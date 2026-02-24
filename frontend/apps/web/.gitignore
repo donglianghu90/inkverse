@@ -1,0 +1,44 @@
+# dependencies
+/node_modules
+/npm-debug.log*
+/yarn-error.log
+/yarn.lock
+/package-lock.json
+/pnpm-debug.log*
+
+# production
+/dist
+/build
+
+# misc
+.DS_Store
+
+# umi
+.umi
+.umi-production
+.umi-test
+
+# ide
+/.vscode
+/.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# cache
+.cache
+.temp
+*.log
+
+# tests
+/coverage
+.nyc_output
+
+# environment
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+

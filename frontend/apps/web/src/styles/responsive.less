@@ -1,0 +1,232 @@
+/**
+ * 移动端响应式布局样式
+ * 提供一致的响应式设计变量和样式
+ */
+
+// 响应式断点
+@screen-xs: 480px; // 超小屏幕（手机）
+@screen-sm: 576px; // 小屏幕（手机）
+@screen-md: 768px; // 中等屏幕（平板）
+@screen-lg: 992px; // 大屏幕（桌面）
+@screen-xl: 1200px; // 超大屏幕（大桌面）
+@screen-xxl: 1600px; // 超超大屏幕
+
+// 移动端通用样式
+.mobile-friendly {
+  // 小屏幕适配
+  @media (max-width: @screen-md) {
+    // 卡片内边距
+    .ant-card-body {
+      padding: 12px !important;
+    }
+
+    // 表格滚动
+    .ant-table-wrapper {
+      overflow-x: auto;
+    }
+
+    // 按钮组调整
+    .ant-space {
+      flex-wrap: wrap;
+    }
+
+    // 表单列调整为单列
+    .ant-row {
+      flex-direction: column;
+    }
+
+    .ant-col {
+      max-width: 100% !important;
+      flex: 0 0 100% !important;
+    }
+
+    // 抽屉宽度调整
+    .ant-drawer {
+      .ant-drawer-content-wrapper {
+        width: 100% !important;
+      }
+    }
+
+    // 模态框宽度调整
+    .ant-modal {
+      max-width: calc(100vw - 32px) !important;
+      margin: 16px auto !important;
+    }
+
+    // 统计卡片调整
+    .ant-statistic {
+      .ant-statistic-title {
+        font-size: 12px;
+      }
+      .ant-statistic-content {
+        font-size: 18px;
+      }
+    }
+
+    // 按钮大小调整
+    .mobile-button {
+      min-height: 44px; // iOS标准最小点击区域
+      font-size: 14px;
+    }
+
+    // 表格行高调整
+    .ant-table-small {
+      font-size: 12px;
+
+      .ant-table-tbody > tr > td {
+        padding: 8px 8px;
+      }
+    }
+
+    // 描述列表调整
+    .ant-descriptions-item {
+      padding-bottom: 8px;
+    }
+  }
+
+  // 超小屏幕适配
+  @media (max-width: @screen-sm) {
+    // 标题字体
+    h1 {
+      font-size: 20px !important;
+    }
+    h2 {
+      font-size: 18px !important;
+    }
+    h3 {
+      font-size: 16px !important;
+    }
+
+    // 隐藏次要信息
+    .mobile-hide {
+      display: none !important;
+    }
+
+    // 页面内边距
+    .page-container {
+      padding: 8px !important;
+    }
+
+    // 按钮只显示图标
+    .mobile-icon-only {
+      .ant-btn-icon + span {
+        display: none;
+      }
+    }
+  }
+}
+
+// 响应式容器
+.responsive-container {
+  width: 100%;
+  padding-right: 15px;
+  padding-left: 15px;
+  margin-right: auto;
+  margin-left: auto;
+
+  @media (min-width: @screen-sm) {
+    max-width: 540px;
+  }
+
+  @media (min-width: @screen-md) {
+    max-width: 720px;
+  }
+
+  @media (min-width: @screen-lg) {
+    max-width: 960px;
+  }
+
+  @media (min-width: @screen-xl) {
+    max-width: 1140px;
+  }
+
+  @media (min-width: @screen-xxl) {
+    max-width: 1320px;
+  }
+}
+
+// 响应式网格
+.responsive-grid {
+  display: grid;
+  gap: 16px;
+
+  // 默认单列
+  grid-template-columns: 1fr;
+
+  // 平板：2列
+  @media (min-width: @screen-md) {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  // 桌面：3列
+  @media (min-width: @screen-lg) {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  // 大桌面：4列
+  @media (min-width: @screen-xl) {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+// 响应式文本
+.responsive-text {
+  font-size: 14px;
+
+  @media (max-width: @screen-sm) {
+    font-size: 12px;
+  }
+
+  @media (min-width: @screen-lg) {
+    font-size: 16px;
+  }
+}
+
+// 移动端专用样式
+.mobile-only {
+  display: none !important;
+
+  @media (max-width: @screen-md) {
+    display: block !important;
+  }
+}
+
+// 桌面端专用样式
+.desktop-only {
+  display: none !important;
+
+  @media (min-width: @screen-md) {
+    display: block !important;
+  }
+}
+
+// 触摸友好的按钮
+.touch-friendly-button {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 12px 16px;
+}
+
+// 卡片式列表（移动端友好）
+.card-list-item {
+  padding: 12px;
+  margin-bottom: 8px;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+
+  &:active {
+    background: #f5f5f5;
+  }
+
+  .item-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .item-content {
+    font-size: 12px;
+    color: #666;
+  }
+}

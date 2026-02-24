@@ -1,0 +1,64 @@
+2026-02-25 00:03:07:299 INFO  --- [              -]                  apps/public-api/main.js  : 
+🚀 请求开始
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 GET /api/inkverse/novel/books
+🌐 IP: 127.0.0.1
+👤 User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Cursor/2.4.21...
+📄 Content-Type: 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ [method=GET url=/api/inkverse/novel/books ip=127.0.0.1 userAgent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Cursor/2.4.21 contentType= userId=undefined requestId=undefined]
+2026-02-25 00:03:07:308 INFO  --- [              -]                  apps/public-api/main.js  : 
+✅ 请求完成
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 GET /api/inkverse/novel/books
+📊 状态码: 200
+💬 消息: 操作成功
+⏱️  耗时: 8ms
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ [method=GET url=/api/inkverse/novel/books statusCode=200 message=操作成功 duration=8 userId=undefined requestId=undefined]
+2026-02-25 00:03:07:308 INFO  --- [              -]                  apps/public-api/main.js  : GET /api/inkverse/novel/books 200 8ms [method=GET url=/api/inkverse/novel/books statusCode=200 message=操作成功 duration=8 userId=undefined requestId=undefined type=api_request responseTime=8]
+2026-02-25 00:05:27:327 INFO  --- [              -]                  apps/public-api/main.js  : 🔄 收到 SIGTERM 信号，开始优雅关闭... [signal=SIGTERM]
+2026-02-25 00:06:11:026 INFO  --- [              -]                  apps/public-api/main.js  : 🔄 收到 SIGTERM 信号，开始优雅关闭... [signal=SIGTERM]
+2026-02-25 00:06:50:981 INFO  --- [              -]                  apps/public-api/main.js  : 
+🚀 请求开始
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 POST /api/inkverse/novel/idea/enhance
+🌐 IP: 127.0.0.1
+👤 User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Cursor/2.4.21...
+📄 Content-Type: application/json
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ [method=POST url=/api/inkverse/novel/idea/enhance ip=127.0.0.1 userAgent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Cursor/2.4.21 contentType=application/json userId=undefined requestId=undefined]
+2026-02-25 00:06:50:988 INFO  --- [              -]                  apps/public-api/main.js  : 
+✅ 请求完成
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 POST /api/inkverse/novel/idea/enhance
+📊 状态码: 200
+💬 消息: 操作成功
+⏱️  耗时: 8ms
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ [method=POST url=/api/inkverse/novel/idea/enhance statusCode=200 message=操作成功 duration=8 userId=undefined requestId=undefined]
+2026-02-25 00:06:50:988 INFO  --- [              -]                  apps/public-api/main.js  : POST /api/inkverse/novel/idea/enhance 200 8ms [method=POST url=/api/inkverse/novel/idea/enhance statusCode=200 message=操作成功 duration=8 userId=undefined requestId=undefined type=api_request responseTime=8]
+2026-02-25 00:07:08:311 INFO  --- [              -]                  apps/public-api/main.js  : 🔄 收到 SIGTERM 信号，开始优雅关闭... [signal=SIGTERM]
+2026-02-25 00:08:31:300 INFO  --- [              -]                  apps/public-api/main.js  : 🔄 收到 SIGTERM 信号，开始优雅关闭... [signal=SIGTERM]
+2026-02-25 00:09:31:069 INFO  --- [              -]                  apps/public-api/main.js  : 🔄 收到 SIGTERM 信号，开始优雅关闭... [signal=SIGTERM]
+2026-02-25 00:10:09:760 INFO  --- [              -]                  apps/public-api/main.js  : 🔄 收到 SIGTERM 信号，开始优雅关闭... [signal=SIGTERM]
+2026-02-25 00:10:50:255 INFO  --- [              -]                  apps/public-api/main.js  : 🔄 收到 SIGTERM 信号，开始优雅关闭... [signal=SIGTERM]
+2026-02-25 00:11:37:958 INFO  --- [              -]                  apps/public-api/main.js  : 🔄 收到 SIGTERM 信号，开始优雅关闭... [signal=SIGTERM]
+2026-02-25 00:12:08:056 INFO  --- [              -]                  apps/public-api/main.js  : 
+🚀 请求开始
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 POST /api/inkverse/novel/idea/enhance
+🌐 IP: 127.0.0.1
+👤 User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Cursor/2.4.21...
+📄 Content-Type: application/json
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ [method=POST url=/api/inkverse/novel/idea/enhance ip=127.0.0.1 userAgent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Cursor/2.4.21 contentType=application/json userId=undefined requestId=undefined]
+2026-02-25 00:12:26:845 INFO  --- [              -]                  apps/public-api/main.js  : 
+✅ 请求完成
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 POST /api/inkverse/novel/idea/enhance
+📊 状态码: 200
+💬 消息: 操作成功
+⏱️  耗时: 18788ms
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ [method=POST url=/api/inkverse/novel/idea/enhance statusCode=200 message=操作成功 duration=18788 userId=undefined requestId=undefined]
+2026-02-25 00:12:26:846 INFO  --- [              -]                  apps/public-api/main.js  : POST /api/inkverse/novel/idea/enhance 200 18788ms [method=POST url=/api/inkverse/novel/idea/enhance statusCode=200 message=操作成功 duration=18788 userId=undefined requestId=undefined type=api_request responseTime=18788]
+2026-02-25 00:17:03:322 INFO  --- [              -]                  apps/public-api/main.js  : 🔄 收到 SIGTERM 信号，开始优雅关闭... [signal=SIGTERM]
+2026-02-25 00:17:42:218 INFO  --- [              -]                  apps/public-api/main.js  : 🔄 收到 SIGTERM 信号，开始优雅关闭... [signal=SIGTERM]
