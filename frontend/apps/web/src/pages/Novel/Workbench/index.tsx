@@ -13,6 +13,7 @@ import {
   BarChart3,
   AlertCircle,
   Globe,
+  FileEdit,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -298,6 +299,15 @@ const Workbench: React.FC = () => {
             >
               <Globe className="h-3.5 w-3.5" />
               世界观
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 gap-1"
+              onClick={() => history.push(`/novel/book/${bookId}/profile`)}
+            >
+              <FileEdit className="h-3.5 w-3.5" />
+              手册
             </Button>
           </div>
         </div>

@@ -10,6 +10,8 @@ import {
   Loader2,
   Check,
   Settings2,
+  FileEdit,
+  Save,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,8 +20,17 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
-import { createBook, enhanceIdea, generateStoryGoal, type CreateBookParams } from '@/services/novel';
+import {
+  createBook,
+  enhanceIdea,
+  generateStoryGoal,
+  updateBookProfile,
+  type CreateBookParams,
+  type BookPromptProfile,
+} from '@/services/novel';
+import ProfileEditor from '../ProfileEditor';
 
 const GENRE_PRESETS = [
   { value: '玄幻', icon: '🌌', desc: '异界修炼、升级打怪' },
@@ -63,6 +74,7 @@ const STEPS = [
   { title: '主线与规模', icon: Target, desc: '定义目标和创作规模' },
   { title: '高级配置', icon: Settings2, desc: '字数、章节等精细设置' },
   { title: 'AI 生成', icon: BookOpen, desc: '等待 AI 构建世界观' },
+  { title: '审阅手册', icon: FileEdit, desc: '审阅和调整写作手册' },
 ];
 
 interface FormState extends CreateBookParams {
@@ -84,6 +96,10 @@ const CreateBook: React.FC = () => {
 
   const [generatingGoal, setGeneratingGoal] = useState(false);
   const [goalAlternatives, setGoalAlternatives] = useState<string[]>([]);
+
+  const [createdBookId, setCreatedBookId] = useState<string | null>(null);
+  const [generatedProfile, setGeneratedProfile] = useState<BookPromptProfile | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
 
   const [form, setForm] = useState<FormState>({
     mainIdea: '',
@@ -187,9 +203,13 @@ const CreateBook: React.FC = () => {
       setGenProgress(100);
       setGenSteps((prev) => prev.map((s) => ({ ...s, done: true })));
 
+      setCreatedBookId(result.bookId);
+      setGeneratedProfile(result.bookPromptProfile);
+
       setTimeout(() => {
-        history.push(`/novel/book/${result.bookId}`);
-      }, 1000);
+        setStep(5);
+        setLoading(false);
+      }, 800);
     } catch {
       clearInterval(interval);
       clearInterval(stepInterval);
@@ -199,7 +219,25 @@ const CreateBook: React.FC = () => {
   };
 
   const totalSteps = STEPS.length;
-  const isGenerating = step === totalSteps - 1;
+  const isGenerating = step === 4;
+  const isReviewing = step === 5;
+
+  const handleSaveProfile = async () => {
+    if (!createdBookId || !generatedProfile) return;
+    setSavingProfile(true);
+    try {
+      await updateBookProfile(createdBookId, generatedProfile);
+      history.push(`/novel/book/${createdBookId}`);
+    } catch {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleSkipReview = () => {
+    if (createdBookId) {
+      history.push(`/novel/book/${createdBookId}`);
+    }
+  };
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
@@ -208,10 +246,15 @@ const CreateBook: React.FC = () => {
         variant="ghost"
         size="sm"
         className="mb-6 gap-1.5 -ml-2"
-        onClick={() => (step > 0 && !isGenerating ? setStep(step - 1) : history.push('/novel'))}
+        onClick={() => {
+          if (isReviewing || isGenerating) return;
+          if (step > 0) setStep(step - 1);
+          else history.push('/novel');
+        }}
+        disabled={isGenerating || isReviewing}
       >
         <ArrowLeft className="h-4 w-4" />
-        {step > 0 && !isGenerating ? '上一步' : '返回书架'}
+        {step > 0 && !isGenerating && !isReviewing ? '上一步' : '返回书架'}
       </Button>
 
       {/* Step indicator */}
@@ -697,8 +740,64 @@ const CreateBook: React.FC = () => {
         </div>
       )}
 
+      {/* Step 6: Review Profile */}
+      {isReviewing && generatedProfile && (
+        <div className="animate-fade-in space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold">审阅 AI 生成的写作手册</h2>
+            <p className="mt-2 text-muted-foreground">
+              这是 AI 为「{effectiveGenre}」题材生成的专属写作手册。你可以根据自己的理解调整任何内容，
+              所有修改将直接影响后续章节的写作风格和质量评审标准。
+            </p>
+          </div>
+
+          <Card className="border-amber-200 bg-amber-50/50">
+            <CardContent className="flex items-start gap-3 p-4">
+              <FileEdit className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
+              <div className="text-sm text-amber-800">
+                <p className="font-medium mb-1">手册说明</p>
+                <p>
+                  手册包含写手身份、题材规则、正反写法示例、爽感和钩子类型定义、套话黑名单、评审权重等。
+                  点击各板块标题展开编辑。你也可以跳过此步直接开始创作，后续随时可在工作台中修改。
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <ScrollArea className="max-h-[calc(100vh-420px)]">
+            <ProfileEditor
+              profile={generatedProfile}
+              onChange={setGeneratedProfile}
+            />
+          </ScrollArea>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <Button
+              variant="outline"
+              size="lg"
+              onClick={handleSkipReview}
+            >
+              跳过，直接开始创作
+            </Button>
+            <Button
+              size="lg"
+              className="gap-2"
+              disabled={savingProfile}
+              onClick={handleSaveProfile}
+            >
+              {savingProfile ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
+              {savingProfile ? '保存中...' : '确认并开始创作'}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Navigation */}
-      {!isGenerating && (
+      {!isGenerating && !isReviewing && (
         <div className="mt-8 flex justify-end gap-3">
           {step === totalSteps - 2 ? (
             <Button

@@ -73,6 +73,27 @@ export class NovelController {
     return this.novelService.createBook(dto);
   }
 
+  @Get('books/:bookId/profile')
+  @Public()
+  @ApiOperation({ summary: '获取写作手册', description: '返回书籍的 AI 生成写作手册（BookPromptProfile）' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '成功' })
+  async getBookProfile(@Param('bookId') bookId: string): Promise<unknown> {
+    return this.novelService.getBookProfile(bookId);
+  }
+
+  @Put('books/:bookId/profile')
+  @Public()
+  @ApiOperation({ summary: '更新写作手册', description: '用户修改后保存写作手册' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '更新成功' })
+  async updateBookProfile(
+    @Param('bookId') bookId: string,
+    @Body() body: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.novelService.updateBookProfile(bookId, body);
+  }
+
   @Get('books/:bookId')
   @Public()
   @ApiOperation({ summary: '查询书籍', description: '返回书籍概览信息' })

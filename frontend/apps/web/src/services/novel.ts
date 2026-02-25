@@ -45,11 +45,53 @@ export interface BookListItem {
   updatedAt: string;
 }
 
+export interface CraftExample {
+  bad: string;
+  good: string;
+  rule: string;
+}
+
+export interface BookPromptProfile {
+  generatedForGenre: string;
+  generatedForAudience: string;
+  writerGuide: {
+    coreIdentity: string;
+    genreRules: string[];
+    pacingGuide: string;
+    dialogueGuide: string;
+    craftExamples: CraftExample[];
+    toneGuide: string;
+  };
+  satisfactionTypes: Array<{ id: string; label: string; description: string }>;
+  hookTypes: Array<{ id: string; label: string; description: string }>;
+  clichePatterns: Array<{ pattern: string; maxPerChapter: number }>;
+  reviewerCalibration: {
+    dimensionWeights: {
+      engagement: number;
+      pacing: number;
+      hookStrength: number;
+      consistency: number;
+      proseQuality: number;
+      characterDepth: number;
+    };
+    genreSpecificChecks: string[];
+    scoringAnchors: { high: string; mid: string; low: string };
+  };
+  worldProfile: {
+    organizationTypes: string[];
+    powerSystemApplicable: boolean;
+    goldenFingerApplicable: boolean;
+    commitmentTypes: string[];
+    characterRelationEmphasis: string;
+  };
+}
+
 export interface CreateBookResult {
   bookId: string;
   title: string;
   chapterCursor: number;
   outline: Record<string, unknown>;
+  bookPromptProfile: BookPromptProfile;
 }
 
 export interface BookInfo {
@@ -292,6 +334,17 @@ export interface WorldData {
     endingDirection: string;
   };
   chapterSummaries: Array<{ chapterNumber: number; summary: string }>;
+}
+
+export async function getBookProfile(bookId: string): Promise<BookPromptProfile> {
+  return request(`${BASE}/books/${bookId}/profile`);
+}
+
+export async function updateBookProfile(
+  bookId: string,
+  profile: BookPromptProfile,
+): Promise<BookPromptProfile> {
+  return request(`${BASE}/books/${bookId}/profile`, { method: 'PUT', data: profile });
 }
 
 export async function getWorld(bookId: string): Promise<WorldData> {

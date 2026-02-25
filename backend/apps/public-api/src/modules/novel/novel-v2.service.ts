@@ -32,6 +32,8 @@ import {
   StoryStateV2,
   storyStateV2Schema,
   MaintenanceState,
+  BookPromptProfile,
+  bookPromptProfileSchema,
 } from './schemas/novel-v2.schemas';
 import { generationKpiSchema } from './schemas/novel.schemas';
 import { z } from 'zod';
@@ -69,6 +71,21 @@ export class NovelV2Service {
     private readonly llmUsageTracker: LlmUsageTrackerService,
     private readonly llm: LlmService,
   ) {}
+
+  async getBookProfile(bookId: string): Promise<BookPromptProfile> {
+    const state = await this.loadBookState(bookId);
+    return state.bookPromptProfile;
+  }
+
+  async updateBookProfile(bookId: string, profileData: Record<string, unknown>): Promise<BookPromptProfile> {
+    const state = await this.loadBookState(bookId);
+    const parsed = bookPromptProfileSchema.parse(profileData);
+    state.bookPromptProfile = parsed;
+    state.updatedAt = new Date().toISOString();
+    await this.persistBookState(state);
+    this.logger.log(`[updateBookProfile] bookId=${bookId} 写作手册已更新`);
+    return parsed;
+  }
 
   /**
    * Enhance a raw idea into a richer, more compelling concept.
@@ -254,6 +271,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       title: analysis.seed.title,
       chapterCursor: 1,
       outline: analysis.outline,
+      bookPromptProfile,
     };
   }
 
