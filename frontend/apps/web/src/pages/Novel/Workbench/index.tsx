@@ -14,6 +14,7 @@ import {
   AlertCircle,
   Globe,
   FileEdit,
+  Workflow,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -308,6 +309,15 @@ const Workbench: React.FC = () => {
             >
               <FileEdit className="h-3.5 w-3.5" />
               手册
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 gap-1"
+              onClick={() => history.push(`/novel/book/${bookId}/pipeline`)}
+            >
+              <Workflow className="h-3.5 w-3.5" />
+              工作流
             </Button>
           </div>
         </div>

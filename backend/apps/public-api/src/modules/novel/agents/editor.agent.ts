@@ -28,6 +28,7 @@ export class EditorAgent {
     intent: ChapterIntent,
     draft: ChapterDraft,
     review: ChapterReview,
+    additionalSystemPrompt?: string,
   ): Promise<ChapterDraft> {
     const context = buildCompactContextV2(state, {
       maxCharacters: 6,
@@ -72,7 +73,7 @@ ${PROSE_CRAFT_PLAYBOOK}
 
 ${EDITOR_DISCIPLINE_PLAYBOOK}
 
-${CONTINUITY_BASELINE_PLAYBOOK}`;
+${CONTINUITY_BASELINE_PLAYBOOK}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
       })(),
       userPrompt: `故事上下文（精简）：
 ${JSON.stringify(context, null, 2)}

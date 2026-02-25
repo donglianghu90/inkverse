@@ -61,10 +61,6 @@ export class AutoSerializationService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    if (!this.isSchedulerEnabled()) {
-      this.logger.log('auto-serialization scheduler disabled');
-      return;
-    }
     await this.bootstrapRepeatableJobsFromDatabase();
     this.logger.log('auto-serialization scheduler ready');
   }
@@ -194,11 +190,6 @@ export class AutoSerializationService implements OnModuleInit {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
-  }
-
-  private isSchedulerEnabled(): boolean {
-    return (this.configService.get('autoSerialization.enabled') ?? 'true')
-      .toString().toLowerCase() === 'true';
   }
 
   private getSchedulerTimezone(): string {

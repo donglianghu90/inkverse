@@ -10,6 +10,8 @@ import { BookEntity } from './entities/book.entity';
 import { ChapterEntity } from './entities/chapter.entity';
 import { ArtifactEntity } from './entities/artifact.entity';
 import { AutoSerializationJobEntity } from './entities/auto-serialization-job.entity';
+import { BookAgentPipelineEntity } from './entities/book-agent-pipeline.entity';
+import { BookAgentPipelineService } from './book-agent-pipeline.service';
 import { AUTO_SERIALIZATION_QUEUE } from './auto-serialization.processor';
 
 import { NovelController } from './novel.controller';
@@ -38,6 +40,7 @@ import { AutoSerializationProcessor } from './auto-serialization.processor';
       ChapterEntity,
       ArtifactEntity,
       AutoSerializationJobEntity,
+      BookAgentPipelineEntity,
     ]),
     BullModule.registerQueue({ name: AUTO_SERIALIZATION_QUEUE }),
   ],
@@ -60,6 +63,7 @@ import { AutoSerializationProcessor } from './auto-serialization.processor';
     NovelProgressService,
     AutoSerializationService,
     AutoSerializationProcessor,
+    BookAgentPipelineService,
   ],
 })
 export class NovelV2Module {}

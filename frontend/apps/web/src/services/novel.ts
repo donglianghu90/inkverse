@@ -367,3 +367,66 @@ export interface GenerationProgressEvent {
 export function getGenerateSSEUrl(bookId: string): string {
   return `${BASE}/books/${bookId}/chapters/generate-sse`;
 }
+
+/* ========== Pipeline ========== */
+
+export type AgentNodeType =
+  | 'intent'
+  | 'creative-writer'
+  | 'reviewer'
+  | 'editor'
+  | 'recorder'
+  | 'custom';
+
+export type CustomOutputType = 'ChapterDraft' | 'ChapterIntent';
+
+export interface CustomAgentConfig {
+  systemPrompt: string;
+  userPromptTemplate: string;
+  outputType: CustomOutputType;
+  temperature: number;
+}
+
+export interface AgentNodeConfig {
+  id: string;
+  type: AgentNodeType;
+  label: string;
+  description: string;
+  isEnabled: boolean;
+  isDeletable: boolean;
+  isCore: boolean;
+  position: number;
+  rfPosition: { x: number; y: number };
+  additionalSystemPrompt: string;
+  customConfig?: CustomAgentConfig;
+}
+
+export interface PipelineView {
+  bookId: string;
+  draftNodes: AgentNodeConfig[];
+  publishedNodes: AgentNodeConfig[] | null;
+  publishedAt: string | null;
+  hasDraft: boolean;
+}
+
+export async function getPipeline(bookId: string): Promise<PipelineView> {
+  return request(`${BASE}/books/${bookId}/pipeline`);
+}
+
+export async function savePipelineDraft(
+  bookId: string,
+  nodes: AgentNodeConfig[],
+): Promise<PipelineView> {
+  return request(`${BASE}/books/${bookId}/pipeline/draft`, {
+    method: 'PUT',
+    data: { nodes },
+  });
+}
+
+export async function publishPipeline(bookId: string): Promise<PipelineView> {
+  return request(`${BASE}/books/${bookId}/pipeline/publish`, { method: 'POST' });
+}
+
+export function createBookSseUrl(): string {
+  return `${BASE}/books/create-sse`;
+}

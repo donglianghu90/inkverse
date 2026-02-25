@@ -18,6 +18,7 @@ export default [
       { path: '/novel/book/:bookId', component: './Novel/Workbench' },
       { path: '/novel/book/:bookId/world', component: './Novel/WorldBible' },
       { path: '/novel/book/:bookId/profile', component: './Novel/ProfilePage' },
+      { path: '/novel/book/:bookId/pipeline', component: './Novel/Pipeline' },
     ],
   },
   {

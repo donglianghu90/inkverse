@@ -27,6 +27,7 @@ export class ReviewerAgent {
     state: StoryStateV2,
     intent: ChapterIntent,
     draft: ChapterDraft,
+    additionalSystemPrompt?: string,
   ): Promise<ChapterReview> {
     const context = buildCompactContextV2(state, {
       maxCharacters: 8,
@@ -88,7 +89,7 @@ ${cal.genreSpecificChecks.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
 ${CONTINUITY_BASELINE_PLAYBOOK}
 
-${CHARACTER_ARC_PLAYBOOK}`;
+${CHARACTER_ARC_PLAYBOOK}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
       })(),
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}

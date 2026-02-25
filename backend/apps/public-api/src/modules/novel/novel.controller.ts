@@ -25,6 +25,8 @@ import { GenerateChaptersBatchDto } from './dto/generate-chapters-batch.dto';
 import { ListChaptersDto } from './dto/list-chapters.dto';
 import { NovelV2Service } from './novel-v2.service';
 import { NovelProgressService } from './novel-progress.service';
+import { BookAgentPipelineService } from './book-agent-pipeline.service';
+import { AgentNodeConfig } from './entities/book-agent-pipeline.entity';
 import { Public } from '@packages/common/guards';
 
 @ApiTags('Novel - 小说生成')
@@ -35,6 +37,7 @@ export class NovelController {
     private readonly novelService: NovelV2Service,
     private readonly autoSerializationService: AutoSerializationService,
     private readonly progressService: NovelProgressService,
+    private readonly pipelineService: BookAgentPipelineService,
   ) {}
 
   @Get('books')
@@ -71,6 +74,33 @@ export class NovelController {
   @ApiResponse({ status: 201, description: '创建成功，返回书籍基本信息' })
   async createBook(@Body() dto: CreateBookDto): Promise<unknown> {
     return this.novelService.createBook(dto);
+  }
+
+  @Sse('books/create-sse')
+  @Public()
+  @ApiOperation({ summary: '创建新书（SSE）', description: '通过 SSE 流式推送创建进度，完成后返回书籍信息' })
+  createBookSse(@Body() dto: CreateBookDto): Observable<MessageEvent> {
+    const subject = new Subject<MessageEvent>();
+
+    const unsubscribe = this.progressService.subscribe('__creating__', (event) => {
+      subject.next({ data: event } as MessageEvent);
+      if (event.done || event.error) {
+        setTimeout(() => subject.complete(), 200);
+      }
+    });
+
+    this.novelService
+      .createBook(dto)
+      .then((result) => {
+        subject.next({ data: { result, _type: 'result' } } as MessageEvent);
+      })
+      .catch((err) => {
+        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
+        subject.complete();
+      })
+      .finally(() => unsubscribe());
+
+    return subject.asObservable();
   }
 
   @Get('books/:bookId/profile')
@@ -256,5 +286,37 @@ export class NovelController {
     @Param('bookId') bookId: string,
   ): Promise<Record<string, unknown>> {
     return this.autoSerializationService.runNow(bookId);
+  }
+
+  // ── Pipeline ──────────────────────────────────────────────────────────────
+
+  @Get('books/:bookId/pipeline')
+  @Public()
+  @ApiOperation({ summary: '获取 Agent Pipeline', description: '返回草稿和已发布的 pipeline 配置' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '成功' })
+  async getPipeline(@Param('bookId') bookId: string): Promise<unknown> {
+    return this.pipelineService.getPipeline(bookId);
+  }
+
+  @Put('books/:bookId/pipeline/draft')
+  @Public()
+  @ApiOperation({ summary: '保存 Pipeline 草稿', description: '保存节点配置为草稿，不影响生成' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '保存成功' })
+  async savePipelineDraft(
+    @Param('bookId') bookId: string,
+    @Body() body: { nodes: AgentNodeConfig[] },
+  ): Promise<unknown> {
+    return this.pipelineService.saveDraft(bookId, body.nodes);
+  }
+
+  @Post('books/:bookId/pipeline/publish')
+  @Public()
+  @ApiOperation({ summary: '发布 Pipeline', description: '将草稿发布为生效配置，下次生成立即使用' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 201, description: '发布成功' })
+  async publishPipeline(@Param('bookId') bookId: string): Promise<unknown> {
+    return this.pipelineService.publish(bookId);
   }
 }

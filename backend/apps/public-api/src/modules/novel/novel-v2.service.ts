@@ -23,6 +23,8 @@ import { RecorderAgent } from './agents/recorder.agent';
 import { ChapterWorkflowV2Service, ChapterWorkflowV2Result } from './chapter-workflow-v2.service';
 import { DeepMaintenanceService } from './deep-maintenance.service';
 import { LoreApplicationService } from './lore-application.service';
+import { BookAgentPipelineService } from './book-agent-pipeline.service';
+import { NovelProgressService } from './novel-progress.service';
 import { BookEntity } from './entities/book.entity';
 import { ChapterEntity } from './entities/chapter.entity';
 import { ArtifactEntity } from './entities/artifact.entity';
@@ -70,6 +72,8 @@ export class NovelV2Service {
     private readonly loreService: LoreApplicationService,
     private readonly llmUsageTracker: LlmUsageTrackerService,
     private readonly llm: LlmService,
+    private readonly pipelineService: BookAgentPipelineService,
+    private readonly progressService: NovelProgressService,
   ) {}
 
   async getBookProfile(bookId: string): Promise<BookPromptProfile> {
@@ -171,6 +175,21 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       `  genre: ${dto.genre} | targetAudience: ${dto.targetAudience}`,
     );
 
+    const emitCreate = (step: string, stepIndex: number, message: string, done = false) => {
+      this.progressService.emit({
+        bookId: '__creating__',
+        chapterNumber: 0,
+        step,
+        stepIndex,
+        totalSteps: 4,
+        message,
+        done,
+      });
+    };
+
+    // Step 1: Seed analysis
+    this.logger.log(`[createBook V2] 步骤 1/4: 种子创意分析...`);
+    emitCreate('seed', 0, '种子创意分析');
     const analysis = await this.seedAnalyzer.analyze({
       mainIdea: dto.mainIdea,
       genre: dto.genre,
@@ -183,8 +202,16 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         max: dto.plannedMaxChapters ?? 800,
       },
     });
+    this.logger.log(
+      `[createBook V2] 种子分析完成 — ${Date.now() - t0}ms\n` +
+      `  书名: ${analysis.seed.title} | 主角: ${analysis.seed.protagonistConcept.name}\n` +
+      `  大纲节点: ${analysis.outline.points.length} | 可行性: ${analysis.seed.conceptEvaluation?.overallViability ?? 'N/A'}`,
+    );
+    emitCreate('seed', 0, `种子分析完成 — 书名《${analysis.seed.title}》`);
 
-    this.logger.log(`[createBook V2] 正在生成写作手册（BookPromptProfile）...`);
+    // Step 2: Prompt profile
+    this.logger.log(`[createBook V2] 步骤 2/4: 生成写作手册（BookPromptProfile）...`);
+    emitCreate('profile', 1, '生成专属写作手册');
     const bookPromptProfile = await this.promptProfiler.generate({
       genre: dto.genre,
       targetAudience: dto.targetAudience,
@@ -197,8 +224,16 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         max: dto.plannedMaxChapters ?? 800,
       },
     });
-    this.logger.log(`[createBook V2] 写作手册生成完成 | 题材: ${bookPromptProfile.generatedForGenre}`);
+    this.logger.log(
+      `[createBook V2] 写作手册生成完成 — ${Date.now() - t0}ms\n` +
+      `  题材: ${bookPromptProfile.generatedForGenre} | 受众: ${bookPromptProfile.generatedForAudience}\n` +
+      `  类型规则: ${bookPromptProfile.writerGuide.genreRules.length} 条 | 爽感类型: ${bookPromptProfile.satisfactionTypes.length} 种`,
+    );
+    emitCreate('profile', 1, `写作手册生成完成 — ${bookPromptProfile.writerGuide.genreRules.length} 条题材规则`);
 
+    // Step 3: Persist
+    this.logger.log(`[createBook V2] 步骤 3/4: 初始化角色与世界...`);
+    emitCreate('init', 2, '初始化角色与世界');
     const bookEntity = await this.bookRepo.save(
       this.bookRepo.create({ stateJson: {} as Record<string, unknown> }),
     );
@@ -259,12 +294,15 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     await this.persistBookState(state);
     await this.persistArtifact(bookId, 0, 'seed', analysis.seed);
     await this.persistArtifact(bookId, 0, 'rough_outline', analysis.outline);
+    await this.pipelineService.initDefault(bookId);
 
     this.logger.log(
-      `[createBook V2] ========== 开书完成 ========== ${Date.now() - t0}ms\n` +
+      `[createBook V2] 步骤 4/4: 初始化完成 — ${Date.now() - t0}ms\n` +
       `  bookId: ${bookId} | 书名: ${analysis.seed.title}\n` +
-      `  主角: ${protagonist.name} | 大纲节点: ${analysis.outline.points.length}`,
+      `  主角: ${protagonist.name} | 大纲节点: ${analysis.outline.points.length}\n` +
+      `  ========== 开书完成 ==========`,
     );
+    emitCreate('done', 3, `开书完成 — 《${analysis.seed.title}》`, true);
 
     return {
       bookId,
@@ -440,7 +478,8 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       async () => {
         try {
           const previousChapterEnding = await this.getPreviousChapterEnding(bookId, chapterNumber);
-          const result = await this.chapterWorkflow.run(state, previousChapterEnding);
+          const pipelineNodes = await this.pipelineService.getPublishedNodes(bookId);
+          const result = await this.chapterWorkflow.run(state, previousChapterEnding, pipelineNodes);
 
           // Persist chapter text.
           await this.chapterRepo.upsert(

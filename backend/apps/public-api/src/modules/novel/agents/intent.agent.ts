@@ -23,7 +23,7 @@ import {
 export class IntentAgent {
   constructor(private readonly llm: LlmService) {}
 
-  async buildIntent(state: StoryStateV2): Promise<ChapterIntent> {
+  async buildIntent(state: StoryStateV2, additionalSystemPrompt?: string): Promise<ChapterIntent> {
     const chapterNumber = state.chapterCursor;
     const context = buildCompactContextV2(state, {
       maxCharacters: 10,
@@ -152,7 +152,7 @@ export class IntentAgent {
 ${THREAD_AWARENESS_PLAYBOOK}
 
 ${CHARACTER_ARC_PLAYBOOK}
-${dynamicParts.length > 0 ? '\n' + dynamicParts.join('\n\n') : ''}`,
+${dynamicParts.length > 0 ? '\n' + dynamicParts.join('\n\n') : ''}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}
 

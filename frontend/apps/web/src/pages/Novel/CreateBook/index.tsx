@@ -23,10 +23,10 @@ import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import {
-  createBook,
   enhanceIdea,
   generateStoryGoal,
   updateBookProfile,
+  createBookSseUrl,
   type CreateBookParams,
   type BookPromptProfile,
 } from '@/services/novel';
@@ -167,52 +167,95 @@ const CreateBook: React.FC = () => {
   const handleSubmit = async () => {
     setStep(4);
     setLoading(true);
+    setGenProgress(0);
     setGenSteps([
       { label: '种子创意分析', done: false },
-      { label: '生成写作手册 (BookPromptProfile)', done: false },
-      { label: '构建粗大纲', done: false },
+      { label: '生成专属写作手册', done: false },
       { label: '初始化角色与世界', done: false },
+      { label: '完成开书', done: false },
     ]);
 
-    const interval = setInterval(() => {
-      setGenProgress((prev) => (prev >= 90 ? prev : prev + Math.random() * 8));
-    }, 800);
+    const params: CreateBookParams = {
+      mainIdea: form.mainIdea,
+      genre: effectiveGenre,
+      targetAudience: effectiveAudience,
+      mainStoryGoal: form.mainStoryGoal,
+      titleHint: form.titleHint || undefined,
+      targetChapterWordCount: form.targetChapterWordCount,
+      plannedMinChapters: form.plannedMinChapters,
+      plannedMaxChapters: form.plannedMaxChapters,
+    };
 
-    const stepInterval = setInterval(() => {
-      setGenSteps((prev) => {
-        const nextIdx = prev.findIndex((s) => !s.done);
-        if (nextIdx === -1) return prev;
-        return prev.map((s, i) => (i === nextIdx ? { ...s, done: true } : s));
-      });
-    }, 3000);
+    const STEP_PROGRESS: Record<string, number> = {
+      seed: 20,
+      profile: 60,
+      init: 85,
+      done: 100,
+    };
 
     try {
-      const params: CreateBookParams = {
-        mainIdea: form.mainIdea,
-        genre: effectiveGenre,
-        targetAudience: effectiveAudience,
-        mainStoryGoal: form.mainStoryGoal,
-        titleHint: form.titleHint || undefined,
-        targetChapterWordCount: form.targetChapterWordCount,
-        plannedMinChapters: form.plannedMinChapters,
-        plannedMaxChapters: form.plannedMaxChapters,
-      };
-      const result = await createBook(params);
-      clearInterval(interval);
-      clearInterval(stepInterval);
-      setGenProgress(100);
-      setGenSteps((prev) => prev.map((s) => ({ ...s, done: true })));
+      const response = await fetch(createBookSseUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        body: JSON.stringify(params),
+      });
 
-      setCreatedBookId(result.bookId);
-      setGeneratedProfile(result.bookPromptProfile);
+      if (!response.ok || !response.body) throw new Error('创建失败');
 
-      setTimeout(() => {
-        setStep(5);
-        setLoading(false);
-      }, 800);
-    } catch {
-      clearInterval(interval);
-      clearInterval(stepInterval);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          try {
+            const payload = JSON.parse(line.slice(5).trim());
+
+            if (payload._type === 'result') {
+              // Final result
+              setGenProgress(100);
+              setGenSteps((prev) => prev.map((s) => ({ ...s, done: true })));
+              setCreatedBookId(payload.result.bookId);
+              setGeneratedProfile(payload.result.bookPromptProfile);
+              setTimeout(() => { setStep(5); setLoading(false); }, 600);
+              return;
+            }
+
+            if (payload.error) {
+              throw new Error(payload.error);
+            }
+
+            // Progress event
+            const progress = STEP_PROGRESS[payload.step] ?? 0;
+            setGenProgress(progress);
+
+            const stepIndexMap: Record<string, number> = {
+              seed: 0, profile: 1, init: 2, done: 3,
+            };
+            const idx = stepIndexMap[payload.step] ?? -1;
+            if (idx >= 0 && payload.message) {
+              setGenSteps((prev) =>
+                prev.map((s, i) => {
+                  if (i < idx) return { ...s, done: true };
+                  if (i === idx) return { label: payload.message, done: payload.done ?? false };
+                  return s;
+                }),
+              );
+            }
+          } catch (parseErr) {
+            // skip malformed lines
+          }
+        }
+      }
+    } catch (err: any) {
       setLoading(false);
       setStep(3);
     }
@@ -716,25 +759,33 @@ const CreateBook: React.FC = () => {
             </p>
 
             <div className="space-y-3 pt-4">
-              {genSteps.map((gs) => (
-                <div key={gs.label} className="flex items-center gap-3">
-                  {gs.done ? (
-                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100">
-                      <Check className="h-3.5 w-3.5 text-emerald-600" />
+              {(() => {
+                const activeIdx = genSteps.findIndex((s) => !s.done);
+                return genSteps.map((gs, i) => {
+                  const isActive = i === activeIdx;
+                  return (
+                    <div key={i} className="flex items-center gap-3">
+                      {gs.done ? (
+                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100">
+                          <Check className="h-3.5 w-3.5 text-emerald-600" />
+                        </div>
+                      ) : isActive ? (
+                        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                      ) : (
+                        <div className="h-6 w-6 rounded-full border-2 border-muted" />
+                      )}
+                      <span
+                        className={cn(
+                          'text-sm',
+                          gs.done ? 'text-foreground font-medium' : isActive ? 'text-foreground' : 'text-muted-foreground',
+                        )}
+                      >
+                        {gs.label}
+                      </span>
                     </div>
-                  ) : (
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                  )}
-                  <span
-                    className={cn(
-                      'text-sm',
-                      gs.done ? 'text-foreground' : 'text-muted-foreground',
-                    )}
-                  >
-                    {gs.label}
-                  </span>
-                </div>
-              ))}
+                  );
+                });
+              })()}
             </div>
           </div>
         </div>

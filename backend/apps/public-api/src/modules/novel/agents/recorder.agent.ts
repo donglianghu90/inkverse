@@ -31,6 +31,7 @@ export class RecorderAgent {
   async record(
     state: StoryStateV2,
     draft: ChapterDraft,
+    additionalSystemPrompt?: string,
   ): Promise<LoreRecord> {
     const context = buildCompactContextV2(state, {
       maxCharacters: 10,
@@ -234,7 +235,7 @@ export class RecorderAgent {
 
 ${CONTINUITY_BASELINE_PLAYBOOK}
 
-${THREAD_AWARENESS_PLAYBOOK}`,
+${THREAD_AWARENESS_PLAYBOOK}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
       userPrompt: `章节前故事状态：
 ${JSON.stringify(context, null, 2)}
 

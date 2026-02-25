@@ -18,6 +18,7 @@ import { EditorAgent } from './agents/editor.agent';
 import { RecorderAgent } from './agents/recorder.agent';
 import { DeterministicCheckerService } from './validators/deterministic-checker.service';
 import { NovelProgressService } from './novel-progress.service';
+import { AgentNodeConfig } from './entities/book-agent-pipeline.entity';
 import {
   ChapterIntent,
   ChapterReview,
@@ -75,7 +76,12 @@ export class ChapterWorkflowV2Service {
   async run(
     state: StoryStateV2,
     previousChapterEnding?: string,
+    pipelineNodes?: AgentNodeConfig[],
   ): Promise<ChapterWorkflowV2Result> {
+    const getPrompt = (id: string) =>
+      pipelineNodes?.find((n) => n.id === id)?.additionalSystemPrompt || undefined;
+    const isEnabled = (id: string) =>
+      pipelineNodes ? (pipelineNodes.find((n) => n.id === id)?.isEnabled ?? true) : true;
     const chapterNumber = state.chapterCursor;
     const workflowStart = Date.now();
     this.logger.log(
@@ -87,7 +93,7 @@ export class ChapterWorkflowV2Service {
     let t0 = Date.now();
     this.logger.log(`[Chapter ${chapterNumber}] 步骤 1/5: 意图设定`);
     this.emitProgress(state.bookId, chapterNumber, 'intent', 0, '意图设定');
-    const intent = await this.intentAgent.buildIntent(state);
+    const intent = await this.intentAgent.buildIntent(state, getPrompt('intent'));
     this.emitProgress(state.bookId, chapterNumber, 'intent', 0, '意图完成');
     this.logger.log(
       `[Chapter ${chapterNumber}] 意图完成 — ${Date.now() - t0}ms | ` +
@@ -98,7 +104,7 @@ export class ChapterWorkflowV2Service {
     t0 = Date.now();
     this.logger.log(`[Chapter ${chapterNumber}] 步骤 2/5: 创作写作`);
     this.emitProgress(state.bookId, chapterNumber, 'writing', 1, '创作写作');
-    let draft = await this.creativeWriter.write(state, intent, previousChapterEnding);
+    let draft = await this.creativeWriter.write(state, intent, previousChapterEnding, getPrompt('creative-writer'));
     this.emitProgress(state.bookId, chapterNumber, 'writing', 1, '写作完成');
     this.logger.log(
       `[Chapter ${chapterNumber}] 写作完成 — ${Date.now() - t0}ms | ` +
@@ -117,7 +123,9 @@ export class ChapterWorkflowV2Service {
     t0 = Date.now();
     this.logger.log(`[Chapter ${chapterNumber}] 步骤 3/5: 综合审阅`);
     this.emitProgress(state.bookId, chapterNumber, 'review', 2, '综合审阅');
-    const review = await this.reviewer.review(state, intent, draft);
+    const review = isEnabled('reviewer')
+      ? await this.reviewer.review(state, intent, draft, getPrompt('reviewer'))
+      : { overallScore: 8, overallVerdict: 'good' as const, issuesFound: [], strengths: [], dimensionScores: { engagement: 8, pacing: 8, hookStrength: 8, consistency: 8, proseQuality: 8, characterDepth: 8 } };
     this.emitProgress(state.bookId, chapterNumber, 'review', 2, '审阅完成');
     this.logger.log(
       `[Chapter ${chapterNumber}] 审阅完成 — ${Date.now() - t0}ms | ` +
@@ -144,10 +152,10 @@ export class ChapterWorkflowV2Service {
       );
       this.emitProgress(state.bookId, chapterNumber, 'rewrite', 3, '整章重写');
 
-      draft = await this.creativeWriter.write(state, intent, previousChapterEnding);
+      draft = await this.creativeWriter.write(state, intent, previousChapterEnding, getPrompt('creative-writer'));
       wasRewritten = true;
 
-      const reReview = await this.reviewer.review(state, intent, draft);
+      const reReview = await this.reviewer.review(state, intent, draft, getPrompt('reviewer'));
       const stillBad =
         reReview.overallVerdict !== 'good' ||
         !deterministicCheck.pass ||
@@ -161,7 +169,7 @@ export class ChapterWorkflowV2Service {
             suggestedFix: `修复 ${c.rule}`,
           })));
         }
-        draft = await this.editor.edit(state, intent, draft, reReview);
+        draft = await this.editor.edit(state, intent, draft, reReview, getPrompt('editor'));
         wasEdited = true;
       }
       Object.assign(review, reReview);
@@ -187,7 +195,7 @@ export class ChapterWorkflowV2Service {
         })));
       }
 
-      draft = await this.editor.edit(state, intent, draft, review);
+      draft = await this.editor.edit(state, intent, draft, review, getPrompt('editor'));
       wasEdited = true;
       this.emitProgress(state.bookId, chapterNumber, 'edit', 3, '编辑完成');
       this.logger.log(
@@ -202,7 +210,7 @@ export class ChapterWorkflowV2Service {
     t0 = Date.now();
     this.logger.log(`[Chapter ${chapterNumber}] 步骤 5/5: 知识记录`);
     this.emitProgress(state.bookId, chapterNumber, 'record', 4, '知识记录');
-    const loreRecord = await this.recorder.record(state, draft);
+    const loreRecord = await this.recorder.record(state, draft, getPrompt('recorder'));
     this.emitProgress(state.bookId, chapterNumber, 'record', 4, '记录完成');
     this.logger.log(
       `[Chapter ${chapterNumber}] 记录完成 — ${Date.now() - t0}ms | ` +

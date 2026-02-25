@@ -4,7 +4,6 @@
  * V2: also creates new world elements (characters, locations, items).
  */
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@packages/modules';
 import {
   BootstrapRelationSeed,
   ChapterContract,
@@ -22,7 +21,7 @@ import {
 
 @Injectable()
 export class LoreApplicationService {
-  constructor(private readonly configService: ConfigService) {}
+  constructor() {}
 
   /**
    * V2 lore application: creates new entities + applies deltas.
@@ -1252,9 +1251,7 @@ export class LoreApplicationService {
   }
 
   private getCharacterFactRumorThreshold(): number {
-    const raw = Number(this.configService.get('novel.characterFactRumorThreshold') ?? 0.65);
-    if (!Number.isFinite(raw)) return 0.65;
-    return this.clamp01(raw);
+    return 0.65;
   }
 
   private normalizeThreadLabel(label: string): string {

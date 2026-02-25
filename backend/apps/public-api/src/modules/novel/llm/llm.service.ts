@@ -202,9 +202,9 @@ export class LlmService {
       model: modelName,
       temperature,
       maxRetries: 3,
-      timeout: 180_000,
     });
-    const structuredModel = model.withStructuredOutput(input.schema, {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const structuredModel = (model as any).withStructuredOutput(input.schema, {
       includeRaw: true,
     });
 

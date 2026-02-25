@@ -190,6 +190,7 @@ export class CreativeWriterAgent {
     state: StoryStateV2,
     intent: ChapterIntent,
     previousChapterEnding?: string,
+    additionalSystemPrompt?: string,
   ): Promise<ChapterDraft> {
     const proseContext = buildCompactContextProse(state, {
       maxCharacters: 8,
@@ -199,7 +200,8 @@ export class CreativeWriterAgent {
     });
     const intentCtx = buildIntentContext(intent);
     const { type: chapterType, temperature } = this.resolveChapterType(intent, state);
-    const systemPrompt = this.buildDynamicRules(chapterType, state, intent);
+    const systemPrompt = this.buildDynamicRules(chapterType, state, intent) +
+      (additionalSystemPrompt ? `\n\n=== 作者补充指示 ===\n${additionalSystemPrompt}` : '');
 
     const arcHints = intent.characterArcGuidance.arcHints;
     const mustHints = arcHints.filter((h) => h.priority === 'must');

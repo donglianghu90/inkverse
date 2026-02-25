@@ -5,18 +5,13 @@
 export default {
   // 开发环境
   dev: {
-    '/api/erp': {
-      target: 'http://localhost:8082',
-      changeOrigin: true,
-      pathRewrite: { '^/api/erp': '/api' },
-    },
     '/api/novel': {
-      target: 'http://localhost:8081',
+      target: 'http://localhost:8099',
       changeOrigin: true,
       pathRewrite: { '^/api/novel': '/api/inkverse/novel' },
     },
     '/api/auth': {
-      target: 'http://localhost:8081',
+      target: 'http://localhost:8099',
       changeOrigin: true,
       pathRewrite: { '^/api/auth': '/api/inkverse/admin/auth' },
     },

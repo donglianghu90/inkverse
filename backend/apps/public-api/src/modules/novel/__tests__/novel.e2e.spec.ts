@@ -5,7 +5,7 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request = require('supertest');
-import { AppModule } from '../../app.module';
+import { AppModule } from '../../../app.module';
 
 describe('Novel API (e2e)', () => {
   let app: INestApplication;
