@@ -5,7 +5,7 @@
  * - Supports deterministic mock in dry-run/no-key mode.
  */
 import { Injectable, Logger } from '@nestjs/common';
-import { ChatPromptTemplate } from '@langchain/core/prompts';
+import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { RunnableConfig } from '@langchain/core/runnables';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { z, ZodTypeAny } from 'zod';
@@ -51,7 +51,6 @@ const DEFAULT_TASK_TIER: Record<string, ModelTier> = {
   'ip-bible-architect': 'standard',
   'cast-bootstrap': 'standard',
   'arc-architect': 'standard',
-  'arc-architect-replan': 'standard',
   'chapter-contract-manager': 'standard',
   'scene-designer': 'standard',
   'continuity-auditor': 'standard',
@@ -73,6 +72,8 @@ const DEFAULT_TASK_TIER: Record<string, ModelTier> = {
   'thread-health-check': 'lightweight',
   'arc-planning': 'standard',
   'style-anchoring': 'lightweight',
+  'location-sensory-extract': 'lightweight',
+  'item-sensory-extract': 'lightweight',
 };
 
 interface LlmCachedConfig {
@@ -208,16 +209,15 @@ export class LlmService {
       includeRaw: true,
     });
 
-    const prompt = ChatPromptTemplate.fromMessages([
-      ['system', input.systemPrompt],
-      ['human', input.userPrompt],
-    ]);
+    const messages = [
+      new SystemMessage(input.systemPrompt),
+      new HumanMessage(input.userPrompt),
+    ];
 
-    const chain = prompt.pipe(structuredModel);
     let response: unknown;
     try {
-      response = await chain.invoke(
-        {},
+      response = await structuredModel.invoke(
+        messages,
         this.buildInvokeConfig(input),
       );
     } catch (error) {

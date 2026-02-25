@@ -4,7 +4,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
-  IsBoolean,
   IsInt,
   IsNumber,
   IsOptional,
@@ -28,29 +27,19 @@ export class GenerateChaptersBatchDto {
   @Max(8)
   maxRepairRounds?: number;
 
-  @ApiPropertyOptional({ description: '质量低于阈值时是否提前停止', default: true, example: true })
-  @IsOptional()
-  @IsBoolean()
-  stopWhenLowQuality?: boolean;
-
-  @ApiPropertyOptional({ description: '是否强制所有质量门通过，未通过则终止批量生成', default: true, example: true })
-  @IsOptional()
-  @IsBoolean()
-  strictQuality?: boolean;
-
-  @ApiPropertyOptional({ description: '继续生成所需的最低写作质量分', default: 7, minimum: 0, maximum: 10, example: 7 })
+  @ApiPropertyOptional({ description: '继续生成所需的最低写作质量分（下限 7，低于阈值将终止）', default: 7, minimum: 7, maximum: 10, example: 7 })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  @Min(0)
+  @Min(7)
   @Max(10)
   minQualityScore?: number;
 
-  @ApiPropertyOptional({ description: '继续生成所需的最低评审综合分', default: 7, minimum: 0, maximum: 10, example: 7 })
+  @ApiPropertyOptional({ description: '继续生成所需的最低评审综合分（下限 7，低于阈值将终止）', default: 7, minimum: 7, maximum: 10, example: 7 })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  @Min(0)
+  @Min(7)
   @Max(10)
   minOverallScore?: number;
 }

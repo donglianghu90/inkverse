@@ -28,12 +28,6 @@ export class AutoSerializationJobEntity {
   @Column({ name: 'max_repair_rounds', type: 'int', default: 2 })
   maxRepairRounds: number;
 
-  @Column({ name: 'strict_quality', type: 'boolean', default: true })
-  strictQuality: boolean;
-
-  @Column({ name: 'stop_when_low_quality', type: 'boolean', default: true })
-  stopWhenLowQuality: boolean;
-
   @Column({ name: 'min_quality_score', type: 'numeric', precision: 4, scale: 2, default: 7 })
   minQualityScore: number;
 

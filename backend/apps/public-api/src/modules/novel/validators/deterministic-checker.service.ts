@@ -7,14 +7,14 @@ import { Injectable } from '@nestjs/common';
 import {
   ChapterIntent,
   DeterministicCheckResult,
-  StoryStateV2,
-} from '../schemas/novel-v2.schemas';
+  StoryState,
+} from '../schemas/novel-state.schemas';
 import { ChapterDraft } from '../schemas/novel.schemas';
 
 @Injectable()
 export class DeterministicCheckerService {
   check(
-    state: StoryStateV2,
+    state: StoryState,
     intent: ChapterIntent,
     draft: ChapterDraft,
   ): DeterministicCheckResult {

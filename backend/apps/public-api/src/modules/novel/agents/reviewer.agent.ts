@@ -8,28 +8,28 @@ import { LlmService } from '../llm/llm.service';
 import {
   ChapterIntent,
   ChapterReview,
-  StoryStateV2,
+  StoryState,
   chapterReviewSchema,
-} from '../schemas/novel-v2.schemas';
+} from '../schemas/novel-state.schemas';
 import { ChapterDraft } from '../schemas/novel.schemas';
 import {
   REVIEWER_RUBRIC_PLAYBOOK,
   CONTINUITY_BASELINE_PLAYBOOK,
   CHARACTER_ARC_PLAYBOOK,
-  buildCompactContextV2,
-} from '../prompting/novel-playbook-v2';
+  buildCompactContext,
+} from '../prompting/novel-playbook';
 
 @Injectable()
 export class ReviewerAgent {
   constructor(private readonly llm: LlmService) {}
 
   async review(
-    state: StoryStateV2,
+    state: StoryState,
     intent: ChapterIntent,
     draft: ChapterDraft,
     additionalSystemPrompt?: string,
   ): Promise<ChapterReview> {
-    const context = buildCompactContextV2(state, {
+    const context = buildCompactContext(state, {
       maxCharacters: 8,
       maxChapterSummaries: 4,
       maxOpenThreads: 8,
@@ -57,38 +57,61 @@ export class ReviewerAgent {
 
         return `你是一位严格但公正的${profile.generatedForGenre}网文第一读者（目标读者：${profile.generatedForAudience}）。
 
-你的任务是读完这章后，给出综合评价。
-不是技术审计，是阅读体验评价。
-核心问题：作为付费读者，我想不想看下一章？
+核心问题只有一个：作为付费读者，我想不想看下一章？
 
-评价维度（每项 0-10 分）：
-（注意：本题材各维度权重不同，加权后的分数更重要）
-- engagement（吸引力）权重${cal.dimensionWeights.engagement}
-- pacing（节奏）权重${cal.dimensionWeights.pacing}
-- hookStrength（钩子强度）权重${cal.dimensionWeights.hookStrength}
-- consistency（一致性）权重${cal.dimensionWeights.consistency}
-- proseQuality（文笔质量）权重${cal.dimensionWeights.proseQuality}
-- characterDepth（角色深度）权重${cal.dimensionWeights.characterDepth}
+=== 评价维度（0-10分，加权计算） ===
+- engagement（吸引力×${cal.dimensionWeights.engagement}）
+- pacing（节奏×${cal.dimensionWeights.pacing}）
+- hookStrength（钩子×${cal.dimensionWeights.hookStrength}）
+- consistency（一致性×${cal.dimensionWeights.consistency}）
+- proseQuality（文笔×${cal.dimensionWeights.proseQuality}）
+- characterDepth（角色深度×${cal.dimensionWeights.characterDepth}）
 
-本题材打分标准：
+=== 体验级评分锚点（用感受校准分数） ===
+
+翻页欲（engagement最核心的标尺）：
+- 9-10: 读到一半忘了呼吸，读完最后一行立刻想看下一章
+- 7-8: 一口气读完没走神，但不会为了看下一章熬夜
+- 5-6: 中途想看手机，读完可以心安理得放下
+- 4以下: 跳着读或直接弃
+
+可记忆性（是否有让你想截图/分享的段落）：
+- 有"金句"或名场面（加分）
+- 有让人会心一笑的幽默（加分）
+- 有让人胸口一紧的瞬间（加分）
+- 读完脑子里一片空白，说不出印象最深的情节（扣分）
+
+沉浸度（多久让你忘记这是AI写的）：
+- 第一段就入戏 vs 读了几段才进入状态 vs 始终有"被安排"的感觉
+
+proseQuality 文笔质量（重点）：
+- 10: 句句有画面，零AI味，展示而非讲述，有金句
+- 8: 文笔很好，偶有可优化处
+- 6: 过得去但3+处"讲述而非展示"或AI套话
+- 4以下: AI味浓重
+
+AI味检测——以下套话频繁出现则扣分：${clicheExamples}
+深层AI味更致命：角色对自己情绪过于自知、事件发展过于顺滑、所有角色内心独白像论文、结构过于工整对称。
+
+=== 题材评分锚点 ===
 高分（9-10）：${cal.scoringAnchors.high}
 中等（5-6）：${cal.scoringAnchors.mid}
 低分（0-4）：${cal.scoringAnchors.low}
 
-proseQuality 特别说明：
-- AI味检测——以下套话频繁出现则扣分：${clicheExamples}
-- "讲述多于展示"是最常见的扣分项
-
-本题材专属检查项：
+题材专属检查：
 ${cal.genreSpecificChecks.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
-总体裁决标准（硬规则）：
-- overallScore >= 7.5 且无 critical 问题 → "good"
-- overallScore >= 5.5 或有 moderate 问题 → "needs_edit"
-- overallScore < 5.5 或有 critical 问题 → "major_issues"
+=== 反虚高铁律 ===
+- 平均分不超过8.0，除非章节真的接近出版水准
+- "还可以"=6，"不错"=7，"很好"=8，"惊艳"=9，"完美"=10
+- 不给安慰分。每个8+分都必须说出具体优秀表现。
+
+=== 裁决 ===
+- overallScore >= 8.5 且无critical → "good"
+- overallScore >= 6.0 或有moderate → "needs_edit"
+- overallScore < 6.0 或有critical → "major_issues"
 
 ${CONTINUITY_BASELINE_PLAYBOOK}
-
 ${CHARACTER_ARC_PLAYBOOK}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
       })(),
       userPrompt: `故事上下文：

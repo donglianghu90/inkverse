@@ -8,31 +8,33 @@ import { Injectable } from '@nestjs/common';
 import { LlmService } from '../llm/llm.service';
 import {
   ChapterIntent,
-  StoryStateV2,
-} from '../schemas/novel-v2.schemas';
+  StoryState,
+} from '../schemas/novel-state.schemas';
 import { ChapterDraft, chapterDraftSchema } from '../schemas/novel.schemas';
 import {
   WRITING_SOUL_PLAYBOOK,
   PROSE_CRAFT_PLAYBOOK,
-  CHAPTER_RHYTHM_V2_PLAYBOOK,
+  CHAPTER_RHYTHM_PLAYBOOK,
   CONTINUITY_BASELINE_PLAYBOOK,
-  THREAD_AWARENESS_PLAYBOOK,
   CHARACTER_ARC_PLAYBOOK,
-  FIRST_CHAPTERS_V2_PLAYBOOK,
-  buildCompactContextV2,
+  FIRST_CHAPTERS_PLAYBOOK,
+  CHAPTER_TYPE_TEMPLATES,
   buildCompactContextProse,
-  buildIntentContext,
-  buildKpiTrendHintsV2,
-} from '../prompting/novel-playbook-v2';
-import { MiniArcChapterBeat } from '../schemas/novel-v2.schemas';
+  buildKpiTrendHints,
+} from '../prompting/novel-playbook';
+import { MiniArcChapterBeat } from '../schemas/novel-state.schemas';
+import { DetailContextService } from '../detail-context.service';
 
 @Injectable()
 export class CreativeWriterAgent {
-  constructor(private readonly llm: LlmService) {}
+  constructor(
+    private readonly llm: LlmService,
+    private readonly detailContext: DetailContextService,
+  ) {}
 
   private resolveChapterType(
     intent: ChapterIntent,
-    state: StoryStateV2,
+    state: StoryState,
   ): { type: 'setup' | 'rising' | 'climax' | 'relief' | 'general'; temperature: number } {
     const beat = this.findCurrentBeat(intent, state);
     if (beat?.role) {
@@ -51,7 +53,7 @@ export class CreativeWriterAgent {
 
   private findCurrentBeat(
     intent: ChapterIntent,
-    state: StoryStateV2,
+    state: StoryState,
   ): MiniArcChapterBeat | undefined {
     if (!state.currentArc?.chapterBeats) return undefined;
     return state.currentArc.chapterBeats.find(
@@ -61,147 +63,110 @@ export class CreativeWriterAgent {
 
   private buildDynamicRules(
     chapterType: string,
-    state: StoryStateV2,
+    state: StoryState,
     intent: ChapterIntent,
   ): string {
     const profile = state.bookPromptProfile;
     const blocks: string[] = [];
 
-    // Tier 2: Profile-driven identity & rules
+    // ── Layer 1: Identity & Creative Freedom ──
     blocks.push(profile.writerGuide.coreIdentity + `\n你的使命不是"执行任务"，而是"创作故事"。意图给你方向，但你有完全的创作自由。好的意外比严格执行计划更重要。`);
 
-    // Tier 1: Universal hard rules (never change)
-    blocks.push(`=== 不可违反的硬规则 ===
-- 禁止出场的角色绝对不能出现（死亡/退场/休眠角色）。
-- 开头必须承接上章（如果有的话）。
-- 结尾必须有让读者想看下一章的钩子。
-- 字数必须在意图给定的范围内。
-- 不得输出结构化数据、提纲或说明文字，只输出小说正文。`);
+    // ── Layer 2: Iron Rules (5 conditions, never violate) ──
+    blocks.push(`=== 铁律（违反任何一条即为失败） ===
+1. 禁止出场的角色绝对不能出现（死亡/退场/休眠角色）。
+2. 开头必须承接上章（如果有的话）。
+3. 结尾必须有让读者想看下一章的钩子。
+4. 字数必须在意图给定的范围内。
+5. 只输出小说正文，不得输出结构化数据/提纲/说明。`);
 
-    // Tier 1: Universal craft rules
-    blocks.push(PROSE_CRAFT_PLAYBOOK);
+    // ── Layer 3: Chapter Type Template (the most actionable writing guide) ──
+    const template = CHAPTER_TYPE_TEMPLATES[chapterType];
+    if (template) {
+      blocks.push(template);
+    }
+
+    if (intent.chapterNumber <= 3) blocks.push(FIRST_CHAPTERS_PLAYBOOK);
+
+    // ── Layer 4: Core Craft (prose technique + soul) ──
     blocks.push(WRITING_SOUL_PLAYBOOK);
+    blocks.push(PROSE_CRAFT_PLAYBOOK);
+    blocks.push(CHAPTER_RHYTHM_PLAYBOOK);
 
-    // Tier 2: Profile-driven genre-specific craft examples
+    // ── Layer 5: Genre-specific rules (from profile) ──
+    blocks.push(`=== 题材规则 ===\n${profile.writerGuide.genreRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n\n节奏：${profile.writerGuide.pacingGuide}\n对话：${profile.writerGuide.dialogueGuide}\n调性：${profile.writerGuide.toneGuide}`);
+
+    // Genre-specific craft examples (only those NOT already in PROSE_CRAFT_PLAYBOOK)
     if (profile.writerGuide.craftExamples.length > 0) {
-      const exLines = profile.writerGuide.craftExamples.map(
-        (e) => `坏：${e.bad}\n好：${e.good}\n规则：${e.rule}`,
-      );
-      blocks.push(`=== 本题材写作正反例 ===\n${exLines.join('\n\n')}`);
+      const exLines = profile.writerGuide.craftExamples
+        .slice(0, 3)
+        .map((e) => `坏：${e.bad} → 好：${e.good}（${e.rule}）`);
+      blocks.push(`=== 本题材正反例 ===\n${exLines.join('\n')}`);
     }
 
-    // Tier 2: Profile-driven genre rules
-    blocks.push(`=== 题材专属规则 ===\n${profile.writerGuide.genreRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}`);
-
-    // Tier 2: Profile-driven pacing & dialogue
-    blocks.push(`=== 节奏指南 ===\n${profile.writerGuide.pacingGuide}`);
-    blocks.push(`=== 对话指南 ===\n${profile.writerGuide.dialogueGuide}`);
-    blocks.push(`=== 调性 ===\n${profile.writerGuide.toneGuide}`);
-
-    // Tier 1: Universal chapter type rules (structure is universal, but the rules are generic enough)
-    if (chapterType === 'setup') {
-      blocks.push(`=== 铺垫章重点 ===
-- 本章核心任务是"勾起好奇"，不是"说明信息"。
-- 多埋线索，少给答案。新角色登场要有悬念。`);
-    } else if (chapterType === 'climax') {
-      blocks.push(`=== 高潮章重点 ===
-- 本章必须有一个让读者拍桌叫好的大场面或大揭露。
-- 节奏要快：短句、断句、动作密集。
-- 爽感要有层次：先小爽、再中爽、最后炸裂。`);
-    } else if (chapterType === 'relief') {
-      blocks.push(`=== 过渡章重点 ===
-- 可以轻松写，但仍需推进一条暗线。
-- 适合写角色间的日常互动和感情基础。
-- 暗示下一场风暴——让读者在轻松中隐隐感到不安。`);
-    } else if (chapterType === 'rising') {
-      blocks.push(`=== 升温章重点 ===
-- 矛盾加剧但不爆发——像弹簧被越压越紧。
-- 适合展示角色的内心挣扎和两难抉择。`);
-    }
-
-    if (intent.chapterNumber <= 3) blocks.push(FIRST_CHAPTERS_V2_PLAYBOOK);
-
-    // Tier 1: Universal style/POV rules
+    // ── Layer 6: Consistency guardrails (compact) ──
+    const guardrails: string[] = [CONTINUITY_BASELINE_PLAYBOOK];
     if (state.styleAnchor) {
-      blocks.push(`=== 文风一致性 ===
-- 叙事腔调、节奏偏好、对话风格必须与文风锚点一致。`);
-      if (state.styleAnchor.pov) {
-        const povLabel: Record<string, string> = {
-          first_person: '第一人称',
-          third_person_limited: '第三人称限制视角',
-          third_person_omniscient: '第三人称全知视角',
-          multi_pov: '多视角',
-        };
-        blocks.push(`=== 叙事视角 ===\n当前视角：${povLabel[state.styleAnchor.pov] ?? state.styleAnchor.pov}${
-          state.styleAnchor.pov === 'third_person_limited' ? '\n- 只能描写视角角色看到/听到/想到的内容。' : ''
-        }${state.styleAnchor.povSwitchRules ? `\n视角切换规则：${state.styleAnchor.povSwitchRules}` : ''}`);
-      }
+      const povLabel: Record<string, string> = {
+        first_person: '第一人称', third_person_limited: '第三人称限制视角',
+        third_person_omniscient: '第三人称全知视角', multi_pov: '多视角',
+      };
+      guardrails.push(`文风：${state.styleAnchor.narrativeVoice}，节奏：${state.styleAnchor.pacePreference}，对话：${state.styleAnchor.dialogueStyle}${state.styleAnchor.pov ? '，视角：' + (povLabel[state.styleAnchor.pov] ?? state.styleAnchor.pov) : ''}`);
     }
-
-    // Tier 1: Universal continuity rules (always apply)
-    if ((state.factions ?? []).length > 0) {
-      blocks.push(`=== 势力规则 ===
-- 角色行为必须符合其所属势力的规矩和等级。
-- 提到势力时名称/类型必须与势力表一致。`);
-    }
-
-    if ((state.activeCommitments ?? []).length > 0) {
-      blocks.push(`=== 角色承诺 ===
-- 角色不能"失忆"——承诺影响行动和选择。
-- 承诺浮现应由情境自然触发。`);
-    }
-
-    // Tier 2: Profile-conditional — only if genre uses golden finger
+    if ((state.factions ?? []).length > 0) guardrails.push('势力：角色行为必须符合所属势力的规矩和等级。');
+    if ((state.activeCommitments ?? []).length > 0) guardrails.push('承诺：角色不能"失忆"——已立的承诺影响行动和选择。');
     if (state.goldenFinger && profile.worldProfile.goldenFingerApplicable) {
-      blocks.push(`=== 金手指 ===
-- 每次使用都应让读者感到惊喜，但必须有限制和代价。
-- 定期暗示未解锁的更深层能力。`);
+      guardrails.push('金手指：每次使用都应有惊喜感，但必须有限制和代价。');
     }
 
-    if (state.seed.readerPersona) {
-      blocks.push(`=== 读者代入 ===\n${profile.worldProfile.characterRelationEmphasis}`);
-    }
-
-    // Tier 2: Profile-driven anti-cliche
     const clicheNames = profile.clichePatterns
       .filter((c) => c.maxPerChapter <= 1)
       .map((c) => `"${c.pattern}"`)
       .slice(0, 8);
-    if (clicheNames.length > 0 || (state.recentDistinctivePhrases ?? []).length > 0) {
-      blocks.push(`=== 反重复 ===
-- 以下表达本章每个最多出现1次：${clicheNames.join('、')}
-- 上下文中的"禁用表达"列表中的表达本章不得使用。
-- 每个重要场景的描写方式必须有变化。`);
+    if (clicheNames.length > 0) {
+      guardrails.push(`反套话：以下每个最多出现1次——${clicheNames.join('、')}`);
     }
+    blocks.push(`=== 一致性与限制 ===\n${guardrails.join('\n')}`);
 
-    // Tier 1: Universal structural rules
-    blocks.push(CHAPTER_RHYTHM_V2_PLAYBOOK);
-    blocks.push(CONTINUITY_BASELINE_PLAYBOOK);
-    blocks.push(THREAD_AWARENESS_PLAYBOOK);
+    // ── Layer 7: Character depth (compact) ──
     blocks.push(CHARACTER_ARC_PLAYBOOK);
 
-    const kpiHints = buildKpiTrendHintsV2(state);
-    if (kpiHints.length > 0) blocks.push('动态质量提示：\n' + kpiHints.join('\n'));
+    // ── Dynamic hints ──
+    const kpiHints = buildKpiTrendHints(state);
+    if (kpiHints.length > 0) blocks.push(kpiHints.join('\n'));
 
     return blocks.join('\n\n');
   }
 
   async write(
-    state: StoryStateV2,
+    state: StoryState,
     intent: ChapterIntent,
     previousChapterEnding?: string,
     additionalSystemPrompt?: string,
+    rewriteGuidance?: import('../schemas/novel-state.schemas').RewriteGuidance,
+    continuityInjections?: string[],
   ): Promise<ChapterDraft> {
     const proseContext = buildCompactContextProse(state, {
-      maxCharacters: 8,
-      maxChapterSummaries: 4,
-      maxOpenThreads: 8,
-      maxTimelineEvents: 10,
+      maxCharacters: 12,
+      maxChapterSummaries: 6,
+      maxOpenThreads: 10,
+      maxTimelineEvents: 12,
     });
-    const intentCtx = buildIntentContext(intent);
     const { type: chapterType, temperature } = this.resolveChapterType(intent, state);
-    const systemPrompt = this.buildDynamicRules(chapterType, state, intent) +
+
+    // 角色细节记忆（签名动作 + 典型描写），用于提升人物质感一致性。
+    const detailCtx = await this.detailContext.buildWriterDetailContext(
+      state.bookId,
+      state,
+      intent,
+    );
+
+    let systemPrompt = this.buildDynamicRules(chapterType, state, intent) +
       (additionalSystemPrompt ? `\n\n=== 作者补充指示 ===\n${additionalSystemPrompt}` : '');
+
+    if (detailCtx && detailCtx.trim().length > 0) {
+      systemPrompt += `\n\n=== 人物细节记忆（保持动作/神态一致） ===\n${detailCtx}`;
+    }
 
     const arcHints = intent.characterArcGuidance.arcHints;
     const mustHints = arcHints.filter((h) => h.priority === 'must');
@@ -240,6 +205,32 @@ export class CreativeWriterAgent {
         .join('\n');
     })();
 
+    let rewriteSection = '';
+    if (rewriteGuidance) {
+      const rg = rewriteGuidance;
+      const lines: string[] = [
+        `\n=== 重写指导（第${rg.attemptNumber}/${rg.maxAttempts}轮，上轮${rg.previousScore}分） ===`,
+        `上轮优点（必须保留和加强）：`,
+        ...rg.previousStrengths.map((s) => `  ✓ ${s}`),
+        `上轮问题（本轮必须修复）：`,
+        ...rg.previousIssues.map((i) => `  ✗ [${i.severity}/${i.category}] ${i.description} → ${i.suggestedFix}`),
+      ];
+      if (rg.repeatedIssues.length > 0) {
+        lines.push(`⚠️ 反复出现的问题（最高优先级修复）：`);
+        rg.repeatedIssues.forEach((ri) => lines.push(`  ‼ ${ri}`));
+      }
+      if (rg.specificInstructions) {
+        lines.push(`特别指示：${rg.specificInstructions}`);
+      }
+      lines.push(`重写策略：不是在旧稿上修补，而是用全新的角度重新构思这一章，同时保留优点、规避已知问题。`);
+      rewriteSection = lines.join('\n');
+    }
+
+    let continuitySection = '';
+    if (continuityInjections?.length) {
+      continuitySection = `\n=== 连续性提醒 ===\n${continuityInjections.map((c) => `⚠ ${c}`).join('\n')}`;
+    }
+
     return this.llm.generateStructured({
       taskName: 'creative-writer',
       schema: chapterDraftSchema,
@@ -249,24 +240,27 @@ export class CreativeWriterAgent {
         chapterNumber: intent.chapterNumber,
         lastHook: state.lastHook,
         chapterType,
+        isRewrite: !!rewriteGuidance,
+        attemptNumber: rewriteGuidance?.attemptNumber ?? 1,
       },
       systemPrompt,
       userPrompt: `故事上下文：
 ${proseContext}
 
-本章意图：
-${JSON.stringify(intentCtx, null, 2)}
-${previousChapterEnding ? `\n上一章结尾原文（你必须精确承接这段文字的场景、语气和情绪）：\n「${previousChapterEnding}」\n` : ''}
-创作指引：
-- 文风要贴合 ${state.seed.targetAudience} 的中文网文阅读习惯。
-- 章节标题要有冲突感和吸引力，禁止"第X章"模板标题。
-- 开头承接：${intent.carryoverFromLastChapter}
-- 伏线指引：新坑不超过 ${intent.threadGuidance.maxNewThreads} 条；${intent.threadGuidance.advice}
-- 正文字数：${intent.wordCountRange.min}-${intent.wordCountRange.max} 字。
+本章方向（第${intent.chapterNumber}章）：
+- 目标：${intent.goals.join('；')}
+- 情绪走向：${intent.emotionDirection}
+- 承接上章：${intent.carryoverFromLastChapter}
+- 伏线：新坑不超过${intent.threadGuidance.maxNewThreads}条。${intent.threadGuidance.advice}
 - 钩子方向：${intent.hookDirection}
-${ arcSection ? `\n角色弧线要求：\n${arcSection}` : ''}${voiceSection}${gapSection}
+- 正文字数：${intent.wordCountRange.min}-${intent.wordCountRange.max}字
+${previousChapterEnding ? `\n上一章结尾原文（精确承接场景、语气和情绪）：\n「${previousChapterEnding}」` : ''}
+${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSection}${rewriteSection}${continuitySection}
 
-请输出完整中文章节正文。`,
+创作要求：
+- 文风贴合${state.seed.targetAudience}的中文网文阅读习惯。
+- 章节标题要有冲突感和吸引力，禁止"第X章"模板标题。
+- 输出完整中文章节正文。`,
       temperature,
     });
   }

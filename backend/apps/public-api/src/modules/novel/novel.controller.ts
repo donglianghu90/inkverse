@@ -25,7 +25,7 @@ import { ConfigureAutoSerializationDto } from './dto/configure-auto-serializatio
 import { CreateBookDto } from './dto/create-book.dto';
 import { GenerateChaptersBatchDto } from './dto/generate-chapters-batch.dto';
 import { ListChaptersDto } from './dto/list-chapters.dto';
-import { NovelV2Service } from './novel-v2.service';
+import { NovelService } from './novel.service';
 import { NovelProgressService } from './novel-progress.service';
 import { BookAgentPipelineService } from './book-agent-pipeline.service';
 import { AgentNodeConfig } from './entities/book-agent-pipeline.entity';
@@ -38,7 +38,7 @@ export class NovelController {
   private readonly logger = new Logger(NovelController.name);
 
   constructor(
-    private readonly novelService: NovelV2Service,
+    private readonly novelService: NovelService,
     private readonly autoSerializationService: AutoSerializationService,
     private readonly progressService: NovelProgressService,
     private readonly pipelineService: BookAgentPipelineService,
@@ -112,7 +112,7 @@ export class NovelController {
       }
     });
 
-    (async () => {
+    setTimeout(async () => {
       try {
         this.logger.log(`[createBookSse] 开始调用 createBook...`);
         const result = await this.novelService.createBook(dto);
@@ -126,7 +126,7 @@ export class NovelController {
         unsubscribe();
         this.logger.log(`[createBookSse] SSE 流程结束，已取消订阅`);
       }
-    })();
+    }, 0);
 
     return subject.asObservable();
   }
@@ -174,7 +174,7 @@ export class NovelController {
 
   @Post('books/:bookId/chapters/generate-batch')
   @Public()
-  @ApiOperation({ summary: '批量生成章节', description: '循环生成多章，支持质量低于阈值自动停止' })
+  @ApiOperation({ summary: '批量生成章节', description: '循环生成多章，质量门控固定开启（低于阈值自动停止）' })
   @ApiParam({ name: 'bookId', description: '书籍唯一 ID', example: 'b1a2c3d4-e5f6-7890-abcd-ef1234567890' })
   @ApiResponse({ status: 201, description: '批量生成结果' })
   @ApiResponse({ status: 404, description: '未找到' })
@@ -212,6 +212,21 @@ export class NovelController {
     return this.novelService.getChapter(bookId, chapterNumber);
   }
 
+  @Put('books/:bookId/chapters/:chapterNumber')
+  @Public()
+  @ApiOperation({ summary: '更新章节', description: '用户修改章节标题或内容后保存' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiParam({ name: 'chapterNumber', description: '章节序号', example: 1 })
+  @ApiResponse({ status: 200, description: '更新成功' })
+  @ApiResponse({ status: 404, description: '章节未找到' })
+  async updateChapter(
+    @Param('bookId') bookId: string,
+    @Param('chapterNumber', ParseIntPipe) chapterNumber: number,
+    @Body() body: { title?: string; content?: string },
+  ): Promise<unknown> {
+    return this.novelService.updateChapter(bookId, chapterNumber, body);
+  }
+
   @Sse('books/:bookId/chapters/generate-sse')
   @Public()
   @ApiOperation({ summary: '生成章节（SSE）', description: '通过 SSE 流式推送章节生成进度' })
@@ -228,7 +243,7 @@ export class NovelController {
       }
     });
 
-    (async () => {
+    setTimeout(async () => {
       try {
         await this.novelService.generateChapter(bookId);
       } catch (err: any) {
@@ -237,7 +252,7 @@ export class NovelController {
       } finally {
         unsubscribe();
       }
-    })();
+    }, 0);
 
     return subject.asObservable();
   }

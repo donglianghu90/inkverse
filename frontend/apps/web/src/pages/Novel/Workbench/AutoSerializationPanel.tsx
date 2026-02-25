@@ -3,7 +3,6 @@ import { Clock, Loader2, Play, Power, PowerOff, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import {
@@ -40,8 +39,6 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
     dailyStartTime: '08:00',
     chaptersPerRun: 3,
     maxRepairRounds: 2,
-    strictQuality: true,
-    stopWhenLowQuality: true,
     minQualityScore: 7,
     minOverallScore: 7,
   });
@@ -60,10 +57,8 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
             dailyStartTime: res.dailyStartTime,
             chaptersPerRun: res.chaptersPerRun,
             maxRepairRounds: res.qualityPolicy.maxRepairRounds,
-            strictQuality: res.qualityPolicy.strictQuality,
-            stopWhenLowQuality: res.qualityPolicy.stopWhenLowQuality,
-            minQualityScore: res.qualityPolicy.minQualityScore,
-            minOverallScore: res.qualityPolicy.minOverallScore,
+            minQualityScore: Math.max(res.qualityPolicy.minQualityScore, 7),
+            minOverallScore: Math.max(res.qualityPolicy.minOverallScore, 7),
           });
         }
       } catch {
@@ -77,7 +72,12 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await configureAutoSerialization(bookId, config);
+      const payload = {
+        ...config,
+        minQualityScore: Math.max(config.minQualityScore, 7),
+        minOverallScore: Math.max(config.minOverallScore, 7),
+      };
+      const res = await configureAutoSerialization(bookId, payload);
       setEnabled(res.enabled);
       setHasConfig(true);
       setNextRunAt(res.scheduler.nextRunAt);
@@ -204,55 +204,35 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
             {/* Quality Guards */}
             <div className="space-y-4">
               <p className="text-sm font-medium">质量守卫</p>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label>严格质量模式</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">所有闸门必须通过</p>
-                </div>
-                <Switch
-                  checked={config.strictQuality}
-                  onCheckedChange={(v) => setConfig({ ...config, strictQuality: v })}
-                />
+              <div className="space-y-2 rounded-lg bg-muted/40 p-3">
+                <Label>质量门控（固定开启）</Label>
+                <p className="text-xs text-muted-foreground">任一章节低于阈值即自动停止当次连载任务</p>
               </div>
 
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label>低质量自动停止</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">质量低于阈值时终止本轮</p>
+              <div className="grid grid-cols-2 gap-3 pl-4 border-l-2 border-primary/20">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">最低写作质量分</Label>
+                  <Input
+                    type="number"
+                    min={7}
+                    max={10}
+                    step={0.5}
+                    value={config.minQualityScore}
+                    onChange={(e) => setConfig({ ...config, minQualityScore: Number(e.target.value) })}
+                  />
                 </div>
-                <Switch
-                  checked={config.stopWhenLowQuality}
-                  onCheckedChange={(v) => setConfig({ ...config, stopWhenLowQuality: v })}
-                />
+                <div className="space-y-1.5">
+                  <Label className="text-xs">最低综合评分</Label>
+                  <Input
+                    type="number"
+                    min={7}
+                    max={10}
+                    step={0.5}
+                    value={config.minOverallScore}
+                    onChange={(e) => setConfig({ ...config, minOverallScore: Number(e.target.value) })}
+                  />
+                </div>
               </div>
-
-              {config.stopWhenLowQuality && (
-                <div className="grid grid-cols-2 gap-3 pl-4 border-l-2 border-primary/20">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">最低写作质量分</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={10}
-                      step={0.5}
-                      value={config.minQualityScore}
-                      onChange={(e) => setConfig({ ...config, minQualityScore: Number(e.target.value) })}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">最低综合评分</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={10}
-                      step={0.5}
-                      value={config.minOverallScore}
-                      onChange={(e) => setConfig({ ...config, minOverallScore: Number(e.target.value) })}
-                    />
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         )}

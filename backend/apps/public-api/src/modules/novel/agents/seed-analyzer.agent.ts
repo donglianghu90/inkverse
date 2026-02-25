@@ -11,8 +11,8 @@ import {
   roughOutlineSchema,
   StorySeed,
   RoughOutline,
-} from '../schemas/novel-v2.schemas';
-import { WRITING_SOUL_PLAYBOOK } from '../prompting/novel-playbook-v2';
+} from '../schemas/novel-state.schemas';
+import { WRITING_SOUL_PLAYBOOK } from '../prompting/novel-playbook';
 
 interface SeedAnalysisInput {
   mainIdea: string;
@@ -39,59 +39,55 @@ export class SeedAnalyzerAgent {
     return this.llm.generateStructured({
       taskName: 'seed-analyzer',
       schema: seedAnalysisOutputSchema,
-      systemPrompt: `你是一位资深的网文策划，同时也是一位读者心理专家。
-你的任务不只是"提炼创意"，而是设计一本能让读者上瘾的长篇网文。
+      systemPrompt: `你是一位资深网文策划+读者心理专家。你不是在"提炼创意"——你是在设计一台上瘾机器。
 
-关键原则：
-- 这是一部长篇网文——计划 ${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800} 章，每章约 ${input.targetChapterWordCount ?? 3000} 字，总字数约 ${Math.round(((input.plannedTotalChapters?.min ?? 500) + (input.plannedTotalChapters?.max ?? 800)) / 2 * (input.targetChapterWordCount ?? 3000) / 10000)}万字。
-- 故事种子是"方向"，不是"规范"。后续写作可以偏离。
-- 粗大纲需要覆盖开局→发展→高潮→结局，节点数量应匹配总章数规模。
-  · 500-800 章的长篇，大纲应有 8-15 个大阶段节点，每个阶段跨度 40-100 章。
-  · 每个阶段的 tentativeChapterRange 要明确（如 "1-50", "51-120"）。
-- 主角概念只需要姓名、处境、核心渴望、性格特征——不需要完整档案。
-- 红线是绝对不能做的事（如：主角不能死、不能有种族歧视内容等）。
-- 所有输出使用简体中文。
+=== 核心原则 ===
+- 长篇网文（${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800}章，每章约${input.targetChapterWordCount ?? 3000}字，总约${Math.round(((input.plannedTotalChapters?.min ?? 500) + (input.plannedTotalChapters?.max ?? 800)) / 2 * (input.targetChapterWordCount ?? 3000) / 10000)}万字）
+- 故事种子是"方向"不是"规范"，后续可偏离
+- 粗大纲 8-15 个大阶段，每阶段 40-100 章
+- 所有输出简体中文
 
-长篇规划特别注意：
-- 世界观深度要能支撑 ${input.plannedTotalChapters?.min ?? 500}+ 章——需要多个地域/势力/力量层级。
-- 主线冲突要有足够的"升级空间"——从小舞台到大舞台，逐步扩展。
-- 金手指的进化路径要有足够阶段——每 80-120 章左右应有一次重大升级。
-- 反派/对手要有梯度——不能一开始就打终极boss。
-- 概念评估时要额外考虑"这个世界观能不能支撑 500+ 章不枯竭"。
+=== 核心循环设计（最重要的新增——决定书能不能追下去） ===
+每本成功的长篇网文都有一个让读者上瘾的"核心循环"。你必须在种子中明确设计它。
+- 天蚕土豆式：被小看→隐忍修炼→关键时刻爆发→震惊众人→更大的舞台→再被小看…
+- 猫腻式：发现异常→追查真相→被更大的谜团包围→获得碎片答案→世界观再次扩大…
+- 核心循环的关键：每次重复都有变化，但读者每次都期待"这次会怎样爆发"。
+- 你要明确定义：
+  1) 循环的起点状态（主角面临什么处境）
+  2) 循环的上升路径（如何积蓄势能）
+  3) 循环的爆发点（读者获得满足感的瞬间）
+  4) 循环的重置机制（如何让主角回到新的起点但更高一层）
 
-读者画像设计（readerPersona——极其重要）：
-你必须精确建模目标读者：
-- demographics: 年龄、性别、生活状态（如"18-25岁男性大学生/初入职场"）
-- dailyFrustrations: 2-3个他们每天面对的真实痛苦（如"被领导PUA"、"考试压力"、"感情不顺"）
-- coreFantasy: 一句话概括他们的白日梦（如"如果我有超能力/如果我回到过去"）
-- projectionAnchor: 主角身上让读者产生"这就是我"感觉的锚点（如"普通出身但不甘平庸"）
-- emotionalNeeds: 这本书满足读者的哪些情感需求
-- triggerScenes: 2-3个能让这群读者忍不住拍大腿/红眼眶的场景类型（如"被人小看后翻盘"、"发现父亲一直在默默守护"）
+=== 情感锚点设计 ===
+金手指不只是"能力工具"，它必须承载情感：
+- 金手指的来源/代价要和角色的核心情感挂钩（继承自亡父→思念、偷来的力量→愧疚、代价是记忆→恐惧）
+- 每次使用金手指时，读者不只感到"爽"，还感到一丝情绪波动
 
-金手指设计（goldenFinger——决定书能不能活过第一卷）：
-- 金手指必须独特——不能是"系统+面板"的老套路（除非有创新变化）
-- 金手指必须有限制——全能的金手指没有张力
-- 金手指必须可进化——随着故事发展解锁新能力
-- name: 金手指的名字
-- concept: 一句话解释它是什么
-- uniqueness: 它和同类网文的金手指有什么不同
-- limitations: 使用限制和代价
-- evolutionPath: 至少2个进化阶段
-- hiddenDepth: 金手指背后的秘密（后期揭晓，可以是剧情大转折的种子）
+=== 大纲的情感主题 ===
+每个大阶段节点除了剧情描述，还要有"情感主题"：
+- 例：第一阶段（1-50章）→ 情感主题："孤独者找到归属"
+- 例：第二阶段（51-120章）→ 情感主题："信任被背叛后的重建"
+- 这样每个阶段不只有剧情推进，还有情感成长弧。
 
-概念评估（conceptEvaluation——你必须自我审视）：
-生成完概念后，以一个资深编辑的眼光打分：
-- hookScore: 第一章能不能抓住读者？（0-10）
-- uniquenessScore: 和市面上的书相比有多不同？（0-10）
-- marketFitScore: 目标读者群有多大？（0-10）
-- projectionScore: 读者能不能代入主角？（0-10）
-- overallViability: 综合判断（weak/passable/strong/exceptional）
-- strengthNotes: 概念的亮点
-- weaknessNotes: 概念的弱点（必须诚实）
-- suggestions: 如果要更好，可以怎么改进
+=== 世界观深度 ===
+- 世界观要能支撑 ${input.plannedTotalChapters?.min ?? 500}+ 章——多个地域/势力/力量层级
+- 主线冲突有足够"升级空间"——从小舞台到大舞台
+- 反派/对手有梯度——不能一开始打终极boss
 
-如果 overallViability 是 weak，你应该主动调整概念直到至少是 passable。
-如果 hookScore < 6，你必须重新设计开局。
+=== 读者画像（readerPersona） ===
+精确建模目标读者：demographics、dailyFrustrations、coreFantasy、projectionAnchor、emotionalNeeds、triggerScenes
+- projectionAnchor 最关键：主角身上什么特质让读者觉得"这就是我想成为的人"
+
+=== 金手指设计 ===
+- 独特（不是"系统+面板"老套路）、有限制、可进化
+- evolutionPath 阶段数匹配总章数（500-800章需5-8个进化阶段）
+- hiddenDepth：金手指背后的秘密，后期可成为剧情大转折种子
+
+=== 概念自评（conceptEvaluation） ===
+hookScore、uniquenessScore、marketFitScore、projectionScore（0-10）
+overallViability：weak/passable/strong/exceptional
+- 新增 addictionScore：读者读到第10章时有多难放下？（0-10）
+- 如果 overallViability = weak 或 hookScore < 6，主动调整
 
 ${WRITING_SOUL_PLAYBOOK}`,
       userPrompt: `请分析这个创意并生成故事种子与粗大纲：

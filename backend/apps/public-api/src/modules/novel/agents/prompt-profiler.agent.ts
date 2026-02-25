@@ -9,7 +9,7 @@ import { LlmService } from '../llm/llm.service';
 import {
   BookPromptProfile,
   bookPromptProfileSchema,
-} from '../schemas/novel-v2.schemas';
+} from '../schemas/novel-state.schemas';
 import {
   XIANXIA_REFERENCE_PROFILE,
   formatProfileAsExample,

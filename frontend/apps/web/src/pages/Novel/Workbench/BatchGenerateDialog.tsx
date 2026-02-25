@@ -3,7 +3,6 @@ import { Loader2, Sparkles, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
   DialogContent,
@@ -27,17 +26,30 @@ export const BatchGenerateDialog: React.FC<Props> = ({ open, onOpenChange, bookI
   const [config, setConfig] = useState({
     chapterCount: 5,
     maxRepairRounds: 2,
-    strictQuality: true,
-    stopWhenLowQuality: true,
     minQualityScore: 7,
     minOverallScore: 7,
   });
+
+  const formatStopReason = (reason: string | null): string | null => {
+    if (!reason) return null;
+    const match = reason.match(/_at_chapter_(\d+)$/);
+    if (match?.[1]) {
+      const chapter = match[1];
+      return `第 ${chapter} 章未达质量阈值`;
+    }
+    return reason;
+  };
 
   const handleSubmit = async () => {
     setLoading(true);
     setResult(null);
     try {
-      const res = await generateChaptersBatch(bookId, config);
+      const payload = {
+        ...config,
+        minQualityScore: Math.max(config.minQualityScore, 7),
+        minOverallScore: Math.max(config.minOverallScore, 7),
+      };
+      const res = await generateChaptersBatch(bookId, payload);
       setResult(res);
     } catch {
       // errorHandler in app.tsx already shows message
@@ -76,23 +88,29 @@ export const BatchGenerateDialog: React.FC<Props> = ({ open, onOpenChange, bookI
                 <p className="font-medium text-emerald-900">
                   生成完成 — {result.generatedChapters}/{result.requestedChapters} 章
                 </p>
-                {result.stopReason && (
+                {formatStopReason(result.stopReason) && (
                   <p className="text-sm text-emerald-700 mt-1 flex items-center gap-1">
                     <AlertTriangle className="h-3.5 w-3.5" />
-                    提前停止: {result.stopReason}
+                    提前停止: {formatStopReason(result.stopReason)}
                   </p>
                 )}
               </div>
             </div>
             <div className="space-y-2 max-h-48 overflow-y-auto">
-              {result.chapters.map((ch) => (
-                <div key={ch.chapterNumber} className="flex items-center justify-between text-sm px-2 py-1.5 rounded hover:bg-muted">
-                  <span>第 {ch.chapterNumber} 章 · {ch.title}</span>
-                  <span className={`tabular-nums font-medium ${ch.overallScore >= 7 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                    {ch.overallScore.toFixed(1)}
-                  </span>
-                </div>
-              ))}
+              {result.chapters.map((ch) => {
+                const qualityScore = ch.qualityScore ?? ch.overallScore;
+                const pass =
+                  qualityScore >= config.minQualityScore &&
+                  ch.overallScore >= config.minOverallScore;
+                return (
+                  <div key={ch.chapterNumber} className="flex items-center justify-between text-sm px-2 py-1.5 rounded hover:bg-muted">
+                    <span>第 {ch.chapterNumber} 章 · {ch.title}</span>
+                    <span className={`tabular-nums font-medium ${pass ? 'text-emerald-600' : 'text-amber-600'}`}>
+                      写作 {qualityScore.toFixed(1)} / 综合 {ch.overallScore.toFixed(1)}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
             <DialogFooter>
               <Button onClick={handleClose}>完成</Button>
@@ -114,43 +132,48 @@ export const BatchGenerateDialog: React.FC<Props> = ({ open, onOpenChange, bookI
                 <p className="text-xs text-muted-foreground">最多一次生成 50 章</p>
               </div>
 
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label>低质量自动停止</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">质量低于阈值时提前终止</p>
-                </div>
-                <Switch
-                  checked={config.stopWhenLowQuality}
-                  onCheckedChange={(v) => setConfig({ ...config, stopWhenLowQuality: v })}
+              <div className="space-y-2">
+                <Label htmlFor="maxRepairRounds">每章最大修复轮数</Label>
+                <Input
+                  id="maxRepairRounds"
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={config.maxRepairRounds}
+                  onChange={(e) => setConfig({ ...config, maxRepairRounds: Number(e.target.value) })}
                 />
+                <p className="text-xs text-muted-foreground">越高越稳，但生成耗时会增加</p>
               </div>
 
-              {config.stopWhenLowQuality && (
-                <div className="grid grid-cols-2 gap-3 pl-4 border-l-2 border-primary/20">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">最低写作质量分</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={10}
-                      step={0.5}
-                      value={config.minQualityScore}
-                      onChange={(e) => setConfig({ ...config, minQualityScore: Number(e.target.value) })}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">最低综合评分</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={10}
-                      step={0.5}
-                      value={config.minOverallScore}
-                      onChange={(e) => setConfig({ ...config, minOverallScore: Number(e.target.value) })}
-                    />
-                  </div>
+              <div className="space-y-2 rounded-lg bg-muted/40 p-3">
+                <Label>质量门控（固定开启）</Label>
+                <p className="text-xs text-muted-foreground">任一章节低于阈值即自动停止本次批量生成</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pl-4 border-l-2 border-primary/20">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">最低写作质量分</Label>
+                  <Input
+                    type="number"
+                    min={7}
+                    max={10}
+                    step={0.5}
+                    value={config.minQualityScore}
+                    onChange={(e) => setConfig({ ...config, minQualityScore: Number(e.target.value) })}
+                  />
                 </div>
-              )}
+                <div className="space-y-1.5">
+                  <Label className="text-xs">最低综合评分</Label>
+                  <Input
+                    type="number"
+                    min={7}
+                    max={10}
+                    step={0.5}
+                    value={config.minOverallScore}
+                    onChange={(e) => setConfig({ ...config, minOverallScore: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
             </div>
 
             <DialogFooter>

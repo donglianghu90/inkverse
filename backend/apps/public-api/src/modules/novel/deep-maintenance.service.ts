@@ -23,7 +23,7 @@ import { ChapterEntity } from './entities/chapter.entity';
 import {
   MaintenanceState,
   MaintenanceTrigger,
-  StoryStateV2,
+  StoryState,
   MiniArc,
   StyleAnchor,
   crystallizedBibleSchema,
@@ -33,8 +33,8 @@ import {
   consistencyAuditResultSchema,
   canonArbitrationResultSchema,
   threadHealthResultSchema,
-} from './schemas/novel-v2.schemas';
-import { buildCompactContextV2 } from './prompting/novel-playbook-v2';
+} from './schemas/novel-state.schemas';
+import { buildCompactContext } from './prompting/novel-playbook';
 
 const FIRST_CRYSTALLIZATION_CHAPTER = 3;
 const NEW_CHARACTERS_THRESHOLD = 3;
@@ -43,6 +43,10 @@ const NEW_FACTS_THRESHOLD = 10;
 const CONSECUTIVE_LOW_SCORE_THRESHOLD = 3;
 const CONSECUTIVE_CONSISTENCY_WARNING_THRESHOLD = 2;
 const MAX_CHAPTERS_WITHOUT_MAINTENANCE = 15;
+
+/** 每卷计划章数范围（卷规划时 LLM 会在此区间内决定 plannedEndChapter - startChapter + 1） */
+export const ARC_CHAPTERS_MIN = 5;
+export const ARC_CHAPTERS_MAX = 10;
 
 @Injectable()
 export class DeepMaintenanceService {
@@ -57,7 +61,7 @@ export class DeepMaintenanceService {
   /**
    * Evaluate whether maintenance should trigger. Pure logic, no LLM.
    */
-  evaluateTrigger(state: StoryStateV2): MaintenanceTrigger {
+  evaluateTrigger(state: StoryState): MaintenanceTrigger {
     const m = state.maintenance;
     const chapterNumber = state.chapterCursor - 1;
     const chaptersSinceLast = chapterNumber - m.lastMaintenanceAtChapter;
@@ -104,7 +108,8 @@ export class DeepMaintenanceService {
       reasons.push('无当前卷计划，需要规划下一卷');
       if (!tasks.includes('arc_planning')) tasks.push('arc_planning');
     } else if (arc && chapterNumber >= arc.plannedEndChapter) {
-      reasons.push(`当前卷「${arc.arcTitle}」已到达计划结束章(${arc.plannedEndChapter})，需要规划下一卷`);
+      // 仅在当前卷完成后再规划下一卷，确保卷内章节不被提前切换。
+      reasons.push(`当前卷「${arc.arcTitle}」已结束（计划结束章${arc.plannedEndChapter}），需要规划下一卷`);
       if (!tasks.includes('arc_planning')) tasks.push('arc_planning');
     }
 
@@ -124,9 +129,9 @@ export class DeepMaintenanceService {
    * Execute maintenance tasks. Returns updated state.
    */
   async execute(
-    state: StoryStateV2,
+    state: StoryState,
     trigger: MaintenanceTrigger,
-  ): Promise<StoryStateV2> {
+  ): Promise<StoryState> {
     const chapterNumber = state.chapterCursor - 1;
     this.logger.log(
       `[Maintenance] ========== 深度维护开始 ==========\n` +
@@ -192,12 +197,30 @@ export class DeepMaintenanceService {
     return updatedState;
   }
 
+  /**
+   * Bootstrap the first arc before chapter generation starts.
+   * Falls back to original state if planning fails.
+   */
+  async bootstrapInitialArc(state: StoryState): Promise<StoryState> {
+    if (state.currentArc) return state;
+    try {
+      return await this.planNextArc(state);
+    } catch (error) {
+      this.logger.warn(
+        `[Maintenance] initial arc planning skipped: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return state;
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Task implementations
   // -------------------------------------------------------------------------
 
-  private async crystallizeBible(state: StoryStateV2): Promise<StoryStateV2> {
-    const context = buildCompactContextV2(state, {
+  private async crystallizeBible(state: StoryState): Promise<StoryState> {
+    const context = buildCompactContext(state, {
       maxCharacters: 15,
       maxChapterSummaries: 20,
       maxOpenThreads: 15,
@@ -208,10 +231,14 @@ export class DeepMaintenanceService {
     const bible = await this.llm.generateStructured({
       taskName: 'bible-crystallization',
       schema: crystallizedBibleSchema,
-      systemPrompt: `你是设定整理专家。
-请从已有的故事内容中提炼一份 IP 圣经。
-这不是创造新设定，而是把已经在故事中建立的内容整理成参考文件。
-只记录已经在正文中确认的事实，不要编造未出现的内容。`,
+      systemPrompt: `你是设定整理专家。从已写内容中提炼IP圣经——这不是创造新设定，而是把已经建立的内容整理成权威参考文件。
+
+关键原则：
+- 只记录正文中确认的事实，不编造未出现的内容。
+- worldRules 要具体到"可验证"的程度（"筑基期修士飞行高度不超过百丈"比"筑基期可以飞"更有用）。
+- powerSystem 要清晰标注已出现的等级和已知的升级条件。
+- establishedFacts 要区分"明确的"和"暗示的"——后者标注 confidence。
+- narrativeStyle 要包含已形成的叙事特点：视角、语感、段落密度偏好。`,
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}
 
@@ -248,8 +275,8 @@ ${JSON.stringify(context, null, 2)}
     };
   }
 
-  private async reviseOutline(state: StoryStateV2): Promise<StoryStateV2> {
-    const context = buildCompactContextV2(state, {
+  private async reviseOutline(state: StoryState): Promise<StoryState> {
+    const context = buildCompactContext(state, {
       maxChapterSummaries: 15,
       maxOpenThreads: 10,
     });
@@ -286,8 +313,8 @@ ${JSON.stringify(context, null, 2)}
     };
   }
 
-  private async runConsistencyAudit(state: StoryStateV2): Promise<StoryStateV2> {
-    const context = buildCompactContextV2(state, {
+  private async runConsistencyAudit(state: StoryState): Promise<StoryState> {
+    const context = buildCompactContext(state, {
       maxCharacters: 20,
       maxChapterSummaries: 15,
       maxOpenThreads: 15,
@@ -365,7 +392,7 @@ ${JSON.stringify((state.characterFactLedger ?? []).slice(-50), null, 2)}
     return state;
   }
 
-  private async runCanonArbitration(state: StoryStateV2): Promise<StoryStateV2> {
+  private async runCanonArbitration(state: StoryState): Promise<StoryState> {
     const facts = state.characterFactLedger ?? [];
     if (facts.length === 0) return state;
 
@@ -428,7 +455,7 @@ ${JSON.stringify(state.characters.filter((c) => charsWithMultiple.some((x) => x.
     return { ...state, characterFactLedger: updatedFacts };
   }
 
-  private async runThreadHealthCheck(state: StoryStateV2): Promise<StoryStateV2> {
+  private async runThreadHealthCheck(state: StoryState): Promise<StoryState> {
     const threads = state.plotThreadLedger ?? [];
     const openThreads = threads.filter((t) => t.status === 'open');
     if (openThreads.length === 0) return state;
@@ -496,9 +523,9 @@ ${JSON.stringify(state.chapterSummaries.slice(-10), null, 2)}
     return state;
   }
 
-  private async planNextArc(state: StoryStateV2): Promise<StoryStateV2> {
+  private async planNextArc(state: StoryState): Promise<StoryState> {
     const chapterNumber = state.chapterCursor - 1;
-    const context = buildCompactContextV2(state, {
+    const context = buildCompactContext(state, {
       maxCharacters: 12,
       maxChapterSummaries: 10,
       maxOpenThreads: 12,
@@ -521,29 +548,36 @@ ${JSON.stringify(state.chapterSummaries.slice(-10), null, 2)}
     const newArc = await this.llm.generateStructured({
       taskName: 'arc-planning',
       schema: miniArcSchema,
-      systemPrompt: `你是一位擅长节奏控制的网文策划师。
-你的任务是规划接下来 5-10 章的"卷计划"。
+      systemPrompt: `你是一位擅长节奏控制的网文策划师。规划接下来${ARC_CHAPTERS_MIN}-${ARC_CHAPTERS_MAX}章的"卷计划"。
 
-网文节奏的核心原理：
-1) 爽感循环：被压制/挑战 → 隐忍/准备 → 爆发/碾压 → 新的更大挑战。每卷至少一个完整循环。
-2) 张力曲线：不能一直高潮，也不能一直平淡。setup(3-5) → escalation(5-7) → climax(8-9) → aftermath(3-4)。
-3) 呼吸节奏：连续 2-3 章紧张后，需要 1 章缓冲（日常/搞笑/感情戏）。
-4) 高潮章必须有明确的大爽点（boss战/真相揭露/情感高潮），不能是普通推进。
-5) 每卷结束时必须留一个更大的悬念，把读者拉进下一卷。
+=== 节奏核心 ===
+1) 爽感循环：压制/挑战→隐忍/准备→爆发/碾压→新的更大挑战。每卷至少一个完整循环。
+2) 张力曲线：setup(3-5)→escalation(5-7)→climax(8-9)→aftermath(3-4)。
+3) 呼吸节奏：连续2-3章紧张后需1章缓冲。
+4) 高潮章必须有明确大爽点，不能是普通推进。
+5) 每卷结束留更大悬念拉入下一卷。
 
-chapterBeats 中每章的 role 选择：
-- setup：铺垫新冲突、引入新角色/势力、建立背景。tensionLevel: 3-5。
-- escalation：升级矛盾、加压、制造紧迫感。tensionLevel: 5-7。
-- twist：出乎意料的转折。tensionLevel: 7-9。
-- climax：本卷最高潮。tensionLevel: 9-10。
-- aftermath：高潮后的善后、角色情感处理。tensionLevel: 2-4。
-- transition：过渡到下一阶段。tensionLevel: 3-5。
+=== 情感主题规划（新增——每卷的灵魂） ===
+每卷必须有一个情感主题——它是角色内心成长的维度，和剧情主线平行但更深入：
+- 例：第一卷剧情是"在宗门站稳脚跟"，情感主题是"孤独者找到归属"
+- 例：第二卷剧情是"应对势力阴谋"，情感主题是"信任被背叛后如何重建"
+- 例：某卷剧情是"比武大会"，情感主题是"证明自己vs接受自己"
+- emotionalTheme 字段要明确这卷的情感主线
+- 卷的高潮不只是战力高潮，也应该是情感高潮
 
-satisfactionType 选择：
+=== chapterBeats role ===
+- setup(铺垫): tensionLevel 3-5
+- escalation(升温): tensionLevel 5-7
+- twist(转折): tensionLevel 7-9
+- climax(高潮): tensionLevel 9-10
+- aftermath(善后): tensionLevel 2-4
+- transition(过渡): tensionLevel 3-5
+
+=== satisfactionType ===
 - none: 普通推进
-- minor_payoff: 小爽点（打脸、小升级、揭露小秘密）
-- major_payoff: 大爽点（boss战胜利、重大揭露）
-- emotional_peak: 情感高潮（告白/离别/重逢）
+- minor_payoff: 小爽点（打脸、小升级）
+- major_payoff: 大爽点（boss战、重大揭露）
+- emotional_peak: 情感高潮（告白/离别/重逢/醒悟）
 - relief: 喘息（日常/搞笑/温馨）`,
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}
@@ -557,7 +591,7 @@ ${arcHistory.length > 0 ? JSON.stringify(arcHistory, null, 2) : '无（这是第
 - arcId: "arc_" + 序号（如 arc_1, arc_2）
 - arcTitle: 本卷标题（有冲突感）
 - startChapter: ${chapterNumber + 1}
-- plannedEndChapter: startChapter + 4~9（5-10 章一卷）
+- plannedEndChapter: startChapter + ${ARC_CHAPTERS_MIN - 1}~${ARC_CHAPTERS_MAX - 1}（本系统配置为 ${ARC_CHAPTERS_MIN}-${ARC_CHAPTERS_MAX} 章一卷）
 - coreTension: 本卷的核心张力是什么
 - climaxChapter: 哪一章是高潮
 - chapterBeats: 每章的节奏角色、张力等级、简要目标、爽感类型
@@ -577,7 +611,7 @@ ${arcHistory.length > 0 ? JSON.stringify(arcHistory, null, 2) : '无（这是第
     };
   }
 
-  private async anchorStyle(state: StoryStateV2): Promise<StoryStateV2> {
+  private async anchorStyle(state: StoryState): Promise<StoryState> {
     const chapterNumber = state.chapterCursor - 1;
 
     const bestChapters = await this.chapterRepo
@@ -593,8 +627,10 @@ ${arcHistory.length > 0 ? JSON.stringify(arcHistory, null, 2) : '无（这是第
     for (const ch of bestChapters.slice(0, 3)) {
       const paragraphs = ch.content.split(/\n\n+/).filter((p) => p.trim().length > 50);
       if (paragraphs.length > 0) {
-        const bestParagraph = paragraphs.reduce((a, b) => a.length > b.length ? a : b);
-        sampleParagraphs.push(bestParagraph.slice(0, 300));
+        const dialoguePara = paragraphs.find((p) => p.includes('"') || p.includes('"'));
+        const actionPara = paragraphs.find((p) => !p.includes('"') && !p.includes('"') && p.length > 80 && p.length < 300);
+        const candidate = dialoguePara ?? actionPara ?? paragraphs[Math.floor(paragraphs.length * 0.3)];
+        sampleParagraphs.push(candidate.slice(0, 300));
       }
     }
 

@@ -9,7 +9,7 @@ import { BullModule } from "@nestjs/bullmq";
 import { JwtAuthGuard } from "@packages/common/guards";
 import { JwtModule } from "@nestjs/jwt";
 import { LlmModule } from "./modules/novel/llm/llm.module";
-import { NovelV2Module } from "./modules/novel/novel-v2.module";
+import { NovelModule } from "./modules/novel/novel.module";
 import { AuthModule } from "./modules/auth/auth.module";
 
 @Module({
@@ -131,7 +131,7 @@ import { AuthModule } from "./modules/auth/auth.module";
     // 业务模块
     AuthModule,
     LlmModule,
-    NovelV2Module,
+    NovelModule,
   ],
   controllers: [],
   providers: [GlobalErrorInterceptor, GlobalFilter, UnifiedInterceptor, JwtAuthGuard],

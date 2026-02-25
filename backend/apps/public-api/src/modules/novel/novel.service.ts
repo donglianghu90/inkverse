@@ -1,9 +1,9 @@
 /**
- * V2 小说服务 — 渐进式创作架构。
+ * 小说服务 — 渐进式创作架构。
  *
- * 核心变化：
+ * 核心特点：
  * - createBook 极轻量：只做种子分析 + 粗大纲（1 次 LLM）
- * - 每章 4-5 次 LLM（旧版 11-13 次）
+ * - 每章 4-5 次 LLM
  * - 圣经/世界观从写作中渐进提炼
  * - 深度维护事件驱动触发
  */
@@ -20,25 +20,59 @@ import { LlmUsageTrackerService } from './llm/llm-usage-tracker.service';
 import { SeedAnalyzerAgent } from './agents/seed-analyzer.agent';
 import { PromptProfilerAgent } from './agents/prompt-profiler.agent';
 import { RecorderAgent } from './agents/recorder.agent';
-import { ChapterWorkflowV2Service, ChapterWorkflowV2Result } from './chapter-workflow-v2.service';
+import { ChapterWorkflowService, ChapterWorkflowResult } from './chapter-workflow.service';
 import { DeepMaintenanceService } from './deep-maintenance.service';
 import { LoreApplicationService } from './lore-application.service';
 import { BookAgentPipelineService } from './book-agent-pipeline.service';
 import { NovelProgressService } from './novel-progress.service';
+import { DetailStoreService } from './detail-store.service';
 import { BookEntity } from './entities/book.entity';
 import { ChapterEntity } from './entities/chapter.entity';
 import { ArtifactEntity } from './entities/artifact.entity';
 import { CreateBookDto } from './dto/create-book.dto';
 import { GenerateChaptersBatchDto } from './dto/generate-chapters-batch.dto';
 import {
-  StoryStateV2,
-  storyStateV2Schema,
+  StoryState,
+  storyStateSchema,
   MaintenanceState,
   BookPromptProfile,
   bookPromptProfileSchema,
-} from './schemas/novel-v2.schemas';
-import { generationKpiSchema } from './schemas/novel.schemas';
+} from './schemas/novel-state.schemas';
+import { ChapterDraft, LoreRecord, generationKpiSchema } from './schemas/novel.schemas';
+import {
+  DetailStoreChapterUpdates,
+  LocationSensoryAnchor,
+  ItemSensorySignature,
+} from './detail-store.schemas';
 import { z } from 'zod';
+
+const locationSensoryExtractionSchema = z.object({
+  sensoryAnchors: z
+    .array(
+      z.object({
+        sense: z.enum(['sight', 'sound', 'smell', 'touch', 'temperature']),
+        description: z.string(),
+        isLandmark: z.boolean().optional(),
+      }),
+    )
+    .min(0)
+    .max(2),
+});
+
+const itemSensoryExtractionSchema = z.object({
+  sensorySignature: z
+    .object({
+      visual: z.string().optional(),
+      tactile: z.string().optional(),
+      auditory: z.string().optional(),
+      olfactory: z.string().optional(),
+      weight: z.string().optional(),
+    })
+    .optional(),
+  activationEffect: z
+    .object({ description: z.string() })
+    .optional(),
+});
 
 const INITIAL_MAINTENANCE: MaintenanceState = {
   lastMaintenanceAtChapter: 0,
@@ -52,9 +86,13 @@ const INITIAL_MAINTENANCE: MaintenanceState = {
   outlineVersion: 1,
 };
 
+interface GenerateChapterRuntimeOptions {
+  maxRepairRounds?: number;
+}
+
 @Injectable()
-export class NovelV2Service {
-  private readonly logger = new Logger(NovelV2Service.name);
+export class NovelService {
+  private readonly logger = new Logger(NovelService.name);
 
   constructor(
     @InjectRepository(BookEntity)
@@ -66,7 +104,7 @@ export class NovelV2Service {
     private readonly dataSource: DataSource,
     private readonly seedAnalyzer: SeedAnalyzerAgent,
     private readonly promptProfiler: PromptProfilerAgent,
-    private readonly chapterWorkflow: ChapterWorkflowV2Service,
+    private readonly chapterWorkflow: ChapterWorkflowService,
     private readonly recorder: RecorderAgent,
     private readonly deepMaintenance: DeepMaintenanceService,
     private readonly loreService: LoreApplicationService,
@@ -74,6 +112,7 @@ export class NovelV2Service {
     private readonly llm: LlmService,
     private readonly pipelineService: BookAgentPipelineService,
     private readonly progressService: NovelProgressService,
+    private readonly detailStore: DetailStoreService,
   ) {}
 
   async getBookProfile(bookId: string): Promise<BookPromptProfile> {
@@ -170,7 +209,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
   async createBook(dto: CreateBookDto): Promise<unknown> {
     const t0 = Date.now();
     this.logger.log(
-      `[createBook V2] ========== 极轻量开书 ==========\n` +
+      `[createBook] ========== 极轻量开书 ==========\n` +
       `  mainIdea: ${dto.mainIdea}\n` +
       `  genre: ${dto.genre} | targetAudience: ${dto.targetAudience}`,
     );
@@ -188,7 +227,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     };
 
     // Step 1: Seed analysis
-    this.logger.log(`[createBook V2] 步骤 1/4: 种子创意分析...`);
+    this.logger.log(`[createBook] 步骤 1/4: 种子创意分析...`);
     emitCreate('seed', 0, '种子创意分析');
     const analysis = await this.seedAnalyzer.analyze({
       mainIdea: dto.mainIdea,
@@ -203,14 +242,14 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       },
     });
     this.logger.log(
-      `[createBook V2] 种子分析完成 — ${Date.now() - t0}ms\n` +
+      `[createBook] 种子分析完成 — ${Date.now() - t0}ms\n` +
       `  书名: ${analysis.seed.title} | 主角: ${analysis.seed.protagonistConcept.name}\n` +
       `  大纲节点: ${analysis.outline.points.length} | 可行性: ${analysis.seed.conceptEvaluation?.overallViability ?? 'N/A'}`,
     );
     emitCreate('seed', 0, `种子分析完成 — 书名《${analysis.seed.title}》`);
 
     // Step 2: Prompt profile
-    this.logger.log(`[createBook V2] 步骤 2/4: 生成写作手册（BookPromptProfile）...`);
+    this.logger.log(`[createBook] 步骤 2/4: 生成写作手册（BookPromptProfile）...`);
     emitCreate('profile', 1, '生成专属写作手册');
     const bookPromptProfile = await this.promptProfiler.generate({
       genre: dto.genre,
@@ -225,14 +264,14 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       },
     });
     this.logger.log(
-      `[createBook V2] 写作手册生成完成 — ${Date.now() - t0}ms\n` +
+      `[createBook] 写作手册生成完成 — ${Date.now() - t0}ms\n` +
       `  题材: ${bookPromptProfile.generatedForGenre} | 受众: ${bookPromptProfile.generatedForAudience}\n` +
       `  类型规则: ${bookPromptProfile.writerGuide.genreRules.length} 条 | 爽感类型: ${bookPromptProfile.satisfactionTypes.length} 种`,
     );
     emitCreate('profile', 1, `写作手册生成完成 — ${bookPromptProfile.writerGuide.genreRules.length} 条题材规则`);
 
     // Step 3: Persist
-    this.logger.log(`[createBook V2] 步骤 3/4: 初始化角色与世界...`);
+    this.logger.log(`[createBook] 步骤 3/4: 初始化角色与世界...`);
     emitCreate('init', 2, '初始化角色与世界');
     const bookEntity = await this.bookRepo.save(
       this.bookRepo.create({ stateJson: {} as Record<string, unknown> }),
@@ -262,7 +301,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       },
     };
 
-    const state: StoryStateV2 = {
+    let state: StoryState = {
       bookId,
       createdAt: now,
       updatedAt: now,
@@ -291,13 +330,16 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       maintenance: INITIAL_MAINTENANCE,
     };
 
+    // 默认先规划首卷（5-10章）再开始逐章创作，避免第1章裸写。
+    state = await this.deepMaintenance.bootstrapInitialArc(state);
+
     await this.persistBookState(state);
     await this.persistArtifact(bookId, 0, 'seed', analysis.seed);
     await this.persistArtifact(bookId, 0, 'rough_outline', analysis.outline);
     await this.pipelineService.initDefault(bookId);
 
     this.logger.log(
-      `[createBook V2] 步骤 4/4: 初始化完成 — ${Date.now() - t0}ms\n` +
+      `[createBook] 步骤 4/4: 初始化完成 — ${Date.now() - t0}ms\n` +
       `  bookId: ${bookId} | 书名: ${analysis.seed.title}\n` +
       `  主角: ${protagonist.name} | 大纲节点: ${analysis.outline.points.length}\n` +
       `  ========== 开书完成 ==========`,
@@ -310,6 +352,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       chapterCursor: 1,
       outline: analysis.outline,
       bookPromptProfile,
+      currentArc: state.currentArc ?? null,
     };
   }
 
@@ -321,9 +364,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     return {
       count: books.length,
       books: books.map((b) => {
-        const state = storyStateV2Schema.safeParse(b.stateJson);
-        if (!state.success) return { bookId: b.bookId, title: '(解析失败)', chaptersGenerated: 0, latestKpi: null };
-        const s = state.data;
+        const s = storyStateSchema.parse(b.stateJson);
         const latestKpi = s.kpiHistory[s.kpiHistory.length - 1] ?? null;
         return {
           bookId: b.bookId,
@@ -350,6 +391,8 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       chaptersGenerated: state.chapterCursor - 1,
       hasBible: !!state.bible,
       openPlotThreads: state.openPlotThreads,
+      currentArc: state.currentArc ?? null,
+      completedArcs: state.completedArcs ?? [],
       latestKpi: latestKpi
         ? { qualityScore: latestKpi.qualityScore, overallScore: latestKpi.overallScore }
         : null,
@@ -367,31 +410,40 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     return this.withBookLock(bookId, async () => {
       const batchStart = Date.now();
       const count = dto.chapterCount;
-      const minScore = dto.minOverallScore ?? 5;
-      const stopOnLow = dto.stopWhenLowQuality ?? false;
+      const maxRepairRounds = dto.maxRepairRounds ?? 2;
+      const minQualityScore = Math.max(dto.minQualityScore ?? 7, 7);
+      const minOverallScore = Math.max(dto.minOverallScore ?? 7, 7);
 
       this.logger.log(
-        `[batch V2] ========== 批量生成开始 ==========\n` +
-        `  bookId: ${bookId} | 目标章数: ${count}`,
+        `[batch] ========== 批量生成开始 ==========\n` +
+        `  bookId: ${bookId} | 目标章数: ${count}\n` +
+        `  修复轮数: ${maxRepairRounds} | 质量门控: 强制开启\n` +
+        `  阈值: quality>=${minQualityScore}, overall>=${minOverallScore}`,
       );
 
       const chapters: unknown[] = [];
       let stopReason: string | null = null;
 
       for (let i = 0; i < count; i++) {
-        this.logger.log(`[batch V2] 进度: ${i + 1}/${count}`);
-        const result = await this.generateChapterUnsafe(bookId);
+        this.logger.log(`[batch] 进度: ${i + 1}/${count}`);
+        const result = await this.generateChapterUnsafe(bookId, { maxRepairRounds });
         chapters.push(this.toPublicResult(result));
 
-        if (stopOnLow && result.overallScore < minScore) {
-          stopReason = `quality_below_${minScore}_at_chapter_${result.finalDraft.chapterNumber}`;
+        const chapterQualityScore = result.review.dimensions.proseQuality;
+        const chapterOverallScore = result.overallScore;
+        const belowThreshold =
+          chapterQualityScore < minQualityScore ||
+          chapterOverallScore < minOverallScore;
+
+        if (belowThreshold) {
+          stopReason = `quality_threshold_failed_at_chapter_${result.finalDraft.chapterNumber}`;
           break;
         }
       }
 
       const state = await this.loadBookState(bookId);
       this.logger.log(
-        `[batch V2] ========== 批量完成 ========== ${Date.now() - batchStart}ms\n` +
+        `[batch] ========== 批量完成 ========== ${Date.now() - batchStart}ms\n` +
         `  生成: ${chapters.length}/${count} | 停止: ${stopReason ?? '全部完成'}`,
       );
 
@@ -418,6 +470,40 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     };
   }
 
+  async updateChapter(
+    bookId: string,
+    chapterNumber: number,
+    update: { title?: string; content?: string },
+  ): Promise<unknown> {
+    const chapter = await this.chapterRepo.findOneBy({ bookId, chapterNumber });
+    if (!chapter) throw new NotFoundException(`Chapter not found: ${bookId}#${chapterNumber}`);
+
+    const patch: Partial<Pick<ChapterEntity, 'title' | 'content'>> = {};
+    if (update.title !== undefined) patch.title = update.title;
+    if (update.content !== undefined) patch.content = update.content;
+
+    if (Object.keys(patch).length === 0) {
+      return {
+        bookId: chapter.bookId,
+        chapterNumber: chapter.chapterNumber,
+        title: chapter.title,
+        content: chapter.content,
+        createdAt: chapter.createdAt.toISOString(),
+      };
+    }
+
+    await this.chapterRepo.update({ bookId, chapterNumber }, patch);
+
+    const updated = await this.chapterRepo.findOneBy({ bookId, chapterNumber });
+    return {
+      bookId: updated!.bookId,
+      chapterNumber: updated!.chapterNumber,
+      title: updated!.title,
+      content: updated!.content,
+      createdAt: updated!.createdAt.toISOString(),
+    };
+  }
+
   async getWorld(bookId: string): Promise<unknown> {
     const state = await this.loadBookState(bookId);
     return {
@@ -438,6 +524,8 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       relationGraph: state.relationGraph ?? [],
       openPlotThreads: state.openPlotThreads,
       plotThreadLedger: state.plotThreadLedger ?? [],
+      currentArc: state.currentArc ?? null,
+      completedArcs: state.completedArcs ?? [],
       roughOutline: state.roughOutline,
       chapterSummaries: state.chapterSummaries,
     };
@@ -469,7 +557,10 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
   // Internal
   // -------------------------------------------------------------------------
 
-  private async generateChapterUnsafe(bookId: string): Promise<ChapterWorkflowV2Result> {
+  private async generateChapterUnsafe(
+    bookId: string,
+    runtimeOptions?: GenerateChapterRuntimeOptions,
+  ): Promise<ChapterWorkflowResult> {
     let state = await this.loadBookState(bookId);
     const chapterNumber = state.chapterCursor;
 
@@ -477,9 +568,17 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       { bookId, chapterNumber },
       async () => {
         try {
+          if (!state.currentArc) {
+            state = await this.deepMaintenance.bootstrapInitialArc(state);
+          }
           const previousChapterEnding = await this.getPreviousChapterEnding(bookId, chapterNumber);
           const pipelineNodes = await this.pipelineService.getPublishedNodes(bookId);
-          const result = await this.chapterWorkflow.run(state, previousChapterEnding, pipelineNodes);
+          const result = await this.chapterWorkflow.run(
+            state,
+            previousChapterEnding,
+            pipelineNodes,
+            { maxRepairRounds: runtimeOptions?.maxRepairRounds },
+          );
 
           // Persist chapter text.
           await this.chapterRepo.upsert(
@@ -500,8 +599,15 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
             { name: 'lore_record', data: result.loreRecord },
           ]);
 
+          // Update high-fidelity detail store (角色细节档案) based on this chapter.
+          await this.updateDetailStoreFromChapter(
+            bookId,
+            result.finalDraft,
+            result.loreRecord,
+          );
+
           // Apply lore: creates new world elements + applies deltas.
-          state = this.loreService.applyLoreV2(state, result.loreRecord, result.intent);
+          state = this.loreService.applyLore(state, result.loreRecord, result.intent);
 
           // Extract distinctive phrases for anti-repetition tracking.
           state = this.updateDistinctivePhrases(state, result.finalDraft.content);
@@ -558,9 +664,317 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     );
   }
 
+  /**
+   * 基于本章 LoreRecord / Draft，对高保真细节仓做轻量更新。
+   *
+   * 当前只维护角色相关信息：
+   * - 使用 characterProfileDeltas 的 appearance/outfit 等，生成典型描写片段
+   *
+   * 这里不做额外 LLM 调用，完全复用已有结构化 delta。
+   */
+  private async updateDetailStoreFromChapter(
+    bookId: string,
+    draft: ChapterDraft,
+    lore: LoreRecord,
+  ): Promise<void> {
+    const chapterNumber = draft.chapterNumber;
+
+    // ── 角色：外貌/服饰/受伤等描写片段 ──
+    const snippetsByCharacter = new Map<
+      string,
+      { chapterNumber: number; type: import('./detail-store.schemas').CharacterDescriptionType; text: string }[]
+    >();
+
+    const pushCharSnippet = (
+      characterId: string,
+      type: import('./detail-store.schemas').CharacterDescriptionType,
+      text: string,
+    ) => {
+      const list = snippetsByCharacter.get(characterId) ?? [];
+      list.push({ chapterNumber, type, text });
+      snippetsByCharacter.set(characterId, list);
+    };
+
+    for (const delta of lore.characterProfileDeltas ?? []) {
+      if (!delta.description?.trim()) continue;
+      if (delta.field === 'appearance') {
+        pushCharSnippet(delta.characterId, 'face', delta.description);
+      } else if (delta.field === 'outfit') {
+        pushCharSnippet(delta.characterId, 'outfit', delta.description);
+      } else if (delta.field === 'injury') {
+        pushCharSnippet(delta.characterId, 'gesture', delta.description);
+      }
+    }
+
+    const characterUpdates = Array.from(snippetsByCharacter.entries()).map(
+      ([characterId, snippets]) => ({ characterId, descriptionSnippets: snippets }),
+    );
+
+    // ── 地点：描写片段 + 本章场景访问记忆 ──
+    type LocSnippet = {
+      chapterNumber: number;
+      type: import('./detail-store.schemas').LocationDescriptionType;
+      text: string;
+    };
+    const snippetsByLocation = new Map<string, LocSnippet[]>();
+    const visitMemoriesByLocation = new Map<
+      string,
+      { chapterNumber: number; characterId: string; event: string; emotionalTone: string }[]
+    >();
+
+    const pushLocSnippet = (
+      locationId: string,
+      type: import('./detail-store.schemas').LocationDescriptionType,
+      text: string,
+    ) => {
+      const list = snippetsByLocation.get(locationId) ?? [];
+      list.push({ chapterNumber, type, text });
+      snippetsByLocation.set(locationId, list);
+    };
+
+    for (const delta of lore.locationProfileDeltas ?? []) {
+      if (!delta.description?.trim()) continue;
+      const type =
+        delta.field === 'terrain'
+          ? ('panorama' as const)
+          : delta.field === 'climate'
+            ? ('weather' as const)
+            : delta.field === 'sensory'
+              ? ('interior' as const)
+              : delta.field === 'architecture'
+                ? ('interior' as const)
+                : ('interior' as const);
+      pushLocSnippet(delta.locationId, type, delta.description);
+    }
+
+    const snapshot = lore.sceneSnapshot;
+    if (snapshot?.locationId && (snapshot.presentCharacterIds?.length ?? 0) > 0) {
+      const event = snapshot.ongoingAction?.trim() || '在场';
+      const emotionalTone = snapshot.emotionalTone?.trim() || '—';
+      const list =
+        visitMemoriesByLocation.get(snapshot.locationId) ?? [];
+      for (const characterId of snapshot.presentCharacterIds) {
+        list.push({
+          chapterNumber,
+          characterId,
+          event,
+          emotionalTone,
+        });
+      }
+      visitMemoriesByLocation.set(snapshot.locationId, list);
+    }
+
+    const locationIds = new Set<string>([
+      ...snippetsByLocation.keys(),
+      ...visitMemoriesByLocation.keys(),
+    ]);
+
+    // 本章主场景地点：用 LLM 从正文中抽取 1～2 条感官锚点，供重访时复现。
+    let extractedAnchors: LocationSensoryAnchor[] = [];
+    if (snapshot?.locationId) {
+      const locationLabel =
+        snapshot.locationName?.trim() || snapshot.locationId;
+      try {
+        extractedAnchors = await this.extractSensoryAnchorsFromChapter(
+          draft.content.slice(0, 3200),
+          locationLabel,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `[detail-store] 地点感官锚点抽取失败 (location=${locationLabel}): ${err}`,
+        );
+      }
+    }
+
+    const locationUpdates = Array.from(locationIds).map((locationId) => ({
+      locationId,
+      descriptionSnippets: snippetsByLocation.get(locationId) ?? [],
+      visitMemories: visitMemoriesByLocation.get(locationId) ?? [],
+      ...(locationId === snapshot?.locationId && extractedAnchors.length > 0
+        ? { sensoryAnchors: extractedAnchors }
+        : {}),
+    }));
+
+    // ── 道具：描写片段（外观/来历/限制/进化）──
+    type ItemSnippet = {
+      chapterNumber: number;
+      type: import('./detail-store.schemas').ItemDescriptionType;
+      text: string;
+    };
+    const snippetsByItem = new Map<string, ItemSnippet[]>();
+    const pushItemSnippet = (
+      itemId: string,
+      type: import('./detail-store.schemas').ItemDescriptionType,
+      text: string,
+    ) => {
+      const list = snippetsByItem.get(itemId) ?? [];
+      list.push({ chapterNumber, type, text });
+      snippetsByItem.set(itemId, list);
+    };
+
+    for (const delta of lore.itemProfileDeltas ?? []) {
+      if (!delta.description?.trim()) continue;
+      const type =
+        delta.field === 'appearance'
+          ? ('appearance' as const)
+          : delta.field === 'origin'
+            ? ('origin' as const)
+            : delta.field === 'limitation'
+              ? ('limitation' as const)
+              : delta.field === 'evolution'
+                ? ('evolution' as const)
+                : ('appearance' as const);
+      pushItemSnippet(delta.itemId, type, delta.description);
+    }
+
+    if (snippetsByItem.size > 0) {
+      // 本章仅对「第一个」有 delta 的道具做一次感官/使用效果抽取，控制 LLM 调用量
+      const firstItemId = Array.from(snippetsByItem.keys())[0];
+      const firstSnippets = snippetsByItem.get(firstItemId) ?? [];
+      const itemHint =
+        firstSnippets[0]?.text?.slice(0, 80) ?? '本章出现的道具或武器';
+
+      let extractedSensory: Partial<ItemSensorySignature> | undefined;
+      let extractedActivation: { chapterNumber: number; description: string } | undefined;
+      try {
+        const out = await this.extractItemSensoryFromChapter(
+          draft.content.slice(0, 3200),
+          itemHint,
+        );
+        if (out.sensorySignature && Object.keys(out.sensorySignature).length > 0) {
+          extractedSensory = out.sensorySignature;
+        }
+        if (out.activationEffect?.description?.trim()) {
+          extractedActivation = {
+            chapterNumber,
+            description: out.activationEffect.description.trim(),
+          };
+        }
+      } catch (err) {
+        this.logger.warn(
+          `[detail-store] 道具感官/使用效果抽取失败 (item=${firstItemId}): ${err}`,
+        );
+      }
+
+      const itemUpdates = Array.from(snippetsByItem.entries()).map(
+        ([itemId, snippets]) => ({
+          itemId,
+          descriptionSnippets: snippets,
+          ...(itemId === firstItemId && (extractedSensory || extractedActivation)
+            ? {
+                sensorySignature: extractedSensory,
+                activationEffects: extractedActivation
+                  ? [extractedActivation]
+                  : undefined,
+              }
+            : {}),
+        }),
+      );
+
+      const updates: DetailStoreChapterUpdates = {
+        ...(characterUpdates.length > 0 ? { characterUpdates } : {}),
+        ...(locationUpdates.length > 0 ? { locationUpdates } : {}),
+        itemUpdates,
+      };
+      await this.detailStore.applyChapterUpdates(bookId, updates);
+      return;
+    }
+
+    // 无道具更新时，仍要写入角色与地点
+    const updates: DetailStoreChapterUpdates = {
+      ...(characterUpdates.length > 0 ? { characterUpdates } : {}),
+      ...(locationUpdates.length > 0 ? { locationUpdates } : {}),
+    };
+    if (characterUpdates.length > 0 || locationUpdates.length > 0) {
+      await this.detailStore.applyChapterUpdates(bookId, updates);
+    }
+  }
+
+  /**
+   * 从章节正文中抽取「道具/武器/异火」的感官签名与一次使用效果，
+   * 用于细节仓 ItemDetail，便于后续出场时复现。
+   */
+  private async extractItemSensoryFromChapter(
+    contentExcerpt: string,
+    itemHint: string,
+  ): Promise<{
+    sensorySignature?: Partial<ItemSensorySignature>;
+    activationEffect?: { description: string };
+  }> {
+    if (!contentExcerpt?.trim()) return {};
+
+    const result = await this.llm.generateStructured({
+      taskName: 'item-sensory-extract',
+      schema: itemSensoryExtractionSchema,
+      tags: ['workflow', 'detail-store', 'item'],
+      metadata: { itemHint: itemHint.slice(0, 50) },
+      systemPrompt: `你是道具/武器/异火描写提炼专家。从给定的章节正文摘录中，针对「与道具相关的描写」（提示：${itemHint}），抽取：
+1. sensorySignature：该道具的 1～2 个感官维度具体描写（视觉/触感/听觉/气味/重量），只提炼正文中已出现的，不要编造。每个维度一句话即可。
+2. activationEffect：若正文中有该道具被使用、激活、催动的一次具体效果描写，提炼为一句话（如「青莲在掌心绽放，方圆三尺温度骤升」）。若无则省略。
+
+要求：只提炼正文中明确出现的描写，不要编造。若几乎没有道具相关描写，可返回空。`,
+      userPrompt: `道具/武器提示：${itemHint}\n\n章节正文摘录：\n${contentExcerpt}`,
+      temperature: 0.3,
+    });
+
+    const sensorySignature: Partial<ItemSensorySignature> = {};
+    const raw = result.sensorySignature ?? {};
+    if (raw.visual?.trim()) sensorySignature.visual = raw.visual.trim();
+    if (raw.tactile?.trim()) sensorySignature.tactile = raw.tactile.trim();
+    if (raw.auditory?.trim()) sensorySignature.auditory = raw.auditory.trim();
+    if (raw.olfactory?.trim()) sensorySignature.olfactory = raw.olfactory.trim();
+    if (raw.weight?.trim()) sensorySignature.weight = raw.weight.trim();
+
+    const activationEffect =
+      result.activationEffect?.description?.trim()
+        ? { description: result.activationEffect.description.trim() }
+        : undefined;
+
+    return {
+      ...(Object.keys(sensorySignature).length > 0 ? { sensorySignature } : {}),
+      ...(activationEffect ? { activationEffect } : {}),
+    };
+  }
+
+  /**
+   * 从章节正文中抽取当前场景的 1～2 个感官锚点（视觉/听觉/气味等），
+   * 用于细节仓「地点」的 sensoryAnchors，便于后续重访同一地点时复现。
+   */
+  private async extractSensoryAnchorsFromChapter(
+    contentExcerpt: string,
+    locationLabel: string,
+  ): Promise<LocationSensoryAnchor[]> {
+    if (!contentExcerpt?.trim()) return [];
+
+    const result = await this.llm.generateStructured({
+      taskName: 'location-sensory-extract',
+      schema: locationSensoryExtractionSchema,
+      tags: ['workflow', 'detail-store', 'location'],
+      metadata: { locationLabel },
+      systemPrompt: `你是环境描写提炼专家。从给定的章节正文摘录中，针对「${locationLabel}」这一地点，抽取 1～2 个具体、可记忆的感官细节作为「锚点」。
+要求：
+- 只提炼正文中已出现的描写，不要编造。
+- 每个锚点对应一种感官：视觉(sight)、听觉(sound)、气味(smell)、触感(touch)、体感温度(temperature)。
+- 描述要具体（如「门口两棵百年老槐树，夏日蝉鸣刺耳」「空气中弥漫着香火与霉味」），不要泛泛而谈。
+- 若某处是地标（建筑、标志物），可设 isLandmark 为 true。
+- 最多输出 2 个锚点。若摘录中几乎没有环境描写，可返回空数组。`,
+      userPrompt: `地点：${locationLabel}\n\n章节正文摘录：\n${contentExcerpt}`,
+      temperature: 0.3,
+    });
+
+    const raw = result.sensoryAnchors ?? [];
+    return raw
+      .filter((a) => a.description?.trim())
+      .map((a) => ({
+        sense: a.sense,
+        description: a.description.trim(),
+        isLandmark: a.isLandmark ?? false,
+      }));
+  }
+
   private updateMaintenanceQualitySignals(
     m: MaintenanceState,
-    result: ChapterWorkflowV2Result,
+    result: ChapterWorkflowResult,
   ): MaintenanceState {
     const lowScore = result.overallScore < 6.5;
     const consistencyWarning = result.review.dimensions.consistency < 7;
@@ -573,10 +987,11 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     };
   }
 
-  private toPublicResult(result: ChapterWorkflowV2Result): Record<string, unknown> {
+  private toPublicResult(result: ChapterWorkflowResult): Record<string, unknown> {
     return {
       chapterNumber: result.finalDraft.chapterNumber,
       title: result.finalDraft.title,
+      qualityScore: result.review.dimensions.proseQuality,
       overallScore: result.overallScore,
       wasEdited: result.wasEdited,
       reviewVerdict: result.review.overallVerdict,
@@ -589,20 +1004,20 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
   private static readonly MAX_FACTS = 300;
   private static readonly MAX_COMPLETED_ARCS = 20;
 
-  private compactState(state: StoryStateV2): StoryStateV2 {
+  private compactState(state: StoryState): StoryState {
     return {
       ...state,
-      kpiHistory: state.kpiHistory.slice(-NovelV2Service.MAX_KPI),
-      chapterSummaries: state.chapterSummaries.slice(-NovelV2Service.MAX_SUMMARIES),
-      timelineEvents: (state.timelineEvents ?? []).slice(-NovelV2Service.MAX_TIMELINE),
+      kpiHistory: state.kpiHistory.slice(-NovelService.MAX_KPI),
+      chapterSummaries: state.chapterSummaries.slice(-NovelService.MAX_SUMMARIES),
+      timelineEvents: (state.timelineEvents ?? []).slice(-NovelService.MAX_TIMELINE),
       characterFactLedger: (state.characterFactLedger ?? [])
         .filter((f) => f.status !== 'deprecated')
-        .slice(-NovelV2Service.MAX_FACTS),
+        .slice(-NovelService.MAX_FACTS),
       plotThreadLedger: (state.plotThreadLedger ?? []).filter((t) => {
         if (t.status === 'open') return true;
         return state.chapterCursor - t.lastTouchedChapter < 50;
       }),
-      completedArcs: (state.completedArcs ?? []).slice(-NovelV2Service.MAX_COMPLETED_ARCS),
+      completedArcs: (state.completedArcs ?? []).slice(-NovelService.MAX_COMPLETED_ARCS),
       pendingForeshadowingSeeds: (state.pendingForeshadowingSeeds ?? []).filter((s) => !s.applied),
       informationLedger: state.informationLedger ? {
         activeGaps: state.informationLedger.activeGaps,
@@ -623,7 +1038,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
    * Apply pending foreshadowing seeds by injecting text into past chapters.
    * Only processes seeds targeting chapters that have already been written.
    */
-  private async applyPendingForeshadowing(state: StoryStateV2): Promise<StoryStateV2> {
+  private async applyPendingForeshadowing(state: StoryState): Promise<StoryState> {
     const seeds = (state.pendingForeshadowingSeeds ?? []).filter((s) => !s.applied);
     if (seeds.length === 0) return state;
 
@@ -686,11 +1101,11 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     /[一道|数道][身影|黑影][闪过|掠过]/,
   ];
 
-  private updateDistinctivePhrases(state: StoryStateV2, content: string): StoryStateV2 {
+  private updateDistinctivePhrases(state: StoryState, content: string): StoryState {
     const existing = state.recentDistinctivePhrases ?? [];
     const newPhrases: string[] = [];
 
-    for (const pattern of NovelV2Service.CLICHE_PATTERNS) {
+    for (const pattern of NovelService.CLICHE_PATTERNS) {
       const matches = content.match(new RegExp(pattern.source, 'g'));
       if (matches) {
         for (const m of matches) newPhrases.push(m);
@@ -731,13 +1146,13 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
   // DB helpers
   // -------------------------------------------------------------------------
 
-  private async loadBookState(bookId: string): Promise<StoryStateV2> {
+  private async loadBookState(bookId: string): Promise<StoryState> {
     const book = await this.bookRepo.findOneBy({ bookId });
     if (!book) throw new NotFoundException(`Book not found: ${bookId}`);
-    return storyStateV2Schema.parse(book.stateJson);
+    return storyStateSchema.parse(book.stateJson);
   }
 
-  private async persistBookState(state: StoryStateV2): Promise<void> {
+  private async persistBookState(state: StoryState): Promise<void> {
     await this.bookRepo.save({
       bookId: state.bookId,
       stateJson: state as unknown as Record<string, unknown>,

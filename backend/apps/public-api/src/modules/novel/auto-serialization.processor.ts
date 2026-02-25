@@ -3,7 +3,7 @@ import { Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Job } from 'bullmq';
 import { Repository } from 'typeorm';
-import { NovelV2Service } from './novel-v2.service';
+import { NovelService } from './novel.service';
 import { GenerateChaptersBatchDto } from './dto/generate-chapters-batch.dto';
 import { AutoSerializationJobEntity } from './entities/auto-serialization-job.entity';
 
@@ -20,8 +20,6 @@ export interface AutoSerializationScheduleRecord {
   dailyStartTime: string;
   chaptersPerRun: number;
   maxRepairRounds: number;
-  strictQuality: boolean;
-  stopWhenLowQuality: boolean;
   minQualityScore: number;
   minOverallScore: number;
   nextRunAt: string | null;
@@ -41,8 +39,6 @@ export function mapJobEntity(job: AutoSerializationJobEntity): AutoSerialization
     dailyStartTime: job.dailyStartTime,
     chaptersPerRun: job.chaptersPerRun,
     maxRepairRounds: job.maxRepairRounds,
-    strictQuality: job.strictQuality,
-    stopWhenLowQuality: job.stopWhenLowQuality,
     minQualityScore: Number(job.minQualityScore),
     minOverallScore: Number(job.minOverallScore),
     nextRunAt: job.nextRunAt ? job.nextRunAt.toISOString() : null,
@@ -63,7 +59,7 @@ export class AutoSerializationProcessor extends WorkerHost {
   constructor(
     @InjectRepository(AutoSerializationJobEntity)
     private readonly jobRepo: Repository<AutoSerializationJobEntity>,
-    private readonly novelService: NovelV2Service,
+    private readonly novelService: NovelService,
   ) {
     super();
   }
@@ -121,8 +117,6 @@ export class AutoSerializationProcessor extends WorkerHost {
     const batchInput: GenerateChaptersBatchDto = {
       chapterCount: schedule.chaptersPerRun,
       maxRepairRounds: schedule.maxRepairRounds,
-      strictQuality: schedule.strictQuality,
-      stopWhenLowQuality: schedule.stopWhenLowQuality,
       minQualityScore: schedule.minQualityScore,
       minOverallScore: schedule.minOverallScore,
     };

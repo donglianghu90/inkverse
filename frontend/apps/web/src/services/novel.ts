@@ -18,8 +18,6 @@ export interface CreateBookParams {
 export interface BatchGenerateParams {
   chapterCount: number;
   maxRepairRounds?: number;
-  stopWhenLowQuality?: boolean;
-  strictQuality?: boolean;
   minQualityScore?: number;
   minOverallScore?: number;
 }
@@ -28,8 +26,6 @@ export interface AutoSerializationConfig {
   dailyStartTime: string;
   chaptersPerRun: number;
   maxRepairRounds?: number;
-  strictQuality?: boolean;
-  stopWhenLowQuality?: boolean;
   minQualityScore?: number;
   minOverallScore?: number;
 }
@@ -86,12 +82,33 @@ export interface BookPromptProfile {
   };
 }
 
+export interface MiniArcChapterBeat {
+  chapterNumber: number;
+  role: 'setup' | 'escalation' | 'twist' | 'climax' | 'aftermath' | 'transition';
+  tensionLevel: number;
+  briefGoal: string;
+  satisfactionType: 'none' | 'minor_payoff' | 'major_payoff' | 'emotional_peak' | 'relief';
+}
+
+export interface MiniArc {
+  arcId: string;
+  arcTitle: string;
+  startChapter: number;
+  plannedEndChapter: number;
+  coreTension: string;
+  emotionalTheme: string;
+  climaxChapter: number;
+  chapterBeats: MiniArcChapterBeat[];
+  status: 'active' | 'completed';
+}
+
 export interface CreateBookResult {
   bookId: string;
   title: string;
   chapterCursor: number;
   outline: Record<string, unknown>;
   bookPromptProfile: BookPromptProfile;
+  currentArc?: MiniArc | null;
 }
 
 export interface BookInfo {
@@ -102,6 +119,8 @@ export interface BookInfo {
   chaptersGenerated: number;
   hasBible: boolean;
   openPlotThreads: string[];
+  currentArc?: MiniArc | null;
+  completedArcs?: MiniArc[];
   latestKpi: { qualityScore: number; overallScore: number } | null;
 }
 
@@ -116,6 +135,7 @@ export interface ChapterItem {
 export interface ChapterGenerateResult {
   chapterNumber: number;
   title: string;
+  qualityScore?: number;
   overallScore: number;
   wasEdited: boolean;
   reviewVerdict: string;
@@ -137,8 +157,6 @@ export interface AutoSerializationView {
   chaptersPerRun: number;
   qualityPolicy: {
     maxRepairRounds: number;
-    strictQuality: boolean;
-    stopWhenLowQuality: boolean;
     minQualityScore: number;
     minOverallScore: number;
   };
@@ -213,6 +231,17 @@ export async function listChapters(
 
 export async function getChapter(bookId: string, chapterNumber: number): Promise<ChapterItem> {
   return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}`);
+}
+
+export async function updateChapter(
+  bookId: string,
+  chapterNumber: number,
+  data: { title?: string; content?: string },
+): Promise<ChapterItem> {
+  return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}`, {
+    method: 'PUT',
+    data,
+  });
 }
 
 export async function configureAutoSerialization(
@@ -329,6 +358,8 @@ export interface WorldData {
     setupChapter: number;
     lastTouchedChapter: number;
   }>;
+  currentArc?: MiniArc | null;
+  completedArcs?: MiniArc[];
   roughOutline: {
     points: Array<{ phase: string; description: string; tentativeChapterRange: string }>;
     endingDirection: string;

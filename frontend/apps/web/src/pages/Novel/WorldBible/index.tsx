@@ -232,6 +232,49 @@ const WorldBible: React.FC = () => {
               </CardContent>
             </Card>
 
+            {world.currentArc && (
+              <Card className="md:col-span-2">
+                <CardHeader>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <GitBranch className="h-4 w-4 text-primary" />
+                    当前卷计划
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">卷名: </span>
+                    <span>{world.currentArc.arcTitle}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">章节范围: </span>
+                    <span>{world.currentArc.startChapter}-{world.currentArc.plannedEndChapter}（高潮第 {world.currentArc.climaxChapter} 章）</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">核心张力: </span>
+                    <span>{world.currentArc.coreTension}</span>
+                  </div>
+                  {world.currentArc.emotionalTheme && (
+                    <div>
+                      <span className="text-muted-foreground">情感主题: </span>
+                      <span>{world.currentArc.emotionalTheme}</span>
+                    </div>
+                  )}
+                  <Separator />
+                  <div className="space-y-1">
+                    <p className="text-muted-foreground">章节节拍:</p>
+                    {world.currentArc.chapterBeats.map((beat) => (
+                      <div key={beat.chapterNumber} className="flex items-center gap-2 text-xs">
+                        <Badge variant="outline">第 {beat.chapterNumber} 章</Badge>
+                        <span>{beat.role}</span>
+                        <span className="text-muted-foreground">张力 {beat.tensionLevel}/10</span>
+                        <span className="text-muted-foreground">· {beat.briefGoal}</span>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {world.bible && (
               <Card className="md:col-span-2">
                 <CardHeader>

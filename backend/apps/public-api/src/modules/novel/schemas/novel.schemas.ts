@@ -786,47 +786,7 @@ export const generationKpiSchema = z.object({
   overallScore: z.number().min(0).max(10),
 });
 
-// Full mutable story state persisted by storage layer.
-export const storyStateSchema = z.object({
-  bookId: z.string(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  mainIdea: z.string(),
-  editorialPlan: editorialPlanSchema,
-  bible: storyBibleSchema,
-  volumePlan: volumePlanSchema,
-  chapterCursor: z.number().int().positive(),
-  characters: z.array(characterSchema),
-  locations: z.array(locationSchema),
-  items: z.array(itemSchema),
-  chapterSummaries: z.preprocess(
-    (val) => {
-      if (!Array.isArray(val)) return [];
-      return val.map((item: unknown, index: number) => {
-        if (typeof item === 'string') return { chapterNumber: index + 1, summary: item };
-        return item;
-      });
-    },
-    z.array(
-      z.object({
-        chapterNumber: z.number().int().nonnegative(),
-        summary: z.string(),
-      }),
-    ),
-  ),
-  openPlotThreads: z.array(z.string()),
-  // 关系/事件/伏线账本统一默认空数组，避免旧状态缺字段导致链路分支复杂化。
-  relationGraph: z.array(relationshipEdgeSchema).default([]),
-  timelineEvents: z.array(timelineEventSchema).default([]),
-  plotThreadLedger: z.array(plotThreadSchema).default([]),
-  // Optional for backward compatibility with older states.
-  characterFactLedger: z.array(characterFactSchema).optional(),
-  lastHook: z.string(),
-  kpiHistory: z.array(generationKpiSchema),
-});
-
 // Exported inferred runtime types.
-export type StoryState = z.infer<typeof storyStateSchema>;
 export type EditorialPlan = z.infer<typeof editorialPlanSchema>;
 export type StoryBible = z.infer<typeof storyBibleSchema>;
 export type BootstrapWorld = z.infer<typeof bootstrapWorldSchema>;

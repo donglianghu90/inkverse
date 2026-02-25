@@ -1,7 +1,7 @@
 /**
- * V2 Schema contracts for the organic novel generation workflow.
+ * Schema contracts for the organic novel generation workflow.
  *
- * Design philosophy shift:
+ * Design philosophy:
  * - Settings emerge FROM writing, not before it.
  * - The bible is crystallized after chapters are written, not pre-planned.
  * - Per-chapter planning is lightweight; creative freedom goes to the writer.
@@ -58,7 +58,7 @@ export const goldenFingerSchema = z.object({
   currentStage: z.string(),
   evolutionPath: z.array(z.object({
     stage: z.string(),
-    unlockedAtChapter: z.number().int().positive().optional(),
+    unlockedAtChapter: z.number().int().min(1).optional(),
     description: z.string(),
     newCapability: z.string(),
   })).default([]),
@@ -92,10 +92,10 @@ export const storySeedSchema = z.object({
   tone: z.string(),
   coreConflictDirection: z.string(),
   redLines: z.array(z.string()),
-  targetChapterWordCount: z.number().int().positive().default(3000),
+  targetChapterWordCount: z.number().int().min(1).default(3000),
   plannedTotalChapters: z.object({
-    min: z.number().int().positive().default(500),
-    max: z.number().int().positive().default(800),
+    min: z.number().int().min(1).default(500),
+    max: z.number().int().min(1).default(800),
   }).default({ min: 500, max: 800 }),
   readerPersona: readerPersonaSchema,
   goldenFinger: goldenFingerSchema,
@@ -111,7 +111,7 @@ export const roughOutlinePointSchema = z.object({
 export const roughOutlineSchema = z.object({
   points: z.array(roughOutlinePointSchema).min(4),
   endingDirection: z.string(),
-  estimatedTotalChapters: z.number().int().positive().default(600),
+  estimatedTotalChapters: z.number().int().min(1).default(600),
 });
 
 // ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ export const characterArcHintSchema = z.object({
 });
 
 export const chapterIntentSchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   goals: z.array(z.string()).min(1).max(5),
   emotionDirection: z.string(),
   hookDirection: z.string(),
@@ -219,8 +219,8 @@ export const chapterIntentSchema = z.object({
     emotionalLogicNotes: z.string(),
   }),
   wordCountRange: z.object({
-    min: z.number().int().positive(),
-    max: z.number().int().positive(),
+    min: z.number().int().min(1),
+    max: z.number().int().min(1),
   }),
 });
 
@@ -269,7 +269,7 @@ export const chapterReviewSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const miniArcChapterBeatSchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   role: z.enum([
     'setup',         // 铺垫/引入
     'escalation',    // 升级/加压
@@ -292,12 +292,48 @@ export const miniArcChapterBeatSchema = z.object({
 export const miniArcSchema = z.object({
   arcId: z.string(),
   arcTitle: z.string(),
-  startChapter: z.number().int().positive(),
-  plannedEndChapter: z.number().int().positive(),
+  startChapter: z.number().int().min(1),
+  plannedEndChapter: z.number().int().min(1),
   coreTension: z.string(),
-  climaxChapter: z.number().int().positive(),
+  emotionalTheme: z.string().default(''),
+  climaxChapter: z.number().int().min(1),
   chapterBeats: z.array(miniArcChapterBeatSchema),
   status: z.enum(['active', 'completed']).default('active'),
+}).superRefine((arc, ctx) => {
+  if (arc.plannedEndChapter < arc.startChapter) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'plannedEndChapter must be >= startChapter',
+      path: ['plannedEndChapter'],
+    });
+  }
+
+  if (arc.climaxChapter < arc.startChapter || arc.climaxChapter > arc.plannedEndChapter) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'climaxChapter must be within [startChapter, plannedEndChapter]',
+      path: ['climaxChapter'],
+    });
+  }
+
+  const seenBeatChapters = new Set<number>();
+  arc.chapterBeats.forEach((beat, idx) => {
+    if (beat.chapterNumber < arc.startChapter || beat.chapterNumber > arc.plannedEndChapter) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'chapterBeat.chapterNumber must be within arc chapter range',
+        path: ['chapterBeats', idx, 'chapterNumber'],
+      });
+    }
+    if (seenBeatChapters.has(beat.chapterNumber)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'duplicate chapterBeat.chapterNumber is not allowed',
+        path: ['chapterBeats', idx, 'chapterNumber'],
+      });
+    }
+    seenBeatChapters.add(beat.chapterNumber);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -309,7 +345,7 @@ export const styleAnchorSchema = z.object({
   narrativeVoice: z.string(),
   pacePreference: z.string(),
   dialogueStyle: z.string(),
-  anchoredAtChapter: z.number().int().positive(),
+  anchoredAtChapter: z.number().int().min(1),
   pov: z.enum([
     'first_person',
     'third_person_limited',
@@ -330,7 +366,7 @@ export const informationGapSchema = z.object({
   knownBy: z.array(z.string()),
   unknownTo: z.array(z.string()),
   dramaticPotential: z.enum(['low', 'medium', 'high', 'explosive']),
-  seededAtChapter: z.number().int().positive(),
+  seededAtChapter: z.number().int().min(1),
   type: z.enum([
     'dramatic_irony',
     'mystery',
@@ -340,7 +376,7 @@ export const informationGapSchema = z.object({
     'misunderstanding',
   ]),
   resolved: z.boolean().default(false),
-  resolvedAtChapter: z.number().int().positive().optional(),
+  resolvedAtChapter: z.number().int().min(1).optional(),
 });
 
 export const informationLedgerSchema = z.object({
@@ -364,7 +400,7 @@ export const satisfactionEventSchema = z.object({
     'continental',
     'world',
   ]).default('personal'),
-  deliveredAtChapter: z.number().int().positive(),
+  deliveredAtChapter: z.number().int().min(1),
   description: z.string(),
   audienceImpact: z.string().optional(),
 });
@@ -400,12 +436,12 @@ export const dopamineScheduleSchema = z.object({
 
 export const foreshadowingSeedSchema = z.object({
   id: z.string(),
-  targetChapterNumber: z.number().int().positive(),
+  targetChapterNumber: z.number().int().min(1),
   insertionType: z.enum(['sentence', 'paragraph', 'inner_thought', 'background_detail']),
   content: z.string(),
   insertAfterParagraph: z.number().int().nonnegative(),
   reason: z.string(),
-  triggeredByChapter: z.number().int().positive(),
+  triggeredByChapter: z.number().int().min(1),
   applied: z.boolean().default(false),
 });
 
@@ -416,12 +452,12 @@ export const foreshadowingSeedSchema = z.object({
 export const readerCuriositySchema = z.object({
   id: z.string(),
   question: z.string(),
-  seededAtChapter: z.number().int().positive(),
+  seededAtChapter: z.number().int().min(1),
   lastTeaseAtChapter: z.number().int().nonnegative().default(0),
   urgency: z.enum(['simmering', 'building', 'boiling', 'overdue']),
   relatedThreadId: z.string().optional(),
   payoffDelivered: z.boolean().default(false),
-  payoffAtChapter: z.number().int().positive().optional(),
+  payoffAtChapter: z.number().int().min(1).optional(),
 });
 
 export const readerTensionModelSchema = z.object({
@@ -429,7 +465,7 @@ export const readerTensionModelSchema = z.object({
   recentPayoffs: z.array(z.object({
     curiosityId: z.string(),
     question: z.string(),
-    payoffAtChapter: z.number().int().positive(),
+    payoffAtChapter: z.number().int().min(1),
     satisfactionType: z.enum(['full_answer', 'partial_reveal', 'twist', 'subversion']),
   })).default([]),
   chaptersSinceLastPayoff: z.number().int().nonnegative().default(0),
@@ -470,8 +506,8 @@ export const maintenanceTriggerSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const crystallizedBibleSchema = z.object({
-  version: z.number().int().positive(),
-  crystallizedAtChapter: z.number().int().positive(),
+  version: z.number().int().min(1),
+  crystallizedAtChapter: z.number().int().min(1),
   title: z.string(),
   genre: z.string(),
   targetAudience: z.string(),
@@ -499,7 +535,7 @@ export const storyClockSchema = z.object({
   season: z.enum(['spring', 'summer', 'autumn', 'winter', 'unknown']).default('unknown'),
   calendarNote: z.string().optional(),
   daysSinceStoryStart: z.number().int().nonnegative().default(0),
-  lastUpdatedAtChapter: z.number().int().positive().optional(),
+  lastUpdatedAtChapter: z.number().int().min(1).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -511,7 +547,7 @@ export const addressEntrySchema = z.object({
   toCharacterId: z.string(),
   address: z.string(),
   context: z.string().optional(),
-  firstUsedChapter: z.number().int().positive(),
+  firstUsedChapter: z.number().int().min(1),
 });
 
 // ---------------------------------------------------------------------------
@@ -519,7 +555,7 @@ export const addressEntrySchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const sceneSnapshotSchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   locationId: z.string().optional(),
   locationName: z.string().optional(),
   timeOfDay: z.string().optional(),
@@ -549,10 +585,10 @@ export const namingConventionSchema = z.object({
 }).optional();
 
 // ---------------------------------------------------------------------------
-// V2 Story State (evolves from V1, backward compatible)
+// Story State
 // ---------------------------------------------------------------------------
 
-export const storyStateV2Schema = z.object({
+export const storyStateSchema = z.object({
   bookId: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -614,7 +650,7 @@ export const storyStateV2Schema = z.object({
   recentDistinctivePhrases: z.array(z.string()).default([]),
 
   // Runtime state.
-  chapterCursor: z.number().int().positive(),
+  chapterCursor: z.number().int().min(1),
   characters: z.array(characterSchema),
   locations: z.array(locationSchema),
   items: z.array(itemSchema),
@@ -629,7 +665,7 @@ export const storyStateV2Schema = z.object({
   characterFactLedger: z.array(characterFactSchema).optional(),
   lastHook: z.string(),
   recentHookTypes: z.array(z.object({
-    chapterNumber: z.number().int().positive(),
+    chapterNumber: z.number().int().min(1),
     hookType: z.string(),
   })).default([]),
   kpiHistory: z.array(generationKpiSchema),
@@ -712,6 +748,96 @@ export const deterministicCheckResultSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Phase 6: Rewrite Guidance (multi-attempt quality loop)
+// ---------------------------------------------------------------------------
+
+export const rewriteGuidanceSchema = z.object({
+  attemptNumber: z.number().int().positive(),
+  maxAttempts: z.number().int().positive().default(3),
+  previousStrengths: z.array(z.string()),
+  previousIssues: z.array(z.object({
+    category: z.string(),
+    severity: z.string(),
+    description: z.string(),
+    suggestedFix: z.string(),
+  })),
+  repeatedIssues: z.array(z.string()),
+  previousScore: z.number().min(0).max(10),
+  specificInstructions: z.string().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Phase 7: Reader Feedback (platform-based)
+// ---------------------------------------------------------------------------
+
+export const readerCommentSchema = z.object({
+  content: z.string(),
+  sentiment: z.enum(['positive', 'negative', 'neutral', 'mixed']),
+  aspect: z.enum(['plot', 'character', 'writing', 'pacing', 'worldbuilding', 'hook', 'general']),
+});
+
+export const readerFeedbackSchema = z.object({
+  chapterNumber: z.number().int().positive(),
+  comments: z.array(readerCommentSchema),
+  metrics: z.object({
+    readCompletionRate: z.number().min(0).max(1).optional(),
+    retentionRate: z.number().min(0).max(1).optional(),
+    favoriteCount: z.number().int().nonnegative().optional(),
+    commentCount: z.number().int().nonnegative().optional(),
+  }).optional(),
+  analyzedAt: z.string(),
+});
+
+export const readerFeedbackAnalysisSchema = z.object({
+  doMore: z.array(z.string()),
+  doLess: z.array(z.string()),
+  neverAgain: z.array(z.string()),
+  readerPreferences: z.object({
+    favoriteCharacters: z.array(z.string()),
+    favoriteSceneTypes: z.array(z.string()),
+    painPoints: z.array(z.string()),
+  }),
+  overallSentiment: z.enum(['very_positive', 'positive', 'mixed', 'negative', 'very_negative']),
+  priorityImprovements: z.array(z.string()),
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8: Continuity Pre-check
+// ---------------------------------------------------------------------------
+
+export const continuityPreCheckSchema = z.object({
+  pass: z.boolean(),
+  warnings: z.array(z.object({
+    type: z.enum([
+      'dead_character_active',
+      'location_mismatch',
+      'timeline_violation',
+      'power_level_breach',
+      'faction_rule_violation',
+      'commitment_forgotten',
+      'pov_violation',
+    ]),
+    description: z.string(),
+    severity: z.enum(['warning', 'block']),
+    affectedEntityId: z.string().optional(),
+  })),
+  contextInjections: z.array(z.string()),
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9: Pacing Analysis
+// ---------------------------------------------------------------------------
+
+export const pacingAnalysisSchema = z.object({
+  overallPacing: z.enum(['too_slow', 'good', 'too_fast']),
+  sentenceLengthVariety: z.number().min(0).max(10),
+  dialogueToNarrativeRatio: z.number().min(0).max(1),
+  actionDensity: z.number().min(0).max(10),
+  emotionalArcPresent: z.boolean(),
+  suggestions: z.array(z.string()),
+});
+
+// ---------------------------------------------------------------------------
 // Exported types
 // ---------------------------------------------------------------------------
 
@@ -723,7 +849,7 @@ export type ChapterReview = z.infer<typeof chapterReviewSchema>;
 export type MaintenanceState = z.infer<typeof maintenanceStateSchema>;
 export type MaintenanceTrigger = z.infer<typeof maintenanceTriggerSchema>;
 export type CrystallizedBible = z.infer<typeof crystallizedBibleSchema>;
-export type StoryStateV2 = z.infer<typeof storyStateV2Schema>;
+export type StoryState = z.infer<typeof storyStateSchema>;
 export type DeterministicCheckResult = z.infer<typeof deterministicCheckResultSchema>;
 export type BookPromptProfile = z.infer<typeof bookPromptProfileSchema>;
 export type MiniArc = z.infer<typeof miniArcSchema>;
@@ -743,8 +869,14 @@ export type NamingConvention = z.infer<typeof namingConventionSchema>;
 export type ConsistencyAuditResult = z.infer<typeof consistencyAuditResultSchema>;
 export type CanonArbitrationResult = z.infer<typeof canonArbitrationResultSchema>;
 export type ThreadHealthResult = z.infer<typeof threadHealthResultSchema>;
+export type RewriteGuidance = z.infer<typeof rewriteGuidanceSchema>;
+export type ReaderComment = z.infer<typeof readerCommentSchema>;
+export type ReaderFeedback = z.infer<typeof readerFeedbackSchema>;
+export type ReaderFeedbackAnalysis = z.infer<typeof readerFeedbackAnalysisSchema>;
+export type ContinuityPreCheck = z.infer<typeof continuityPreCheckSchema>;
+export type PacingAnalysis = z.infer<typeof pacingAnalysisSchema>;
 
-// Re-export types still used from V1.
+// Re-export shared types.
 export type {
   ChapterDraft,
   LoreRecord,

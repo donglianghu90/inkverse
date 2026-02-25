@@ -18,6 +18,13 @@ export class UnifiedInterceptor implements NestInterceptor {
     const response = context.switchToHttp().getResponse();
     const startTime = Date.now();
 
+    const isSse = (request.headers['accept'] || '').includes('text/event-stream');
+
+    if (isSse) {
+      this.logRequest(request);
+      return next.handle();
+    }
+
     // 设置响应头，禁用缓存（避免 304 状态码）
     response.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     response.setHeader('Pragma', 'no-cache');

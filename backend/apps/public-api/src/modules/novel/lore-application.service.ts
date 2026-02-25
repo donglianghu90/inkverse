@@ -1,7 +1,7 @@
 /**
  * Applies LoreRecord deltas to StoryState — characters, relations,
  * timeline, plot threads, facts, aliases.
- * V2: also creates new world elements (characters, locations, items).
+ * Also creates new world elements (characters, locations, items).
  */
 import { Injectable } from '@nestjs/common';
 import {
@@ -11,27 +11,25 @@ import {
   LoreRecord,
   PlotThread,
   RelationshipEdge,
-  StoryState,
   TimelineEvent,
 } from './schemas/novel.schemas';
 import {
-  StoryStateV2,
+  StoryState,
   ChapterIntent,
-} from './schemas/novel-v2.schemas';
+} from './schemas/novel-state.schemas';
 
 @Injectable()
 export class LoreApplicationService {
   constructor() {}
 
   /**
-   * V2 lore application: creates new entities + applies deltas.
-   * No synthetic contract needed.
+   * Lore application: creates new entities + applies deltas.
    */
-  applyLoreV2(
-    state: StoryStateV2,
+  applyLore(
+    state: StoryState,
     lore: LoreRecord,
     intent: ChapterIntent,
-  ): StoryStateV2 {
+  ): StoryState {
     const chapterNumber = lore.chapterNumber;
 
     // Step 1: Register new world elements BEFORE applying deltas.
@@ -112,7 +110,7 @@ export class LoreApplicationService {
     }
 
     // Step 2: Build a bridge state with new entities for delta application.
-    const bridgeState: StoryState = {
+    const bridgeState = {
       ...(state as any),
       characters,
       locations,
@@ -134,8 +132,7 @@ export class LoreApplicationService {
       wordCountRange: intent.wordCountRange,
     };
 
-    // Step 3: Apply standard deltas using existing V1 logic.
-    const applied = this.applyLore(bridgeState, lore, bridgeContract);
+    const applied = this.applyLoreDeltas(bridgeState as any, lore, bridgeContract);
 
     // Step 4: Apply character profile deltas.
     let profiledCharacters = applied.characters;
@@ -634,7 +631,7 @@ export class LoreApplicationService {
       while (recentHookTypes.length > 10) recentHookTypes.shift();
     }
 
-    // Step 17: Merge back into V2 state.
+    // Merge back into state.
     return {
       ...state,
       characters: finalCharacters,
@@ -680,16 +677,16 @@ export class LoreApplicationService {
     return 'simmering';
   }
 
-  applyLore(state: StoryState, lore: LoreRecord, contract: ChapterContract): StoryState {
+  private applyLoreDeltas(state: any, lore: LoreRecord, contract: ChapterContract): any {
     const chapterNumber = lore.chapterNumber;
-    const knownLocationIds = new Set(state.locations.map((x) => x.id));
-    const knownItemIds = new Set(state.items.map((x) => x.id));
+    const knownLocationIds = new Set<string>(state.locations.map((x) => x.id));
+    const knownItemIds = new Set<string>(state.items.map((x) => x.id));
 
     const lifecycleAppliedCharacters = this.applyCharacterLifecycleDeltas(
       state.characters, lore, chapterNumber, knownLocationIds, knownItemIds,
     );
     const characters = this.applyCharacterAliasDeltas(lifecycleAppliedCharacters, lore);
-    const knownCharacterIds = new Set(characters.map((x) => x.id));
+    const knownCharacterIds = new Set<string>(characters.map((x) => x.id));
     const characterFactLedger = this.applyCharacterFactDeltas(
       state.characterFactLedger ?? [], lore, chapterNumber, knownCharacterIds,
     );

@@ -10,7 +10,7 @@ import { Queue, RepeatOptions } from 'bullmq';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@packages/modules';
 import { ConfigureAutoSerializationDto } from './dto/configure-auto-serialization.dto';
-import { NovelV2Service } from './novel-v2.service';
+import { NovelService } from './novel.service';
 import { BookEntity } from './entities/book.entity';
 import { AutoSerializationJobEntity } from './entities/auto-serialization-job.entity';
 import {
@@ -27,8 +27,6 @@ interface AutoSerializationView {
   chaptersPerRun: number;
   qualityPolicy: {
     maxRepairRounds: number;
-    strictQuality: boolean;
-    stopWhenLowQuality: boolean;
     minQualityScore: number;
     minOverallScore: number;
   };
@@ -54,7 +52,7 @@ export class AutoSerializationService implements OnModuleInit {
     private readonly bookRepo: Repository<BookEntity>,
     @InjectRepository(AutoSerializationJobEntity)
     private readonly jobRepo: Repository<AutoSerializationJobEntity>,
-    private readonly novelService: NovelV2Service,
+    private readonly novelService: NovelService,
     private readonly configService: ConfigService,
     @InjectQueue(AUTO_SERIALIZATION_QUEUE)
     private readonly queue: Queue<AutoSerializationJobPayload>,
@@ -78,10 +76,8 @@ export class AutoSerializationService implements OnModuleInit {
         dailyStartTime: dto.dailyStartTime,
         chaptersPerRun: dto.chaptersPerRun,
         maxRepairRounds: dto.maxRepairRounds ?? 2,
-        strictQuality: dto.strictQuality ?? true,
-        stopWhenLowQuality: dto.stopWhenLowQuality ?? true,
-        minQualityScore: dto.minQualityScore ?? 7,
-        minOverallScore: dto.minOverallScore ?? 7,
+        minQualityScore: Math.max(dto.minQualityScore ?? 7, 7),
+        minOverallScore: Math.max(dto.minOverallScore ?? 7, 7),
         nextRunAt: new Date(nextRunAt),
       },
       ['bookId'],
@@ -174,8 +170,6 @@ export class AutoSerializationService implements OnModuleInit {
       chaptersPerRun: record.chaptersPerRun,
       qualityPolicy: {
         maxRepairRounds: record.maxRepairRounds,
-        strictQuality: record.strictQuality,
-        stopWhenLowQuality: record.stopWhenLowQuality,
         minQualityScore: record.minQualityScore,
         minOverallScore: record.minOverallScore,
       },
