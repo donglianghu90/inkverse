@@ -102,13 +102,13 @@ export class GlobalErrorInterceptor implements OnModuleInit {
     console.error('===========================');
 
     // 尝试处理Promise拒绝，避免进程崩溃
-    try {
-      promise.catch((error) => {
+    (async () => {
+      try {
+        await promise;
+      } catch (error) {
         this.logService.warn('已处理之前未处理的Promise拒绝', { error: String(error) });
-      });
-    } catch (error) {
-      this.logService.error('处理Promise拒绝时发生错误', error);
-    }
+      }
+    })();
   }
 
   /**
@@ -136,15 +136,18 @@ export class GlobalErrorInterceptor implements OnModuleInit {
     }, 30000); // 30秒超时
 
     // 执行清理操作
-    this.performCleanup().then(() => {
-      clearTimeout(shutdownTimeout);
-      this.logService.info('✅ 清理完成，系统退出');
-      process.exit(0);
-    }).catch((error) => {
-      clearTimeout(shutdownTimeout);
-      this.logService.error('❌ 清理过程中发生错误', error);
-      process.exit(1);
-    });
+    (async () => {
+      try {
+        await this.performCleanup();
+        clearTimeout(shutdownTimeout);
+        this.logService.info('✅ 清理完成，系统退出');
+        process.exit(0);
+      } catch (error) {
+        clearTimeout(shutdownTimeout);
+        this.logService.error('❌ 清理过程中发生错误', error);
+        process.exit(1);
+      }
+    })();
   }
 
   /**

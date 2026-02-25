@@ -547,7 +547,11 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         } finally {
           const usage = this.llmUsageTracker.consumeCurrentSummary();
           if (usage) {
-            await this.persistArtifact(bookId, chapterNumber, 'llm_usage_summary', usage).catch(() => {});
+            try {
+              await this.persistArtifact(bookId, chapterNumber, 'llm_usage_summary', usage);
+            } catch {
+              // ignore non-critical artifact persistence failure
+            }
           }
         }
       },

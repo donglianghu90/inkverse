@@ -194,10 +194,13 @@ const CreateBook: React.FC = () => {
     };
 
     try {
-      const response = await fetch(createBookSseUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-        body: JSON.stringify(params),
+      const searchParams = new URLSearchParams();
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null) searchParams.set(k, String(v));
+      });
+      const response = await fetch(`${createBookSseUrl()}?${searchParams.toString()}`, {
+        method: 'GET',
+        headers: { Accept: 'text/event-stream' },
       });
 
       if (!response.ok || !response.body) throw new Error('创建失败');

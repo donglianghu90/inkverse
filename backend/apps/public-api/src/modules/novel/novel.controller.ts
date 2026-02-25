@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Logger,
   MessageEvent,
   Param,
   ParseIntPipe,
@@ -10,6 +11,7 @@ import {
   Query,
   Sse,
 } from '@nestjs/common';
+
 import {
   ApiTags,
   ApiOperation,
@@ -17,7 +19,7 @@ import {
   ApiResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { Observable, Subject } from 'rxjs';
+import { Observable, ReplaySubject, Subject } from 'rxjs';
 import { AutoSerializationService } from './auto-serialization.service';
 import { ConfigureAutoSerializationDto } from './dto/configure-auto-serialization.dto';
 import { CreateBookDto } from './dto/create-book.dto';
@@ -33,6 +35,8 @@ import { Public } from '@packages/common/guards';
 @ApiBearerAuth('Authorization')
 @Controller('novel')
 export class NovelController {
+  private readonly logger = new Logger(NovelController.name);
+
   constructor(
     private readonly novelService: NovelV2Service,
     private readonly autoSerializationService: AutoSerializationService,
@@ -79,26 +83,50 @@ export class NovelController {
   @Sse('books/create-sse')
   @Public()
   @ApiOperation({ summary: '创建新书（SSE）', description: '通过 SSE 流式推送创建进度，完成后返回书籍信息' })
-  createBookSse(@Body() dto: CreateBookDto): Observable<MessageEvent> {
-    const subject = new Subject<MessageEvent>();
+  createBookSse(@Query() query: Record<string, string>): Observable<MessageEvent> {
+    const dto: CreateBookDto = Object.assign(new CreateBookDto(), {
+      mainIdea: query.mainIdea,
+      genre: query.genre,
+      targetAudience: query.targetAudience,
+      mainStoryGoal: query.mainStoryGoal,
+      titleHint: query.titleHint,
+      targetChapterWordCount: query.targetChapterWordCount ? parseInt(query.targetChapterWordCount, 10) : undefined,
+      plannedMinChapters: query.plannedMinChapters ? parseInt(query.plannedMinChapters, 10) : undefined,
+      plannedMaxChapters: query.plannedMaxChapters ? parseInt(query.plannedMaxChapters, 10) : undefined,
+    });
+
+    this.logger.log(
+      `[createBookSse] SSE 连接建立\n` +
+      `  mainIdea: ${dto.mainIdea}\n` +
+      `  genre: ${dto.genre} | targetAudience: ${dto.targetAudience}`,
+    );
+
+    const subject = new ReplaySubject<MessageEvent>(20);
 
     const unsubscribe = this.progressService.subscribe('__creating__', (event) => {
+      this.logger.debug(`[createBookSse] 进度事件 → step=${event.step} message=${event.message} done=${event.done}`);
       subject.next({ data: event } as MessageEvent);
       if (event.done || event.error) {
+        this.logger.log(`[createBookSse] 进度流结束 done=${event.done} error=${event.error ?? 'none'}`);
         setTimeout(() => subject.complete(), 200);
       }
     });
 
-    this.novelService
-      .createBook(dto)
-      .then((result) => {
+    (async () => {
+      try {
+        this.logger.log(`[createBookSse] 开始调用 createBook...`);
+        const result = await this.novelService.createBook(dto);
+        this.logger.log(`[createBookSse] createBook 完成，推送 result 事件`);
         subject.next({ data: { result, _type: 'result' } } as MessageEvent);
-      })
-      .catch((err) => {
+      } catch (err: any) {
+        this.logger.error(`[createBookSse] createBook 异常: ${err.message}`, err.stack);
         subject.next({ data: { done: true, error: err.message } } as MessageEvent);
         subject.complete();
-      })
-      .finally(() => unsubscribe());
+      } finally {
+        unsubscribe();
+        this.logger.log(`[createBookSse] SSE 流程结束，已取消订阅`);
+      }
+    })();
 
     return subject.asObservable();
   }
@@ -200,15 +228,16 @@ export class NovelController {
       }
     });
 
-    this.novelService
-      .generateChapter(bookId)
-      .catch((err) => {
-        subject.next({
-          data: { done: true, error: err.message },
-        } as MessageEvent);
+    (async () => {
+      try {
+        await this.novelService.generateChapter(bookId);
+      } catch (err: any) {
+        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
         subject.complete();
-      })
-      .finally(() => unsubscribe());
+      } finally {
+        unsubscribe();
+      }
+    })();
 
     return subject.asObservable();
   }
