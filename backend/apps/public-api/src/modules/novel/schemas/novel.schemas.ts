@@ -40,6 +40,33 @@ export const characterVoiceSchema = z.object({
   vocabularyLevel: z.enum(['crude', 'casual', 'neutral', 'formal', 'archaic']).default('neutral'),
   sampleDialogues: z.array(z.string()).default([]),
   innerMonologueStyle: z.string().optional(),
+  defaultDialogueStrategy: z.object({
+    liePattern: z.enum(['never_lies', 'white_lies', 'strategic_liar', 'compulsive']).default('white_lies'),
+    deflectionStyle: z.string().default(''),
+    emotionalLeakage: z.enum(['controlled', 'occasional_slip', 'transparent', 'masked']).default('occasional_slip'),
+    humorStyle: z.string().default(''),
+  }).default({}),
+  emotionalVoiceMap: z.array(z.object({
+    emotion: z.string(), // 情绪（如"愤怒""悲伤""恐惧""得意"）
+    voiceShift: z.string(), // 声音变化（如"句子变短，音量提高但反而更冷"）
+    corePreserved: z.string(), // 保留的核心特征（如"依然用敬语但语气变硬"）
+  })).max(6).default([]),
+  powerDynamicVoice: z.object({
+    toSuperior: z.string().default(''), // 面对上级（如"措辞谨慎，多用敬语，但暗含自尊"）
+    toEqual: z.string().default(''), // 面对同辈
+    toInferior: z.string().default(''), // 面对下位者（如"语气放松，偶尔打趣"）
+    toEnemy: z.string().default(''), // 面对敌人
+  }).default({}),
+  narrativeActions: z.object({
+    signatureGestures: z.array(z.string()).default([]), // 招牌动作（如"习惯性摩挲剑柄""说话时微侧头"）
+    physicalTics: z.array(z.string()).default([]), // 下意识动作（如"紧张时转指环""思考时敲桌面"）
+    thoughtPatterns: z.string().default(''), // 内心戏风格（如"冷静分析型，像在下棋"）
+  }).default({}),
+  voiceEvolution: z.array(z.object({
+    chapterNumber: z.number().int().positive(),
+    change: z.string(), // 声音变化（如"经历背叛后对话变得更加警惕和试探"）
+  })).max(10).default([]),
+  catchphrases: z.array(z.string()).max(5).default([]), // 经典语录（从已写章节中积累）
 }).optional();
 
 // Character ability entry.
@@ -158,6 +185,71 @@ export const characterCommitmentSchema = z.object({
 });
 
 // Story actor profile.
+// Character psychology — dynamic emotional state machine (跨章节追踪).
+export const emotionalMemorySchema = z.object({
+  chapterNumber: z.number().int().positive(),
+  trigger: z.string(), // 什么引发了这个情绪
+  emotion: z.string(), // 核心情绪
+  intensity: z.number().min(0).max(1), // 强度 0-1
+  unresolved: z.boolean().default(true), // 是否尚未释放/消化
+});
+
+export const characterPsychologySchema = z.object({
+  innerConflict: z.object({
+    desire: z.string(), // 想要什么
+    fear: z.string(), // 害怕什么
+    tension: z.string(), // 两者之间的撕裂
+  }).optional(),
+  emotionalBaseline: z.enum([
+    'stoic', 'anxious', 'optimistic', 'melancholic', 'volatile',
+    'guarded', 'passionate', 'detached', 'bitter', 'hopeful',
+  ]).default('stoic'),
+  currentMood: z.string().default('平静'), // 当前情绪（自然语言）
+  emotionalMemories: z.array(emotionalMemorySchema).default([]), // 跨章节情绪记忆
+  decisionPattern: z.enum([
+    'rational_first', 'emotion_first', 'duty_first', 'survival_first',
+    'pride_first', 'loyalty_first', 'curiosity_first', 'impulsive',
+  ]).default('rational_first'),
+  stressResponse: z.enum([
+    'fight', 'flight', 'freeze', 'mask', 'analyze', 'lash_out',
+  ]).default('fight'),
+  trustThreshold: z.enum(['trusts_easily', 'cautious', 'guarded', 'paranoid']).default('cautious'),
+  interactionPatterns: z.array(z.object({
+    targetCharacterId: z.string(),
+    pattern: z.string(), // 如"嘴上刻薄但暗中保护"
+    chemistryType: z.enum(['rivalry', 'mentor', 'romantic_tension', 'reluctant_ally', 'parent_child', 'distrust', 'worship', 'betrayal_scar', 'comedic_banter']),
+    dialogueStrategy: z.object({
+      powerDynamic: z.enum(['dominant', 'submissive', 'equal', 'shifting']).default('equal'),
+      subtextLayer: z.string().default(''), // 潜台词层（如"每句关心背后都是试探"）
+      avoidTopics: z.array(z.string()).default([]), // 回避话题
+      triggerTopics: z.array(z.string()).default([]), // 触发强烈反应的话题
+      silencePattern: z.string().default(''), // 沉默的含义（如"沉默=压抑怒火"）
+      typicalOpeningMove: z.string().default(''), // 典型开场方式
+    }).default({}),
+  })).default([]),
+}).optional();
+
+export const characterKnowledgeEntrySchema = z.object({
+  factId: z.string(), // 如 "kn_主角真实身份"
+  subject: z.string(), // 知识主体（如人名/地名/事件）
+  content: z.string(), // 该角色知道的内容
+  source: z.enum(['witnessed', 'told', 'overheard', 'deduced', 'rumor', 'false_info']),
+  confidence: z.enum(['certain', 'suspected', 'vague', 'wrong']).default('certain'),
+  acquiredAtChapter: z.number().int().positive(),
+  isSecret: z.boolean().default(false), // 该角色是否意识到这是秘密
+});
+
+export const characterKnowledgeStateSchema = z.object({
+  knownFacts: z.array(characterKnowledgeEntrySchema).default([]),
+  falseBeliefs: z.array(z.object({
+    factId: z.string(),
+    wrongBelief: z.string(),
+    truthId: z.string().optional(), // 对应的真实factId
+    acquiredAtChapter: z.number().int().positive(),
+  })).default([]),
+  blindSpots: z.array(z.string()).default([]), // 该角色明确不知道的关键事项
+}).optional();
+
 export const characterSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -170,6 +262,8 @@ export const characterSchema = z.object({
   profile: characterProfileSchema,
   voice: characterVoiceSchema,
   status: characterStateSchema,
+  psychology: characterPsychologySchema,
+  knowledgeState: characterKnowledgeStateSchema,
 });
 
 // Location profile — rich environmental details for consistency.
@@ -573,6 +667,12 @@ export const loreRecordSchema = z.object({
       }),
     )
     .optional(),
+  emotionalImprints: z.array(z.object({
+    characterId: z.string(),
+    emotion: z.string(), // 具体情绪描述（如"对父亲的愧疚混合着不甘"）
+    trigger: z.string(), // 触发事件（如"父亲的遗物被发现"）
+    intensity: z.enum(['subtle', 'moderate', 'intense', 'overwhelming']),
+  })).default([]),
   curiosityDeltas: z
     .array(
       z.object({
@@ -787,6 +887,10 @@ export const generationKpiSchema = z.object({
 });
 
 // Exported inferred runtime types.
+export type CharacterPsychology = z.infer<typeof characterPsychologySchema>;
+export type EmotionalMemory = z.infer<typeof emotionalMemorySchema>;
+export type CharacterKnowledgeEntry = z.infer<typeof characterKnowledgeEntrySchema>;
+export type CharacterKnowledgeState = z.infer<typeof characterKnowledgeStateSchema>;
 export type EditorialPlan = z.infer<typeof editorialPlanSchema>;
 export type StoryBible = z.infer<typeof storyBibleSchema>;
 export type BootstrapWorld = z.infer<typeof bootstrapWorldSchema>;

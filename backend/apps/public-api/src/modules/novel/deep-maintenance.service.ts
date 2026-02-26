@@ -19,13 +19,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { LlmService } from './llm/llm.service';
+import { VolumeDirectorAgent } from './agents/volume-director.agent';
+import { RetrospectiveLearnerAgent } from './agents/retrospective-learner.agent';
+import { MemoryRetrieverService } from './memory-retriever.service';
 import { ChapterEntity } from './entities/chapter.entity';
 import {
   MaintenanceState,
   MaintenanceTrigger,
   StoryState,
-  MiniArc,
-  StyleAnchor,
+  ArcAcceptanceReport,
   crystallizedBibleSchema,
   roughOutlineSchema,
   miniArcSchema,
@@ -33,6 +35,9 @@ import {
   consistencyAuditResultSchema,
   canonArbitrationResultSchema,
   threadHealthResultSchema,
+  arcSummaryOutputSchema,
+  volumeSummaryOutputSchema,
+  WritingLesson,
 } from './schemas/novel-state.schemas';
 import { buildCompactContext } from './prompting/novel-playbook';
 
@@ -44,9 +49,13 @@ const CONSECUTIVE_LOW_SCORE_THRESHOLD = 3;
 const CONSECUTIVE_CONSISTENCY_WARNING_THRESHOLD = 2;
 const MAX_CHAPTERS_WITHOUT_MAINTENANCE = 15;
 
-/** 每卷计划章数范围（卷规划时 LLM 会在此区间内决定 plannedEndChapter - startChapter + 1） */
-export const ARC_CHAPTERS_MIN = 5;
-export const ARC_CHAPTERS_MAX = 10;
+/** 根据全书规模动态计算MiniArc章数范围 */
+export function getArcChapterRange(state: { roughOutline?: { estimatedTotalChapters?: number; estimatedVolumes?: number } }): { min: number; max: number } {
+  const total = state.roughOutline?.estimatedTotalChapters ?? 600;
+  const vols = state.roughOutline?.estimatedVolumes ?? Math.max(1, Math.round(Math.sqrt(total / 25)));
+  const avg = Math.round(total / vols);
+  return { min: Math.max(5, Math.floor(avg * 0.7 / 6)), max: Math.max(8, Math.ceil(avg * 1.3 / 3)) };
+}
 
 @Injectable()
 export class DeepMaintenanceService {
@@ -54,6 +63,9 @@ export class DeepMaintenanceService {
 
   constructor(
     private readonly llm: LlmService,
+    private readonly volumeDirector: VolumeDirectorAgent,
+    private readonly retrospectiveLearner: RetrospectiveLearnerAgent,
+    private readonly memoryRetriever: MemoryRetrieverService,
     @InjectRepository(ChapterEntity)
     private readonly chapterRepo: Repository<ChapterEntity>,
   ) {}
@@ -215,6 +227,45 @@ export class DeepMaintenanceService {
     }
   }
 
+  /** 确保有活跃的大卷规划。无卷或当前卷已超估计结束章时触发新卷规划。 */
+  private async ensureVolumeArc(state: StoryState): Promise<StoryState> {
+    const ch = state.chapterCursor;
+    const vol = state.currentVolume;
+    const needsNewVolume = !vol || (vol.status === 'active' && ch > vol.estimatedEndChapter);
+    if (!needsNewVolume) return state;
+
+    if (vol && vol.status === 'active') {
+      this.logger.log(`[Volume] 卷「${vol.title}」已超过预估结束章${vol.estimatedEndChapter}，规划新卷`);
+      await this.generateVolumeSummary(state, vol, ch).catch((e) =>
+        this.logger.warn(`[Volume] 卷摘要生成失败: ${e instanceof Error ? e.message : String(e)}`),
+      );
+      state = {
+        ...state,
+        completedVolumes: [...(state.completedVolumes ?? []), { ...vol, status: 'completed' as const }],
+      };
+    }
+
+    try {
+      const { volume: newVolume, deposits } = await this.volumeDirector.planVolumeWithForeshadowing(state);
+      this.logger.log(
+        `[Volume] 新卷规划完成：「${newVolume.title}」ch${newVolume.startChapter}-${newVolume.estimatedEndChapter} | ` +
+        `MiniArc槽位: ${newVolume.miniArcSlots.length} | 伏笔种子: ${deposits.length} | 创新: ${newVolume.structuralInnovation || '无'}`,
+      );
+      const bank = state.foreshadowingBank ?? { deposits: [], totalPlanted: 0, totalResolved: 0 };
+      return {
+        ...state,
+        currentVolume: { ...newVolume, status: 'active' as const },
+        foreshadowingBank: {
+          ...bank,
+          deposits: [...bank.deposits, ...deposits],
+        },
+      };
+    } catch (err) {
+      this.logger.warn(`[Volume] 大卷规划失败，继续使用现有状态: ${err}`);
+      return state;
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Task implementations
   // -------------------------------------------------------------------------
@@ -299,7 +350,8 @@ ${JSON.stringify(context, null, 2)}
 - 已经写过的节点保留或标记为已完成
 - 未来的节点根据实际故事走向调整
 - 如果故事偏离了原大纲，跟着故事实际方向走
-- 保持 4-6 个节点的粗略程度`,
+- 保持 4-6 个节点的粗略程度
+- 根据实际进展重新评估 estimatedVolumes（预计卷数）是否合理，必要时调整`,
       temperature: 0.5,
     });
 
@@ -525,6 +577,11 @@ ${JSON.stringify(state.chapterSummaries.slice(-10), null, 2)}
 
   private async planNextArc(state: StoryState): Promise<StoryState> {
     const chapterNumber = state.chapterCursor - 1;
+    const arcRange = getArcChapterRange(state);
+
+    // ── Volume boundary check: plan new volume if needed ──
+    state = await this.ensureVolumeArc(state);
+
     const context = buildCompactContext(state, {
       maxCharacters: 12,
       maxChapterSummaries: 10,
@@ -533,29 +590,65 @@ ${JSON.stringify(state.chapterSummaries.slice(-10), null, 2)}
     });
 
     const completedArcs = state.completedArcs ?? [];
+    const completedArcAcceptanceReports = state.completedArcAcceptanceReports ?? [];
     const currentArc = state.currentArc;
+    let currentArcAcceptance = state.currentArcAcceptance;
 
     if (currentArc && currentArc.status === 'active') {
       completedArcs.push({ ...currentArc, status: 'completed' });
+      const acceptance = this.evaluateArcAcceptance(state, currentArc, chapterNumber);
+      completedArcAcceptanceReports.push(acceptance);
+      currentArcAcceptance = acceptance;
+      await Promise.all([
+        this.generateArcSummary(state, currentArc, chapterNumber).catch((e) =>
+          this.logger.warn(`[Maintenance] 弧摘要生成失败: ${e instanceof Error ? e.message : String(e)}`)),
+        this.runRetrospectiveLearning(state, currentArc).then((lessons) => {
+          if (lessons.length > 0) {
+            state = { ...state, writingLessons: [...(state.writingLessons ?? []), ...lessons] };
+            this.logger.log(`[Maintenance] 回顾学习：提炼${lessons.length}条写作教训`);
+          }
+        }).catch((e) => this.logger.warn(`[Maintenance] 回顾学习失败: ${e instanceof Error ? e.message : String(e)}`)),
+      ]);
     }
 
     const arcHistory = completedArcs.map((a) => ({
       标题: a.arcTitle,
       章节范围: `${a.startChapter}-${a.plannedEndChapter}`,
       核心张力: a.coreTension,
+      类型: a.arcType,
+      叙事技法: a.narrativeTechnique ?? 'linear',
+      高潮模式: a.climaxPattern ?? '',
     }));
+
+    const nr = state.noveltyRegistry ?? { usedArcTypes: [], usedNarrativeTechniques: [], usedCooldownTags: [], usedClimaxPatterns: [], lastArcTypes: [] };
+    const usedTechniques = nr.usedNarrativeTechniques.map((t) => t.technique);
+    const freshTechniques = ['linear', 'flashback', 'parallel_pov', 'in_medias_res', 'countdown',
+      'mystery_reveal', 'unreliable_narrator', 'time_skip_montage', 'epistolary',
+      'bottle_episode', 'slow_burn_reveal', 'dual_timeline', 'heist_plan',
+    ].filter((t) => !usedTechniques.includes(t));
 
     const newArc = await this.llm.generateStructured({
       taskName: 'arc-planning',
       schema: miniArcSchema,
-      systemPrompt: `你是一位擅长节奏控制的网文策划师。规划接下来${ARC_CHAPTERS_MIN}-${ARC_CHAPTERS_MAX}章的"卷计划"。
+      systemPrompt: `你是一位擅长节奏控制的网文策划师。规划接下来${arcRange.min}-${arcRange.max}章的"卷计划"。
 
-=== 节奏核心 ===
-1) 爽感循环：压制/挑战→隐忍/准备→爆发/碾压→新的更大挑战。每卷至少一个完整循环。
-2) 张力曲线：setup(3-5)→escalation(5-7)→climax(8-9)→aftermath(3-4)。
-3) 呼吸节奏：连续2-3章紧张后需1章缓冲。
-4) 高潮章必须有明确大爽点，不能是普通推进。
-5) 每卷结束留更大悬念拉入下一卷。
+=== 新鲜感要求（重要）===
+${nr.lastArcTypes.length > 0 ? `最近卷类型序列：${nr.lastArcTypes.join('→')}——本卷arcType禁止和最近一个相同。` : ''}
+${usedTechniques.length > 0 ? `已用叙事技法：${usedTechniques.join('、')}——优先使用未用过的技法。` : ''}
+${freshTechniques.length > 0 ? `推荐优先尝试：${freshTechniques.slice(0, 5).join('、')}` : ''}
+${nr.usedClimaxPatterns.length > 0 ? `已用高潮模式：${nr.usedClimaxPatterns.join('、')}——本卷climaxPattern必须不同。` : ''}
+narrativeTechnique 字段必须从枚举中选择一个最适合本卷的叙事技法。
+structuralInnovation 字段用一句话描述本卷的叙事创新点。
+climaxPattern 字段描述本卷高潮的模式（如"boss战""揭秘""背叛反转""牺牲""大逃离""禁术觉醒"）。
+
+=== 四幕结构（适配${arcRange.min}-${arcRange.max}章长卷） ===
+1) 第一幕-铺垫（~25%）：建立本卷冲突、引入新角色/势力、埋下本卷核心悬念。
+2) 第二幕-升温（~35%）：多条支线交织推进，角色内外压力递增，至少包含1-2个小爽点。
+3) 第三幕-高潮（~25%）：核心冲突爆发、角色面临最艰难选择、大爽点、情感高潮。
+4) 第四幕-余韵（~15%）：善后+伏笔下卷+角色内心消化，留更大悬念拉入下一卷。
+- 爽感循环：每卷至少2个完整"压制→准备→爆发"循环（长卷容纳更多层次）。
+- 呼吸节奏：连续2-3章紧张后需1章缓冲，但缓冲章也要暗推支线。
+- 角色深度：长卷的优势是有足够空间展开角色弧线，不要浪费——日常互动和内心挣扎比密集剧情更能塑造立体角色。
 
 === 情感主题规划（新增——每卷的灵魂） ===
 每卷必须有一个情感主题——它是角色内心成长的维度，和剧情主线平行但更深入：
@@ -578,11 +671,26 @@ ${JSON.stringify(state.chapterSummaries.slice(-10), null, 2)}
 - minor_payoff: 小爽点（打脸、小升级）
 - major_payoff: 大爽点（boss战、重大揭露）
 - emotional_peak: 情感高潮（告白/离别/重逢/醒悟）
-- relief: 喘息（日常/搞笑/温馨）`,
+- relief: 喘息（日常/搞笑/温馨）
+
+=== 卷合同字段（必须输出） ===
+- arcType: 卷类型（dungeon/sect_politics/journey/war/mystery/tournament/court/slice_of_life/transition/custom）
+- triggerReason: 为什么现在必须进入这一卷（要解决什么叙事问题）
+- entryCondition: 卷入口条件（角色/势力/时机）
+- exitCondition: 卷结束条件（必须达成什么才算出卷）
+- mustPayoffThreadIds: 本卷必须回收的 threadId（优先从已有开放伏线中选择）
+- rewardLossLedger.expectedGains: 本卷主角/阵营的预期收益
+- rewardLossLedger.expectedCosts: 本卷必须承担的代价
+- rewardLossLedger.irreversibleChanges: 本卷结束后不可逆变化
+- antagonistMilestones: 反派推进里程碑（章节号+目标+成功信号）
+- cooldownTag: 用于避免连续同构卷（如"dungeon_like"）
+- narrativeTechnique: 本卷叙事技法（必须从枚举中选择）
+- structuralInnovation: 一句话描述本卷叙事创新
+- climaxPattern: 本卷高潮模式（必须与已用模式不同）`,
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}
 
-已完成的卷：
+已完成的卷（含类型和技法，避免重复）：
 ${arcHistory.length > 0 ? JSON.stringify(arcHistory, null, 2) : '无（这是第一卷）'}
 
 当前位置：第 ${chapterNumber} 章已写完，即将开始第 ${chapterNumber + 1} 章。
@@ -591,9 +699,16 @@ ${arcHistory.length > 0 ? JSON.stringify(arcHistory, null, 2) : '无（这是第
 - arcId: "arc_" + 序号（如 arc_1, arc_2）
 - arcTitle: 本卷标题（有冲突感）
 - startChapter: ${chapterNumber + 1}
-- plannedEndChapter: startChapter + ${ARC_CHAPTERS_MIN - 1}~${ARC_CHAPTERS_MAX - 1}（本系统配置为 ${ARC_CHAPTERS_MIN}-${ARC_CHAPTERS_MAX} 章一卷）
+- plannedEndChapter: startChapter + ${arcRange.min - 1}~${arcRange.max - 1}（本系统配置为 ${arcRange.min}-${arcRange.max} 章一卷）
 - coreTension: 本卷的核心张力是什么
 - climaxChapter: 哪一章是高潮
+- arcType/triggerReason/entryCondition/exitCondition 必须填写
+- narrativeTechnique: 必须从枚举中选择（优先未用过的技法）
+- structuralInnovation: 一句话描述本卷叙事创新（不能为空）
+- climaxPattern: 本卷高潮模式（不能与已用模式重复）
+- mustPayoffThreadIds 优先从当前 open thread 中选 1-3 条
+- rewardLossLedger 三个列表都要填写（即使是短语）
+- antagonistMilestones 至少 1 条
 - chapterBeats: 每章的节奏角色、张力等级、简要目标、爽感类型
 - 至少包含 1 个 major_payoff 和 1 个 relief`,
       temperature: 0.6,
@@ -601,13 +716,105 @@ ${arcHistory.length > 0 ? JSON.stringify(arcHistory, null, 2) : '无（这是第
 
     this.logger.log(
       `[Maintenance] arc_planning: 新卷「${newArc.arcTitle}」${newArc.startChapter}-${newArc.plannedEndChapter} ` +
-      `高潮章: ${newArc.climaxChapter}`,
+      `高潮章: ${newArc.climaxChapter} | 技法: ${newArc.narrativeTechnique} | 高潮模式: ${newArc.climaxPattern}`,
     );
+
+    const updatedRegistry = { ...nr };
+    updatedRegistry.usedArcTypes = [...nr.usedArcTypes, { arcType: newArc.arcType, arcId: newArc.arcId }];
+    updatedRegistry.usedNarrativeTechniques = [...nr.usedNarrativeTechniques, { technique: newArc.narrativeTechnique, arcId: newArc.arcId }];
+    if (newArc.cooldownTag) updatedRegistry.usedCooldownTags = [...new Set([...nr.usedCooldownTags, newArc.cooldownTag])];
+    if (newArc.climaxPattern) updatedRegistry.usedClimaxPatterns = [...new Set([...nr.usedClimaxPatterns, newArc.climaxPattern])];
+    updatedRegistry.lastArcTypes = [...nr.lastArcTypes.slice(-4), newArc.arcType];
 
     return {
       ...state,
       currentArc: newArc,
       completedArcs,
+      currentArcAcceptance,
+      completedArcAcceptanceReports,
+      noveltyRegistry: updatedRegistry,
+    };
+  }
+
+  private evaluateArcAcceptance(
+    state: StoryState,
+    arc: StoryState['currentArc'],
+    chapterNumber: number,
+  ): ArcAcceptanceReport {
+    const safeArc = arc!;
+    const expectedRange = Math.max(1, safeArc.plannedEndChapter - safeArc.startChapter + 1);
+    const coveredRange = Math.max(
+      0,
+      Math.min(chapterNumber, safeArc.plannedEndChapter) - safeArc.startChapter + 1,
+    );
+    const goalCompletionScore = Math.max(0, Math.min(1, coveredRange / expectedRange));
+
+    const mustPayoff = safeArc.mustPayoffThreadIds ?? [];
+    const threadById = new Map((state.plotThreadLedger ?? []).map((t) => [t.id, t] as const));
+    const missingPayoffThreadIds = mustPayoff.filter((id) => {
+      const thread = threadById.get(id);
+      return !thread || thread.status === 'open';
+    });
+    const mustPayoffCompletionScore =
+      mustPayoff.length === 0
+        ? 1
+        : (mustPayoff.length - missingPayoffThreadIds.length) / mustPayoff.length;
+
+    const activeCuriosities = state.readerTension?.activeCuriosities ?? [];
+    const overdueCuriosities = activeCuriosities.filter(
+      (c) => chapterNumber - (c.seededAtChapter ?? chapterNumber) >= 15,
+    ).length;
+    const chaptersSinceLastPayoff = state.readerTension?.chaptersSinceLastPayoff ?? 0;
+    let readerTensionResolutionScore = 1 - Math.min(1, overdueCuriosities / 3);
+    if (chaptersSinceLastPayoff >= 8) readerTensionResolutionScore -= 0.2;
+    if (chaptersSinceLastPayoff >= 12) readerTensionResolutionScore -= 0.2;
+    readerTensionResolutionScore = Math.max(0, Math.min(1, readerTensionResolutionScore));
+
+    const newOpenThreads = (state.plotThreadLedger ?? []).filter(
+      (t) =>
+        t.status === 'open' &&
+        t.setupChapter >= safeArc.startChapter &&
+        t.setupChapter <= chapterNumber,
+    ).length;
+
+    const overallPass =
+      goalCompletionScore >= 0.9 &&
+      mustPayoffCompletionScore >= 0.8 &&
+      readerTensionResolutionScore >= 0.55;
+
+    const actions: string[] = [];
+    if (missingPayoffThreadIds.length > 0) {
+      actions.push(`优先回收伏线：${missingPayoffThreadIds.slice(0, 3).join('、')}`);
+    }
+    if (readerTensionResolutionScore < 0.55) {
+      actions.push('下一卷前2章安排至少1次明确揭晓，降低读者疑问积压');
+    }
+    if (newOpenThreads > 3) {
+      actions.push('减少新开坑，优先消化现有冲突线');
+    }
+    if (actions.length === 0) {
+      actions.push('卷目标达成，按计划切换到下一卷');
+    }
+
+    const summary =
+      `卷验收：目标达成 ${(goalCompletionScore * 100).toFixed(0)}%，` +
+      `伏线回收 ${(mustPayoffCompletionScore * 100).toFixed(0)}%，` +
+      `张力清偿 ${(readerTensionResolutionScore * 100).toFixed(0)}%。` +
+      (overallPass ? '通过。' : '未完全通过，建议补偿。');
+
+    return {
+      arcId: safeArc.arcId,
+      arcTitle: safeArc.arcTitle,
+      evaluatedAtChapter: chapterNumber,
+      evaluationType: 'end_arc',
+      goalCompletionScore,
+      mustPayoffCompletionScore,
+      readerTensionResolutionScore,
+      overallPass,
+      missingPayoffThreadIds,
+      newOpenThreads,
+      summary,
+      actions,
     };
   }
 
@@ -624,41 +831,168 @@ ${arcHistory.length > 0 ? JSON.stringify(arcHistory, null, 2) : '无（这是第
     if (bestChapters.length === 0) return state;
 
     const sampleParagraphs: string[] = [];
-    for (const ch of bestChapters.slice(0, 3)) {
+    const dialogueSamples: string[] = [];
+    const actionSamples: string[] = [];
+    const emotionSamples: string[] = [];
+    for (const ch of bestChapters.slice(0, 4)) {
       const paragraphs = ch.content.split(/\n\n+/).filter((p) => p.trim().length > 50);
-      if (paragraphs.length > 0) {
-        const dialoguePara = paragraphs.find((p) => p.includes('"') || p.includes('"'));
-        const actionPara = paragraphs.find((p) => !p.includes('"') && !p.includes('"') && p.length > 80 && p.length < 300);
-        const candidate = dialoguePara ?? actionPara ?? paragraphs[Math.floor(paragraphs.length * 0.3)];
-        sampleParagraphs.push(candidate.slice(0, 300));
+      for (const p of paragraphs.slice(0, 15)) {
+        const hasDialogue = /["「].+?["」]/.test(p);
+        const hasAction = p.length > 80 && /[打斩冲跃挥劈]|[剑刀拳掌]/.test(p);
+        const hasEmotion = /[心胸眼眸]|[怒哀喜惧]|沉默|颤抖|咬/.test(p) && !hasDialogue;
+        if (hasDialogue && dialogueSamples.length < 2) dialogueSamples.push(p.slice(0, 300));
+        else if (hasAction && actionSamples.length < 2) actionSamples.push(p.slice(0, 300));
+        else if (hasEmotion && emotionSamples.length < 2) emotionSamples.push(p.slice(0, 300));
+        else if (sampleParagraphs.length < 3 && p.length > 80) sampleParagraphs.push(p.slice(0, 300));
       }
     }
 
-    if (sampleParagraphs.length === 0) return state;
+    const allSamples = [...sampleParagraphs, ...dialogueSamples, ...actionSamples, ...emotionSamples];
+    if (allSamples.length === 0) return state;
 
     const anchor = await this.llm.generateStructured({
       taskName: 'style-anchoring',
       schema: styleAnchorSchema,
-      systemPrompt: `你是一位文风分析专家。
-请分析给定的文本样本，提炼出这部小说的稳定文风特征。
-输出要精练、可操作——后续写手会参考这些描述来保持风格一致。`,
-      userPrompt: `以下是这部小说的几段代表性文字：
+      systemPrompt: `你是一位顶级文风分析专家，专门研究中文网文的"文风DNA"。你需要从文本样本中提取深层风格特征——不是笼统的描述，而是具体到可以指导写作的"配方"。
 
-${sampleParagraphs.map((p, i) => `段落${i + 1}：\n${p}`).join('\n\n')}
+分析维度：
+1. **修辞指纹**（metaphorStyle）：这个作者偏爱什么类型的比喻？通感、具象化、古诗化、口语化？
+2. **描写手法**（descriptionApproach）：白描还是工笔？多用短句还是长句堆叠？关键时刻和日常场景的描写密度差异？
+3. **情绪技法**（emotionTechnique）：直接写"他感到悲伤"还是用环境/动作/感官间接表达？
+4. **节奏签名**（rhythmSignature）：紧张时句式怎么变？平静时段落密度如何？对话与叙述的比例？
+5. **招牌技法**（signatureTechniques）：这本书最独特的2-3个写作技巧，附原文示例。
+6. **场景密度**（proseDensityMap）：动作戏、对话戏、情感戏、世界观构建、过渡段各用什么密度？
+7. **反模式**（antiPatterns）：这本书的文风应该避免什么具体表达？
 
-请分析并输出：
-- sampleParagraphs: 选取 2-3 段最能代表本书文风的短段落（每段不超过 200 字）
-- narrativeVoice: 叙事视角和腔调描述（如"第三人称限制视角，冷峻克制，偶尔插入内心独白"）
-- pacePreference: 节奏偏好（如"中短段落为主，对话密度高，动作戏快切"）
-- dialogueStyle: 对话风格（如"简洁利落，少用语气词，角色差异通过用词层次体现"）
+输出要精练、可操作——后续AI写手会以此为"文风宪法"保持风格一致。`,
+      userPrompt: `以下是这部小说的代表性文字样本：
+
+通用段落：
+${sampleParagraphs.map((p, i) => `[样本${i + 1}]\n${p}`).join('\n\n')}
+${dialogueSamples.length > 0 ? `\n对话段落：\n${dialogueSamples.map((p, i) => `[对话${i + 1}]\n${p}`).join('\n\n')}` : ''}
+${actionSamples.length > 0 ? `\n动作段落：\n${actionSamples.map((p, i) => `[动作${i + 1}]\n${p}`).join('\n\n')}` : ''}
+${emotionSamples.length > 0 ? `\n情感段落：\n${emotionSamples.map((p, i) => `[情感${i + 1}]\n${p}`).join('\n\n')}` : ''}
+
+题材：${state.seed.genre}，目标读者：${state.seed.targetAudience}
+
+请深度分析文风DNA并输出所有字段：
+- sampleParagraphs: 选取 2-3 段最能代表文风的短段落
+- narrativeVoice: 叙事腔调
+- pacePreference: 节奏偏好
+- dialogueStyle: 对话风格
+- proseTexture: { metaphorStyle, descriptionApproach, emotionTechnique, transitionStyle }
+- signatureTechniques: 2-3个招牌技法[{ name, description, example }]
+- rhythmSignature: { avgSentenceLength, paragraphDensity, dialogueRatio, actionPace, quietPace }
+- proseDensityMap: { action, dialogue, emotion, worldbuilding, transition }
+- antiPatterns: 5-8个本书应避免的具体表达
 - anchoredAtChapter: ${chapterNumber}`,
       temperature: 0.3,
     });
 
     this.logger.log(
-      `[Maintenance] style_anchoring: 文风锚定完成 | 叙事: ${anchor.narrativeVoice.slice(0, 50)}...`,
+      `[Maintenance] style_anchoring: 文风DNA锚定完成 | 叙事:${anchor.narrativeVoice.slice(0, 40)} | 招牌技法:${anchor.signatureTechniques?.length ?? 0}个 | 反模式:${anchor.antiPatterns?.length ?? 0}个`,
     );
 
     return { ...state, styleAnchor: anchor };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 记忆金字塔：弧级摘要生成
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async generateArcSummary(state: StoryState, arc: StoryState['currentArc'], chapterNumber: number): Promise<void> {
+    const safeArc = arc!;
+    const chapters = await this.chapterRepo.createQueryBuilder('ch')
+      .where('ch.bookId = :bookId AND ch.chapterNumber BETWEEN :start AND :end', { bookId: state.bookId, start: safeArc.startChapter, end: chapterNumber })
+      .orderBy('ch.chapterNumber', 'ASC').getMany();
+    if (chapters.length === 0) return;
+
+    const chapterBriefs = chapters.map((ch) => `[第${ch.chapterNumber}章·${ch.title}] ${ch.content.slice(0, 200)}...`).join('\n');
+    const resolvedThreads = (state.plotThreadLedger ?? []).filter((t) =>
+      t.status !== 'open' && t.lastTouchedChapter >= safeArc.startChapter && t.lastTouchedChapter <= chapterNumber,
+    ).map((t) => t.label);
+    const newThreads = (state.plotThreadLedger ?? []).filter((t) =>
+      t.setupChapter >= safeArc.startChapter && t.setupChapter <= chapterNumber,
+    ).map((t) => t.label);
+
+    const output = await this.llm.generateStructured({
+      taskName: 'arc-summary-pyramid',
+      schema: arcSummaryOutputSchema,
+      systemPrompt: `你是故事摘要专家。为刚结束的「卷/弧」生成结构化摘要，供后续章节远程记忆召回使用。
+要求：summary 300-500字，概括本弧核心剧情发展、角色成长、情感主线；emotionalArc 一句话描述情感走向；keywords 用于语义检索。`,
+      userPrompt: `弧信息：
+- 标题：${safeArc.arcTitle}（${safeArc.startChapter}-${chapterNumber}章）
+- 核心张力：${safeArc.coreTension}
+- 情感主题：${safeArc.emotionalTheme || '未定义'}
+
+章节概要：
+${chapterBriefs}
+
+已回收伏线：${resolvedThreads.join('、') || '无'}
+新开伏线：${newThreads.join('、') || '无'}
+
+角色（本弧出场）：
+${state.characters.slice(0, 12).map((c) => `${c.name}(${c.role}): ${c.archetype} | ${c.status?.state ?? ''}`).join('\n')}
+
+请生成弧摘要。`,
+      temperature: 0.3,
+    });
+
+    await this.memoryRetriever.persistArcSummary(state.bookId, {
+      bookId: state.bookId, arcId: safeArc.arcId, arcTitle: safeArc.arcTitle,
+      startChapter: safeArc.startChapter, endChapter: chapterNumber,
+      summary: output.summary, keyCharacterArcs: output.keyCharacterArcs,
+      resolvedThreads: output.resolvedThreads, newThreadsPlanted: output.newThreadsPlanted,
+      emotionalArc: output.emotionalArc, keyTurningPoints: output.keyTurningPoints,
+      worldStateChanges: output.worldStateChanges, keywords: output.keywords,
+    } as any);
+    this.logger.log(`[Maintenance] 弧摘要生成完成：「${safeArc.arcTitle}」${safeArc.startChapter}-${chapterNumber}`);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 记忆金字塔：卷级摘要生成
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async generateVolumeSummary(state: StoryState, vol: StoryState['currentVolume'], chapterNumber: number): Promise<void> {
+    const safeVol = vol!;
+    const arcsInVol = (state.completedArcs ?? []).filter((a) =>
+      a.startChapter >= safeVol.startChapter && a.startChapter <= chapterNumber,
+    );
+    const arcBriefs = arcsInVol.map((a) => `「${a.arcTitle}」(${a.startChapter}-${a.plannedEndChapter}章): ${a.coreTension}`).join('\n');
+
+    const output = await this.llm.generateStructured({
+      taskName: 'volume-summary-pyramid',
+      schema: volumeSummaryOutputSchema,
+      systemPrompt: `你是故事摘要专家。为刚结束的「大卷」生成宏观摘要，供后续卷的远程记忆召回使用。
+要求：summary 500-800字，宏观概括本卷剧情、主角成长、世界观展开；powerProgression 描述实力变化；keywords 用于语义检索。`,
+      userPrompt: `卷信息：
+- 标题：${safeVol.title}（第${safeVol.volumeNumber}卷，${safeVol.startChapter}-${chapterNumber}章）
+- 核心矛盾：${safeVol.coreConflict}
+- 实力成长路线：${safeVol.powerProgression.startLevel} → ${safeVol.powerProgression.endLevel}（${safeVol.powerProgression.growthPath}）
+- 主题焦点：${safeVol.thematicFocus}
+
+包含弧：
+${arcBriefs || '无独立弧记录'}
+
+角色概况（核心角色）：
+${state.characters.filter((c) => c.role === 'protagonist').map((c) => `${c.name}(${c.role}): ${c.archetype} | ${c.status?.state ?? ''}`).join('\n')}
+
+请生成卷级摘要。`,
+      temperature: 0.3,
+    });
+
+    await this.memoryRetriever.persistVolumeSummary(state.bookId, {
+      bookId: state.bookId, volumeId: safeVol.volumeId, volumeNumber: safeVol.volumeNumber,
+      title: safeVol.title, startChapter: safeVol.startChapter, endChapter: chapterNumber,
+      summary: output.summary, powerProgression: output.powerProgression,
+      majorPlotMovements: output.majorPlotMovements, characterGrowth: output.characterGrowth,
+      worldExpansion: output.worldExpansion, arcIds: arcsInVol.map((a) => a.arcId),
+      keywords: output.keywords,
+    } as any);
+    this.logger.log(`[Volume] 卷摘要生成完成：「${safeVol.title}」${safeVol.startChapter}-${chapterNumber}`);
+  }
+
+  private async runRetrospectiveLearning(state: StoryState, arc: NonNullable<StoryState['currentArc']>): Promise<WritingLesson[]> {
+    return this.retrospectiveLearner.analyze(state, arc.arcId, [arc.startChapter, arc.plannedEndChapter]);
   }
 }

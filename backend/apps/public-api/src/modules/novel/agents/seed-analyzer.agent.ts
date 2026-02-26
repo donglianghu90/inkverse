@@ -44,7 +44,7 @@ export class SeedAnalyzerAgent {
 === 核心原则 ===
 - 长篇网文（${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800}章，每章约${input.targetChapterWordCount ?? 3000}字，总约${Math.round(((input.plannedTotalChapters?.min ?? 500) + (input.plannedTotalChapters?.max ?? 800)) / 2 * (input.targetChapterWordCount ?? 3000) / 10000)}万字）
 - 故事种子是"方向"不是"规范"，后续可偏离
-- 粗大纲 8-15 个大阶段，每阶段 40-100 章
+- 粗大纲阶段数和每阶段章数必须匹配总章数规模（如50章→3-5阶段每阶段10-17章，200章→5-8阶段每阶段25-40章，600章→8-15阶段每阶段40-100章）
 - 所有输出简体中文
 
 === 核心循环设计（最重要的新增——决定书能不能追下去） ===
@@ -80,8 +80,14 @@ export class SeedAnalyzerAgent {
 
 === 金手指设计 ===
 - 独特（不是"系统+面板"老套路）、有限制、可进化
-- evolutionPath 阶段数匹配总章数（500-800章需5-8个进化阶段）
+- evolutionPath 阶段数匹配总章数（每100-150章约1个进化阶段）
 - hiddenDepth：金手指背后的秘密，后期可成为剧情大转折种子
+
+=== 主题内核（thematicCore，最重要的灵魂） ===
+- centralQuestion：这本书的核心命题是什么？不是"主角要变强"，而是"力量让人自由还是孤独？"
+- thematicProgression：主题在故事中如何演变？每个阶段的答案都不同。如["代价是值得的","代价太沉重了","代价已经成为我的一部分"]
+- recurringMotif：贯穿全书的意象/符号，如"雪"="孤独与纯洁"，"火"="野心与毁灭"
+- 好的主题让每个剧情选择有深层意义，差的主题让故事沦为打怪升级
 
 === 概念自评（conceptEvaluation） ===
 hookScore、uniquenessScore、marketFitScore、projectionScore（0-10）
@@ -107,12 +113,14 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
 5. seed.targetChapterWordCount 设为 ${input.targetChapterWordCount ?? 3000}
 6. seed.plannedTotalChapters 设为 { min: ${input.plannedTotalChapters?.min ?? 500}, max: ${input.plannedTotalChapters?.max ?? 800} }
 7. seed.readerPersona 精确建模目标读者的心理画像
-8. seed.goldenFinger 设计一个独特的、有限制的、可进化的金手指——进化阶段数量要匹配总章数（500-800章至少需要 5-8 个进化阶段）
-9. seed.conceptEvaluation 诚实评估这个概念的商业潜力，特别评估"世界观深度是否够支撑 ${input.plannedTotalChapters?.min ?? 500}+ 章"
-10. outline.points 包含 8-15 个故事阶段节点（匹配 ${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800} 章的规模），每个标明阶段和暂定章节范围
+8. seed.goldenFinger 设计一个独特的、有限制的、可进化的金手指——进化阶段数量要匹配总章数（每100-150章约1个进化阶段）
+9. seed.thematicCore 设计核心命题——不是剧情目标，而是人性命题。thematicProgression 阶段数匹配大纲阶段数。
+10. seed.conceptEvaluation 诚实评估这个概念的商业潜力，特别评估"世界观深度是否够支撑 ${input.plannedTotalChapters?.min ?? 500}+ 章"
+10. outline.points 包含合理数量的故事阶段节点（匹配 ${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800} 章的规模，每阶段约占总章数的8%-15%），每个标明阶段和暂定章节范围
 11. outline.estimatedTotalChapters 设为你估算的合理总章数
-12. outline.endingDirection 只给一个模糊的结局方向，允许后续调整
-13. 如果你评估出来概念偏弱（hookScore < 6 或 overallViability = weak），主动在生成中调整优化`,
+12. outline.estimatedVolumes 根据总章数和故事结构估算合理卷数（参考：50章→1卷，100章→2卷，200章→3卷，400章→4卷，600章→5卷，1000章→6-8卷）
+13. outline.endingDirection 只给一个模糊的结局方向，允许后续调整
+14. 如果你评估出来概念偏弱（hookScore < 6 或 overallViability = weak），主动在生成中调整优化`,
       temperature: 0.6,
     });
   }

@@ -13,22 +13,33 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
+import { Queue } from 'bullmq';
+import { randomUUID } from 'crypto';
 import { LlmService } from './llm/llm.service';
 import { LlmUsageTrackerService } from './llm/llm-usage-tracker.service';
 import { SeedAnalyzerAgent } from './agents/seed-analyzer.agent';
 import { PromptProfilerAgent } from './agents/prompt-profiler.agent';
 import { RecorderAgent } from './agents/recorder.agent';
+import { CharacterVoiceCoachAgent } from './agents/character-voice-coach.agent';
 import { ChapterWorkflowService, ChapterWorkflowResult } from './chapter-workflow.service';
 import { DeepMaintenanceService } from './deep-maintenance.service';
 import { LoreApplicationService } from './lore-application.service';
 import { BookAgentPipelineService } from './book-agent-pipeline.service';
 import { NovelProgressService } from './novel-progress.service';
 import { DetailStoreService } from './detail-store.service';
-import { BookEntity } from './entities/book.entity';
+import { MemoryRetrieverService } from './memory-retriever.service';
+import { ReaderPulseAnalyzerAgent } from './agents/reader-pulse-analyzer.agent';
 import { ChapterEntity } from './entities/chapter.entity';
 import { ArtifactEntity } from './entities/artifact.entity';
+import { BookStateRepository } from './book-state.repository';
+import {
+  ChapterResyncJobEntity,
+  ChapterResyncJobStatus,
+} from './entities/chapter-resync-job.entity';
+import { CHAPTER_RESYNC_QUEUE, ChapterResyncJobPayload } from './chapter-resync.queue';
 import { CreateBookDto } from './dto/create-book.dto';
 import { GenerateChaptersBatchDto } from './dto/generate-chapters-batch.dto';
 import {
@@ -37,8 +48,19 @@ import {
   MaintenanceState,
   BookPromptProfile,
   bookPromptProfileSchema,
+  ChapterIntent,
+  chapterIntentSchema,
+  ReaderFeedback,
+  ReaderFeedbackAnalysis,
+  FeedbackState,
 } from './schemas/novel-state.schemas';
-import { ChapterDraft, LoreRecord, generationKpiSchema } from './schemas/novel.schemas';
+import {
+  ChapterDraft,
+  LoreRecord,
+  chapterDraftSchema,
+  loreRecordSchema,
+  generationKpiSchema,
+} from './schemas/novel.schemas';
 import {
   DetailStoreChapterUpdates,
   LocationSensoryAnchor,
@@ -90,22 +112,84 @@ interface GenerateChapterRuntimeOptions {
   maxRepairRounds?: number;
 }
 
+interface CreateBookRuntimeOptions {
+  progressChannel?: string;
+}
+
+type ChapterResyncStatus =
+  | 'not_requested'
+  | 'queued'
+  | 'running'
+  | 'synced'
+  | 'synced_forward'
+  | 'skipped_missing_snapshot'
+  | 'skipped_too_many_chapters'
+  | 'skipped_missing_chapters'
+  | 'failed';
+
+interface ChapterResyncResult {
+  status: ChapterResyncStatus;
+  message?: string;
+  jobId?: string;
+  requestedStartChapter?: number;
+  requestedEndChapter?: number;
+  effectiveStartChapter?: number;
+  effectiveEndChapter?: number;
+  completedChapters?: number;
+  totalChapters?: number;
+  progressChapter?: number;
+  requestedAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
+interface UpdateChapterPayload {
+  title?: string;
+  content?: string;
+  resyncState?: boolean;
+}
+
+interface ChapterResyncRunOptions {
+  onProgress?: (progress: {
+    chapterNumber: number;
+    completed: number;
+    total: number;
+    message: string;
+  }) => Promise<void> | void;
+}
+
+const MAX_CHAPTER_RESYNC_CHAPTERS = 500;
+const DEFAULT_TRACE_ARTIFACT_NAMES = [
+  'arc_director',
+  'intent',
+  'review',
+  'deterministic_check',
+];
+const TRACE_HOOK_TAIL_CHARS = 1200;
+const TRACE_REWRITE_THRESHOLD = 70;
+const TRACE_CRITICAL_THRESHOLD = 45;
+const TRACE_MATCH_GOOD_THRESHOLD = 0.6;
+
 @Injectable()
 export class NovelService {
   private readonly logger = new Logger(NovelService.name);
 
   constructor(
-    @InjectRepository(BookEntity)
-    private readonly bookRepo: Repository<BookEntity>,
+    private readonly bookStateRepo: BookStateRepository,
     @InjectRepository(ChapterEntity)
     private readonly chapterRepo: Repository<ChapterEntity>,
     @InjectRepository(ArtifactEntity)
     private readonly artifactRepo: Repository<ArtifactEntity>,
+    @InjectRepository(ChapterResyncJobEntity)
+    private readonly chapterResyncJobRepo: Repository<ChapterResyncJobEntity>,
+    @InjectQueue(CHAPTER_RESYNC_QUEUE)
+    private readonly chapterResyncQueue: Queue<ChapterResyncJobPayload>,
     private readonly dataSource: DataSource,
     private readonly seedAnalyzer: SeedAnalyzerAgent,
     private readonly promptProfiler: PromptProfilerAgent,
     private readonly chapterWorkflow: ChapterWorkflowService,
     private readonly recorder: RecorderAgent,
+    private readonly voiceCoach: CharacterVoiceCoachAgent,
     private readonly deepMaintenance: DeepMaintenanceService,
     private readonly loreService: LoreApplicationService,
     private readonly llmUsageTracker: LlmUsageTrackerService,
@@ -113,6 +197,8 @@ export class NovelService {
     private readonly pipelineService: BookAgentPipelineService,
     private readonly progressService: NovelProgressService,
     private readonly detailStore: DetailStoreService,
+    private readonly memoryRetriever: MemoryRetrieverService,
+    private readonly readerPulse: ReaderPulseAnalyzerAgent,
   ) {}
 
   async getBookProfile(bookId: string): Promise<BookPromptProfile> {
@@ -206,7 +292,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
    * Create a book with minimal upfront planning.
    * 1 LLM call: seed analysis + rough outline.
    */
-  async createBook(dto: CreateBookDto): Promise<unknown> {
+  async createBook(dto: CreateBookDto, options?: CreateBookRuntimeOptions): Promise<unknown> {
     const t0 = Date.now();
     this.logger.log(
       `[createBook] ========== 极轻量开书 ==========\n` +
@@ -214,9 +300,11 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       `  genre: ${dto.genre} | targetAudience: ${dto.targetAudience}`,
     );
 
+    const progressChannel = options?.progressChannel ?? '__creating__';
+
     const emitCreate = (step: string, stepIndex: number, message: string, done = false) => {
       this.progressService.emit({
-        bookId: '__creating__',
+        bookId: progressChannel,
         chapterNumber: 0,
         step,
         stepIndex,
@@ -273,9 +361,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     // Step 3: Persist
     this.logger.log(`[createBook] 步骤 3/4: 初始化角色与世界...`);
     emitCreate('init', 2, '初始化角色与世界');
-    const bookEntity = await this.bookRepo.save(
-      this.bookRepo.create({ stateJson: {} as Record<string, unknown> }),
-    );
+    const bookEntity = await this.bookStateRepo.createEmpty();
     const bookId = bookEntity.bookId;
     const now = new Date().toISOString();
 
@@ -327,6 +413,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       characterFactLedger: [],
       lastHook: '',
       kpiHistory: [],
+      completedArcAcceptanceReports: [],
       maintenance: INITIAL_MAINTENANCE,
     };
 
@@ -336,6 +423,8 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     await this.persistBookState(state);
     await this.persistArtifact(bookId, 0, 'seed', analysis.seed);
     await this.persistArtifact(bookId, 0, 'rough_outline', analysis.outline);
+    await this.persistArtifact(bookId, 0, 'initial_state', state);
+    await this.persistArtifact(bookId, 0, 'state_snapshot', state);
     await this.pipelineService.initDefault(bookId);
 
     this.logger.log(
@@ -353,24 +442,24 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       outline: analysis.outline,
       bookPromptProfile,
       currentArc: state.currentArc ?? null,
+      currentArcAcceptance: state.currentArcAcceptance ?? null,
+      completedArcAcceptanceReports: state.completedArcAcceptanceReports ?? [],
     };
   }
 
   async listBooks(): Promise<unknown> {
-    const books = await this.bookRepo.find({
-      order: { updatedAt: 'DESC' },
-      take: 50,
-    });
+    const books = await this.bookStateRepo.findAllLightweight(50);
     return {
       count: books.length,
       books: books.map((b) => {
-        const s = storyStateSchema.parse(b.stateJson);
-        const latestKpi = s.kpiHistory[s.kpiHistory.length - 1] ?? null;
+        const s = b.stateJson as any; // 核心态JSONB（不含已拆出的子表数组）
+        const kpi = s.kpiHistory ?? [];
+        const latestKpi = kpi[kpi.length - 1] ?? null;
         return {
           bookId: b.bookId,
-          title: s.seed.title,
-          genre: s.seed.genre ?? '',
-          chaptersGenerated: s.chapterCursor - 1,
+          title: s.seed?.title ?? '',
+          genre: s.seed?.genre ?? '',
+          chaptersGenerated: (s.chapterCursor ?? 1) - 1,
           latestKpi: latestKpi
             ? { qualityScore: latestKpi.qualityScore, overallScore: latestKpi.overallScore }
             : null,
@@ -393,6 +482,8 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       openPlotThreads: state.openPlotThreads,
       currentArc: state.currentArc ?? null,
       completedArcs: state.completedArcs ?? [],
+      currentArcAcceptance: state.currentArcAcceptance ?? null,
+      completedArcAcceptanceReports: state.completedArcAcceptanceReports ?? [],
       latestKpi: latestKpi
         ? { qualityScore: latestKpi.qualityScore, overallScore: latestKpi.overallScore }
         : null,
@@ -470,37 +561,426 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     };
   }
 
-  async updateChapter(
+  async getChapterArtifacts(
     bookId: string,
     chapterNumber: number,
-    update: { title?: string; content?: string },
+    namesRaw?: string,
   ): Promise<unknown> {
     const chapter = await this.chapterRepo.findOneBy({ bookId, chapterNumber });
-    if (!chapter) throw new NotFoundException(`Chapter not found: ${bookId}#${chapterNumber}`);
+    if (!chapter) {
+      throw new NotFoundException(`Chapter not found: ${bookId}#${chapterNumber}`);
+    }
 
-    const patch: Partial<Pick<ChapterEntity, 'title' | 'content'>> = {};
-    if (update.title !== undefined) patch.title = update.title;
-    if (update.content !== undefined) patch.content = update.content;
+    const requestedNames = (namesRaw ?? '')
+      .split(',')
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0);
+    const names = [...new Set(requestedNames.length > 0 ? requestedNames : DEFAULT_TRACE_ARTIFACT_NAMES)];
+    if (names.length > 30) {
+      throw new UnprocessableEntityException('Artifact names exceed limit (max 30)');
+    }
+    const fetchNames = [...new Set([...names, 'arc_director', 'intent'])];
 
-    if (Object.keys(patch).length === 0) {
+    const artifacts = await this.artifactRepo.find({
+      where: {
+        bookId,
+        chapterNumber,
+        name: In(fetchNames),
+      },
+    });
+    const payloadByName = new Map(artifacts.map((artifact) => [artifact.name, artifact.payload]));
+    const alignment = this.computeChapterTraceAlignment(
+      chapter.content,
+      this.asRecord(payloadByName.get('arc_director')),
+      this.asRecord(payloadByName.get('intent')),
+    );
+
+    return {
+      bookId,
+      chapterNumber,
+      names,
+      artifacts: names.map((name) => ({
+        name,
+        found: payloadByName.has(name),
+        payload: payloadByName.get(name) ?? null,
+      })),
+      alignment,
+    };
+  }
+
+  private computeChapterTraceAlignment(
+    chapterContent: string,
+    arcPayload: Record<string, unknown> | null,
+    intentPayload: Record<string, unknown> | null,
+  ): Record<string, unknown> | null {
+    const contentNorm = this.normalizeForMatch(chapterContent);
+    if (!contentNorm) return null;
+
+    const mustHitItems = this.toStringArray(arcPayload?.mustHit).map((text) => ({
+      text,
+      ...this.scoreGuidanceMatch(text, contentNorm),
+    }));
+    const intentGoalItems = this.toStringArray(intentPayload?.goals).map((text) => ({
+      text,
+      ...this.scoreGuidanceMatch(text, contentNorm),
+    }));
+
+    const hookText = this.firstNonEmptyString([
+      intentPayload?.hookDirection,
+      arcPayload?.hookDirective,
+    ]);
+    const tailNorm = this.normalizeForMatch(
+      chapterContent.slice(-Math.min(chapterContent.length, TRACE_HOOK_TAIL_CHARS)),
+    );
+    const hookMatch = hookText
+      ? { text: hookText, ...this.scoreGuidanceMatch(hookText, tailNorm) }
+      : null;
+
+    const mustHitScore = this.aggregateMatchScore(mustHitItems);
+    const intentScore = this.aggregateMatchScore(intentGoalItems);
+    const hookScore = hookMatch ? hookMatch.matchScore : null;
+    const weighted: Array<{ score: number; weight: number }> = [];
+    if (mustHitScore !== null) weighted.push({ score: mustHitScore, weight: 0.5 });
+    if (intentScore !== null) weighted.push({ score: intentScore, weight: 0.35 });
+    if (hookScore !== null) weighted.push({ score: hookScore, weight: 0.15 });
+    const weightSum = weighted.reduce((sum, part) => sum + part.weight, 0);
+    const overall = weightSum > 0
+      ? Math.round((weighted.reduce((sum, part) => sum + (part.score * part.weight), 0) / weightSum) * 100)
+      : null;
+    const remediation = this.buildTraceRemediation(
+      overall,
+      mustHitItems,
+      intentGoalItems,
+      hookMatch,
+    );
+
+    return {
+      overallAlignmentScore: overall,
+      mustHit: {
+        total: mustHitItems.length,
+        matched: mustHitItems.filter((item) => item.matched).length,
+        score: mustHitScore,
+        items: mustHitItems,
+      },
+      intentGoals: {
+        total: intentGoalItems.length,
+        matched: intentGoalItems.filter((item) => item.matched).length,
+        score: intentScore,
+        items: intentGoalItems,
+      },
+      hookDirection: hookMatch,
+      remediation,
+    };
+  }
+
+  private buildTraceRemediation(
+    overallScore: number | null,
+    mustHitItems: Array<{ text: string; matched: boolean; matchScore: number }>,
+    intentGoalItems: Array<{ text: string; matched: boolean; matchScore: number }>,
+    hookMatch: { text: string; matched: boolean; matchScore: number } | null,
+  ): Record<string, unknown> {
+    const unmatchedMustHit = mustHitItems
+      .filter((item) => !item.matched)
+      .map((item) => item.text);
+    const weakIntentGoals = intentGoalItems
+      .filter((item) => item.matchScore < TRACE_MATCH_GOOD_THRESHOLD)
+      .map((item) => item.text);
+    const hookWeak = hookMatch ? hookMatch.matchScore < TRACE_MATCH_GOOD_THRESHOLD : false;
+
+    const hasSignals =
+      mustHitItems.length > 0 ||
+      intentGoalItems.length > 0 ||
+      Boolean(hookMatch);
+    if (!hasSignals) {
       return {
-        bookId: chapter.bookId,
-        chapterNumber: chapter.chapterNumber,
-        title: chapter.title,
-        content: chapter.content,
-        createdAt: chapter.createdAt.toISOString(),
+        shouldRewrite: false,
+        severity: 'low',
+        reasons: ['缺少可评估的对齐数据'],
+        suggestedActions: [],
+        rewritePrompt: null,
       };
     }
 
-    await this.chapterRepo.update({ bookId, chapterNumber }, patch);
+    const shouldRewrite = overallScore !== null && overallScore < TRACE_REWRITE_THRESHOLD;
+    const severity: 'low' | 'medium' | 'high' =
+      overallScore !== null && overallScore < TRACE_CRITICAL_THRESHOLD
+        ? 'high'
+        : shouldRewrite
+          ? 'medium'
+          : 'low';
 
-    const updated = await this.chapterRepo.findOneBy({ bookId, chapterNumber });
+    const reasons: string[] = [];
+    if (unmatchedMustHit.length > 0) {
+      reasons.push(`mustHit 未命中 ${unmatchedMustHit.length} 条`);
+    }
+    if (weakIntentGoals.length > 0) {
+      reasons.push(`章节目标弱命中 ${weakIntentGoals.length} 条`);
+    }
+    if (hookWeak) {
+      reasons.push('结尾钩子与预期方向偏离');
+    }
+    if (reasons.length === 0 && overallScore !== null) {
+      reasons.push(`总体对齐分 ${overallScore}，建议微调`);
+    }
+
+    const suggestedActions: string[] = [];
+    if (unmatchedMustHit.length > 0) {
+      suggestedActions.push(
+        `补写 mustHit 场景：${unmatchedMustHit.slice(0, 3).join('；')}`,
+      );
+    }
+    if (weakIntentGoals.length > 0) {
+      suggestedActions.push(
+        `强化章节目标推进：${weakIntentGoals.slice(0, 3).join('；')}`,
+      );
+    }
+    if (hookWeak && hookMatch) {
+      suggestedActions.push(`重写章末钩子，贴合方向：${hookMatch.text}`);
+    }
+    if (suggestedActions.length === 0) {
+      suggestedActions.push('保持当前章节结构，做局部措辞与节奏优化');
+    }
+
+    const rewritePrompt = shouldRewrite
+      ? [
+          '你是小说修订编辑，请在不破坏既有设定的前提下重写本章。',
+          '重写目标：优先补齐以下对齐缺口。',
+          ...unmatchedMustHit.map((text, idx) => `${idx + 1}. 必须命中：${text}`),
+          ...weakIntentGoals.map((text, idx) => `${idx + 1}. 强化目标：${text}`),
+          ...(hookWeak && hookMatch ? [`章末钩子方向：${hookMatch.text}`] : []),
+          '约束：角色与设定不变；冲突更明确；结尾保留下一章驱动力。',
+        ].join('\n')
+      : null;
+
     return {
-      bookId: updated!.bookId,
-      chapterNumber: updated!.chapterNumber,
-      title: updated!.title,
-      content: updated!.content,
-      createdAt: updated!.createdAt.toISOString(),
+      shouldRewrite,
+      severity,
+      reasons,
+      suggestedActions,
+      rewritePrompt,
+    };
+  }
+
+  private aggregateMatchScore(
+    items: Array<{ matched: boolean; matchScore: number }>,
+  ): number | null {
+    if (items.length === 0) return null;
+    const total = items.reduce((sum, item) => sum + item.matchScore, 0);
+    return Math.round((total / items.length) * 100) / 100;
+  }
+
+  private scoreGuidanceMatch(
+    guidance: string,
+    contentNorm: string,
+  ): { matched: boolean; matchScore: number } {
+    const normalizedGuidance = this.normalizeForMatch(guidance);
+    if (!normalizedGuidance) return { matched: false, matchScore: 0 };
+    if (contentNorm.includes(normalizedGuidance)) return { matched: true, matchScore: 1 };
+
+    const tokens = this.extractGuidanceTokens(guidance);
+    if (tokens.length === 0) return { matched: false, matchScore: 0 };
+    const matchedTokenCount = tokens.filter((token) => contentNorm.includes(token)).length;
+    const tokenScore = matchedTokenCount / tokens.length;
+    const matched =
+      tokenScore >= TRACE_MATCH_GOOD_THRESHOLD ||
+      (matchedTokenCount >= 2 && tokenScore >= 0.45);
+    return {
+      matched,
+      matchScore: Math.round(tokenScore * 100) / 100,
+    };
+  }
+
+  private extractGuidanceTokens(text: string): string[] {
+    const baseTokens = text
+      .split(/[\s,，。！？、；;:：\n\r\t"“”'‘’()（）【】\[\]<>《》]/g)
+      .map((token) => this.normalizeForMatch(token))
+      .filter((token) => token.length >= 2);
+    const uniq = [...new Set(baseTokens)].slice(0, 8);
+    if (uniq.length > 0) return uniq;
+
+    const normalized = this.normalizeForMatch(text);
+    if (!normalized) return [];
+    if (normalized.length <= 4) return [normalized];
+
+    const fallback: string[] = [];
+    const step = normalized.length <= 10 ? 2 : 3;
+    for (let idx = 0; idx <= normalized.length - 2 && fallback.length < 8; idx += step) {
+      fallback.push(normalized.slice(idx, idx + 2));
+    }
+    return [...new Set(fallback)].filter((token) => token.length >= 2);
+  }
+
+  private toStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item) => item.length > 0);
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+  }
+
+  private firstNonEmptyString(values: unknown[]): string | null {
+    for (const value of values) {
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+    return null;
+  }
+
+  private normalizeForMatch(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/\s+/g, '')
+      .replace(/[，。！？、；：,.!?;:()（）【】\[\]{}"'“”‘’`~\-_/\\|<>《》]/g, '');
+  }
+
+  async updateChapter(
+    bookId: string,
+    chapterNumber: number,
+    update: UpdateChapterPayload,
+  ): Promise<unknown> {
+    return this.withBookLock(bookId, async () => {
+      const chapter = await this.chapterRepo.findOneBy({ bookId, chapterNumber });
+      if (!chapter) throw new NotFoundException(`Chapter not found: ${bookId}#${chapterNumber}`);
+
+      const patch: Partial<Pick<ChapterEntity, 'title' | 'content'>> = {};
+      if (update.title !== undefined) patch.title = update.title;
+      if (update.content !== undefined) patch.content = update.content;
+
+      if (Object.keys(patch).length === 0) {
+        return {
+          bookId: chapter.bookId,
+          chapterNumber: chapter.chapterNumber,
+          title: chapter.title,
+          content: chapter.content,
+          createdAt: chapter.createdAt.toISOString(),
+          stateResync: { status: 'not_requested' as const },
+        };
+      }
+
+      const prevContent = chapter.content;
+      await this.chapterRepo.update({ bookId, chapterNumber }, patch);
+      const updated = await this.chapterRepo.findOneBy({ bookId, chapterNumber });
+      if (!updated) throw new NotFoundException(`Chapter not found: ${bookId}#${chapterNumber}`);
+
+      let stateResync: ChapterResyncResult = { status: 'not_requested' };
+      const contentChanged = update.content !== undefined && update.content !== prevContent;
+      const shouldResync = update.resyncState ?? true;
+      if (contentChanged && shouldResync) {
+        try {
+          stateResync = await this.enqueueChapterResyncJob(
+            bookId,
+            updated.chapterNumber,
+            'updateChapter',
+          );
+        } catch (err: any) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.logger.error(
+            `[updateChapter] 状态回灌入队失败 bookId=${bookId} chapter=${chapterNumber}: ${message}`,
+          );
+          stateResync = {
+            status: 'failed',
+            message: `状态回灌入队失败: ${message}`,
+          };
+        }
+      }
+
+      return {
+        bookId: updated.bookId,
+        chapterNumber: updated.chapterNumber,
+        title: updated.title,
+        content: updated.content,
+        createdAt: updated.createdAt.toISOString(),
+        stateResync,
+      };
+    });
+  }
+
+  async getChapterResyncJob(bookId: string, jobId: string): Promise<unknown> {
+    const job = await this.chapterResyncJobRepo.findOneBy({ jobId, bookId });
+    if (!job) {
+      throw new NotFoundException(`Chapter resync job not found: ${bookId}/${jobId}`);
+    }
+    return this.toChapterResyncJobView(job);
+  }
+
+  private toChapterResyncJobView(
+    job: ChapterResyncJobEntity,
+  ): Record<string, unknown> {
+    const stateResync = this.toChapterResyncResult(job);
+    return {
+      jobId: job.jobId,
+      bookId: job.bookId,
+      requestedBy: job.requestedBy,
+      requestedRange: {
+        startChapter: job.requestedStartChapter,
+        endChapter: job.requestedEndChapter,
+      },
+      effectiveRange:
+        job.effectiveStartChapter != null && job.effectiveEndChapter != null
+          ? {
+              startChapter: job.effectiveStartChapter,
+              endChapter: job.effectiveEndChapter,
+            }
+          : null,
+      progress: {
+        completedChapters: job.completedChapters,
+        totalChapters: job.totalChapters,
+        currentChapter: job.progressChapter,
+        message: job.progressMessage,
+      },
+      scheduler: {
+        status: job.status,
+        startedAt: job.startedAt ? job.startedAt.toISOString() : null,
+        finishedAt: job.finishedAt ? job.finishedAt.toISOString() : null,
+      },
+      lastError: job.lastError,
+      lastResult: job.lastResult,
+      stateResync,
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString(),
+    };
+  }
+
+  private toChapterResyncResult(job: ChapterResyncJobEntity): ChapterResyncResult {
+    const raw = (job.lastResult ?? {}) as Partial<ChapterResyncResult>;
+    let status: ChapterResyncStatus;
+    if (job.status === 'queued') {
+      status = 'queued';
+    } else if (job.status === 'running') {
+      status = 'running';
+    } else if (job.status === 'failed') {
+      status = 'failed';
+    } else if (job.status === 'skipped') {
+      const candidate = raw.status;
+      status =
+        candidate === 'skipped_missing_snapshot' ||
+        candidate === 'skipped_too_many_chapters' ||
+        candidate === 'skipped_missing_chapters'
+          ? candidate
+          : 'skipped_missing_chapters';
+    } else {
+      status = raw.status === 'synced_forward' ? 'synced_forward' : 'synced';
+    }
+
+    return {
+      status,
+      jobId: job.jobId,
+      message: raw.message ?? job.progressMessage ?? job.lastError ?? undefined,
+      requestedStartChapter: job.requestedStartChapter,
+      requestedEndChapter: job.requestedEndChapter,
+      effectiveStartChapter: job.effectiveStartChapter ?? undefined,
+      effectiveEndChapter: job.effectiveEndChapter ?? undefined,
+      completedChapters: job.completedChapters,
+      totalChapters: job.totalChapters ?? undefined,
+      progressChapter: job.progressChapter ?? undefined,
+      requestedAt: job.createdAt.toISOString(),
+      startedAt: job.startedAt ? job.startedAt.toISOString() : null,
+      finishedAt: job.finishedAt ? job.finishedAt.toISOString() : null,
     };
   }
 
@@ -526,14 +1006,30 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       plotThreadLedger: state.plotThreadLedger ?? [],
       currentArc: state.currentArc ?? null,
       completedArcs: state.completedArcs ?? [],
+      currentArcAcceptance: state.currentArcAcceptance ?? null,
+      completedArcAcceptanceReports: state.completedArcAcceptanceReports ?? [],
       roughOutline: state.roughOutline,
       chapterSummaries: state.chapterSummaries,
     };
   }
 
+  async getArcContract(bookId: string): Promise<unknown> {
+    const state = await this.loadBookState(bookId);
+    const trigger = this.deepMaintenance.evaluateTrigger(state);
+    return {
+      bookId: state.bookId,
+      currentArc: state.currentArc ?? null,
+      currentArcAcceptance: state.currentArcAcceptance ?? null,
+      completedArcAcceptanceReports: (state.completedArcAcceptanceReports ?? []).slice(-10),
+      arcPlanningHint: {
+        shouldPlanNextArc: trigger.shouldTrigger && trigger.tasks.includes('arc_planning'),
+        reasons: trigger.reasons,
+      },
+    };
+  }
+
   async listChapters(bookId: string, limit: number): Promise<unknown> {
-    const exists = await this.bookRepo.count({ where: { bookId } });
-    if (exists === 0) throw new NotFoundException(`Book not found: ${bookId}`);
+    if (!(await this.bookStateRepo.exists(bookId))) throw new NotFoundException(`Book not found: ${bookId}`);
     const normalizedLimit = Math.max(1, Math.min(200, limit));
     const chapters = await this.chapterRepo.find({
       where: { bookId },
@@ -571,6 +1067,14 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
           if (!state.currentArc) {
             state = await this.deepMaintenance.bootstrapInitialArc(state);
           }
+
+          // Keep a replay snapshot for "state before current chapter".
+          await this.persistArtifact(
+            bookId,
+            Math.max(0, chapterNumber - 1),
+            'state_snapshot',
+            state,
+          );
           const previousChapterEnding = await this.getPreviousChapterEnding(bookId, chapterNumber);
           const pipelineNodes = await this.pipelineService.getPublishedNodes(bookId);
           const result = await this.chapterWorkflow.run(
@@ -592,12 +1096,16 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
           );
 
           // Persist artifacts.
-          await this.persistArtifactsBatch(bookId, chapterNumber, [
+          const chapterArtifacts: Array<{ name: string; data: unknown }> = [
             { name: 'intent', data: result.intent },
             { name: 'review', data: result.review },
             { name: 'deterministic_check', data: result.deterministicCheck },
             { name: 'lore_record', data: result.loreRecord },
-          ]);
+          ];
+          if (result.arcDirective) {
+            chapterArtifacts.unshift({ name: 'arc_director', data: result.arcDirective });
+          }
+          await this.persistArtifactsBatch(bookId, chapterNumber, chapterArtifacts);
 
           // Update high-fidelity detail store (角色细节档案) based on this chapter.
           await this.updateDetailStoreFromChapter(
@@ -606,8 +1114,20 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
             result.loreRecord,
           );
 
+          // Persist structured chapter memory for long-range retrieval.
+          await this.memoryRetriever.persistChapterMemory(
+            bookId, chapterNumber, result.finalDraft,
+            result.loreRecord, state, result.intent,
+          ).catch((err) => this.logger.warn(`[ch${chapterNumber}] 章节记忆持久化失败: ${err}`));
+
           // Apply lore: creates new world elements + applies deltas.
           state = this.loreService.applyLore(state, result.loreRecord, result.intent);
+
+          // Apply voice evolution: catchphrases, gesture fingerprints, emotional voice map.
+          if (result.voiceEvolution) state = this.voiceCoach.applyVoiceEvolution(state, result.voiceEvolution, chapterNumber);
+
+          // Update feedback confidence decay.
+          state.feedbackState = this.updateFeedbackConfidence(state.feedbackState ?? { history: [], lastAnalyzedAtChapter: 0, gapSinceLastFeedback: 0, pendingCommentCount: 0, sentimentHistory: [], confidence: 'none' }, chapterNumber);
 
           // Extract distinctive phrases for anti-repetition tracking.
           state = this.updateDistinctivePhrases(state, result.finalDraft.content);
@@ -649,6 +1169,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
           }
 
           await this.persistBookState(state);
+          await this.persistArtifact(bookId, chapterNumber, 'state_snapshot', state);
           return result;
         } finally {
           const usage = this.llmUsageTracker.consumeCurrentSummary();
@@ -665,6 +1186,499 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
   }
 
   /**
+   * Enqueue background chapter-resync job after manual chapter edits.
+   */
+  private async enqueueChapterResyncJob(
+    bookId: string,
+    startChapterNumber: number,
+    requestedBy: string,
+  ): Promise<ChapterResyncResult> {
+    const currentState = await this.loadBookState(bookId);
+    const latestChapterNumber = currentState.chapterCursor - 1;
+    const replayCount = latestChapterNumber - startChapterNumber + 1;
+
+    if (replayCount <= 0) {
+      return {
+        status: 'skipped_missing_chapters',
+        message: `当前没有可回放章节（start=${startChapterNumber}, latest=${latestChapterNumber})`,
+      };
+    }
+    if (replayCount > MAX_CHAPTER_RESYNC_CHAPTERS) {
+      return {
+        status: 'skipped_too_many_chapters',
+        message: `回灌跨度 ${replayCount} 章，超过上限 ${MAX_CHAPTER_RESYNC_CHAPTERS} 章`,
+      };
+    }
+
+    const jobId = randomUUID();
+    const now = new Date();
+    const jobEntity = this.chapterResyncJobRepo.create({
+      jobId,
+      bookId,
+      requestedStartChapter: startChapterNumber,
+      requestedEndChapter: latestChapterNumber,
+      status: 'queued',
+      requestedBy,
+      effectiveStartChapter: null,
+      effectiveEndChapter: null,
+      totalChapters: replayCount,
+      completedChapters: 0,
+      progressChapter: null,
+      progressMessage: '已入队，等待处理',
+      lastError: null,
+      lastResult: null,
+      startedAt: null,
+      finishedAt: null,
+    });
+    await this.chapterResyncJobRepo.save(jobEntity);
+    try {
+      await this.chapterResyncQueue.add(
+        'chapter-resync',
+        { jobId },
+        { jobId: `chapter-resync:${jobId}` },
+      );
+    } catch (err: any) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.chapterResyncJobRepo.update(
+        { jobId },
+        {
+          status: 'failed',
+          lastError: message,
+          progressMessage: `入队失败: ${message}`,
+          finishedAt: new Date(),
+        },
+      );
+      throw err;
+    }
+
+    return {
+      status: 'queued',
+      jobId,
+      message: `已加入后台重放队列（${startChapterNumber}-${latestChapterNumber}）`,
+      requestedStartChapter: startChapterNumber,
+      requestedEndChapter: latestChapterNumber,
+      totalChapters: replayCount,
+      requestedAt: now.toISOString(),
+    };
+  }
+
+  async processChapterResyncJob(jobId: string): Promise<Record<string, unknown>> {
+    const queued = await this.chapterResyncJobRepo.findOneBy({ jobId });
+    if (!queued) {
+      return { jobId, skipped: true, reason: 'job_not_found' };
+    }
+
+    const claim = await this.chapterResyncJobRepo
+      .createQueryBuilder()
+      .update(ChapterResyncJobEntity)
+      .set({
+        status: 'running',
+        startedAt: () => 'NOW()',
+        finishedAt: null,
+        lastError: null,
+        progressMessage: '开始回放',
+        updatedAt: () => 'NOW()',
+      })
+      .where('jobId = :jobId', { jobId })
+      .andWhere('status = :status', { status: 'queued' })
+      .execute();
+
+    if (claim.affected === 0) {
+      const existing = await this.chapterResyncJobRepo.findOneBy({ jobId });
+      return {
+        jobId,
+        skipped: true,
+        reason: 'job_not_claimable',
+        status: existing?.status ?? 'missing',
+      };
+    }
+
+    const claimed = await this.chapterResyncJobRepo.findOneByOrFail({ jobId });
+    this.logger.log(
+      `[chapter-resync] job=${jobId} book=${claimed.bookId} range=${claimed.requestedStartChapter}-${claimed.requestedEndChapter} 开始`,
+    );
+
+    try {
+      const result = await this.withBookLock(claimed.bookId, async () =>
+        this.syncChapterAndForwardAfterManualEdit(
+          claimed.bookId,
+          claimed.requestedStartChapter,
+          claimed.requestedEndChapter,
+          {
+            onProgress: async (progress) => {
+              await this.chapterResyncJobRepo.update(
+                { jobId },
+                {
+                  completedChapters: progress.completed,
+                  totalChapters: progress.total,
+                  progressChapter: progress.chapterNumber,
+                  progressMessage: progress.message,
+                },
+              );
+            },
+          },
+        ),
+      );
+
+      const finalStatus: ChapterResyncJobStatus =
+        result.status === 'synced' || result.status === 'synced_forward'
+          ? 'completed'
+          : result.status.startsWith('skipped_')
+            ? 'skipped'
+            : 'failed';
+      await this.chapterResyncJobRepo.update(
+        { jobId },
+        {
+          status: finalStatus,
+          effectiveStartChapter: result.effectiveStartChapter ?? null,
+          effectiveEndChapter: result.effectiveEndChapter ?? null,
+          completedChapters: result.completedChapters ?? 0,
+          totalChapters: result.totalChapters ?? null,
+          progressChapter: result.progressChapter ?? null,
+          progressMessage:
+            finalStatus === 'completed'
+              ? '回放完成'
+              : result.message ?? '回放结束',
+          lastError: finalStatus === 'failed' ? (result.message ?? '回放失败') : null,
+          lastResult: result as unknown as Record<string, unknown>,
+          finishedAt: new Date(),
+        },
+      );
+      this.logger.log(`[chapter-resync] job=${jobId} 完成 status=${finalStatus}`);
+      return {
+        jobId,
+        status: finalStatus,
+        result,
+      };
+    } catch (err: any) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.chapterResyncJobRepo.update(
+        { jobId },
+        {
+          status: 'failed',
+          progressMessage: `回放失败: ${message}`,
+          lastError: message,
+          finishedAt: new Date(),
+        },
+      );
+      this.logger.error(`[chapter-resync] job=${jobId} 失败: ${message}`);
+      return {
+        jobId,
+        status: 'failed',
+        message,
+      };
+    }
+  }
+
+  /**
+   * Rebuild lore/state/detail-store from edited chapter to latest chapter.
+   */
+  private async syncChapterAndForwardAfterManualEdit(
+    bookId: string,
+    editedChapterNumber: number,
+    requestedEndChapter?: number,
+    options?: ChapterResyncRunOptions,
+  ): Promise<ChapterResyncResult> {
+    const currentState = await this.loadBookState(bookId);
+    const latestChapterNumber = currentState.chapterCursor - 1;
+    const effectiveEndChapter = Math.max(
+      latestChapterNumber,
+      requestedEndChapter ?? latestChapterNumber,
+    );
+    const replayCount = effectiveEndChapter - editedChapterNumber + 1;
+
+    if (replayCount <= 0) {
+      return {
+        status: 'failed',
+        message: `章节范围非法：edited=${editedChapterNumber} latest=${effectiveEndChapter}`,
+      };
+    }
+    if (replayCount > MAX_CHAPTER_RESYNC_CHAPTERS) {
+      return {
+        status: 'skipped_too_many_chapters',
+        message: `回灌跨度 ${replayCount} 章，超过上限 ${MAX_CHAPTER_RESYNC_CHAPTERS} 章`,
+        effectiveStartChapter: editedChapterNumber,
+        effectiveEndChapter,
+        totalChapters: replayCount,
+        completedChapters: 0,
+      };
+    }
+    this.logger.log(
+      `[updateChapter] 启动状态回灌 bookId=${bookId} range=${editedChapterNumber}-${effectiveEndChapter} replay=${replayCount}`,
+    );
+
+    const preChapterState = await this.loadStateSnapshotBeforeChapter(
+      bookId,
+      editedChapterNumber,
+    );
+    if (!preChapterState) {
+      return {
+        status: 'skipped_missing_snapshot',
+        message: `缺少第${editedChapterNumber - 1}章快照，无法安全回灌`,
+      };
+    }
+
+    const chaptersToReplay = await this.loadContiguousChapterRange(
+      bookId,
+      editedChapterNumber,
+      effectiveEndChapter,
+    );
+    if (!chaptersToReplay) {
+      return {
+        status: 'skipped_missing_chapters',
+        message: `章节数据不连续，无法从第${editedChapterNumber}章重放至第${effectiveEndChapter}章`,
+        effectiveStartChapter: editedChapterNumber,
+        effectiveEndChapter,
+        totalChapters: replayCount,
+        completedChapters: 0,
+      };
+    }
+
+    let replayState = preChapterState;
+    const recorderPrompt = await this.loadPipelineNodePrompt(bookId, 'recorder');
+    const replayOutputs: Array<{
+      chapter: ChapterEntity;
+      draft: ChapterDraft;
+      loreRecord: LoreRecord;
+      stateAfterChapter: StoryState;
+    }> = [];
+
+    for (let index = 0; index < chaptersToReplay.length; index++) {
+      const chapter = chaptersToReplay[index];
+      const completed = index + 1;
+      const progressMessage = `回放第${chapter.chapterNumber}章`;
+      if (options?.onProgress) {
+        await options.onProgress({
+          chapterNumber: chapter.chapterNumber,
+          completed,
+          total: chaptersToReplay.length,
+          message: progressMessage,
+        });
+      }
+      const chapterDraft = chapterDraftSchema.parse({
+        chapterNumber: chapter.chapterNumber,
+        title: chapter.title,
+        content: chapter.content,
+      });
+      const chapterIntent =
+        (await this.loadChapterIntentArtifact(bookId, chapter.chapterNumber)) ??
+        this.buildFallbackIntent(replayState, chapter.chapterNumber);
+
+      const loreRecord = loreRecordSchema.parse(
+        await this.recorder.record(replayState, chapterDraft, recorderPrompt),
+      );
+      replayState = this.loreService.applyLore(
+        replayState,
+        loreRecord,
+        chapterIntent,
+      );
+      replayState = {
+        ...replayState,
+        chapterCursor: chapter.chapterNumber + 1,
+        updatedAt: new Date().toISOString(),
+      };
+      replayOutputs.push({
+        chapter,
+        draft: chapterDraft,
+        loreRecord,
+        stateAfterChapter: replayState,
+      });
+    }
+
+    const mergedState = this.mergeLoreDerivedStateAfterManualEdit(
+      currentState,
+      replayState,
+    );
+
+    await this.persistBookState(mergedState);
+
+    for (const out of replayOutputs) {
+      await this.persistArtifact(bookId, out.chapter.chapterNumber, 'lore_record', out.loreRecord);
+      await this.persistArtifact(
+        bookId,
+        out.chapter.chapterNumber,
+        'state_snapshot',
+        out.chapter.chapterNumber === effectiveEndChapter ? mergedState : out.stateAfterChapter,
+      );
+    }
+
+    try {
+      for (const out of replayOutputs) {
+        await this.detailStore.removeChapterContributions(bookId, out.chapter.chapterNumber);
+      }
+      for (const out of replayOutputs) {
+        await this.updateDetailStoreFromChapter(
+          bookId,
+          out.draft,
+          out.loreRecord,
+          { enableSensoryExtraction: false },
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[updateChapter] detail_store 回灌失败 bookId=${bookId} start=${editedChapterNumber} end=${effectiveEndChapter}: ${err}`,
+      );
+    }
+    this.logger.log(
+      `[updateChapter] 状态回灌完成 bookId=${bookId} range=${editedChapterNumber}-${effectiveEndChapter} replay=${replayCount}`,
+    );
+
+    return {
+      status: replayCount > 1 ? 'synced_forward' : 'synced',
+      message:
+        replayCount > 1
+          ? `已重放 ${replayCount} 章（${editedChapterNumber}-${effectiveEndChapter}）`
+          : undefined,
+      effectiveStartChapter: editedChapterNumber,
+      effectiveEndChapter,
+      totalChapters: replayCount,
+      completedChapters: replayCount,
+      progressChapter: effectiveEndChapter,
+    };
+  }
+
+  private async loadStateSnapshotBeforeChapter(
+    bookId: string,
+    chapterNumber: number,
+  ): Promise<StoryState | null> {
+    const snapshotChapterNumber = Math.max(0, chapterNumber - 1);
+    const payload = await this.loadArtifactPayload(
+      bookId,
+      snapshotChapterNumber,
+      'state_snapshot',
+    );
+    if (!payload) return null;
+
+    try {
+      const snapshot = storyStateSchema.parse(payload);
+      if (snapshot.chapterCursor !== chapterNumber) {
+        this.logger.warn(
+          `[state_snapshot] 游标不匹配，拒绝回灌 bookId=${bookId} expected=${chapterNumber} actual=${snapshot.chapterCursor}`,
+        );
+        return null;
+      }
+      return snapshot;
+    } catch (err) {
+      this.logger.warn(
+        `[state_snapshot] 解析失败 bookId=${bookId} chapter=${snapshotChapterNumber}: ${err}`,
+      );
+      return null;
+    }
+  }
+
+  private async loadContiguousChapterRange(
+    bookId: string,
+    fromChapterNumber: number,
+    toChapterNumber: number,
+  ): Promise<ChapterEntity[] | null> {
+    const ranged = await this.chapterRepo
+      .createQueryBuilder('chapter')
+      .where('chapter.bookId = :bookId', { bookId })
+      .andWhere('chapter.chapterNumber >= :fromChapterNumber', { fromChapterNumber })
+      .andWhere('chapter.chapterNumber <= :toChapterNumber', { toChapterNumber })
+      .orderBy('chapter.chapterNumber', 'ASC')
+      .getMany();
+    const expectedLength = toChapterNumber - fromChapterNumber + 1;
+    if (ranged.length !== expectedLength) return null;
+    for (let i = 0; i < ranged.length; i++) {
+      if (ranged[i].chapterNumber !== fromChapterNumber + i) return null;
+    }
+    return ranged;
+  }
+
+  private mergeLoreDerivedStateAfterManualEdit(
+    currentState: StoryState,
+    recomputedState: StoryState,
+  ): StoryState {
+    return storyStateSchema.parse({
+      ...currentState,
+      characters: recomputedState.characters,
+      locations: recomputedState.locations,
+      items: recomputedState.items,
+      factions: recomputedState.factions,
+      activeCommitments: recomputedState.activeCommitments,
+      chapterSummaries: recomputedState.chapterSummaries,
+      openPlotThreads: recomputedState.openPlotThreads,
+      relationGraph: recomputedState.relationGraph,
+      timelineEvents: recomputedState.timelineEvents,
+      plotThreadLedger: recomputedState.plotThreadLedger,
+      characterFactLedger: recomputedState.characterFactLedger,
+      lastHook: recomputedState.lastHook,
+      recentHookTypes: recomputedState.recentHookTypes,
+      readerTension: recomputedState.readerTension,
+      informationLedger: recomputedState.informationLedger,
+      dopamineSchedule: recomputedState.dopamineSchedule,
+      pendingForeshadowingSeeds: recomputedState.pendingForeshadowingSeeds,
+      storyClock: recomputedState.storyClock,
+      addressMatrix: recomputedState.addressMatrix,
+      lastSceneSnapshot: recomputedState.lastSceneSnapshot,
+      chapterCursor: currentState.chapterCursor,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  private async loadChapterIntentArtifact(
+    bookId: string,
+    chapterNumber: number,
+  ): Promise<ChapterIntent | null> {
+    const payload = await this.loadArtifactPayload(bookId, chapterNumber, 'intent');
+    if (!payload) return null;
+    try {
+      return chapterIntentSchema.parse(payload);
+    } catch {
+      return null;
+    }
+  }
+
+  private buildFallbackIntent(
+    state: StoryState,
+    chapterNumber: number,
+  ): ChapterIntent {
+    const activeCharacterIds = state.characters.slice(0, 3).map((c) => c.id);
+    const focusCharacterIds = activeCharacterIds.slice(0, 1);
+    return chapterIntentSchema.parse({
+      chapterNumber,
+      goals: [`延续第${chapterNumber}章冲突线`],
+      emotionDirection: '紧张推进',
+      hookDirection: state.lastHook || '抛出新的不确定性',
+      carryoverFromLastChapter: '',
+      threadGuidance: {
+        priorityThreadLabels: state.openPlotThreads.slice(0, 3),
+        maxNewThreads: 1,
+        advice: '优先推进既有伏线',
+      },
+      characterAvailability: {
+        activeCharacterIds,
+        blockedCharacterIds: [],
+        foreshadowOnlyCharacterIds: [],
+      },
+      characterArcGuidance: {
+        focusCharacterIds,
+        arcHints: [],
+        emotionalLogicNotes: '保持角色行为与既有人设一致',
+      },
+      wordCountRange: { min: 2000, max: 4000 },
+    });
+  }
+
+  private async loadPipelineNodePrompt(
+    bookId: string,
+    nodeId: string,
+  ): Promise<string | undefined> {
+    const pipelineNodes = await this.pipelineService.getPublishedNodes(bookId);
+    return pipelineNodes.find((n) => n.id === nodeId)?.additionalSystemPrompt || undefined;
+  }
+
+  private async loadArtifactPayload(
+    bookId: string,
+    chapterNumber: number,
+    name: string,
+  ): Promise<Record<string, unknown> | null> {
+    const artifact = await this.artifactRepo.findOneBy({ bookId, chapterNumber, name });
+    return artifact?.payload ?? null;
+  }
+
+  /**
    * 基于本章 LoreRecord / Draft，对高保真细节仓做轻量更新。
    *
    * 当前只维护角色相关信息：
@@ -676,8 +1690,10 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     bookId: string,
     draft: ChapterDraft,
     lore: LoreRecord,
+    options?: { enableSensoryExtraction?: boolean },
   ): Promise<void> {
     const chapterNumber = draft.chapterNumber;
+    const enableSensoryExtraction = options?.enableSensoryExtraction ?? true;
 
     // ── 角色：外貌/服饰/受伤等描写片段 ──
     const snippetsByCharacter = new Map<
@@ -771,7 +1787,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
 
     // 本章主场景地点：用 LLM 从正文中抽取 1～2 条感官锚点，供重访时复现。
     let extractedAnchors: LocationSensoryAnchor[] = [];
-    if (snapshot?.locationId) {
+    if (snapshot?.locationId && enableSensoryExtraction) {
       const locationLabel =
         snapshot.locationName?.trim() || snapshot.locationId;
       try {
@@ -836,24 +1852,26 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
 
       let extractedSensory: Partial<ItemSensorySignature> | undefined;
       let extractedActivation: { chapterNumber: number; description: string } | undefined;
-      try {
-        const out = await this.extractItemSensoryFromChapter(
-          draft.content.slice(0, 3200),
-          itemHint,
-        );
-        if (out.sensorySignature && Object.keys(out.sensorySignature).length > 0) {
-          extractedSensory = out.sensorySignature;
+      if (enableSensoryExtraction) {
+        try {
+          const out = await this.extractItemSensoryFromChapter(
+            draft.content.slice(0, 3200),
+            itemHint,
+          );
+          if (out.sensorySignature && Object.keys(out.sensorySignature).length > 0) {
+            extractedSensory = out.sensorySignature;
+          }
+          if (out.activationEffect?.description?.trim()) {
+            extractedActivation = {
+              chapterNumber,
+              description: out.activationEffect.description.trim(),
+            };
+          }
+        } catch (err) {
+          this.logger.warn(
+            `[detail-store] 道具感官/使用效果抽取失败 (item=${firstItemId}): ${err}`,
+          );
         }
-        if (out.activationEffect?.description?.trim()) {
-          extractedActivation = {
-            chapterNumber,
-            description: out.activationEffect.description.trim(),
-          };
-        }
-      } catch (err) {
-        this.logger.warn(
-          `[detail-store] 道具感官/使用效果抽取失败 (item=${firstItemId}): ${err}`,
-        );
       }
 
       const itemUpdates = Array.from(snippetsByItem.entries()).map(
@@ -1003,6 +2021,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
   private static readonly MAX_TIMELINE = 500;
   private static readonly MAX_FACTS = 300;
   private static readonly MAX_COMPLETED_ARCS = 20;
+  private static readonly MAX_COMPLETED_ARC_ACCEPTANCE_REPORTS = 50;
 
   private compactState(state: StoryState): StoryState {
     return {
@@ -1018,6 +2037,8 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         return state.chapterCursor - t.lastTouchedChapter < 50;
       }),
       completedArcs: (state.completedArcs ?? []).slice(-NovelService.MAX_COMPLETED_ARCS),
+      completedArcAcceptanceReports: (state.completedArcAcceptanceReports ?? [])
+        .slice(-NovelService.MAX_COMPLETED_ARC_ACCEPTANCE_REPORTS),
       pendingForeshadowingSeeds: (state.pendingForeshadowingSeeds ?? []).filter((s) => !s.applied),
       informationLedger: state.informationLedger ? {
         activeGaps: state.informationLedger.activeGaps,
@@ -1137,7 +2158,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     });
     if (!prev?.content) return undefined;
     const content = prev.content;
-    const tail = content.slice(-500);
+    const tail = content.slice(-1500); // 1500字上下文确保场景/情绪完整衔接
     const firstNewline = tail.indexOf('\n');
     return firstNewline > 0 ? tail.slice(firstNewline + 1) : tail;
   }
@@ -1147,16 +2168,11 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
   // -------------------------------------------------------------------------
 
   private async loadBookState(bookId: string): Promise<StoryState> {
-    const book = await this.bookRepo.findOneBy({ bookId });
-    if (!book) throw new NotFoundException(`Book not found: ${bookId}`);
-    return storyStateSchema.parse(book.stateJson);
+    return this.bookStateRepo.load(bookId);
   }
 
   private async persistBookState(state: StoryState): Promise<void> {
-    await this.bookRepo.save({
-      bookId: state.bookId,
-      stateJson: state as unknown as Record<string, unknown>,
-    });
+    await this.bookStateRepo.save(state);
   }
 
   private async persistArtifact(
@@ -1194,5 +2210,112 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         await qr.release();
       }
     }
+  }
+
+  // =========================================================================
+  // Reader Feedback — 评论提交 + 触发分析 + 查看
+  // =========================================================================
+
+  /** 提交单章评论，累积存储，达标则自动触发分析。 */
+  async submitChapterFeedback(bookId: string, feedback: ReaderFeedback): Promise<{
+    stored: boolean; analysisTriggered: boolean; analysis?: ReaderFeedbackAnalysis;
+  }> {
+    const state = await this.loadBookState(bookId);
+    const fs = state.feedbackState ?? {
+      history: [], lastAnalyzedAtChapter: 0, gapSinceLastFeedback: 0,
+      pendingCommentCount: 0, sentimentHistory: [], confidence: 'none' as const,
+    };
+
+    const existing = fs.history.findIndex((h) => h.chapterNumber === feedback.chapterNumber);
+    if (existing >= 0) {
+      fs.history[existing] = { ...fs.history[existing], comments: [...fs.history[existing].comments, ...feedback.comments], metrics: feedback.metrics ?? fs.history[existing].metrics };
+    } else {
+      fs.history.push(feedback);
+    }
+    fs.history = fs.history.slice(-50); // 保留最近50章
+    fs.pendingCommentCount += feedback.comments.length;
+    fs.gapSinceLastFeedback = 0;
+
+    state.feedbackState = fs;
+    await this.persistBookState(state);
+    this.logger.log(`[Feedback] bookId=${bookId} ch${feedback.chapterNumber} +${feedback.comments.length}条评论，待分析${fs.pendingCommentCount}条`);
+
+    if (this.shouldTriggerAnalysis(fs, state)) {
+      const analysis = await this.triggerFeedbackAnalysis(bookId);
+      return { stored: true, analysisTriggered: true, analysis };
+    }
+    return { stored: true, analysisTriggered: false };
+  }
+
+  /** 手动触发分析（不管累积量）。 */
+  async triggerFeedbackAnalysis(bookId: string): Promise<ReaderFeedbackAnalysis> {
+    const state = await this.loadBookState(bookId);
+    const fs = state.feedbackState ?? { history: [], lastAnalyzedAtChapter: 0, gapSinceLastFeedback: 0, pendingCommentCount: 0, sentimentHistory: [], confidence: 'none' as const };
+
+    const chaptersWithData = fs.history.filter((h) => h.comments.length > 0);
+    const pendingFeedbacks = fs.lastAnalyzedAtChapter > 0
+      ? chaptersWithData.filter((h) => h.chapterNumber > fs.lastAnalyzedAtChapter)
+      : chaptersWithData;
+    const toAnalyze = pendingFeedbacks.length > 0 ? pendingFeedbacks : chaptersWithData.slice(-10);
+
+    if (!toAnalyze.length) throw new UnprocessableEntityException('无可分析的读者评论');
+
+    this.logger.log(`[Feedback] 开始分析 bookId=${bookId}，${toAnalyze.length}个章节，${toAnalyze.reduce((s, f) => s + f.comments.length, 0)}条评论`);
+    const analysis = await this.readerPulse.analyze(state, toAnalyze);
+
+    fs.lastAnalysis = analysis;
+    fs.lastAnalyzedAtChapter = state.chapterCursor;
+    fs.pendingCommentCount = 0;
+    fs.confidence = 'fresh';
+    fs.sentimentHistory = [
+      ...fs.sentimentHistory,
+      { chapterRange: `ch${toAnalyze[0].chapterNumber}-ch${toAnalyze[toAnalyze.length - 1].chapterNumber}`, sentiment: analysis.overallSentiment, analysisTimestamp: analysis.analysisTimestamp },
+    ].slice(-20);
+
+    state.feedbackState = fs;
+    await this.persistBookState(state);
+    this.logger.log(`[Feedback] 分析完成 sentiment=${analysis.overallSentiment} trend=${analysis.sentimentTrend} adopt=${this.countAdopted(analysis)}条采纳`);
+    return analysis;
+  }
+
+  /** 获取反馈分析状态。 */
+  async getFeedbackState(bookId: string): Promise<FeedbackState> {
+    const state = await this.loadBookState(bookId);
+    return state.feedbackState ?? { history: [], lastAnalyzedAtChapter: 0, gapSinceLastFeedback: 0, pendingCommentCount: 0, sentimentHistory: [], confidence: 'none' };
+  }
+
+  /** 检查是否应自动触发分析：≥3章有评论且待分析≥30条，或距上次分析已积累≥5章有评论数据。 */
+  private shouldTriggerAnalysis(fs: FeedbackState, state: StoryState): boolean {
+    if (fs.pendingCommentCount < 15) return false;
+    const unanalyzed = fs.history.filter((h) => h.comments.length > 0 && h.chapterNumber > fs.lastAnalyzedAtChapter);
+    if (unanalyzed.length >= 3) return true;
+    if (fs.pendingCommentCount >= 30) return true;
+    return false;
+  }
+
+  /** 每章生成后更新反馈新鲜度（在 generateChapter 流程中调用）。 */
+  updateFeedbackConfidence(fs: FeedbackState, chapterNumber: number): FeedbackState {
+    if (!fs.lastAnalysis) return { ...fs, confidence: 'none' };
+    const gap = chapterNumber - fs.lastAnalyzedAtChapter;
+    fs.gapSinceLastFeedback = gap;
+    if (gap <= 5) fs.confidence = 'fresh';
+    else if (gap <= 15) fs.confidence = 'aging';
+    else fs.confidence = 'stale';
+    // chapter级建议过期检查
+    if (fs.lastAnalysis && fs.lastAnalysis.chapterLevel.expiresAfterChapter <= chapterNumber) {
+      fs.lastAnalysis = {
+        ...fs.lastAnalysis,
+        chapterLevel: { ...fs.lastAnalysis.chapterLevel, immediateFixes: [], suspenseUrgency: [], pacingAdjustment: 'maintain', recentTechniqueVerdict: [] },
+      };
+    }
+    return fs;
+  }
+
+  private countAdopted(analysis: ReaderFeedbackAnalysis): number {
+    const all = [
+      ...analysis.bookLevel.writingStyleFeedback, ...analysis.bookLevel.coreIssues,
+      ...analysis.arcLevel.suggestions, ...analysis.chapterLevel.immediateFixes,
+    ];
+    return all.filter((a) => a.verdict === 'adopt' || a.verdict === 'conditional').length;
   }
 }

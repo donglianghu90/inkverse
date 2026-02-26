@@ -1,11 +1,44 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { Outlet, history, useLocation } from '@umijs/max';
-import { BookOpen, PenTool, Sun, Moon, LogOut, User, ChevronDown, Plus, Menu, X } from 'lucide-react';
+import { BookOpen, PenTool, Sun, Moon, LogOut, ChevronDown, Plus, Menu, X, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useDarkMode } from '@/hooks/useDarkMode';
 import { isAuthenticated, getSavedUser, clearAuth, logout as apiLogout, UserInfo } from '@/services/auth';
 import { cn } from '@/lib/utils';
+
+const AVATAR_GRADIENTS = [
+  'from-violet-500 to-purple-600',
+  'from-blue-500 to-cyan-500',
+  'from-emerald-500 to-teal-500',
+  'from-rose-500 to-pink-500',
+  'from-amber-500 to-orange-500',
+  'from-indigo-500 to-blue-600',
+  'from-fuchsia-500 to-purple-500',
+  'from-teal-500 to-emerald-600',
+  'from-red-500 to-rose-600',
+  'from-sky-500 to-indigo-500',
+];
+
+function hashStr(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function UserAvatar({ name, size = 'sm' }: { name: string; size?: 'sm' | 'md' | 'lg' }) {
+  const initial = (name || '?')[0].toUpperCase();
+  const gradient = AVATAR_GRADIENTS[hashStr(name || '') % AVATAR_GRADIENTS.length];
+  const cls = size === 'lg' ? 'w-14 h-14 text-xl' : size === 'md' ? 'w-9 h-9 text-sm' : 'w-7 h-7 text-xs';
+  return (
+    <div className={cn(
+      'rounded-full bg-gradient-to-br flex items-center justify-center font-bold text-white shadow-sm select-none shrink-0',
+      gradient, cls,
+    )}>
+      {initial}
+    </div>
+  );
+}
 
 const NovelLayout: React.FC = () => {
   const { isDark, toggle } = useDarkMode();
@@ -14,6 +47,16 @@ const NovelLayout: React.FC = () => {
   const [mobileNav, setMobileNav] = useState(false);
   const location = useLocation();
   const isBookshelf = location.pathname === '/novel';
+
+  const joinDate = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('user_info');
+      if (!raw) return '';
+      const info = JSON.parse(raw);
+      if (info.createdAt) return new Date(info.createdAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long' }) + '加入';
+    } catch {}
+    return '创作者';
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated()) {
@@ -91,16 +134,19 @@ const NovelLayout: React.FC = () => {
               <div className="relative">
                 <button
                   onClick={() => setShowMenu(!showMenu)}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-accent transition-colors"
+                  className={cn(
+                    'flex items-center gap-2 px-1.5 py-1 rounded-full transition-all',
+                    showMenu
+                      ? 'bg-accent ring-2 ring-primary/20'
+                      : 'hover:bg-accent',
+                  )}
                 >
-                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center ring-1 ring-primary/20">
-                    <User className="w-3.5 h-3.5 text-primary" />
-                  </div>
+                  <UserAvatar name={user?.username || '?'} size="sm" />
                   <span className="text-sm font-medium text-foreground max-w-[100px] truncate">
                     {user?.username || '用户'}
                   </span>
                   <ChevronDown className={cn(
-                    'w-3 h-3 text-muted-foreground transition-transform duration-200',
+                    'w-3 h-3 text-muted-foreground transition-transform duration-200 mr-0.5',
                     showMenu && 'rotate-180',
                   )} />
                 </button>
@@ -108,17 +154,61 @@ const NovelLayout: React.FC = () => {
                 {showMenu && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)} />
-                    <div className="absolute right-0 top-full mt-1.5 z-50 w-52 rounded-xl border bg-card shadow-xl animate-scale-in py-1.5">
-                      <div className="px-3.5 py-2.5 border-b">
-                        <p className="text-sm font-semibold text-card-foreground truncate">
-                          {user?.username}
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">{user?.role || '创作者'}</p>
+                    <div className="absolute right-0 top-full mt-2 z-50 w-64 rounded-2xl border bg-card shadow-2xl shadow-black/10 dark:shadow-black/30 animate-scale-in overflow-hidden">
+                      {/* Profile header */}
+                      <div className="px-4 pt-5 pb-4 bg-gradient-to-b from-primary/5 to-transparent">
+                        <div className="flex items-center gap-3">
+                          <UserAvatar name={user?.username || '?'} size="lg" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-base font-bold text-card-foreground truncate">
+                              {user?.username || '用户'}
+                            </p>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <Sparkles className="w-3 h-3 text-primary" />
+                              <span className="text-xs text-muted-foreground">{joinDate || '创作者'}</span>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <div className="py-1">
+
+                      <div className="h-px bg-border" />
+
+                      {/* Menu items */}
+                      <div className="p-1.5">
+                        <button
+                          onClick={() => { setShowMenu(false); history.push('/novel'); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-card-foreground hover:bg-accent rounded-lg transition-colors"
+                        >
+                          <BookOpen className="w-4 h-4 text-muted-foreground" />
+                          我的书架
+                        </button>
+                        <button
+                          onClick={() => { setShowMenu(false); history.push('/novel/create'); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-card-foreground hover:bg-accent rounded-lg transition-colors"
+                        >
+                          <Plus className="w-4 h-4 text-muted-foreground" />
+                          创建新书
+                        </button>
+                        <button
+                          onClick={toggle}
+                          className="w-full flex items-center justify-between px-3 py-2.5 text-sm text-card-foreground hover:bg-accent rounded-lg transition-colors"
+                        >
+                          <span className="flex items-center gap-2.5">
+                            {isDark ? <Sun className="w-4 h-4 text-muted-foreground" /> : <Moon className="w-4 h-4 text-muted-foreground" />}
+                            {isDark ? '浅色模式' : '深色模式'}
+                          </span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">
+                            {isDark ? '☀' : '🌙'}
+                          </span>
+                        </button>
+                      </div>
+
+                      <div className="h-px bg-border mx-3" />
+
+                      <div className="p-1.5">
                         <button
                           onClick={handleLogout}
-                          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-destructive hover:bg-destructive/10 transition-colors rounded-md mx-auto"
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-destructive hover:bg-destructive/8 rounded-lg transition-colors"
                         >
                           <LogOut className="w-4 h-4" />
                           退出登录
@@ -171,13 +261,14 @@ const NovelLayout: React.FC = () => {
                   创建新书
                 </button>
                 <div className="border-t my-2" />
-                <div className="flex items-center gap-3 px-3 py-2">
-                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center ring-1 ring-primary/20">
-                    <User className="w-3.5 h-3.5 text-primary" />
-                  </div>
+                <div className="flex items-center gap-3 px-3 py-2.5">
+                  <UserAvatar name={user?.username || '?'} size="md" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{user?.username || '用户'}</p>
-                    <p className="text-xs text-muted-foreground">{user?.role || '创作者'}</p>
+                    <p className="text-sm font-semibold truncate">{user?.username || '用户'}</p>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <Sparkles className="w-3 h-3 text-primary" />
+                      <span className="text-xs text-muted-foreground">{joinDate || '创作者'}</span>
+                    </div>
                   </div>
                 </div>
                 <button
@@ -195,6 +286,12 @@ const NovelLayout: React.FC = () => {
         <main className="flex-1">
           <Outlet />
         </main>
+
+        {(isBookshelf || location.pathname === '/novel/create') && (
+          <footer className="border-t py-4 text-center text-xs text-muted-foreground/50">
+            InkVerse &copy; {new Date().getFullYear()} &middot; AI 小说创作平台
+          </footer>
+        )}
       </div>
     </TooltipProvider>
   );

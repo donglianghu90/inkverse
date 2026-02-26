@@ -231,6 +231,81 @@ export class LoreApplicationService {
       });
     }
 
+    // Step 4c: Apply emotional imprints to character psychology.
+    if (lore.emotionalImprints?.length) {
+      const INTENSITY_MAP: Record<string, number> = {
+        subtle: 0.3, moderate: 0.5, intense: 0.8, overwhelming: 1.0,
+      };
+      finalCharacters = finalCharacters.map((ch) => {
+        const imprints = lore.emotionalImprints!.filter((e) => e.characterId === ch.id);
+        if (!imprints.length) return ch;
+        const psych = ch.psychology ?? {
+          emotionalBaseline: 'stoic' as const,
+          currentMood: '平静',
+          emotionalMemories: [],
+          decisionPattern: 'rational_first' as const,
+          stressResponse: 'fight' as const,
+          trustThreshold: 'cautious' as const,
+          interactionPatterns: [],
+        };
+        const newMemories = [
+          ...(psych.emotionalMemories ?? []),
+          ...imprints.map((e) => ({
+            chapterNumber,
+            trigger: e.trigger,
+            emotion: e.emotion,
+            intensity: INTENSITY_MAP[e.intensity] ?? 0.5,
+            unresolved: e.intensity !== 'subtle',
+          })),
+        ].slice(-20); // 保留最近20条
+        const latestIntense = imprints.find((e) => e.intensity === 'intense' || e.intensity === 'overwhelming');
+        return {
+          ...ch,
+          psychology: {
+            ...psych,
+            emotionalMemories: newMemories,
+            currentMood: latestIntense?.emotion ?? psych.currentMood,
+          },
+        };
+      });
+    }
+
+    // Step 4d: Update character knowledge state from informationGapDeltas + characterFact changes.
+    if (lore.informationGapDeltas?.length) {
+      finalCharacters = finalCharacters.map((ch) => {
+        const ks = ch.knowledgeState ?? { knownFacts: [], falseBeliefs: [], blindSpots: [] };
+        const knownFacts = [...(ks.knownFacts ?? [])];
+        const blindSpots = [...(ks.blindSpots ?? [])];
+
+        for (const delta of lore.informationGapDeltas!) {
+          if (delta.action === 'create' && delta.secret) {
+            const knowers = delta.knownBy ?? [];
+            if (!knowers.includes(ch.id)) {
+              if (!blindSpots.includes(delta.secret.slice(0, 50))) blindSpots.push(delta.secret.slice(0, 50));
+            }
+          }
+          if (delta.action === 'reveal' && delta.gapId) {
+            const existing = knownFacts.find((f) => f.factId === delta.gapId);
+            if (!existing) {
+              knownFacts.push({
+                factId: delta.gapId,
+                subject: delta.gapId,
+                content: `信息差已揭露(ch${chapterNumber})`,
+                source: 'witnessed' as const,
+                confidence: 'certain' as const,
+                acquiredAtChapter: chapterNumber,
+                isSecret: false,
+              });
+              const idx = blindSpots.findIndex((b) => delta.gapId && b.includes(delta.gapId.slice(0, 10)));
+              if (idx >= 0) blindSpots.splice(idx, 1);
+            }
+          }
+        }
+
+        return { ...ch, knowledgeState: { knownFacts, falseBeliefs: ks.falseBeliefs ?? [], blindSpots } };
+      });
+    }
+
     // Step 5: Apply curiosity deltas to reader tension model.
     let readerTension = state.readerTension ?? {
       activeCuriosities: [],
@@ -651,9 +726,14 @@ export class LoreApplicationService {
       informationLedger,
       dopamineSchedule,
       pendingForeshadowingSeeds: pendingSeeds.filter((s) => !s.applied),
+      foreshadowingBank: this.updateForeshadowingBank(state, lore, chapterNumber),
       storyClock,
       addressMatrix,
       lastSceneSnapshot,
+      recentEmotionalImprints: [
+        ...(state.recentEmotionalImprints ?? []),
+        ...(lore.emotionalImprints ?? []).map((e) => ({ ...e, chapterNumber })),
+      ].slice(-30), // 保留最近30条情感印记
     };
   }
 
@@ -1261,5 +1341,45 @@ export class LoreApplicationService {
     let hash = 0;
     for (const ch of value) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
     return `u${hash.toString(36)}`;
+  }
+
+  /** 更新伏笔银行状态：检查本章是否命中了埋设/回收窗口。 */
+  private updateForeshadowingBank(state: StoryState, lore: LoreRecord, chapterNumber: number) {
+    const bank = state.foreshadowingBank ?? { deposits: [], totalPlanted: 0, totalResolved: 0 };
+    if (!bank.deposits.length) return bank;
+
+    const chapterText = lore.summary ?? '';
+    const openedThreads = new Set(lore.plotThreadDeltas.filter((d) => d.action === 'open').map((d) => d.label));
+    const closedThreads = new Set(lore.plotThreadDeltas.filter((d) => d.action === 'payoff').map((d) => d.label));
+
+    let planted = bank.totalPlanted;
+    let resolved = bank.totalResolved;
+
+    const updatedDeposits = bank.deposits.map((d) => {
+      if (d.status === 'pending' && chapterNumber >= d.plantWindow.earliestChapter && chapterNumber <= d.plantWindow.latestChapter) {
+        const relatedOpened = d.relatedPlotThreadIds.some((id) => openedThreads.has(id));
+        const mentionedInSummary = d.label && chapterText.includes(d.label.slice(0, 4));
+        if (relatedOpened || mentionedInSummary) {
+          planted++;
+          return { ...d, status: 'planted' as const, plantedAtChapter: chapterNumber };
+        }
+      }
+      if (d.status === 'planted' && chapterNumber >= d.payoffWindow.earliestChapter) {
+        const relatedClosed = d.relatedPlotThreadIds.some((id) => closedThreads.has(id));
+        if (relatedClosed) {
+          resolved++;
+          return { ...d, status: 'resolved' as const, resolvedAtChapter: chapterNumber };
+        }
+        if (chapterNumber > d.payoffWindow.latestChapter) {
+          return { ...d, status: 'expired' as const };
+        }
+      }
+      if (d.status === 'pending' && chapterNumber > d.plantWindow.latestChapter) {
+        return { ...d, status: 'expired' as const };
+      }
+      return d;
+    });
+
+    return { deposits: updatedDeposits, totalPlanted: planted, totalResolved: resolved };
   }
 }

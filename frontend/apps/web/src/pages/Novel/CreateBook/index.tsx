@@ -1,5 +1,6 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { history } from '@umijs/max';
+import { message } from 'antd';
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,6 +14,9 @@ import {
   FileEdit,
   Save,
 } from 'lucide-react';
+import worldCreatingImg from '@/assets/illustrations/world-creating.png';
+import creativeInspirationImg from '@/assets/illustrations/creative-inspiration.png';
+import profileCompleteImg from '@/assets/illustrations/profile-complete.png';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -26,6 +30,7 @@ import {
   enhanceIdea,
   generateStoryGoal,
   updateBookProfile,
+  createBookSession,
   createBookSseUrl,
   type CreateBookParams,
   type BookPromptProfile,
@@ -68,6 +73,12 @@ const SCALE_PRESETS = [
   { min: 500, max: 800, label: '超长篇 (500-800 章)', desc: '约 150-240 万字' },
 ];
 
+const SERIALIZATION_PRESETS = [
+  { label: '日更 3 章', runEveryDays: 1, chaptersPerRun: 3, desc: '平台冲刺期常见节奏' },
+  { label: '日更 2 章', runEveryDays: 1, chaptersPerRun: 2, desc: '稳定连载主流节奏' },
+  { label: '2 天 1 章', runEveryDays: 2, chaptersPerRun: 1, desc: '慢节奏精品向' },
+];
+
 const FORM_STEPS = [
   { title: '核心创意', icon: Sparkles, desc: '描述你的故事灵感' },
   { title: '类型与受众', icon: Users, desc: '选择类型和目标读者' },
@@ -108,11 +119,22 @@ const CreateBook: React.FC = () => {
     targetChapterWordCount: 3000,
     plannedMinChapters: 500,
     plannedMaxChapters: 800,
+    autoSerializationEnabled: true,
+    autoSerializationDailyStartTime: '08:00',
+    autoSerializationRunEveryDays: 1,
+    autoSerializationChaptersPerRun: 3,
+    autoSerializationMaxRepairRounds: 2,
+    autoSerializationMinQualityScore: 7,
+    autoSerializationMinOverallScore: 7,
     customGenre: '',
     customAudience: '',
     useCustomGenre: false,
     useCustomAudience: false,
   });
+
+  const abortRef = useRef<AbortController | null>(null);
+  const sessionRef = useRef<{ key: string; fingerprint: string } | null>(null);
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   const effectiveGenre = form.useCustomGenre ? form.customGenre : form.genre;
   const effectiveAudience = form.useCustomAudience ? form.customAudience : form.targetAudience;
@@ -187,6 +209,13 @@ const CreateBook: React.FC = () => {
       targetChapterWordCount: form.targetChapterWordCount,
       plannedMinChapters: form.plannedMinChapters,
       plannedMaxChapters: form.plannedMaxChapters,
+      autoSerializationEnabled: form.autoSerializationEnabled,
+      autoSerializationDailyStartTime: form.autoSerializationDailyStartTime,
+      autoSerializationRunEveryDays: form.autoSerializationRunEveryDays,
+      autoSerializationChaptersPerRun: form.autoSerializationChaptersPerRun,
+      autoSerializationMaxRepairRounds: form.autoSerializationMaxRepairRounds,
+      autoSerializationMinQualityScore: form.autoSerializationMinQualityScore,
+      autoSerializationMinOverallScore: form.autoSerializationMinOverallScore,
     };
 
     const STEP_PROGRESS: Record<string, number> = {
@@ -196,14 +225,40 @@ const CreateBook: React.FC = () => {
       done: 100,
     };
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const STALE_MS = 300_000;
+    let staleTimer!: ReturnType<typeof setTimeout>;
+    const touchStale = () => { clearTimeout(staleTimer); staleTimer = setTimeout(() => controller.abort(), STALE_MS); };
+    let streamError: string | null = null;
+    const fingerprint = JSON.stringify(params);
+    const idempotencyKey = sessionRef.current?.fingerprint === fingerprint
+      ? sessionRef.current.key
+      : (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    sessionRef.current = { key: idempotencyKey, fingerprint };
+
     try {
-      const searchParams = new URLSearchParams();
-      Object.entries(params).forEach(([k, v]) => {
-        if (v !== undefined && v !== null) searchParams.set(k, String(v));
-      });
-      const response = await fetch(`${createBookSseUrl()}?${searchParams.toString()}`, {
+      const session = await createBookSession(params, idempotencyKey);
+      if (session.status === 'completed' && session.result) {
+        clearTimeout(staleTimer);
+        setGenProgress(100);
+        setGenSteps((prev) => prev.map((s) => ({ ...s, done: true })));
+        setCreatedBookId(session.result.bookId);
+        setGeneratedProfile(session.result.bookPromptProfile);
+        setTimeout(() => { setStep(5); setLoading(false); }, 600);
+        return;
+      }
+      if (session.status === 'failed') {
+        throw new Error(session.error || '创建失败');
+      }
+
+      touchStale();
+      const response = await fetch(createBookSseUrl(session.progressChannel), {
         method: 'GET',
         headers: { Accept: 'text/event-stream' },
+        signal: controller.signal,
       });
 
       if (!response.ok || !response.body) throw new Error('创建失败');
@@ -211,10 +266,12 @@ const CreateBook: React.FC = () => {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let gotResult = false;
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        touchStale();
         buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split('\n');
@@ -226,6 +283,8 @@ const CreateBook: React.FC = () => {
             const payload = JSON.parse(line.slice(5).trim());
 
             if (payload._type === 'result') {
+              gotResult = true;
+              clearTimeout(staleTimer);
               setGenProgress(100);
               setGenSteps((prev) => prev.map((s) => ({ ...s, done: true })));
               setCreatedBookId(payload.result.bookId);
@@ -235,7 +294,8 @@ const CreateBook: React.FC = () => {
             }
 
             if (payload.error) {
-              throw new Error(payload.error);
+              streamError = payload.error;
+              break;
             }
 
             const progress = STEP_PROGRESS[payload.step] ?? 0;
@@ -255,11 +315,19 @@ const CreateBook: React.FC = () => {
               );
             }
           } catch {
-            // skip malformed lines
+            // skip malformed JSON
           }
         }
+        if (streamError) break;
       }
-    } catch {
+      clearTimeout(staleTimer);
+      if (!gotResult && !streamError) {
+        throw new Error('创建结果未返回');
+      }
+      if (streamError) throw new Error(streamError);
+    } catch (error: any) {
+      clearTimeout(staleTimer!);
+      message.error(streamError || error?.message || '创建连接中断，请重试');
       setLoading(false);
       setStep(3);
     }
@@ -401,11 +469,14 @@ const CreateBook: React.FC = () => {
       {/* Step 1: Core Idea */}
       {step === 0 && (
         <div className="animate-fade-in space-y-5 sm:space-y-6">
-          <div>
-            <h2 className="text-xl sm:text-2xl font-bold">你的故事核心创意是什么？</h2>
-            <p className="mt-1.5 sm:mt-2 text-sm sm:text-base text-muted-foreground">
-              描述你脑中的故事灵感，越具体越好。AI 会基于此构建完整的世界观和定制化写作手册。
-            </p>
+          <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
+            <img src={creativeInspirationImg} alt="" className="w-36 sm:w-44 h-auto pointer-events-none select-none shrink-0 drop-shadow-sm" draggable={false} />
+            <div>
+              <h2 className="text-xl sm:text-2xl font-bold">你的故事核心创意是什么？</h2>
+              <p className="mt-1.5 sm:mt-2 text-sm sm:text-base text-muted-foreground">
+                描述你脑中的故事灵感，越具体越好。AI 会基于此构建完整的世界观和定制化写作手册。
+              </p>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -474,8 +545,9 @@ const CreateBook: React.FC = () => {
           )}
 
           {highlights.length === 0 && (
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="flex items-start gap-3 p-3.5 sm:p-4">
+            <Card className="border-primary/20 bg-gradient-to-br from-primary/5 via-transparent to-violet-500/5 overflow-hidden">
+              <CardContent className="flex items-start gap-3 p-3.5 sm:p-4 relative">
+                <div className="absolute -right-4 -top-4 w-20 h-20 bg-primary/5 rounded-full blur-2xl" />
                 <Sparkles className="h-5 w-5 text-primary mt-0.5 shrink-0" />
                 <div className="text-sm text-muted-foreground">
                   <p className="font-medium text-foreground mb-1">灵感提示</p>
@@ -572,12 +644,13 @@ const CreateBook: React.FC = () => {
             )}
           </div>
 
-          <Card className="border-muted bg-muted/30">
-            <CardContent className="flex items-start gap-3 p-3.5 sm:p-4">
-              <BookOpen className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
+          <Card className="border-primary/10 bg-gradient-to-br from-primary/3 to-transparent overflow-hidden">
+            <CardContent className="flex items-start gap-3 p-3.5 sm:p-4 relative">
+              <div className="absolute -left-4 -bottom-4 w-20 h-20 bg-primary/5 rounded-full blur-2xl pointer-events-none" />
+              <BookOpen className="h-5 w-5 text-primary mt-0.5 shrink-0" />
               <div className="text-sm text-muted-foreground">
                 <p className="font-medium text-foreground mb-1">为什么这很重要？</p>
-                <p>AI 会根据你的选择生成一份完整的<strong>写作手册</strong>——包含这个题材专属的写作规则、正反例对比、章末钩子类型、套话黑名单、评审标准等。不同题材的手册完全不同。</p>
+                <p>AI 会根据你的选择生成一份完整的<strong className="text-foreground">写作手册</strong>——包含这个题材专属的写作规则、正反例对比、章末钩子类型、套话黑名单、评审标准等。不同题材的手册完全不同。</p>
               </div>
             </CardContent>
           </Card>
@@ -587,9 +660,13 @@ const CreateBook: React.FC = () => {
       {/* Step 3: Story Goal + Title */}
       {step === 2 && (
         <div className="animate-fade-in space-y-5 sm:space-y-6">
-          <div>
-            <h2 className="text-xl sm:text-2xl font-bold">定义故事的终极主线目标</h2>
-            <p className="mt-1.5 sm:mt-2 text-sm sm:text-base text-muted-foreground">
+          <div className="relative">
+            <div className="absolute -right-8 -top-8 w-32 h-32 bg-gradient-to-br from-primary/8 to-violet-500/8 rounded-full blur-3xl pointer-events-none" />
+            <div className="flex items-center gap-3 mb-2">
+              <Target className="h-6 w-6 text-primary shrink-0" />
+              <h2 className="text-xl sm:text-2xl font-bold">定义故事的终极主线目标</h2>
+            </div>
+            <p className="mt-1.5 sm:mt-2 text-sm sm:text-base text-muted-foreground pl-9">
               主线目标是贯穿全书的核心驱动力，AI 会围绕它规划卷级结构。可以自己写，也可以让 AI 根据前面的信息帮你生成。
             </p>
           </div>
@@ -625,23 +702,28 @@ const CreateBook: React.FC = () => {
           </div>
 
           {goalAlternatives.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">备选方案（点击可替换）：</p>
-              <div className="space-y-1.5">
-                {goalAlternatives.map((alt, i) => (
-                  <button
-                    key={i}
-                    className="w-full text-left rounded-lg border border-border px-3 py-2.5 text-sm text-muted-foreground transition-all hover:border-primary/50 hover:bg-primary/5 hover:text-foreground active:scale-[0.99]"
-                    onClick={() => {
-                      setForm((prev) => ({ ...prev, mainStoryGoal: alt }));
-                      setGoalAlternatives([]);
-                    }}
-                  >
-                    {alt}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <Card className="border-primary/15 bg-gradient-to-br from-primary/3 to-transparent">
+              <CardContent className="p-3.5 sm:p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  <p className="text-xs font-semibold text-foreground">AI 备选方案（点击替换）</p>
+                </div>
+                <div className="space-y-1.5">
+                  {goalAlternatives.map((alt, i) => (
+                    <button
+                      key={i}
+                      className="w-full text-left rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm text-muted-foreground transition-all hover:border-primary/50 hover:bg-primary/5 hover:text-foreground active:scale-[0.99]"
+                      onClick={() => {
+                        setForm((prev) => ({ ...prev, mainStoryGoal: alt }));
+                        setGoalAlternatives([]);
+                      }}
+                    >
+                      {alt}
+                    </button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
           )}
 
           <div className="space-y-2.5">
@@ -754,35 +836,155 @@ const CreateBook: React.FC = () => {
             </div>
           </div>
 
-          <Card className="border-muted">
-            <CardContent className="p-3.5 sm:p-4">
-              <p className="text-sm font-medium mb-3">创作摘要</p>
-              <div className="space-y-2 text-sm text-muted-foreground">
-                <div className="flex gap-2">
-                  <span className="shrink-0 w-14 sm:w-16 text-foreground font-medium">创意</span>
-                  <span className="line-clamp-2">{form.mainIdea || '—'}</span>
+          <Card className="border-primary/20 bg-primary/5">
+            <CardContent className="space-y-4 p-3.5 sm:p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">自动连载节奏</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    默认开启。系统先自动修复，连续低分才升级人工介入。
+                  </p>
                 </div>
-                <div className="flex gap-2">
-                  <span className="shrink-0 w-14 sm:w-16 text-foreground font-medium">类型</span>
-                  <span>{effectiveGenre || '—'}</span>
-                </div>
-                <div className="flex gap-2">
-                  <span className="shrink-0 w-14 sm:w-16 text-foreground font-medium">受众</span>
-                  <span>{effectiveAudience || '—'}</span>
-                </div>
-                <div className="flex gap-2">
-                  <span className="shrink-0 w-14 sm:w-16 text-foreground font-medium">目标</span>
-                  <span className="line-clamp-2">{form.mainStoryGoal || '—'}</span>
-                </div>
-                <div className="flex gap-2">
-                  <span className="shrink-0 w-14 sm:w-16 text-foreground font-medium">规模</span>
-                  <span>
-                    {form.targetChapterWordCount?.toLocaleString()} 字/章 ×{' '}
-                    {form.plannedMinChapters}-{form.plannedMaxChapters} 章
-                    {' ≈ '}
-                    {(((form.plannedMinChapters ?? 500) + (form.plannedMaxChapters ?? 800)) / 2 * (form.targetChapterWordCount ?? 3000) / 10000).toFixed(0)} 万字
-                  </span>
-                </div>
+                <Button
+                  type="button"
+                  variant={form.autoSerializationEnabled ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setForm({ ...form, autoSerializationEnabled: !form.autoSerializationEnabled })}
+                >
+                  {form.autoSerializationEnabled ? '已开启' : '已关闭'}
+                </Button>
+              </div>
+
+              {form.autoSerializationEnabled ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {SERIALIZATION_PRESETS.map((preset) => {
+                      const selected =
+                        form.autoSerializationRunEveryDays === preset.runEveryDays &&
+                        form.autoSerializationChaptersPerRun === preset.chaptersPerRun;
+                      return (
+                        <button
+                          key={preset.label}
+                          className={cn(
+                            'rounded-lg border p-3 text-left transition-all hover:border-primary/50',
+                            selected
+                              ? 'border-primary bg-background ring-2 ring-primary/20'
+                              : 'border-border bg-background/70',
+                          )}
+                          onClick={() => setForm({
+                            ...form,
+                            autoSerializationRunEveryDays: preset.runEveryDays,
+                            autoSerializationChaptersPerRun: preset.chaptersPerRun,
+                          })}
+                        >
+                          <p className="text-sm font-medium">{preset.label}</p>
+                          <p className="text-xs text-muted-foreground mt-1">{preset.desc}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs">每日触发时间</Label>
+                      <Input
+                        type="time"
+                        className="h-8 text-sm"
+                        value={form.autoSerializationDailyStartTime}
+                        onChange={(e) => setForm({ ...form, autoSerializationDailyStartTime: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">每隔几天</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={14}
+                        className="h-8 text-sm"
+                        value={form.autoSerializationRunEveryDays}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (!Number.isNaN(v)) {
+                            setForm({ ...form, autoSerializationRunEveryDays: Math.min(14, Math.max(1, v)) });
+                          }
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">每次几章</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={50}
+                        className="h-8 text-sm"
+                        value={form.autoSerializationChaptersPerRun}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (!Number.isNaN(v)) {
+                            setForm({ ...form, autoSerializationChaptersPerRun: Math.min(50, Math.max(1, v)) });
+                          }
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">修复轮数</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={8}
+                        className="h-8 text-sm"
+                        value={form.autoSerializationMaxRepairRounds}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (!Number.isNaN(v)) {
+                            setForm({ ...form, autoSerializationMaxRepairRounds: Math.min(8, Math.max(1, v)) });
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    预估日均更新：{((form.autoSerializationChaptersPerRun ?? 3) / Math.max(1, form.autoSerializationRunEveryDays ?? 1)).toFixed(2)} 章/天
+                  </p>
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  关闭后将不自动更新，可在工作台手动开启。
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-primary/15 bg-gradient-to-br from-primary/3 via-transparent to-violet-500/3 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-4 relative">
+              <div className="absolute -right-6 -bottom-6 w-28 h-28 bg-primary/5 rounded-full blur-2xl pointer-events-none" />
+              <div className="flex items-center gap-2 mb-3">
+                <BookOpen className="h-4 w-4 text-primary" />
+                <p className="text-sm font-semibold">创作摘要</p>
+              </div>
+              <div className="space-y-2.5 text-sm">
+                {[
+                  { label: '创意', value: form.mainIdea || '—', clamp: true },
+                  { label: '类型', value: effectiveGenre || '—' },
+                  { label: '受众', value: effectiveAudience || '—' },
+                  { label: '目标', value: form.mainStoryGoal || '—', clamp: true },
+                  {
+                    label: '规模',
+                    value: `${form.targetChapterWordCount?.toLocaleString()} 字/章 × ${form.plannedMinChapters}-${form.plannedMaxChapters} 章 ≈ ${(((form.plannedMinChapters ?? 500) + (form.plannedMaxChapters ?? 800)) / 2 * (form.targetChapterWordCount ?? 3000) / 10000).toFixed(0)} 万字`,
+                  },
+                  {
+                    label: '连载',
+                    value: form.autoSerializationEnabled
+                      ? `${form.autoSerializationRunEveryDays} 天 ${form.autoSerializationChaptersPerRun} 章（${form.autoSerializationDailyStartTime}）`
+                      : '创建后不自动连载',
+                  },
+                ].map(({ label, value, clamp }) => (
+                  <div key={label} className="flex gap-2">
+                    <span className="shrink-0 w-14 sm:w-16 text-primary/80 font-semibold text-xs uppercase tracking-wider pt-0.5">{label}</span>
+                    <span className={cn('text-muted-foreground', clamp && 'line-clamp-2')}>{value}</span>
+                  </div>
+                ))}
               </div>
             </CardContent>
           </Card>
@@ -791,10 +993,8 @@ const CreateBook: React.FC = () => {
 
       {/* Generating */}
       {isGenerating && (
-        <div className="animate-fade-in flex flex-col items-center py-8 sm:py-12 space-y-6 sm:space-y-8">
-          <div className="flex h-16 w-16 sm:h-20 sm:w-20 items-center justify-center rounded-full bg-primary/10">
-            <Sparkles className="h-8 w-8 sm:h-10 sm:w-10 text-primary animate-pulse" />
-          </div>
+        <div className="animate-fade-in flex flex-col items-center py-6 sm:py-10 space-y-5 sm:space-y-6">
+          <img src={worldCreatingImg} alt="" className="w-56 sm:w-72 h-auto pointer-events-none select-none" draggable={false} />
 
           <div className="text-center px-2">
             <h2 className="text-xl sm:text-2xl font-bold">AI 正在构建你的小说世界</h2>
@@ -845,15 +1045,18 @@ const CreateBook: React.FC = () => {
       {/* Review Profile */}
       {isReviewing && generatedProfile && (
         <div className="animate-fade-in space-y-5 sm:space-y-6">
-          <div>
-            <h2 className="text-xl sm:text-2xl font-bold">审阅 AI 生成的写作手册</h2>
-            <p className="mt-1.5 sm:mt-2 text-sm sm:text-base text-muted-foreground">
-              这是 AI 为「{effectiveGenre}」题材生成的专属写作手册。你可以根据自己的理解调整任何内容，
-              所有修改将直接影响后续章节的写作风格和质量评审标准。
-            </p>
+          <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
+            <img src={profileCompleteImg} alt="" className="w-28 sm:w-36 h-auto pointer-events-none select-none shrink-0 drop-shadow-sm" draggable={false} />
+            <div>
+              <h2 className="text-xl sm:text-2xl font-bold">审阅 AI 生成的写作手册</h2>
+              <p className="mt-1.5 sm:mt-2 text-sm sm:text-base text-muted-foreground">
+                这是 AI 为「{effectiveGenre}」题材生成的专属写作手册。你可以根据自己的理解调整任何内容，
+                所有修改将直接影响后续章节的写作风格和质量评审标准。
+              </p>
+            </div>
           </div>
 
-          <Card className="border-amber-200 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/30">
+          <Card className="border-amber-200/60 bg-gradient-to-r from-amber-50/50 to-orange-50/30 dark:from-amber-950/30 dark:to-orange-950/20 dark:border-amber-900/60">
             <CardContent className="flex items-start gap-3 p-3.5 sm:p-4">
               <FileEdit className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
               <div className="text-sm text-amber-800 dark:text-amber-300">

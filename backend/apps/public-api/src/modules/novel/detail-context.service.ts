@@ -34,6 +34,8 @@ export class DetailContextService {
     if (characterBlock) parts.push(characterBlock);
     if (locationBlock) parts.push(locationBlock);
     if (itemBlock) parts.push(itemBlock);
+    const emotionalBlock = this.buildEmotionalMemoryBlock(state, intent);
+    if (emotionalBlock) parts.push(emotionalBlock);
     return parts.join('\n\n');
   }
 
@@ -281,6 +283,34 @@ export class DetailContextService {
    * - 先用意图里的 focusCharacterIds
    * - 不足时再补充 activeCharacterIds
    */
+  private buildEmotionalMemoryBlock(state: StoryState, intent: ChapterIntent): string {
+    const imprints = state.recentEmotionalImprints ?? [];
+    if (imprints.length === 0) return '';
+    const focusIds = new Set([
+      ...(intent.characterArcGuidance?.focusCharacterIds ?? []),
+      ...(intent.characterAvailability?.activeCharacterIds ?? []).slice(0, 3),
+    ]);
+    const charNames = new Map(state.characters.map((c) => [c.id, c.name] as const));
+    const relevant = imprints
+      .filter((e) => focusIds.has(e.characterId) && e.intensity !== 'subtle')
+      .slice(-8);
+    if (relevant.length === 0) return '';
+    const lines = ['【角色情感记忆（影响本章行为和反应的未消化情绪）】'];
+    const grouped = new Map<string, typeof relevant>();
+    for (const e of relevant) {
+      const arr = grouped.get(e.characterId) ?? [];
+      arr.push(e);
+      grouped.set(e.characterId, arr);
+    }
+    for (const [charId, emotions] of grouped) {
+      const name = charNames.get(charId) ?? charId;
+      lines.push(`── ${name}：`);
+      for (const e of emotions) lines.push(`  - [第${e.chapterNumber}章] ${e.emotion}（因${e.trigger}，${e.intensity}级）`);
+    }
+    lines.push('提示：这些情绪不会消失，会影响角色的语气、决策和反应。写到该角色时自然带出，不需要直接说明。');
+    return lines.join('\n');
+  }
+
   private resolveFocusCharacterIds(
     intent: ChapterIntent,
     state: StoryState,

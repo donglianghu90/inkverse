@@ -14,10 +14,11 @@ import {
   AlertCircle,
   GitBranch,
 } from 'lucide-react';
+import worldBibleImg from '@/assets/illustrations/world-bible.png';
+import emptyCharsImg from '@/assets/illustrations/empty-characters.png';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
@@ -138,44 +139,47 @@ const WorldBible: React.FC = () => {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
+    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
       {/* Header */}
-      <div className="flex items-center gap-3 mb-6">
-        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => history.push(`/novel/book/${bookId}`)}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Globe className="h-6 w-6 text-primary" />
-            《{world.title}》世界观百科
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">{world.seed.logline}</p>
+      <div className="relative mb-8 rounded-2xl overflow-hidden border bg-gradient-to-r from-primary/5 via-primary/3 to-transparent">
+        <img src={worldBibleImg} alt="" className="absolute right-4 top-1/2 -translate-y-1/2 w-36 h-auto opacity-30 dark:opacity-20 pointer-events-none select-none hidden md:block" draggable={false} />
+        <div className="relative z-10 flex items-center gap-3 px-5 py-5">
+          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => history.push(`/novel/book/${bookId}`)}>
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold flex items-center gap-2 tracking-tight">
+              <Globe className="h-5 w-5 text-primary shrink-0" />
+              《{world.title}》世界观百科
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{world.seed.logline}</p>
+          </div>
         </div>
       </div>
 
       <Tabs defaultValue="overview" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-6">
-          <TabsTrigger value="overview" className="gap-1 text-xs">
+        <TabsList className="flex w-full justify-start gap-1 overflow-x-auto">
+          <TabsTrigger value="overview" className="gap-1 shrink-0 text-xs">
             <BookOpen className="h-3.5 w-3.5" />
             概览
           </TabsTrigger>
-          <TabsTrigger value="characters" className="gap-1 text-xs">
+          <TabsTrigger value="characters" className="gap-1 shrink-0 text-xs">
             <Users className="h-3.5 w-3.5" />
             角色
           </TabsTrigger>
-          <TabsTrigger value="locations" className="gap-1 text-xs">
+          <TabsTrigger value="locations" className="gap-1 shrink-0 text-xs">
             <MapPin className="h-3.5 w-3.5" />
             地点
           </TabsTrigger>
-          <TabsTrigger value="power" className="gap-1 text-xs">
+          <TabsTrigger value="power" className="gap-1 shrink-0 text-xs">
             <Zap className="h-3.5 w-3.5" />
             力量体系
           </TabsTrigger>
-          <TabsTrigger value="threads" className="gap-1 text-xs">
+          <TabsTrigger value="threads" className="gap-1 shrink-0 text-xs">
             <GitBranch className="h-3.5 w-3.5" />
             伏笔线
           </TabsTrigger>
-          <TabsTrigger value="relations" className="gap-1 text-xs">
+          <TabsTrigger value="relations" className="gap-1 shrink-0 text-xs">
             <Shield className="h-3.5 w-3.5" />
             关系图
           </TabsTrigger>
@@ -333,9 +337,10 @@ const WorldBible: React.FC = () => {
             ))}
           </div>
           {world.characters.length === 0 && (
-            <div className="text-center py-12 text-muted-foreground">
-              <Users className="h-10 w-10 mx-auto opacity-30 mb-2" />
-              <p>暂无角色数据</p>
+            <div className="text-center py-10 text-muted-foreground">
+              <img src={emptyCharsImg} alt="" className="w-48 h-auto mx-auto mb-3 pointer-events-none select-none opacity-70" draggable={false} />
+              <p className="font-medium">角色们还在幕后准备...</p>
+              <p className="text-xs mt-1">生成更多章节后角色将自动登场</p>
             </div>
           )}
         </TabsContent>
@@ -348,9 +353,10 @@ const WorldBible: React.FC = () => {
             ))}
           </div>
           {world.locations.length === 0 && (
-            <div className="text-center py-12 text-muted-foreground">
-              <MapPin className="h-10 w-10 mx-auto opacity-30 mb-2" />
-              <p>暂无地点数据</p>
+            <div className="text-center py-10 text-muted-foreground">
+              <MapPin className="h-10 w-10 mx-auto opacity-20 mb-2" />
+              <p className="font-medium">这片大陆尚未被探索</p>
+              <p className="text-xs mt-1">故事推进后地点将自动录入</p>
             </div>
           )}
         </TabsContent>
@@ -379,10 +385,10 @@ const WorldBible: React.FC = () => {
                 ))}
             </div>
           ) : (
-            <div className="text-center py-12 text-muted-foreground">
-              <Zap className="h-10 w-10 mx-auto opacity-30 mb-2" />
-              <p>力量体系尚未结晶</p>
-              <p className="text-xs mt-1">生成更多章节后，AI 将自动提炼力量体系</p>
+            <div className="text-center py-10 text-muted-foreground">
+              <Zap className="h-10 w-10 mx-auto opacity-20 mb-2" />
+              <p className="font-medium">力量体系尚未结晶</p>
+              <p className="text-xs mt-1">生成更多章节后 AI 将自动提炼力量等级</p>
             </div>
           )}
         </TabsContent>
@@ -445,10 +451,10 @@ const WorldBible: React.FC = () => {
               </CardContent>
             </Card>
           ) : (
-            <div className="text-center py-12 text-muted-foreground">
-              <Shield className="h-10 w-10 mx-auto opacity-30 mb-2" />
-              <p>暂无角色关系数据</p>
-              <p className="text-xs mt-1">生成更多章节后将自动建立关系图</p>
+            <div className="text-center py-10 text-muted-foreground">
+              <Shield className="h-10 w-10 mx-auto opacity-20 mb-2" />
+              <p className="font-medium">关系网络尚未编织</p>
+              <p className="text-xs mt-1">角色互动增多后将自动建立关系图</p>
             </div>
           )}
         </TabsContent>

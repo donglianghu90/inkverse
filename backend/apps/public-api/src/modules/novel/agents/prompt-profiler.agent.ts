@@ -96,7 +96,13 @@ ${referenceExample}
   - powerSystemApplicable: 是否需要力量体系？
   - goldenFingerApplicable: 是否需要"金手指"（主角特殊能力）？
   - commitmentTypes: 角色之间会产生什么类型的承诺？
-  - characterRelationEmphasis: 人际关系的重心在哪？`,
+  - characterRelationEmphasis: 人际关系的重心在哪？
+
+11.【文风参考文本 styleReferenceTexts】
+  - 写2-3段"理想文风"的示范文本（每段150-200字）。
+  - 这些文本不是故事内容，而是展示这本书应该有的"质感"——句式节奏、用词习惯、描写密度。
+  - Writer会把这些当作"模仿这种感觉"的参考。
+  - 要匹配题材和调性——玄幻的冷峻和言情的细腻是完全不同的。`,
 
       userPrompt: `请为以下设定生成完整的 BookPromptProfile：
 

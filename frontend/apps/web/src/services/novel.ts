@@ -13,6 +13,13 @@ export interface CreateBookParams {
   targetChapterWordCount?: number;
   plannedMinChapters?: number;
   plannedMaxChapters?: number;
+  autoSerializationEnabled?: boolean;
+  autoSerializationDailyStartTime?: string;
+  autoSerializationRunEveryDays?: number;
+  autoSerializationChaptersPerRun?: number;
+  autoSerializationMaxRepairRounds?: number;
+  autoSerializationMinQualityScore?: number;
+  autoSerializationMinOverallScore?: number;
 }
 
 export interface BatchGenerateParams {
@@ -25,6 +32,7 @@ export interface BatchGenerateParams {
 export interface AutoSerializationConfig {
   dailyStartTime: string;
   chaptersPerRun: number;
+  runEveryDays?: number;
   maxRepairRounds?: number;
   minQualityScore?: number;
   minOverallScore?: number;
@@ -109,6 +117,23 @@ export interface CreateBookResult {
   outline: Record<string, unknown>;
   bookPromptProfile: BookPromptProfile;
   currentArc?: MiniArc | null;
+  autoSerialization?: {
+    enabled: boolean;
+    status: 'configured' | 'failed' | 'disabled_by_user';
+    schedule?: AutoSerializationView;
+    error?: string;
+    requested?: AutoSerializationConfig;
+  };
+}
+
+export interface CreateBookSessionResult {
+  progressChannel: string;
+  reused: boolean;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  result: CreateBookResult | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface BookInfo {
@@ -130,6 +155,47 @@ export interface ChapterItem {
   title: string;
   content: string;
   createdAt: string;
+}
+
+export interface ChapterArtifactEntry {
+  name: string;
+  found: boolean;
+  payload: Record<string, unknown> | null;
+}
+
+export interface ChapterTraceMatchItem {
+  text: string;
+  matched: boolean;
+  matchScore: number;
+}
+
+export interface ChapterTraceAlignmentGroup {
+  total: number;
+  matched: number;
+  score: number | null;
+  items: ChapterTraceMatchItem[];
+}
+
+export interface ChapterTraceAlignment {
+  overallAlignmentScore: number | null;
+  mustHit: ChapterTraceAlignmentGroup;
+  intentGoals: ChapterTraceAlignmentGroup;
+  hookDirection: ChapterTraceMatchItem | null;
+  remediation?: {
+    shouldRewrite: boolean;
+    severity: 'low' | 'medium' | 'high';
+    reasons: string[];
+    suggestedActions: string[];
+    rewritePrompt: string | null;
+  } | null;
+}
+
+export interface ChapterArtifactsView {
+  bookId: string;
+  chapterNumber: number;
+  names: string[];
+  artifacts: ChapterArtifactEntry[];
+  alignment?: ChapterTraceAlignment | null;
 }
 
 export interface ChapterGenerateResult {
@@ -155,10 +221,28 @@ export interface AutoSerializationView {
   enabled: boolean;
   dailyStartTime: string;
   chaptersPerRun: number;
+  runEveryDays: number;
+  cadence: {
+    runEveryDays: number;
+    chaptersPerRun: number;
+    averageChaptersPerDay: number;
+  };
   qualityPolicy: {
     maxRepairRounds: number;
     minQualityScore: number;
     minOverallScore: number;
+  };
+  intervention: {
+    required: boolean;
+    expired: boolean;
+    reason: string | null;
+    failingChapterNumber: number | null;
+    markerChapterNumber: number | null;
+    markerChapterNumbers: number[];
+    consecutiveLowQualityRuns: number;
+    threshold: number;
+    raisedAt: string | null;
+    expiresAt: string | null;
   };
   scheduler: {
     nextRunAt: string | null;
@@ -207,6 +291,19 @@ export async function createBook(data: CreateBookParams): Promise<CreateBookResu
   return request(`${BASE}/books`, { method: 'POST', data });
 }
 
+export async function createBookSession(
+  data: CreateBookParams,
+  idempotencyKey?: string,
+): Promise<CreateBookSessionResult> {
+  return request(`${BASE}/books/create-session`, {
+    method: 'POST',
+    data: {
+      ...data,
+      idempotencyKey,
+    },
+  });
+}
+
 export async function getBook(bookId: string): Promise<BookInfo> {
   return request(`${BASE}/books/${bookId}`);
 }
@@ -231,6 +328,18 @@ export async function listChapters(
 
 export async function getChapter(bookId: string, chapterNumber: number): Promise<ChapterItem> {
   return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}`);
+}
+
+export async function getChapterArtifacts(
+  bookId: string,
+  chapterNumber: number,
+  names?: string[],
+): Promise<ChapterArtifactsView> {
+  const params =
+    names && names.length > 0
+      ? { names: names.join(',') }
+      : undefined;
+  return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}/artifacts`, { params });
 }
 
 export async function updateChapter(
@@ -403,10 +512,17 @@ export function getGenerateSSEUrl(bookId: string): string {
 
 export type AgentNodeType =
   | 'intent'
+  | 'arc-director'
+  | 'scene-planner'
   | 'creative-writer'
+  | 'scene-stitcher'
   | 'reviewer'
   | 'editor'
   | 'recorder'
+  | 'continuity-guard'
+  | 'hook-crafter'
+  | 'pacing-analyzer'
+  | 'character-voice-coach'
   | 'custom';
 
 export type CustomOutputType = 'ChapterDraft' | 'ChapterIntent';
@@ -458,6 +574,49 @@ export async function publishPipeline(bookId: string): Promise<PipelineView> {
   return request(`${BASE}/books/${bookId}/pipeline/publish`, { method: 'POST' });
 }
 
-export function createBookSseUrl(): string {
-  return `${BASE}/books/create-sse`;
+export function createBookSseUrl(progressChannel: string): string {
+  const params = new URLSearchParams({ progressChannel });
+  return `${BASE}/books/create-sse?${params.toString()}`;
+}
+
+// =========================================================================
+// Reader Feedback — 读者反馈
+// =========================================================================
+
+export interface ReaderCommentInput {
+  content: string;
+  sentiment: 'positive' | 'negative' | 'neutral' | 'mixed';
+  aspect: 'plot' | 'character' | 'writing' | 'pacing' | 'worldbuilding' | 'hook' | 'general';
+  authorId?: string;
+  platform?: string;
+}
+
+export interface SubmitFeedbackPayload {
+  chapterNumber: number;
+  comments: ReaderCommentInput[];
+  metrics?: {
+    readCompletionRate?: number;
+    retentionRate?: number;
+    favoriteCount?: number;
+    commentCount?: number;
+    wordCount?: number;
+  };
+}
+
+export interface FeedbackSubmitResult {
+  stored: boolean;
+  analysisTriggered: boolean;
+  analysis?: unknown;
+}
+
+export async function submitChapterFeedback(bookId: string, payload: SubmitFeedbackPayload): Promise<FeedbackSubmitResult> {
+  return request(`${BASE}/books/${bookId}/feedback`, { method: 'POST', data: payload });
+}
+
+export async function triggerFeedbackAnalysis(bookId: string): Promise<unknown> {
+  return request(`${BASE}/books/${bookId}/feedback/analyze`, { method: 'POST' });
+}
+
+export async function getFeedbackState(bookId: string): Promise<unknown> {
+  return request(`${BASE}/books/${bookId}/feedback`);
 }

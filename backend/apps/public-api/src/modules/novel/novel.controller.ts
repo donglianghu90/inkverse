@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -16,6 +17,7 @@ import {
   ApiTags,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
@@ -23,13 +25,16 @@ import { Observable, ReplaySubject, Subject } from 'rxjs';
 import { AutoSerializationService } from './auto-serialization.service';
 import { ConfigureAutoSerializationDto } from './dto/configure-auto-serialization.dto';
 import { CreateBookDto } from './dto/create-book.dto';
+import { CreateBookSessionDto } from './dto/create-book-session.dto';
 import { GenerateChaptersBatchDto } from './dto/generate-chapters-batch.dto';
 import { ListChaptersDto } from './dto/list-chapters.dto';
+import { SubmitFeedbackDto } from './dto/submit-feedback.dto';
 import { NovelService } from './novel.service';
 import { NovelProgressService } from './novel-progress.service';
 import { BookAgentPipelineService } from './book-agent-pipeline.service';
 import { AgentNodeConfig } from './entities/book-agent-pipeline.entity';
 import { Public } from '@packages/common/guards';
+import { CreateBookSessionService } from './create-book-session.service';
 
 @ApiTags('Novel - 小说生成')
 @ApiBearerAuth('Authorization')
@@ -42,6 +47,7 @@ export class NovelController {
     private readonly autoSerializationService: AutoSerializationService,
     private readonly progressService: NovelProgressService,
     private readonly pipelineService: BookAgentPipelineService,
+    private readonly createBookSessionService: CreateBookSessionService,
   ) {}
 
   @Get('books')
@@ -77,54 +83,122 @@ export class NovelController {
   @ApiOperation({ summary: '创建新书', description: '极轻量开书：种子分析 + 粗大纲（1 次 LLM 调用）' })
   @ApiResponse({ status: 201, description: '创建成功，返回书籍基本信息' })
   async createBook(@Body() dto: CreateBookDto): Promise<unknown> {
-    return this.novelService.createBook(dto);
+    const created = await this.novelService.createBook(dto);
+    return this.attachInitialAutoSerialization(created, dto);
+  }
+
+  @Post('books/create-session')
+  @Public()
+  @ApiOperation({ summary: '创建新书会话', description: '创建或复用开书任务会话，返回 progressChannel（支持幂等键）' })
+  @ApiResponse({ status: 201, description: '返回会话信息' })
+  createBookSession(@Body() dto: CreateBookSessionDto): Record<string, unknown> {
+    const { idempotencyKey, ...payload } = dto;
+    const createBookDto = Object.assign(new CreateBookDto(), payload);
+    const { session, reused } = this.createBookSessionService.createOrReuse(
+      createBookDto,
+      idempotencyKey,
+    );
+
+    return {
+      progressChannel: session.progressChannel,
+      reused,
+      status: session.status,
+      result: session.result,
+      error: session.error,
+      createdAt: new Date(session.createdAt).toISOString(),
+      updatedAt: new Date(session.updatedAt).toISOString(),
+    };
   }
 
   @Sse('books/create-sse')
   @Public()
-  @ApiOperation({ summary: '创建新书（SSE）', description: '通过 SSE 流式推送创建进度，完成后返回书籍信息' })
-  createBookSse(@Query() query: Record<string, string>): Observable<MessageEvent> {
-    const dto: CreateBookDto = Object.assign(new CreateBookDto(), {
-      mainIdea: query.mainIdea,
-      genre: query.genre,
-      targetAudience: query.targetAudience,
-      mainStoryGoal: query.mainStoryGoal,
-      titleHint: query.titleHint,
-      targetChapterWordCount: query.targetChapterWordCount ? parseInt(query.targetChapterWordCount, 10) : undefined,
-      plannedMinChapters: query.plannedMinChapters ? parseInt(query.plannedMinChapters, 10) : undefined,
-      plannedMaxChapters: query.plannedMaxChapters ? parseInt(query.plannedMaxChapters, 10) : undefined,
-    });
-
-    this.logger.log(
-      `[createBookSse] SSE 连接建立\n` +
-      `  mainIdea: ${dto.mainIdea}\n` +
-      `  genre: ${dto.genre} | targetAudience: ${dto.targetAudience}`,
-    );
+  @ApiOperation({ summary: '创建新书（SSE）', description: '通过 progressChannel 订阅创建进度，完成后返回书籍信息' })
+  @ApiQuery({ name: 'progressChannel', required: true, description: '创建会话返回的进度通道 ID' })
+  createBookSse(
+    @Query('progressChannel') progressChannelQuery?: string,
+  ): Observable<MessageEvent> {
+    const progressChannel = progressChannelQuery?.trim();
+    if (!progressChannel) {
+      throw new BadRequestException('progressChannel is required');
+    }
+    const session = this.createBookSessionService.get(progressChannel);
+    if (!session) {
+      throw new BadRequestException(`create session not found for progressChannel=${progressChannel}`);
+    }
 
     const subject = new ReplaySubject<MessageEvent>(20);
+    let finished = false;
+    const finish = (unsubscribe: () => void): void => {
+      if (finished) return;
+      finished = true;
+      unsubscribe();
+      setTimeout(() => subject.complete(), 80);
+    };
 
-    const unsubscribe = this.progressService.subscribe('__creating__', (event) => {
-      this.logger.debug(`[createBookSse] 进度事件 → step=${event.step} message=${event.message} done=${event.done}`);
+    if (session.status === 'completed') {
+      subject.next({ data: { result: session.result, _type: 'result' } } as MessageEvent);
+      subject.complete();
+      return subject.asObservable();
+    }
+    if (session.status === 'failed') {
+      subject.next({
+        data: { done: true, error: session.error ?? 'create book session failed' },
+      } as MessageEvent);
+      subject.complete();
+      return subject.asObservable();
+    }
+
+    const unsubscribe = this.progressService.subscribe(progressChannel, (event) => {
+      this.logger.debug(
+        `[createBookSse] 进度事件 → channel=${progressChannel} step=${event.step} done=${event.done}`,
+      );
       subject.next({ data: event } as MessageEvent);
       if (event.done || event.error) {
-        this.logger.log(`[createBookSse] 进度流结束 done=${event.done} error=${event.error ?? 'none'}`);
-        setTimeout(() => subject.complete(), 200);
+        const flushFinalResult = (attempt: number) => {
+          const latest = this.createBookSessionService.get(progressChannel);
+          if (latest?.status === 'completed') {
+            subject.next({ data: { result: latest.result, _type: 'result' } } as MessageEvent);
+            finish(unsubscribe);
+            return;
+          }
+          if (latest?.status === 'failed') {
+            subject.next({
+              data: { done: true, error: latest.error ?? 'create book session failed' },
+            } as MessageEvent);
+            finish(unsubscribe);
+            return;
+          }
+          if (attempt >= 25) {
+            finish(unsubscribe);
+            return;
+          }
+          setTimeout(() => flushFinalResult(attempt + 1), 200);
+        };
+        setTimeout(() => flushFinalResult(0), 120);
       }
     });
 
+    const statusBefore = session.status;
+    const markResult = this.createBookSessionService.markRunning(progressChannel);
+    const shouldStartCreate = statusBefore === 'queued' && markResult?.status === 'running';
+    if (!shouldStartCreate) {
+      return subject.asObservable();
+    }
+
     setTimeout(async () => {
       try {
-        this.logger.log(`[createBookSse] 开始调用 createBook...`);
-        const result = await this.novelService.createBook(dto);
-        this.logger.log(`[createBookSse] createBook 完成，推送 result 事件`);
+        this.logger.log(`[createBookSse] 开始创建新书 channel=${progressChannel}`);
+        const created = await this.novelService.createBook(session.dto, { progressChannel });
+        const result = await this.attachInitialAutoSerialization(created, session.dto);
+        this.createBookSessionService.markCompleted(progressChannel, result as Record<string, unknown>);
         subject.next({ data: { result, _type: 'result' } } as MessageEvent);
       } catch (err: any) {
-        this.logger.error(`[createBookSse] createBook 异常: ${err.message}`, err.stack);
-        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
-        subject.complete();
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(`[createBookSse] createBook 异常 channel=${progressChannel}: ${message}`);
+        this.createBookSessionService.markFailed(progressChannel, message);
+        subject.next({ data: { done: true, error: message } } as MessageEvent);
       } finally {
-        unsubscribe();
-        this.logger.log(`[createBookSse] SSE 流程结束，已取消订阅`);
+        finish(unsubscribe);
       }
     }, 0);
 
@@ -212,6 +286,21 @@ export class NovelController {
     return this.novelService.getChapter(bookId, chapterNumber);
   }
 
+  @Get('books/:bookId/chapters/:chapterNumber/artifacts')
+  @Public()
+  @ApiOperation({ summary: '查询章节产物', description: '按名称查询指定章节的 artifacts（默认返回 arc_director/intent/review/deterministic_check）' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiParam({ name: 'chapterNumber', description: '章节序号', example: 1 })
+  @ApiResponse({ status: 200, description: '成功' })
+  @ApiResponse({ status: 404, description: '章节未找到' })
+  async getChapterArtifacts(
+    @Param('bookId') bookId: string,
+    @Param('chapterNumber', ParseIntPipe) chapterNumber: number,
+    @Query('names') names?: string,
+  ): Promise<unknown> {
+    return this.novelService.getChapterArtifacts(bookId, chapterNumber, names);
+  }
+
   @Put('books/:bookId/chapters/:chapterNumber')
   @Public()
   @ApiOperation({ summary: '更新章节', description: '用户修改章节标题或内容后保存' })
@@ -222,9 +311,23 @@ export class NovelController {
   async updateChapter(
     @Param('bookId') bookId: string,
     @Param('chapterNumber', ParseIntPipe) chapterNumber: number,
-    @Body() body: { title?: string; content?: string },
+    @Body() body: { title?: string; content?: string; resyncState?: boolean },
   ): Promise<unknown> {
     return this.novelService.updateChapter(bookId, chapterNumber, body);
+  }
+
+  @Get('books/:bookId/chapter-resync-jobs/:jobId')
+  @Public()
+  @ApiOperation({ summary: '查询章节回灌任务', description: '查询异步章节回灌任务的状态和进度' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiParam({ name: 'jobId', description: '回灌任务 ID（updateChapter 返回的 jobId）' })
+  @ApiResponse({ status: 200, description: '成功' })
+  @ApiResponse({ status: 404, description: '任务未找到' })
+  async getChapterResyncJob(
+    @Param('bookId') bookId: string,
+    @Param('jobId') jobId: string,
+  ): Promise<unknown> {
+    return this.novelService.getChapterResyncJob(bookId, jobId);
   }
 
   @Sse('books/:bookId/chapters/generate-sse')
@@ -267,13 +370,23 @@ export class NovelController {
     return this.novelService.getWorld(bookId);
   }
 
+  @Get('books/:bookId/arc-contract')
+  @Public()
+  @ApiOperation({ summary: '获取当前卷合同', description: '返回当前卷定义、验收状态与下一卷规划提示' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '成功' })
+  @ApiResponse({ status: 404, description: '未找到' })
+  async getArcContract(@Param('bookId') bookId: string): Promise<unknown> {
+    return this.novelService.getArcContract(bookId);
+  }
+
   // -------------------------------------------------------------------------
   // 自动连载
   // -------------------------------------------------------------------------
 
   @Put('books/:bookId/auto-serialization')
   @Public()
-  @ApiOperation({ summary: '配置自动连载', description: '设置每日定时自动生成章节的调度参数' })
+  @ApiOperation({ summary: '配置自动连载', description: '设置按周期自动生成章节的调度参数（支持每 N 天执行）' })
   @ApiParam({ name: 'bookId', description: '书籍唯一 ID', example: 'b1a2c3d4-e5f6-7890-abcd-ef1234567890' })
   @ApiResponse({ status: 200, description: '配置成功' })
   @ApiResponse({ status: 404, description: '书籍未找到' })
@@ -332,6 +445,63 @@ export class NovelController {
     return this.autoSerializationService.runNow(bookId);
   }
 
+  private buildInitialAutoSerializationConfig(dto: CreateBookDto): ConfigureAutoSerializationDto | null {
+    const enabled = dto.autoSerializationEnabled ?? true;
+    if (!enabled) return null;
+    return {
+      dailyStartTime: dto.autoSerializationDailyStartTime ?? '08:00',
+      runEveryDays: Math.max(1, dto.autoSerializationRunEveryDays ?? 1),
+      chaptersPerRun: Math.max(1, dto.autoSerializationChaptersPerRun ?? 3),
+      maxRepairRounds: Math.max(1, dto.autoSerializationMaxRepairRounds ?? 2),
+      minQualityScore: Math.max(dto.autoSerializationMinQualityScore ?? 7, 7),
+      minOverallScore: Math.max(dto.autoSerializationMinOverallScore ?? 7, 7),
+    };
+  }
+
+  private async attachInitialAutoSerialization(
+    created: unknown,
+    dto: CreateBookDto,
+  ): Promise<unknown> {
+    const result = (created ?? {}) as Record<string, unknown>;
+    const bookId = typeof result.bookId === 'string' ? result.bookId : null;
+    const config = this.buildInitialAutoSerializationConfig(dto);
+    if (!bookId) return created;
+    if (!config) {
+      return {
+        ...result,
+        autoSerialization: {
+          enabled: false,
+          status: 'disabled_by_user',
+        },
+      };
+    }
+    try {
+      const schedule = await this.autoSerializationService.configure(bookId, config);
+      return {
+        ...result,
+        autoSerialization: {
+          enabled: true,
+          status: 'configured',
+          schedule,
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `[createBook] 初始化自动连载失败 bookId=${bookId}: ${message}`,
+      );
+      return {
+        ...result,
+        autoSerialization: {
+          enabled: true,
+          status: 'failed',
+          error: message,
+          requested: config,
+        },
+      };
+    }
+  }
+
   // ── Pipeline ──────────────────────────────────────────────────────────────
 
   @Get('books/:bookId/pipeline')
@@ -362,5 +532,44 @@ export class NovelController {
   @ApiResponse({ status: 201, description: '发布成功' })
   async publishPipeline(@Param('bookId') bookId: string): Promise<unknown> {
     return this.pipelineService.publish(bookId);
+  }
+
+  // =========================================================================
+  // Reader Feedback — 读者反馈
+  // =========================================================================
+
+  @Post('books/:bookId/feedback')
+  @Public()
+  @ApiOperation({ summary: '提交章节读者评论', description: '提交单章的平台评论+数据指标，累积达标自动触发分析' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 201, description: '提交成功' })
+  async submitFeedback(
+    @Param('bookId') bookId: string,
+    @Body() dto: SubmitFeedbackDto,
+  ): Promise<unknown> {
+    return this.novelService.submitChapterFeedback(bookId, {
+      chapterNumber: dto.chapterNumber,
+      comments: dto.comments as any,
+      metrics: dto.metrics,
+      submittedAt: new Date().toISOString(),
+    });
+  }
+
+  @Post('books/:bookId/feedback/analyze')
+  @Public()
+  @ApiOperation({ summary: '手动触发反馈分析', description: '不管累积量，立刻对已有评论执行三层分析' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 201, description: '分析完成' })
+  async triggerFeedbackAnalysis(@Param('bookId') bookId: string): Promise<unknown> {
+    return this.novelService.triggerFeedbackAnalysis(bookId);
+  }
+
+  @Get('books/:bookId/feedback')
+  @Public()
+  @ApiOperation({ summary: '查看反馈分析状态', description: '获取当前反馈历史+最新分析+新鲜度' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '成功' })
+  async getFeedbackState(@Param('bookId') bookId: string): Promise<unknown> {
+    return this.novelService.getFeedbackState(bookId);
   }
 }

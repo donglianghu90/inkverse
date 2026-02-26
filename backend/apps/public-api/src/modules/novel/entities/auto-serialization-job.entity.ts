@@ -25,6 +25,9 @@ export class AutoSerializationJobEntity {
   @Column({ name: 'chapters_per_run', type: 'int' })
   chaptersPerRun: number;
 
+  @Column({ name: 'run_every_days', type: 'int', default: 1 })
+  runEveryDays: number;
+
   @Column({ name: 'max_repair_rounds', type: 'int', default: 2 })
   maxRepairRounds: number;
 
@@ -51,6 +54,27 @@ export class AutoSerializationJobEntity {
 
   @Column({ name: 'last_result', type: 'jsonb', nullable: true })
   lastResult: Record<string, unknown> | null;
+
+  @Column({ name: 'consecutive_low_quality_runs', type: 'int', default: 0 })
+  consecutiveLowQualityRuns: number;
+
+  @Column({ name: 'intervention_required', type: 'boolean', default: false })
+  interventionRequired: boolean;
+
+  @Column({ name: 'intervention_reason', type: 'text', nullable: true })
+  interventionReason: string | null;
+
+  @Column({ name: 'intervention_chapter_number', type: 'int', nullable: true })
+  interventionChapterNumber: number | null;
+
+  @Column({ name: 'intervention_marker_chapters', type: 'jsonb', default: () => "'[]'" })
+  interventionMarkerChapters: number[];
+
+  @Column({ name: 'intervention_raised_at', type: 'timestamptz', nullable: true })
+  interventionRaisedAt: Date | null;
+
+  @Column({ name: 'intervention_expires_at', type: 'timestamptz', nullable: true })
+  interventionExpiresAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

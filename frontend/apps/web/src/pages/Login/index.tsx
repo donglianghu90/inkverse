@@ -3,6 +3,7 @@ import { history } from '@umijs/max';
 import { message } from 'antd';
 import { BookOpen, Sparkles, Eye, EyeOff } from 'lucide-react';
 import { login, register, saveAuth, LoginParams } from '@/services/auth';
+import heroImg from '@/assets/illustrations/hero-writing-desk.png';
 
 type Mode = 'login' | 'register';
 
@@ -51,14 +52,10 @@ const LoginPage: React.FC = () => {
           backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' viewBox=\'0 0 60 60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%23ffffff\' fill-opacity=\'0.4\'%3E%3Cpath d=\'M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")',
         }} />
         <div className="relative z-10 text-center text-white px-12 max-w-lg">
-          <div className="flex items-center justify-center mb-8">
-            <div className="w-20 h-20 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center">
-              <BookOpen className="w-10 h-10 text-white" />
-            </div>
-          </div>
-          <h1 className="text-4xl font-bold mb-4">InkVerse</h1>
-          <p className="text-xl text-white/80 mb-6">AI 驱动的智能小说创作平台</p>
-          <div className="space-y-4 text-left">
+          <img src={heroImg} alt="" className="w-full max-w-md mx-auto mb-6 pointer-events-none select-none drop-shadow-2xl" draggable={false} />
+          <h1 className="text-4xl font-bold mb-3">InkVerse</h1>
+          <p className="text-lg text-white/80 mb-8">AI 驱动的智能小说创作平台</p>
+          <div className="space-y-3.5 text-left">
             <Feature icon={<Sparkles className="w-5 h-5" />} text="一键生成完整故事世界观" />
             <Feature icon={<Sparkles className="w-5 h-5" />} text="AI 智能续写，章章精彩" />
             <Feature icon={<Sparkles className="w-5 h-5" />} text="角色关系图谱可视化" />

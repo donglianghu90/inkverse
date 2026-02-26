@@ -10,11 +10,11 @@ import { Queue, RepeatOptions } from 'bullmq';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@packages/modules';
 import { ConfigureAutoSerializationDto } from './dto/configure-auto-serialization.dto';
-import { NovelService } from './novel.service';
 import { BookEntity } from './entities/book.entity';
 import { AutoSerializationJobEntity } from './entities/auto-serialization-job.entity';
 import {
   AUTO_SERIALIZATION_QUEUE,
+  AUTO_INTERVENTION_THRESHOLD,
   AutoSerializationJobPayload,
   AutoSerializationScheduleRecord,
   mapJobEntity,
@@ -25,10 +25,28 @@ interface AutoSerializationView {
   enabled: boolean;
   dailyStartTime: string;
   chaptersPerRun: number;
+  runEveryDays: number;
+  cadence: {
+    runEveryDays: number;
+    chaptersPerRun: number;
+    averageChaptersPerDay: number;
+  };
   qualityPolicy: {
     maxRepairRounds: number;
     minQualityScore: number;
     minOverallScore: number;
+  };
+  intervention: {
+    required: boolean;
+    expired: boolean;
+    reason: string | null;
+    failingChapterNumber: number | null;
+    markerChapterNumber: number | null;
+    markerChapterNumbers: number[];
+    consecutiveLowQualityRuns: number;
+    threshold: number;
+    raisedAt: string | null;
+    expiresAt: string | null;
   };
   scheduler: {
     nextRunAt: string | null;
@@ -52,7 +70,6 @@ export class AutoSerializationService implements OnModuleInit {
     private readonly bookRepo: Repository<BookEntity>,
     @InjectRepository(AutoSerializationJobEntity)
     private readonly jobRepo: Repository<AutoSerializationJobEntity>,
-    private readonly novelService: NovelService,
     private readonly configService: ConfigService,
     @InjectQueue(AUTO_SERIALIZATION_QUEUE)
     private readonly queue: Queue<AutoSerializationJobPayload>,
@@ -68,17 +85,31 @@ export class AutoSerializationService implements OnModuleInit {
     dto: ConfigureAutoSerializationDto,
   ): Promise<AutoSerializationView> {
     await this.ensureBookExists(bookId);
-    const nextRunAt = this.computeNextRunAt(dto.dailyStartTime, new Date()).toISOString();
+    const existing = await this.jobRepo.findOneBy({ bookId });
+    const runEveryDays = Math.max(1, dto.runEveryDays ?? 1);
+    const nextRunAt = this.computeNextRunAt(
+      dto.dailyStartTime,
+      runEveryDays,
+      new Date(),
+    ).toISOString();
     await this.jobRepo.upsert(
       {
         bookId,
         enabled: true,
         dailyStartTime: dto.dailyStartTime,
         chaptersPerRun: dto.chaptersPerRun,
+        runEveryDays,
         maxRepairRounds: dto.maxRepairRounds ?? 2,
         minQualityScore: Math.max(dto.minQualityScore ?? 7, 7),
         minOverallScore: Math.max(dto.minOverallScore ?? 7, 7),
         nextRunAt: new Date(nextRunAt),
+        consecutiveLowQualityRuns: existing?.consecutiveLowQualityRuns ?? 0,
+        interventionRequired: existing?.interventionRequired ?? false,
+        interventionReason: existing?.interventionReason ?? null,
+        interventionChapterNumber: existing?.interventionChapterNumber ?? null,
+        interventionMarkerChapters: existing?.interventionMarkerChapters ?? [],
+        interventionRaisedAt: existing?.interventionRaisedAt ?? null,
+        interventionExpiresAt: existing?.interventionExpiresAt ?? null,
       },
       ['bookId'],
     );
@@ -111,7 +142,11 @@ export class AutoSerializationService implements OnModuleInit {
     if (!current) {
       throw new NotFoundException(`Auto-serialization schedule not found for book: ${bookId}`);
     }
-    const nextRunAt = this.computeNextRunAt(current.dailyStartTime, new Date()).toISOString();
+    const nextRunAt = this.computeNextRunAt(
+      current.dailyStartTime,
+      current.runEveryDays,
+      new Date(),
+    ).toISOString();
     const updateResult = await this.jobRepo.update(
       { bookId },
       { enabled: true, nextRunAt: new Date(nextRunAt) },
@@ -149,7 +184,11 @@ export class AutoSerializationService implements OnModuleInit {
     }
   }
 
-  private computeNextRunAt(dailyStartTime: string, from: Date): Date {
+  private computeNextRunAt(
+    dailyStartTime: string,
+    runEveryDays: number,
+    from: Date,
+  ): Date {
     const [hourText, minuteText] = dailyStartTime.split(':');
     const hour = Number(hourText);
     const minute = Number(minuteText);
@@ -157,21 +196,46 @@ export class AutoSerializationService implements OnModuleInit {
     next.setSeconds(0, 0);
     next.setHours(hour, minute, 0, 0);
     if (next.getTime() <= from.getTime()) {
-      next.setDate(next.getDate() + 1);
+      next.setDate(next.getDate() + Math.max(1, runEveryDays));
     }
     return next;
   }
 
   private toView(record: AutoSerializationScheduleRecord): AutoSerializationView {
+    const averageChaptersPerDay = Math.round((record.chaptersPerRun / Math.max(1, record.runEveryDays)) * 100) / 100;
+    const markerChapterNumbers = Array.isArray(record.interventionMarkerChapters)
+      ? record.interventionMarkerChapters
+      : [];
+    const markerChapterNumber = markerChapterNumbers.length > 0
+      ? markerChapterNumbers[markerChapterNumbers.length - 1]
+      : record.interventionChapterNumber;
     return {
       bookId: record.bookId,
       enabled: record.enabled,
       dailyStartTime: record.dailyStartTime,
       chaptersPerRun: record.chaptersPerRun,
+      runEveryDays: record.runEveryDays,
+      cadence: {
+        runEveryDays: record.runEveryDays,
+        chaptersPerRun: record.chaptersPerRun,
+        averageChaptersPerDay,
+      },
       qualityPolicy: {
         maxRepairRounds: record.maxRepairRounds,
         minQualityScore: record.minQualityScore,
         minOverallScore: record.minOverallScore,
+      },
+      intervention: {
+        required: this.isInterventionActive(record),
+        expired: this.isInterventionExpired(record),
+        reason: record.interventionReason,
+        failingChapterNumber: record.interventionChapterNumber,
+        markerChapterNumber,
+        markerChapterNumbers,
+        consecutiveLowQualityRuns: record.consecutiveLowQualityRuns,
+        threshold: AUTO_INTERVENTION_THRESHOLD,
+        raisedAt: record.interventionRaisedAt,
+        expiresAt: record.interventionExpiresAt,
       },
       scheduler: {
         nextRunAt: record.nextRunAt,
@@ -235,5 +299,23 @@ export class AutoSerializationService implements OnModuleInit {
       { bookId, trigger: 'scheduled' },
       { jobId: this.buildScheduleJobId(bookId), repeat },
     );
+  }
+
+  private isInterventionActive(record: AutoSerializationScheduleRecord): boolean {
+    const hasMarker =
+      (record.interventionMarkerChapters?.length ?? 0) > 0 ||
+      record.interventionChapterNumber != null;
+    if (!hasMarker) return false;
+    if (!record.interventionExpiresAt) return Boolean(record.interventionRequired);
+    return new Date(record.interventionExpiresAt).getTime() > Date.now();
+  }
+
+  private isInterventionExpired(record: AutoSerializationScheduleRecord): boolean {
+    const hasMarker =
+      (record.interventionMarkerChapters?.length ?? 0) > 0 ||
+      record.interventionChapterNumber != null;
+    if (!hasMarker) return false;
+    if (!record.interventionExpiresAt) return false;
+    return new Date(record.interventionExpiresAt).getTime() <= Date.now();
   }
 }

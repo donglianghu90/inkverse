@@ -100,6 +100,11 @@ export const storySeedSchema = z.object({
   readerPersona: readerPersonaSchema,
   goldenFinger: goldenFingerSchema,
   conceptEvaluation: conceptEvaluationSchema,
+  thematicCore: z.object({
+    centralQuestion: z.string(), // 核心命题（如"权力是否必然腐蚀人性？"）
+    thematicProgression: z.array(z.string()), // 主题演变阶段（如["孤独→归属","信任→背叛","牺牲→自由"]）
+    recurringMotif: z.string().optional(), // 反复出现的意象/符号（如"雪"代表孤独与纯洁）
+  }).optional(),
 });
 
 export const roughOutlinePointSchema = z.object({
@@ -112,6 +117,7 @@ export const roughOutlineSchema = z.object({
   points: z.array(roughOutlinePointSchema).min(4),
   endingDirection: z.string(),
   estimatedTotalChapters: z.number().int().min(1).default(600),
+  estimatedVolumes: z.number().int().min(1).optional(), // AI 估算的预计卷数，未设定时由 volume-director 用 sqrt 公式兜底
 });
 
 // ---------------------------------------------------------------------------
@@ -184,6 +190,12 @@ export const bookPromptProfileSchema = z.object({
     commitmentTypes: z.array(z.string()).default(['promise', 'vow', 'goal', 'debt']),
     characterRelationEmphasis: z.string(),
   }),
+
+  styleReferenceTexts: z.array(z.string()).max(3).default([]), // 2-3段文风参考文本（200字以内/段），用于Writer的"灵魂层"
+
+  chapterTypeTemplates: z.record(z.string(), z.string()).default({}), // 题材定制的章节类型模板（climax/setup/rising/relief）
+  firstChaptersStrategy: z.string().default(''), // 题材定制的前3章策略（替代通用的首章约束）
+  audienceReactionGuide: z.string().default(''), // 题材定制的"观众反应"写法（替代通用的旁观者升级）
 });
 
 // ---------------------------------------------------------------------------
@@ -222,6 +234,32 @@ export const chapterIntentSchema = z.object({
     min: z.number().int().min(1),
     max: z.number().int().min(1),
   }),
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2.1: Arc Director directive (卷级策略下发到单章)
+// ---------------------------------------------------------------------------
+
+export const arcDirectorDirectiveSchema = z.object({
+  chapterNumber: z.number().int().min(1),
+  arcId: z.string().optional(),
+  arcStage: z.enum([
+    'entry',
+    'build',
+    'twist',
+    'climax',
+    'aftermath',
+    'transition',
+    'off_arc',
+  ]),
+  chapterMission: z.string(),
+  mustHit: z.array(z.string()).default([]),
+  shouldAvoid: z.array(z.string()).default([]),
+  payoffThreadIds: z.array(z.string()).default([]),
+  antagonistPressure: z.string().default(''),
+  hookDirective: z.string().default(''),
+  pacingDirective: z.string().default(''),
+  riskBudget: z.enum(['low', 'medium', 'high']).default('medium'),
 });
 
 // ---------------------------------------------------------------------------
@@ -289,14 +327,107 @@ export const miniArcChapterBeatSchema = z.object({
   ]).default('none'),
 });
 
+export const arcRewardLossLedgerSchema = z.object({
+  expectedGains: z.array(z.string()).default([]),
+  expectedCosts: z.array(z.string()).default([]),
+  irreversibleChanges: z.array(z.string()).default([]),
+});
+
+export const antagonistMilestoneSchema = z.object({
+  chapterNumber: z.number().int().min(1),
+  objective: z.string(),
+  successSignal: z.string(),
+  failureSignal: z.string().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3.5: Volume Arc (大卷规划层 — 章数跨度由 estimatedVolumes 动态决定)
+// ---------------------------------------------------------------------------
+
+export const volumeArcMiniArcSlotSchema = z.object({
+  slotIndex: z.number().int().nonnegative(),
+  arcType: z.string(), // dungeon/journey/war/mystery/etc
+  estimatedChapters: z.number().int().positive(),
+  objective: z.string(), // 这个MiniArc要达成什么
+  prerequisitePlotThreads: z.array(z.string()).default([]),
+});
+
+export const volumeArcCharacterGoalSchema = z.object({
+  characterId: z.string(),
+  characterName: z.string(),
+  volumeStartState: z.string(), // 卷开始时角色状态
+  volumeEndState: z.string(), // 卷结束时角色应达到的状态
+  keyMoments: z.array(z.string()).default([]), // 卷内关键转折点
+  relationshipShifts: z.array(z.string()).default([]),
+});
+
+export const volumeArcSchema = z.object({
+  volumeId: z.string(),
+  volumeNumber: z.number().int().positive(),
+  title: z.string(),
+  startChapter: z.number().int().positive(),
+  estimatedEndChapter: z.number().int().positive(),
+  coreConflict: z.string(), // 本卷核心矛盾
+  powerProgression: z.object({
+    startLevel: z.string(), // 卷初主角实力
+    endLevel: z.string(), // 卷末主角实力
+    growthPath: z.string(), // 成长路线
+    bottleneck: z.string(), // 主要瓶颈
+  }),
+  subPlots: z.array(z.object({
+    plotId: z.string(),
+    label: z.string(),
+    priority: z.enum(['main', 'secondary', 'background']),
+    resolveInThisVolume: z.boolean(),
+  })).default([]),
+  miniArcSlots: z.array(volumeArcMiniArcSlotSchema).min(2).max(8),
+  climaxEstimatedChapter: z.number().int().positive(),
+  characterGoals: z.array(volumeArcCharacterGoalSchema).default([]),
+  thematicFocus: z.string(), // 本卷主题焦点
+  forbiddenElements: z.array(z.string()).default([]), // 本卷禁止使用的元素
+  structuralInnovation: z.string().default(''), // 本卷叙事创新（如"双线叙事""悬疑揭露""非线性时间线"）
+  narrativeExperiment: z.string().default(''), // 一句话描述本卷在叙事形式上的实验
+  status: z.enum(['planning', 'active', 'completed']).default('planning'),
+});
+
 export const miniArcSchema = z.object({
   arcId: z.string(),
   arcTitle: z.string(),
+  arcType: z.enum([
+    'dungeon',
+    'sect_politics',
+    'journey',
+    'war',
+    'mystery',
+    'tournament',
+    'court',
+    'slice_of_life',
+    'transition',
+    'custom',
+  ]).default('transition'),
+  triggerReason: z.string().default(''),
+  entryCondition: z.string().default(''),
+  exitCondition: z.string().default(''),
   startChapter: z.number().int().min(1),
   plannedEndChapter: z.number().int().min(1),
   coreTension: z.string(),
   emotionalTheme: z.string().default(''),
+  mustPayoffThreadIds: z.array(z.string()).default([]),
+  rewardLossLedger: arcRewardLossLedgerSchema.default({
+    expectedGains: [],
+    expectedCosts: [],
+    irreversibleChanges: [],
+  }),
+  antagonistMilestones: z.array(antagonistMilestoneSchema).default([]),
+  cooldownTag: z.string().default(''),
+  narrativeTechnique: z.enum([
+    'linear', 'flashback', 'parallel_pov', 'in_medias_res', 'countdown',
+    'mystery_reveal', 'unreliable_narrator', 'time_skip_montage', 'epistolary',
+    'bottle_episode', 'slow_burn_reveal', 'dual_timeline', 'heist_plan',
+  ]).default('linear'),
+  structuralInnovation: z.string().default(''), // 本卷的叙事创新点（如"倒叙揭露真相""多视角拼图"）
   climaxChapter: z.number().int().min(1),
+  climaxPattern: z.string().default(''), // 高潮模式（如"boss战""揭秘""背叛反转""牺牲""大逃离"）
   chapterBeats: z.array(miniArcChapterBeatSchema),
   status: z.enum(['active', 'completed']).default('active'),
 }).superRefine((arc, ctx) => {
@@ -336,6 +467,21 @@ export const miniArcSchema = z.object({
   });
 });
 
+export const arcAcceptanceReportSchema = z.object({
+  arcId: z.string(),
+  arcTitle: z.string(),
+  evaluatedAtChapter: z.number().int().min(1),
+  evaluationType: z.enum(['mid_arc', 'end_arc']).default('end_arc'),
+  goalCompletionScore: z.number().min(0).max(1),
+  mustPayoffCompletionScore: z.number().min(0).max(1),
+  readerTensionResolutionScore: z.number().min(0).max(1),
+  overallPass: z.boolean(),
+  missingPayoffThreadIds: z.array(z.string()).default([]),
+  newOpenThreads: z.number().int().min(0),
+  summary: z.string(),
+  actions: z.array(z.string()).default([]),
+});
+
 // ---------------------------------------------------------------------------
 // Phase 3.6: Style anchor (文风锚定)
 // ---------------------------------------------------------------------------
@@ -354,6 +500,32 @@ export const styleAnchorSchema = z.object({
   ]).default('third_person_limited'),
   povCharacterId: z.string().optional(),
   povSwitchRules: z.string().optional(),
+  proseTexture: z.object({
+    metaphorStyle: z.string().default(''), // 修辞指纹（如"善用通感和具象化比喻，避免直喻"）
+    descriptionApproach: z.string().default(''), // 描写手法（如"白描为主，关键时刻工笔细描"）
+    emotionTechnique: z.string().default(''), // 情绪技法（如"以景写情，用环境映射内心"）
+    transitionStyle: z.string().default(''), // 过渡风格（如"用感官切换做场景过渡"）
+  }).default({}),
+  signatureTechniques: z.array(z.object({
+    name: z.string(), // 技法名（如"阶梯式旁观震惊"）
+    description: z.string(), // 描述
+    example: z.string(), // 原文示例(100字内)
+  })).max(5).default([]),
+  rhythmSignature: z.object({
+    avgSentenceLength: z.enum(['short', 'medium', 'long', 'mixed']).default('mixed'),
+    paragraphDensity: z.enum(['sparse', 'moderate', 'dense']).default('moderate'),
+    dialogueRatio: z.enum(['low', 'balanced', 'high']).default('balanced'),
+    actionPace: z.string().default(''), // 动作戏节奏签名
+    quietPace: z.string().default(''), // 文戏节奏签名
+  }).default({}),
+  proseDensityMap: z.object({
+    action: z.enum(['sparse', 'moderate', 'dense']).default('sparse'),
+    dialogue: z.enum(['sparse', 'moderate', 'dense']).default('moderate'),
+    emotion: z.enum(['sparse', 'moderate', 'dense']).default('dense'),
+    worldbuilding: z.enum(['sparse', 'moderate', 'dense']).default('moderate'),
+    transition: z.enum(['sparse', 'moderate', 'dense']).default('sparse'),
+  }).default({}),
+  antiPatterns: z.array(z.string()).max(10).default([]), // 本书应避免的具体表达模式
 });
 
 // ---------------------------------------------------------------------------
@@ -443,6 +615,49 @@ export const foreshadowingSeedSchema = z.object({
   reason: z.string(),
   triggeredByChapter: z.number().int().min(1),
   applied: z.boolean().default(false),
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3.5c2: Proactive Foreshadowing Bank (前瞻式伏笔银行)
+// ---------------------------------------------------------------------------
+
+export const foreshadowingDepositSchema = z.object({
+  depositId: z.string(), // 如 fsd_vol1_001
+  label: z.string(), // 伏笔名称（如"剑鞘暗纹"）
+  category: z.enum([
+    'character_secret', // 角色身世/秘密
+    'power_seed', // 未来力量/能力的种子
+    'world_rule', // 世界规则的暗示
+    'relationship_hint', // 关系线索
+    'plot_twist', // 反转伏笔
+    'prophecy', // 预言/预示
+    'chekhov_gun', // 契诃夫之枪（物品/细节必须回收）
+    'atmospheric', // 氛围伏笔（不一定要回收，但增加层次）
+  ]),
+  description: z.string(), // 这条伏笔是什么
+  embeddingGuidance: z.string(), // 如何自然嵌入（不能太明显）
+  payoffDescription: z.string(), // 回收时应该产生什么效果
+  plantWindow: z.object({
+    earliestChapter: z.number().int().positive(),
+    latestChapter: z.number().int().positive(),
+  }),
+  payoffWindow: z.object({
+    earliestChapter: z.number().int().positive(),
+    latestChapter: z.number().int().positive(),
+  }),
+  relatedCharacterIds: z.array(z.string()).default([]),
+  relatedPlotThreadIds: z.array(z.string()).default([]),
+  priority: z.enum(['must_plant', 'should_plant', 'nice_to_have']).default('should_plant'),
+  status: z.enum(['pending', 'planted', 'payoff_ready', 'resolved', 'expired']).default('pending'),
+  plantedAtChapter: z.number().int().positive().optional(),
+  plantedSnippet: z.string().optional(), // 实际嵌入的文本摘录
+  resolvedAtChapter: z.number().int().positive().optional(),
+});
+
+export const foreshadowingBankSchema = z.object({
+  deposits: z.array(foreshadowingDepositSchema).default([]),
+  totalPlanted: z.number().int().nonnegative().default(0),
+  totalResolved: z.number().int().nonnegative().default(0),
 });
 
 // ---------------------------------------------------------------------------
@@ -563,6 +778,8 @@ export const sceneSnapshotSchema = z.object({
   presentCharacterIds: z.array(z.string()).default([]),
   ongoingAction: z.string().optional(),
   emotionalTone: z.string().optional(),
+  protagonistMood: z.string().optional(), // 主角此刻的情绪状态（如"愤怒中夹杂着自责"）
+  unresolvedTension: z.string().optional(), // 未解决的张力（如"被背叛的真相尚未揭露"）
 });
 
 // ---------------------------------------------------------------------------
@@ -583,6 +800,105 @@ export const namingConventionSchema = z.object({
   }).optional(),
   taboos: z.array(z.string()).default([]),
 }).optional();
+
+// ---------------------------------------------------------------------------
+// Phase 7: Reader Feedback (platform-based) — 三层作用域 + 采纳判定
+// ---------------------------------------------------------------------------
+
+export const readerCommentSchema = z.object({
+  content: z.string(),
+  sentiment: z.enum(['positive', 'negative', 'neutral', 'mixed']),
+  aspect: z.enum(['plot', 'character', 'writing', 'pacing', 'worldbuilding', 'hook', 'general']),
+  authorId: z.string().optional(),
+  platform: z.string().optional(),
+});
+
+export const readerFeedbackSchema = z.object({
+  chapterNumber: z.number().int().positive(),
+  comments: z.array(readerCommentSchema),
+  metrics: z.object({
+    readCompletionRate: z.number().min(0).max(1).optional(),
+    retentionRate: z.number().min(0).max(1).optional(),
+    favoriteCount: z.number().int().nonnegative().optional(),
+    commentCount: z.number().int().nonnegative().optional(),
+    wordCount: z.number().int().nonnegative().optional(),
+  }).optional(),
+  submittedAt: z.string(),
+});
+
+export const feedbackAdoptionSchema = z.object({
+  suggestion: z.string(),
+  scope: z.enum(['book', 'arc', 'chapter']),
+  verdict: z.enum(['adopt', 'conditional', 'observe', 'reject']),
+  reasoning: z.string(),
+  implementation: z.string().optional(),
+  constraints: z.array(z.string()).default([]),
+  confidence: z.number().min(0).max(1),
+  signalStrength: z.object({
+    mentionCount: z.number().int().nonnegative(),
+    hasDataBacking: z.boolean(),
+    conflictsWithPlan: z.boolean(),
+  }),
+});
+
+export const readerFeedbackAnalysisSchema = z.object({
+  bookLevel: z.object({
+    writingStyleFeedback: z.array(feedbackAdoptionSchema).default([]),
+    neverAgain: z.array(z.string()).default([]),
+    characterPopularity: z.array(z.object({
+      characterId: z.string(),
+      characterName: z.string(),
+      score: z.number().min(-1).max(1),
+      trend: z.enum(['rising', 'stable', 'falling']),
+      keyFeedback: z.string(),
+    })).default([]),
+    sceneTypePreferences: z.array(z.object({
+      sceneType: z.string(),
+      preference: z.enum(['love', 'like', 'neutral', 'dislike', 'hate']),
+      mentionCount: z.number().int().nonnegative(),
+    })).default([]),
+    coreIssues: z.array(feedbackAdoptionSchema).default([]),
+  }),
+  arcLevel: z.object({
+    pacingVerdict: z.enum(['too_slow', 'slightly_slow', 'good', 'slightly_fast', 'too_fast']),
+    currentPlotEngagement: z.number().min(0).max(1),
+    suggestions: z.array(feedbackAdoptionSchema).default([]),
+    supportingCastFeedback: z.array(z.object({
+      characterId: z.string(),
+      characterName: z.string(),
+      verdict: z.enum(['more_screen_time', 'good', 'less_screen_time', 'rework']),
+      reason: z.string(),
+    })).default([]),
+  }),
+  chapterLevel: z.object({
+    immediateFixes: z.array(feedbackAdoptionSchema).default([]),
+    pacingAdjustment: z.enum(['speed_up', 'maintain', 'slow_down']),
+    suspenseUrgency: z.array(z.string()).default([]),
+    recentTechniqueVerdict: z.array(z.object({
+      technique: z.string(),
+      reaction: z.enum(['loved', 'effective', 'neutral', 'annoying', 'hated']),
+    })).default([]),
+    expiresAfterChapter: z.number().int().positive(),
+  }),
+  overallSentiment: z.enum(['very_positive', 'positive', 'mixed', 'negative', 'very_negative']),
+  sentimentTrend: z.enum(['improving', 'stable', 'declining']),
+  analyzedChapters: z.array(z.number().int().positive()),
+  analysisTimestamp: z.string(),
+});
+
+export const feedbackStateSchema = z.object({
+  history: z.array(readerFeedbackSchema).default([]),
+  lastAnalysis: readerFeedbackAnalysisSchema.optional(),
+  lastAnalyzedAtChapter: z.number().int().nonnegative().default(0),
+  gapSinceLastFeedback: z.number().int().nonnegative().default(0),
+  pendingCommentCount: z.number().int().nonnegative().default(0),
+  sentimentHistory: z.array(z.object({
+    chapterRange: z.string(),
+    sentiment: z.enum(['very_positive', 'positive', 'mixed', 'negative', 'very_negative']),
+    analysisTimestamp: z.string(),
+  })).default([]),
+  confidence: z.enum(['fresh', 'aging', 'stale', 'none']).default('none'),
+});
 
 // ---------------------------------------------------------------------------
 // Story State
@@ -606,9 +922,15 @@ export const storyStateSchema = z.object({
   editorialPlan: editorialPlanSchema.optional(),
   volumePlan: volumePlanSchema.optional(),
 
+  // Volume arc (大卷规划) — 章数跨度由 roughOutline.estimatedVolumes 动态决定。
+  currentVolume: volumeArcSchema.optional(),
+  completedVolumes: z.array(volumeArcSchema).default([]),
+
   // Mini-arc (卷级规划) — planned 5-15 chapters at a time.
   currentArc: miniArcSchema.optional(),
   completedArcs: z.array(miniArcSchema).default([]),
+  currentArcAcceptance: arcAcceptanceReportSchema.optional(),
+  completedArcAcceptanceReports: z.array(arcAcceptanceReportSchema).default([]),
 
   // Style anchor — voice consistency across chapters.
   styleAnchor: styleAnchorSchema.optional(),
@@ -624,6 +946,7 @@ export const storyStateSchema = z.object({
 
   // Retroactive foreshadowing — seeds to inject into past chapters.
   pendingForeshadowingSeeds: z.array(foreshadowingSeedSchema).default([]),
+  foreshadowingBank: foreshadowingBankSchema.default({ deposits: [], totalPlanted: 0, totalResolved: 0 }),
 
   // Story-internal time.
   storyClock: storyClockSchema.optional(),
@@ -646,8 +969,25 @@ export const storyStateSchema = z.object({
   // Character commitments / vows / flags.
   activeCommitments: z.array(characterCommitmentSchema).default([]),
 
+  // Structural novelty registry — prevent repetitive arc structures.
+  noveltyRegistry: z.object({
+    usedArcTypes: z.array(z.object({ arcType: z.string(), arcId: z.string() })).default([]),
+    usedNarrativeTechniques: z.array(z.object({ technique: z.string(), arcId: z.string() })).default([]),
+    usedCooldownTags: z.array(z.string()).default([]),
+    usedClimaxPatterns: z.array(z.string()).default([]), // 如"boss战""揭秘""背叛反转"
+    lastArcTypes: z.array(z.string()).max(5).default([]), // 最近5卷的arcType（防连续）
+  }).default({ usedArcTypes: [], usedNarrativeTechniques: [], usedCooldownTags: [], usedClimaxPatterns: [], lastArcTypes: [] }),
+
   // Anti-repetition tracking — recently used distinctive phrases.
   recentDistinctivePhrases: z.array(z.string()).default([]),
+
+  recentEmotionalImprints: z.array(z.object({
+    characterId: z.string(),
+    emotion: z.string(),
+    trigger: z.string(),
+    chapterNumber: z.number(),
+    intensity: z.enum(['subtle', 'moderate', 'intense', 'overwhelming']),
+  })).default([]),
 
   // Runtime state.
   chapterCursor: z.number().int().min(1),
@@ -669,6 +1009,24 @@ export const storyStateSchema = z.object({
     hookType: z.string(),
   })).default([]),
   kpiHistory: z.array(generationKpiSchema),
+
+  // Reader feedback — 三层分析 + 采纳判定。
+  feedbackState: feedbackStateSchema.default({
+    history: [], lastAnalyzedAtChapter: 0, gapSinceLastFeedback: 0,
+    pendingCommentCount: 0, sentimentHistory: [], confidence: 'none',
+  }),
+
+  // Retrospective writing lessons — accumulated wisdom from past arcs.
+  writingLessons: z.array(z.object({
+    id: z.string(), // 如 "lesson_arc_1_1"
+    sourceArcId: z.string(), // 从哪个弧总结的
+    category: z.enum(['pacing', 'dialogue', 'character', 'worldbuilding', 'hook', 'prose', 'structure', 'emotion']),
+    insight: z.string(), // 教训（如"群戏场景角色超过4人时声音辨识度下降"）
+    actionable: z.string(), // 可执行建议（如"群戏限制同时说话角色≤3人"）
+    confidence: z.enum(['tentative', 'confirmed', 'strong']).default('tentative'), // 多次验证后提升
+    sourceEvidence: z.string(), // 依据（如"arc_2 第45-50章 characterDepth 平均5.2"）
+    createdAtChapter: z.number().int().positive(),
+  })).default([]),
 
   // Maintenance tracking.
   maintenance: maintenanceStateSchema,
@@ -764,42 +1122,13 @@ export const rewriteGuidanceSchema = z.object({
   repeatedIssues: z.array(z.string()),
   previousScore: z.number().min(0).max(10),
   specificInstructions: z.string().optional(),
+  preserveParagraphs: z.array(z.object({
+    index: z.number().int().nonnegative(), // 段落索引
+    reason: z.string(), // 保留理由（如"描写精彩""对话自然"）
+  })).default([]),
 });
 
-// ---------------------------------------------------------------------------
-// Phase 7: Reader Feedback (platform-based)
-// ---------------------------------------------------------------------------
-
-export const readerCommentSchema = z.object({
-  content: z.string(),
-  sentiment: z.enum(['positive', 'negative', 'neutral', 'mixed']),
-  aspect: z.enum(['plot', 'character', 'writing', 'pacing', 'worldbuilding', 'hook', 'general']),
-});
-
-export const readerFeedbackSchema = z.object({
-  chapterNumber: z.number().int().positive(),
-  comments: z.array(readerCommentSchema),
-  metrics: z.object({
-    readCompletionRate: z.number().min(0).max(1).optional(),
-    retentionRate: z.number().min(0).max(1).optional(),
-    favoriteCount: z.number().int().nonnegative().optional(),
-    commentCount: z.number().int().nonnegative().optional(),
-  }).optional(),
-  analyzedAt: z.string(),
-});
-
-export const readerFeedbackAnalysisSchema = z.object({
-  doMore: z.array(z.string()),
-  doLess: z.array(z.string()),
-  neverAgain: z.array(z.string()),
-  readerPreferences: z.object({
-    favoriteCharacters: z.array(z.string()),
-    favoriteSceneTypes: z.array(z.string()),
-    painPoints: z.array(z.string()),
-  }),
-  overallSentiment: z.enum(['very_positive', 'positive', 'mixed', 'negative', 'very_negative']),
-  priorityImprovements: z.array(z.string()),
-});
+// (Phase 7 Reader Feedback schemas moved before StoryState)
 
 // ---------------------------------------------------------------------------
 // Phase 8: Continuity Pre-check
@@ -825,6 +1154,58 @@ export const continuityPreCheckSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Phase 8.5: Scene Pipeline (场景级写作拆分)
+// ---------------------------------------------------------------------------
+
+export const sceneContractSchema = z.object({
+  sceneIndex: z.number().int().nonnegative(),
+  sceneId: z.string(),
+  povCharacterId: z.string(),
+  locationId: z.string().optional(),
+  purpose: z.enum([
+    'hook_opening', 'conflict', 'revelation', 'emotional',
+    'action', 'dialogue_driven', 'transition', 'climax', 'cliffhanger',
+  ]),
+  objective: z.string(),
+  conflict: z.string(),
+  turningPoint: z.string(),
+  presentCharacterIds: z.array(z.string()),
+  emotionalEntry: z.string(),
+  emotionalExit: z.string(),
+  paceDirective: z.enum(['slow_burn', 'steady', 'accelerating', 'breakneck', 'stillness']),
+  estimatedWords: z.number().int().positive(),
+  transitionHint: z.string(),
+  characterMoment: z.object({
+    characterId: z.string(),
+    type: z.enum(['inner_test', 'relationship_shift', 'revelation', 'choice', 'growth', 'regression']),
+    hint: z.string(),
+  }).optional(),
+  threadActions: z.array(z.object({
+    threadLabel: z.string(),
+    action: z.enum(['touch', 'advance', 'payoff', 'seed']),
+  })).default([]),
+  sensoryEndState: z.object({
+    timeOfDay: z.string().default(''), // 场景结束时的时间（如"黄昏"）
+    weather: z.string().default(''), // 天气/光线
+    ambientSound: z.string().default(''), // 环境音（如"远处鸦群归巢"）
+    dominantSense: z.string().default(''), // 主导感官（如"空气中的血腥味"）
+  }).default({}),
+});
+
+export const chapterScenePlanSchema = z.object({
+  chapterNumber: z.number().int().positive(),
+  scenes: z.array(sceneContractSchema).min(2).max(6),
+  overallEmotionalArc: z.string(), // 如"紧张→震惊→决心"
+  hookStrategy: z.string(), // 末场景如何制造钩子
+});
+
+export const sceneDraftSchema = z.object({
+  sceneIndex: z.number().int().nonnegative(),
+  sceneId: z.string(),
+  content: z.string(),
+});
+
+// ---------------------------------------------------------------------------
 // Phase 9: Pacing Analysis
 // ---------------------------------------------------------------------------
 
@@ -845,6 +1226,7 @@ export type StorySeed = z.infer<typeof storySeedSchema>;
 export type RoughOutline = z.infer<typeof roughOutlineSchema>;
 export type RoughOutlinePoint = z.infer<typeof roughOutlinePointSchema>;
 export type ChapterIntent = z.infer<typeof chapterIntentSchema>;
+export type ArcDirectorDirective = z.infer<typeof arcDirectorDirectiveSchema>;
 export type ChapterReview = z.infer<typeof chapterReviewSchema>;
 export type MaintenanceState = z.infer<typeof maintenanceStateSchema>;
 export type MaintenanceTrigger = z.infer<typeof maintenanceTriggerSchema>;
@@ -852,8 +1234,12 @@ export type CrystallizedBible = z.infer<typeof crystallizedBibleSchema>;
 export type StoryState = z.infer<typeof storyStateSchema>;
 export type DeterministicCheckResult = z.infer<typeof deterministicCheckResultSchema>;
 export type BookPromptProfile = z.infer<typeof bookPromptProfileSchema>;
+export type VolumeArc = z.infer<typeof volumeArcSchema>;
+export type VolumeArcMiniArcSlot = z.infer<typeof volumeArcMiniArcSlotSchema>;
+export type VolumeArcCharacterGoal = z.infer<typeof volumeArcCharacterGoalSchema>;
 export type MiniArc = z.infer<typeof miniArcSchema>;
 export type MiniArcChapterBeat = z.infer<typeof miniArcChapterBeatSchema>;
+export type ArcAcceptanceReport = z.infer<typeof arcAcceptanceReportSchema>;
 export type StyleAnchor = z.infer<typeof styleAnchorSchema>;
 export type ReaderCuriosity = z.infer<typeof readerCuriositySchema>;
 export type ReaderTensionModel = z.infer<typeof readerTensionModelSchema>;
@@ -862,6 +1248,8 @@ export type InformationLedger = z.infer<typeof informationLedgerSchema>;
 export type SatisfactionEvent = z.infer<typeof satisfactionEventSchema>;
 export type DopamineSchedule = z.infer<typeof dopamineScheduleSchema>;
 export type ForeshadowingSeed = z.infer<typeof foreshadowingSeedSchema>;
+export type ForeshadowingDeposit = z.infer<typeof foreshadowingDepositSchema>;
+export type ForeshadowingBank = z.infer<typeof foreshadowingBankSchema>;
 export type StoryClock = z.infer<typeof storyClockSchema>;
 export type AddressEntry = z.infer<typeof addressEntrySchema>;
 export type SceneSnapshot = z.infer<typeof sceneSnapshotSchema>;
@@ -872,9 +1260,60 @@ export type ThreadHealthResult = z.infer<typeof threadHealthResultSchema>;
 export type RewriteGuidance = z.infer<typeof rewriteGuidanceSchema>;
 export type ReaderComment = z.infer<typeof readerCommentSchema>;
 export type ReaderFeedback = z.infer<typeof readerFeedbackSchema>;
+export type FeedbackAdoption = z.infer<typeof feedbackAdoptionSchema>;
 export type ReaderFeedbackAnalysis = z.infer<typeof readerFeedbackAnalysisSchema>;
+export type FeedbackState = z.infer<typeof feedbackStateSchema>;
 export type ContinuityPreCheck = z.infer<typeof continuityPreCheckSchema>;
 export type PacingAnalysis = z.infer<typeof pacingAnalysisSchema>;
+export type SceneContract = z.infer<typeof sceneContractSchema>;
+export type ChapterScenePlan = z.infer<typeof chapterScenePlanSchema>;
+export type SceneDraft = z.infer<typeof sceneDraftSchema>;
+
+// ---------------------------------------------------------------------------
+// Memory Pyramid — LLM 生成弧/卷摘要的输出格式
+// ---------------------------------------------------------------------------
+
+export const arcSummaryOutputSchema = z.object({
+  summary: z.string(), // 弧整体摘要(300-500字)
+  keyCharacterArcs: z.array(z.object({ characterId: z.string(), name: z.string(), arc: z.string() })).default([]),
+  resolvedThreads: z.array(z.string()).default([]),
+  newThreadsPlanted: z.array(z.string()).default([]),
+  emotionalArc: z.string(), // 情感弧线
+  keyTurningPoints: z.array(z.string()).default([]),
+  worldStateChanges: z.string().default(''),
+  keywords: z.array(z.string()).default([]),
+});
+
+export const volumeSummaryOutputSchema = z.object({
+  summary: z.string(), // 卷整体摘要(500-800字)
+  powerProgression: z.string().default(''),
+  majorPlotMovements: z.array(z.string()).default([]),
+  characterGrowth: z.array(z.object({ characterId: z.string(), name: z.string(), growth: z.string() })).default([]),
+  worldExpansion: z.string().default(''),
+  keywords: z.array(z.string()).default([]),
+});
+
+export type ArcSummaryOutput = z.infer<typeof arcSummaryOutputSchema>;
+export type VolumeSummaryOutput = z.infer<typeof volumeSummaryOutputSchema>;
+
+// ---------------------------------------------------------------------------
+// Retrospective Learning — 弧结束后回顾式学习输出格式
+// ---------------------------------------------------------------------------
+
+export const retrospectiveLessonsOutputSchema = z.object({
+  lessons: z.array(z.object({
+    category: z.enum(['pacing', 'dialogue', 'character', 'worldbuilding', 'hook', 'prose', 'structure', 'emotion']),
+    insight: z.string(), // 发现（如"连续3章高张力后读者疲劳，节奏得分下降"）
+    actionable: z.string(), // 建议（如"高张力章节连续不超过2章，之后插入缓冲章"）
+    evidence: z.string(), // 数据依据
+    confidence: z.enum(['tentative', 'confirmed', 'strong']).default('tentative'),
+  })),
+  bestPractices: z.array(z.string()), // 本弧做得好的实践（可复用）
+  antiPatterns: z.array(z.string()), // 本弧的反面教材（需避免）
+});
+export type RetrospectiveLessonsOutput = z.infer<typeof retrospectiveLessonsOutputSchema>;
+
+export type WritingLesson = NonNullable<StoryState['writingLessons']>[number];
 
 // Re-export shared types.
 export type {

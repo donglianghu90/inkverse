@@ -9,9 +9,19 @@ import { BookEntity } from './entities/book.entity';
 import { ChapterEntity } from './entities/chapter.entity';
 import { ArtifactEntity } from './entities/artifact.entity';
 import { AutoSerializationJobEntity } from './entities/auto-serialization-job.entity';
+import { ChapterResyncJobEntity } from './entities/chapter-resync-job.entity';
 import { BookAgentPipelineEntity } from './entities/book-agent-pipeline.entity';
+import { ChapterMemoryEntity } from './entities/chapter-memory.entity';
+import { ArcSummaryEntity, VolumeSummaryEntity } from './entities/summary-pyramid.entity';
+import {
+  BookCharacterEntity, BookPlotThreadEntity, BookTimelineEventEntity,
+  BookCharacterFactEntity, BookRelationEntity, BookChapterSummaryEntity,
+  BookFactionEntity, BookCommitmentEntity,
+} from './entities/book-state-entities';
 import { BookAgentPipelineService } from './book-agent-pipeline.service';
+import { BookStateRepository } from './book-state.repository';
 import { AUTO_SERIALIZATION_QUEUE } from './auto-serialization.processor';
+import { CHAPTER_RESYNC_QUEUE } from './chapter-resync.queue';
 
 import { NovelController } from './novel.controller';
 import { NovelService } from './novel.service';
@@ -21,12 +31,16 @@ import { DeterministicCheckerService } from './validators/deterministic-checker.
 
 // Core agents
 import { SeedAnalyzerAgent } from './agents/seed-analyzer.agent';
+import { ArcDirectorAgent } from './agents/arc-director.agent';
 import { IntentAgent } from './agents/intent.agent';
 import { CreativeWriterAgent } from './agents/creative-writer.agent';
 import { ReviewerAgent } from './agents/reviewer.agent';
 import { EditorAgent } from './agents/editor.agent';
 import { RecorderAgent } from './agents/recorder.agent';
 import { PromptProfilerAgent } from './agents/prompt-profiler.agent';
+import { ScenePlannerAgent } from './agents/scene-planner.agent';
+import { SceneStitcherAgent } from './agents/scene-stitcher.agent';
+import { VolumeDirectorAgent } from './agents/volume-director.agent';
 
 // New quality agents
 import { ContinuityGuardAgent } from './agents/continuity-guard.agent';
@@ -34,6 +48,7 @@ import { HookCrafterAgent } from './agents/hook-crafter.agent';
 import { CharacterVoiceCoachAgent } from './agents/character-voice-coach.agent';
 import { PacingAnalyzerAgent } from './agents/pacing-analyzer.agent';
 import { ReaderPulseAnalyzerAgent } from './agents/reader-pulse-analyzer.agent';
+import { RetrospectiveLearnerAgent } from './agents/retrospective-learner.agent';
 
 // Recorder sub-agents (parallel extraction)
 import { TextAnalyzerAgent } from './agents/text-analyzer.agent';
@@ -44,8 +59,11 @@ import { LoreApplicationService } from './lore-application.service';
 import { NovelProgressService } from './novel-progress.service';
 import { AutoSerializationService } from './auto-serialization.service';
 import { AutoSerializationProcessor } from './auto-serialization.processor';
+import { ChapterResyncProcessor } from './chapter-resync.processor';
 import { DetailStoreService } from './detail-store.service';
 import { DetailContextService } from './detail-context.service';
+import { CreateBookSessionService } from './create-book-session.service';
+import { MemoryRetrieverService } from './memory-retriever.service';
 
 @Module({
   imports: [
@@ -54,9 +72,18 @@ import { DetailContextService } from './detail-context.service';
       ChapterEntity,
       ArtifactEntity,
       AutoSerializationJobEntity,
+      ChapterResyncJobEntity,
       BookAgentPipelineEntity,
+      ChapterMemoryEntity,
+      ArcSummaryEntity, VolumeSummaryEntity,
+      BookCharacterEntity, BookPlotThreadEntity, BookTimelineEventEntity,
+      BookCharacterFactEntity, BookRelationEntity, BookChapterSummaryEntity,
+      BookFactionEntity, BookCommitmentEntity,
     ]),
-    BullModule.registerQueue({ name: AUTO_SERIALIZATION_QUEUE }),
+    BullModule.registerQueue(
+      { name: AUTO_SERIALIZATION_QUEUE },
+      { name: CHAPTER_RESYNC_QUEUE },
+    ),
   ],
   controllers: [NovelController],
   providers: [
@@ -67,12 +94,16 @@ import { DetailContextService } from './detail-context.service';
 
     // Core agents
     SeedAnalyzerAgent,
+    ArcDirectorAgent,
     IntentAgent,
     CreativeWriterAgent,
     ReviewerAgent,
     EditorAgent,
     RecorderAgent,
     PromptProfilerAgent,
+    ScenePlannerAgent,
+    SceneStitcherAgent,
+    VolumeDirectorAgent,
 
     // New quality agents
     ContinuityGuardAgent,
@@ -80,6 +111,7 @@ import { DetailContextService } from './detail-context.service';
     CharacterVoiceCoachAgent,
     PacingAnalyzerAgent,
     ReaderPulseAnalyzerAgent,
+    RetrospectiveLearnerAgent,
 
     // Recorder sub-agents
     TextAnalyzerAgent,
@@ -90,9 +122,13 @@ import { DetailContextService } from './detail-context.service';
     NovelProgressService,
     AutoSerializationService,
     AutoSerializationProcessor,
+    ChapterResyncProcessor,
     BookAgentPipelineService,
+    BookStateRepository,
     DetailStoreService,
     DetailContextService,
+    CreateBookSessionService,
+    MemoryRetrieverService,
   ],
 })
 export class NovelModule {}

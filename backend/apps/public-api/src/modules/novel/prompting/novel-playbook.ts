@@ -11,6 +11,7 @@ import {
   MiniArc,
   MiniArcChapterBeat,
   StyleAnchor,
+  WritingLesson,
 } from '../schemas/novel-state.schemas';
 
 // ---------------------------------------------------------------------------
@@ -928,8 +929,15 @@ export function buildArcContext(arc: MiniArc, currentChapter: number): Record<st
 
   return {
     卷标题: arc.arcTitle,
+    卷类型: arc.arcType,
+    触发理由: arc.triggerReason || '未指定',
+    入场条件: arc.entryCondition || '未指定',
+    出场条件: arc.exitCondition || '未指定',
     核心张力: arc.coreTension,
     情感主题: arc.emotionalTheme || '未指定',
+    必回收伏线: arc.mustPayoffThreadIds ?? [],
+    收益代价: arc.rewardLossLedger ?? { expectedGains: [], expectedCosts: [], irreversibleChanges: [] },
+    反派里程碑: arc.antagonistMilestones ?? [],
     高潮章: arc.climaxChapter,
     当前进度: `第${currentChapter}章 / 计划${arc.startChapter}-${arc.plannedEndChapter}章`,
     本章节拍: currentBeat ? {
@@ -963,6 +971,57 @@ export function buildStyleAnchorContext(anchor: StyleAnchor): Record<string, unk
   };
   if (anchor.povSwitchRules) ctx['视角切换规则'] = anchor.povSwitchRules;
   return ctx;
+}
+
+const DENSITY_LABEL: Record<string, string> = { sparse: '疏朗', moderate: '适中', dense: '细密' };
+
+/** 深层文风DNA注入 — 为写作Agent构建可操作的风格指令。 */
+export function buildStyleDNA(anchor: StyleAnchor, sceneType?: string): string {
+  const lines: string[] = ['=== 文风DNA（本书灵魂，严格遵循） ==='];
+  lines.push(`腔调：${anchor.narrativeVoice}`);
+  lines.push(`节奏：${anchor.pacePreference}，对话：${anchor.dialogueStyle}`);
+  if (anchor.pov) lines.push(`视角：${POV_LABEL[anchor.pov] ?? anchor.pov}${anchor.povSwitchRules ? '，切换规则：' + anchor.povSwitchRules : ''}`);
+
+  const tex = anchor.proseTexture;
+  if (tex) {
+    const texParts: string[] = [];
+    if (tex.metaphorStyle) texParts.push(`修辞：${tex.metaphorStyle}`);
+    if (tex.descriptionApproach) texParts.push(`描写：${tex.descriptionApproach}`);
+    if (tex.emotionTechnique) texParts.push(`情绪：${tex.emotionTechnique}`);
+    if (tex.transitionStyle) texParts.push(`过渡：${tex.transitionStyle}`);
+    if (texParts.length > 0) lines.push(texParts.join('｜'));
+  }
+
+  const sig = anchor.signatureTechniques ?? [];
+  if (sig.length > 0) {
+    lines.push('招牌技法（本书特色，适当使用）：');
+    sig.forEach((t) => lines.push(`  • ${t.name}：${t.description}${t.example ? '（如：' + t.example.slice(0, 80) + '）' : ''}`));
+  }
+
+  const rhythm = anchor.rhythmSignature;
+  if (rhythm) {
+    const rParts: string[] = [];
+    if (rhythm.actionPace) rParts.push(`动作戏：${rhythm.actionPace}`);
+    if (rhythm.quietPace) rParts.push(`文戏：${rhythm.quietPace}`);
+    if (rParts.length > 0) lines.push(`节奏签名：${rParts.join('，')}`);
+  }
+
+  if (sceneType && anchor.proseDensityMap) {
+    const dm = anchor.proseDensityMap;
+    const densityKey = sceneType === 'action' ? dm.action : sceneType === 'dialogue_driven' ? dm.dialogue
+      : sceneType === 'emotional' ? dm.emotion : sceneType === 'transition' ? dm.transition : dm.worldbuilding;
+    if (densityKey) lines.push(`本场景描写密度：${DENSITY_LABEL[densityKey] ?? densityKey}`);
+  }
+
+  if (anchor.sampleParagraphs?.length) {
+    lines.push('文风参考（模仿质感，不照抄）：');
+    anchor.sampleParagraphs.slice(0, 2).forEach((p) => lines.push(`「${p.slice(0, 200)}」`));
+  }
+
+  const anti = anchor.antiPatterns ?? [];
+  if (anti.length > 0) lines.push(`禁用表达（本书DNA禁止）：${anti.join('、')}`);
+
+  return lines.join('\n');
 }
 
 export function buildIntentContext(intent: ChapterIntent): Record<string, unknown> {
@@ -1052,6 +1111,54 @@ export function buildCharacterArcContext(state: StoryState): Record<string, unkn
   });
 }
 
+/** 为场景级写作构建深度角色声音矩阵 — 情绪调变 + 权力语态 + 叙事动作。 */
+export function buildCharacterVoiceMatrix(state: StoryState, presentCharacterIds: string[]): string {
+  const charMap = new Map(state.characters.map((c) => [c.id, c]));
+  const lines: string[] = [];
+
+  for (const id of presentCharacterIds) {
+    const c = charMap.get(id);
+    if (!c?.voice) continue;
+    const v = c.voice;
+    const parts: string[] = [`【${c.name}】${v.speechPattern}`];
+    if (v.verbalTics?.length) parts.push(`口头禅：${v.verbalTics.join('/')}`);
+
+    if (v.emotionalVoiceMap?.length) {
+      const psych = c.psychology;
+      const currentMood = psych?.currentMood ?? '平静';
+      const relevant = v.emotionalVoiceMap.find((e) => currentMood.includes(e.emotion));
+      if (relevant) parts.push(`[当前${relevant.emotion}]：${relevant.voiceShift}（保留：${relevant.corePreserved}）`);
+      else parts.push(`情绪调变：${v.emotionalVoiceMap.map((e) => `${e.emotion}→${e.voiceShift.slice(0, 20)}`).join('；')}`);
+    }
+
+    const pdv = v.powerDynamicVoice;
+    if (pdv && (pdv.toSuperior || pdv.toEqual || pdv.toInferior || pdv.toEnemy)) {
+      const pdParts: string[] = [];
+      if (pdv.toSuperior) pdParts.push(`↑上级：${pdv.toSuperior}`);
+      if (pdv.toEqual) pdParts.push(`=同辈：${pdv.toEqual}`);
+      if (pdv.toInferior) pdParts.push(`↓下位：${pdv.toInferior}`);
+      if (pdv.toEnemy) pdParts.push(`⚔敌人：${pdv.toEnemy}`);
+      parts.push(`权力语态：${pdParts.join('，')}`);
+    }
+
+    const na = v.narrativeActions;
+    if (na) {
+      if (na.signatureGestures?.length) parts.push(`招牌动作：${na.signatureGestures.join('、')}`);
+      if (na.physicalTics?.length) parts.push(`下意识：${na.physicalTics.join('、')}`);
+      if (na.thoughtPatterns) parts.push(`内心戏：${na.thoughtPatterns}`);
+    }
+
+    if (v.catchphrases?.length) parts.push(`经典语录：${v.catchphrases.map((p) => `"${p}"`).join(' ')}`);
+    if (v.voiceEvolution?.length) {
+      const latest = v.voiceEvolution[v.voiceEvolution.length - 1];
+      parts.push(`声音进化(ch${latest.chapterNumber})：${latest.change}`);
+    }
+
+    lines.push(parts.join('\n  '));
+  }
+  return lines.length > 0 ? `=== 角色声音DNA（遮住名字能猜出是谁） ===\n${lines.join('\n')}` : '';
+}
+
 export function buildKpiTrendHints(state: StoryState): string[] {
   const recent = state.kpiHistory.slice(-5);
   if (recent.length < 2) return [];
@@ -1076,4 +1183,24 @@ export function buildKpiTrendHints(state: StoryState): string[] {
   }
 
   return hints;
+}
+
+/** 从累积写作教训中构建写作指导片段 — 优先注入高置信度+与当前场景相关的教训。 */
+export function buildWritingLessonsHint(lessons: WritingLesson[], relevantCategories?: string[]): string {
+  if (!lessons.length) return '';
+  const sorted = [...lessons].sort((a, b) => {
+    const conf = { strong: 3, confirmed: 2, tentative: 1 };
+    return (conf[b.confidence] ?? 0) - (conf[a.confidence] ?? 0);
+  });
+  const filtered = relevantCategories
+    ? sorted.filter((l) => relevantCategories.includes(l.category))
+    : sorted;
+  const top = filtered.slice(0, 8);
+  if (!top.length) return '';
+  const lines = ['=== 写作教训（从历史数据中学到的）==='];
+  for (const l of top) {
+    const tag = l.confidence === 'strong' ? '★' : l.confidence === 'confirmed' ? '●' : '○';
+    lines.push(`${tag} [${l.category}] ${l.actionable}`);
+  }
+  return lines.join('\n');
 }

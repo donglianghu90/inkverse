@@ -1,21 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { history } from '@umijs/max';
-import {
-  Plus,
-  Clock,
-  Loader2,
-  AlertCircle,
-  PenTool,
-  Sparkles,
-  ArrowRight,
-  ChevronRight,
-  BookOpen,
-} from 'lucide-react';
+import { Plus, Loader2, AlertCircle, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { listBooks, type BookListItem } from '@/services/novel';
+import { listBooks, getAutoSerialization, type BookListItem } from '@/services/novel';
+import emptyImg from '@/assets/illustrations/empty-bookshelf.png';
 
 const GENRE_GRADIENTS: Record<string, string> = {
   '玄幻': 'from-violet-500 to-indigo-600',
@@ -33,27 +22,8 @@ const GENRE_GRADIENTS: Record<string, string> = {
 };
 const DEFAULT_GRADIENT = 'from-primary to-primary/70';
 
-const GENRE_DOT_COLORS: Record<string, string> = {
-  '玄幻': 'bg-violet-500',
-  '科幻': 'bg-cyan-500',
-  '都市': 'bg-orange-500',
-  '悬疑': 'bg-slate-500',
-  '武侠': 'bg-amber-500',
-  '历史': 'bg-yellow-600',
-  '仙侠': 'bg-teal-500',
-  '末世': 'bg-gray-500',
-  '言情': 'bg-pink-500',
-  '奇幻': 'bg-purple-500',
-  '游戏': 'bg-green-500',
-  '军事': 'bg-stone-500',
-};
-
 function getBookGradient(genre?: string): string {
   return genre && GENRE_GRADIENTS[genre] ? GENRE_GRADIENTS[genre] : DEFAULT_GRADIENT;
-}
-
-function getGenreDot(genre?: string): string {
-  return genre && GENRE_DOT_COLORS[genre] ? GENRE_DOT_COLORS[genre] : 'bg-primary';
 }
 
 function formatRelativeTime(isoStr: string): string {
@@ -68,22 +38,94 @@ function formatRelativeTime(isoStr: string): string {
   return new Date(isoStr).toLocaleDateString('zh-CN');
 }
 
-function ScoreBadge({ score }: { score: number }) {
-  const color =
-    score >= 8
-      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-      : score >= 7
-        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
-        : 'bg-red-500/15 text-red-600 dark:text-red-400';
-  return (
-    <span className={cn('inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold tabular-nums', color)}>
-      {score.toFixed(1)}
-    </span>
-  );
-}
+/* ─── BookCard ─── */
+const BookCard: React.FC<{ book: BookListItem; isRunning: boolean }> = ({ book, isRunning }) => (
+  <div
+    className="group cursor-pointer"
+    onClick={() => history.push(`/novel/book/${book.bookId}`)}
+  >
+    {/* Cover — 2:3 book proportion */}
+    <div className={cn(
+      'relative rounded-lg overflow-hidden shadow-md',
+      'group-hover:shadow-xl group-hover:-translate-y-1',
+      'transition-all duration-300 aspect-[2/3] bg-gradient-to-br',
+      getBookGradient(book.genre),
+    )}>
+      {/* Book spine shadow */}
+      <div className="absolute left-0 top-0 bottom-0 w-3 bg-gradient-to-r from-black/30 to-transparent z-10" />
+      {/* Light sheen */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_rgba(255,255,255,0.18),_transparent_60%)]" />
 
+      {/* Running badge */}
+      {isRunning && (
+        <div className="absolute top-2 left-4 z-20">
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-semibold text-white shadow">
+            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+            更新中
+          </span>
+        </div>
+      )}
+
+      {/* Genre tag */}
+      {book.genre && (
+        <div className="absolute top-2 right-2 z-20">
+          <span className="inline-flex rounded-md bg-black/25 backdrop-blur-sm px-1.5 py-0.5 text-[10px] font-medium text-white/90">
+            {book.genre}
+          </span>
+        </div>
+      )}
+
+      {/* Title overlay at bottom */}
+      <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/70 via-black/30 to-transparent z-10">
+        <h3 className="text-sm font-bold text-white leading-snug line-clamp-2">{book.title}</h3>
+      </div>
+
+      {/* Hover dim */}
+      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/8 transition-colors duration-200" />
+    </div>
+
+    {/* Meta below cover */}
+    <div className="mt-2 px-0.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">{book.chaptersGenerated} 章</span>
+        {book.latestKpi && (
+          <span className={cn(
+            'text-xs font-semibold tabular-nums',
+            book.latestKpi.overallScore >= 8
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : book.latestKpi.overallScore >= 7
+                ? 'text-amber-600 dark:text-amber-400'
+                : 'text-red-500',
+          )}>
+            ★ {book.latestKpi.overallScore.toFixed(1)}
+          </span>
+        )}
+      </div>
+      <p className="text-[11px] text-muted-foreground/60 mt-0.5 truncate">
+        {formatRelativeTime(book.updatedAt)}
+      </p>
+    </div>
+  </div>
+);
+
+/* ─── CreateBookCard ─── */
+const CreateBookCard: React.FC = () => (
+  <div className="group cursor-pointer" onClick={() => history.push('/novel/create')}>
+    <div className="relative rounded-lg border-2 border-dashed border-muted-foreground/15 group-hover:border-primary/50 group-hover:bg-gradient-to-br group-hover:from-primary/5 group-hover:to-violet-500/5 transition-all duration-300 aspect-[2/3] flex flex-col items-center justify-center gap-3">
+      <div className="w-12 h-12 rounded-full bg-muted/40 group-hover:bg-primary/10 flex items-center justify-center transition-all duration-300 group-hover:scale-110">
+        <Sparkles className="h-5 w-5 text-muted-foreground/60 group-hover:text-primary transition-colors" />
+      </div>
+      <span className="text-xs font-medium text-muted-foreground/60 group-hover:text-primary transition-colors">
+        创建新书
+      </span>
+    </div>
+  </div>
+);
+
+/* ─── Bookshelf ─── */
 const Bookshelf: React.FC = () => {
   const [books, setBooks] = useState<BookListItem[]>([]);
+  const [runningMap, setRunningMap] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -95,6 +137,16 @@ const Bookshelf: React.FC = () => {
           (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
         );
         setBooks(sorted);
+
+        // Fetch auto-serialization running status for all books in parallel
+        const results = await Promise.allSettled(sorted.map(b => getAutoSerialization(b.bookId)));
+        const map: Record<string, boolean> = {};
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled' && r.value?.scheduler?.running) {
+            map[sorted[i].bookId] = true;
+          }
+        });
+        setRunningMap(map);
       } catch (e: any) {
         setError(e?.message ?? '加载失败');
       } finally {
@@ -122,188 +174,60 @@ const Bookshelf: React.FC = () => {
   }
 
   const hasBooks = books.length > 0;
-  const recentBook = hasBooks ? books[0] : null;
-  const otherBooks = hasBooks ? books.slice(1) : [];
+  const runningCount = Object.values(runningMap).filter(Boolean).length;
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
-      {/* Empty State */}
+    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+      {/* Empty state */}
       {!hasBooks && (
-        <div className="animate-fade-in flex flex-col items-center py-24 text-center">
-          <div className="relative mb-6">
-            <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 flex items-center justify-center">
-              <PenTool className="h-10 w-10 text-primary" />
-            </div>
-            <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center">
-              <Sparkles className="h-3 w-3 text-primary" />
-            </div>
-          </div>
-          <h2 className="text-2xl font-bold mb-2">开始你的创作之旅</h2>
+        <div className="animate-fade-in flex flex-col items-center py-16 text-center">
+          <img src={emptyImg} alt="" className="w-72 h-auto mb-4 pointer-events-none select-none" draggable={false} />
+          <h2 className="text-2xl font-bold mb-2">书架空空，等待你的灵感落笔</h2>
           <p className="text-muted-foreground max-w-md mb-8 leading-relaxed">
-            InkVerse 使用 AI 帮你构建完整的小说世界观，自动生成精彩章节。
-            输入你的创意灵感，一切从这里开始。
+            InkVerse 会帮你构建完整世界观、生成专属写作手册，然后自动续写每一章精彩故事。
           </p>
           <Button
             size="lg"
             className="gap-2 shadow-lg shadow-primary/25"
             onClick={() => history.push('/novel/create')}
           >
-            <Plus className="h-4 w-4" />
-            创建我的第一本书
+            <Sparkles className="h-4 w-4" />
+            开始我的第一本书
           </Button>
         </div>
       )}
 
-      {/* Has Books */}
-      {hasBooks && recentBook && (
-        <div className="animate-fade-in space-y-8">
-          {/* Section: Continue Writing */}
-          <section>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-foreground">继续创作</h2>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5 text-xs"
-                onClick={() => history.push('/novel/create')}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                创建新书
-              </Button>
+      {/* Bookshelf grid */}
+      {hasBooks && (
+        <div className="animate-fade-in">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h2 className="text-xl font-bold tracking-tight">我的书架</h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                共 {books.length} 部作品
+                {runningCount > 0 && (
+                  <span className="ml-2 inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse inline-block" />
+                    {runningCount} 部更新中
+                  </span>
+                )}
+              </p>
             </div>
-
-            {/* Hero Card — most recently active book */}
-            <Card
-              className="group cursor-pointer overflow-hidden transition-all duration-300 hover:shadow-xl hover:shadow-primary/8 hover:border-primary/20"
-              onClick={() => history.push(`/novel/book/${recentBook.bookId}`)}
-            >
-              <div className="flex flex-col sm:flex-row">
-                {/* Gradient cover */}
-                <div className={cn(
-                  'relative h-36 sm:h-auto sm:w-48 bg-gradient-to-br shrink-0 overflow-hidden',
-                  getBookGradient(recentBook.genre),
-                )}>
-                  <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_rgba(255,255,255,0.18),_transparent_60%)]" />
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <BookOpen className="h-12 w-12 text-white/30" />
-                  </div>
-                  {recentBook.genre && (
-                    <div className="absolute top-3 left-3">
-                      <span className="inline-flex items-center rounded-md bg-white/20 backdrop-blur-sm px-2 py-0.5 text-xs font-medium text-white">
-                        {recentBook.genre}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Info */}
-                <CardContent className="flex-1 p-5 sm:p-6 flex flex-col justify-between gap-4">
-                  <div>
-                    <h3 className="text-xl font-bold tracking-tight mb-2">
-                      {recentBook.title}
-                    </h3>
-                    <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                      <span>已生成 {recentBook.chaptersGenerated} 章</span>
-                      {recentBook.latestKpi && (
-                        <>
-                          <span className="text-border">|</span>
-                          <span className="flex items-center gap-1.5">
-                            综合评分 <ScoreBadge score={recentBook.latestKpi.overallScore} />
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    {recentBook.updatedAt && (
-                      <p className="flex items-center gap-1 text-xs text-muted-foreground mt-2">
-                        <Clock className="h-3 w-3" />
-                        上次更新 {formatRelativeTime(recentBook.updatedAt)}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <Button
-                      className="gap-2 shadow-sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        history.push(`/novel/book/${recentBook.bookId}`);
-                      }}
-                    >
-                      <Sparkles className="h-4 w-4" />
-                      继续创作
-                    </Button>
-                    <span className="text-xs text-muted-foreground group-hover:text-primary transition-colors flex items-center gap-1">
-                      进入工作台 <ArrowRight className="h-3 w-3" />
-                    </span>
-                  </div>
-                </CardContent>
-              </div>
-            </Card>
-          </section>
-
-          {/* Section: Other Books */}
-          {otherBooks.length > 0 && (
-            <section>
-              <h2 className="text-lg font-semibold text-foreground mb-4">其他作品</h2>
-              <div className="space-y-2">
-                {otherBooks.map((book) => (
-                  <Card
-                    key={book.bookId}
-                    className="group cursor-pointer transition-all duration-200 hover:border-primary/20 hover:bg-accent/30"
-                    onClick={() => history.push(`/novel/book/${book.bookId}`)}
-                  >
-                    <CardContent className="flex items-center gap-4 p-4">
-                      {/* Genre color indicator */}
-                      <div className={cn(
-                        'w-1 h-10 rounded-full shrink-0',
-                        getGenreDot(book.genre),
-                      )} />
-
-                      {/* Book info */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-semibold truncate">{book.title}</h3>
-                          {book.genre && (
-                            <Badge variant="secondary" className="text-[11px] shrink-0">
-                              {book.genre}
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                          <span>{book.chaptersGenerated} 章</span>
-                          {book.latestKpi && (
-                            <>
-                              <span className="text-border">·</span>
-                              <span>综合 {book.latestKpi.overallScore.toFixed(1)}</span>
-                            </>
-                          )}
-                          {book.updatedAt && (
-                            <>
-                              <span className="text-border">·</span>
-                              <span>{formatRelativeTime(book.updatedAt)}</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Action */}
-                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-primary transition-colors" />
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Create new book footer */}
-          <div className="pt-2">
-            <button
-              className="w-full flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-muted-foreground/15 py-5 text-sm text-muted-foreground hover:border-primary/30 hover:text-primary transition-colors group"
+            <Button
+              size="sm"
+              className="gap-1.5 shadow-sm shadow-primary/20"
               onClick={() => history.push('/novel/create')}
             >
-              <Plus className="h-4 w-4" />
-              <span className="font-medium">创建新书</span>
-            </button>
+              <Plus className="h-3.5 w-3.5" />
+              创建新书
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 sm:gap-5 lg:grid-cols-5 xl:grid-cols-6">
+            {books.map(book => (
+              <BookCard key={book.bookId} book={book} isRunning={!!runningMap[book.bookId]} />
+            ))}
+            <CreateBookCard />
           </div>
         </div>
       )}

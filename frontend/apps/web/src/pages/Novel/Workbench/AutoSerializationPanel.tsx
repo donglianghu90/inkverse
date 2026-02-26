@@ -34,9 +34,21 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
   const [loading, setLoading] = useState(false);
   const [hasConfig, setHasConfig] = useState(false);
   const [nextRunAt, setNextRunAt] = useState<string | null>(null);
+  const [intervention, setIntervention] = useState<{
+    required: boolean;
+    expired: boolean;
+    reason: string | null;
+    failingChapterNumber: number | null;
+    markerChapterNumber: number | null;
+    markerChapterNumbers: number[];
+    consecutiveLowQualityRuns: number;
+    threshold: number;
+    expiresAt: string | null;
+  } | null>(null);
 
   const [config, setConfig] = useState({
     dailyStartTime: '08:00',
+    runEveryDays: 1,
     chaptersPerRun: 3,
     maxRepairRounds: 2,
     minQualityScore: 7,
@@ -47,14 +59,17 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
     if (!open) return;
     (async () => {
       setLoading(true);
+      setIntervention(null);
       try {
         const res = await getAutoSerialization(bookId);
         if (res) {
           setHasConfig(true);
           setEnabled(res.enabled);
           setNextRunAt(res.scheduler.nextRunAt);
+          setIntervention(res.intervention ?? null);
           setConfig({
             dailyStartTime: res.dailyStartTime,
+            runEveryDays: res.runEveryDays ?? 1,
             chaptersPerRun: res.chaptersPerRun,
             maxRepairRounds: res.qualityPolicy.maxRepairRounds,
             minQualityScore: Math.max(res.qualityPolicy.minQualityScore, 7),
@@ -81,6 +96,7 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
       setEnabled(res.enabled);
       setHasConfig(true);
       setNextRunAt(res.scheduler.nextRunAt);
+      setIntervention(res.intervention ?? null);
       onOpenChange(false);
     } finally {
       setSaving(false);
@@ -102,15 +118,18 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
         const res = await disableAutoSerialization(bookId);
         setEnabled(res.enabled);
         setNextRunAt(res.scheduler.nextRunAt);
+        setIntervention(res.intervention ?? null);
       } else {
         const res = await enableAutoSerialization(bookId);
         setEnabled(res.enabled);
         setNextRunAt(res.scheduler.nextRunAt);
+        setIntervention(res.intervention ?? null);
       }
     } catch {
       // errorHandler in app.tsx shows message
     }
   };
+  const markerChapterNumbers = intervention?.markerChapterNumbers ?? [];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -121,7 +140,7 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
             自动连载配置
           </DialogTitle>
           <DialogDescription>
-            设置每日定时自动生成章节，保持稳定更新节奏。
+            设置按周期自动生成章节（支持每 N 天执行）。
           </DialogDescription>
         </DialogHeader>
 
@@ -159,12 +178,35 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
                     下次运行: {new Date(nextRunAt).toLocaleString('zh-CN')}
                   </p>
                 )}
+                {intervention?.required ? (
+                  <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-700">
+                    <p className="font-medium">已触发人工介入</p>
+                    <p className="mt-1">
+                      连续低分 {intervention.consecutiveLowQualityRuns}/{intervention.threshold} 次。
+                      {intervention.failingChapterNumber
+                        ? ` 问题章节：第 ${intervention.failingChapterNumber} 章。`
+                        : ''}
+                    </p>
+                    {intervention.reason ? <p className="mt-1">{intervention.reason}</p> : null}
+                    {intervention.expiresAt ? (
+                      <p className="mt-1">有效期至：{new Date(intervention.expiresAt).toLocaleString('zh-CN')}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {!intervention?.required && markerChapterNumbers.length > 0 ? (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700">
+                    <p className="font-medium">人工介入提醒已过期</p>
+                    <p className="mt-1">
+                      已保留问题章节标记：第 {markerChapterNumbers.join('、第 ')} 章。
+                    </p>
+                  </div>
+                ) : null}
                 <Separator />
               </>
             )}
 
             {/* Schedule Config */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
               <div className="space-y-2">
                 <Label htmlFor="dailyTime">每日生成时间</Label>
                 <Input
@@ -172,6 +214,17 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
                   type="time"
                   value={config.dailyStartTime}
                   onChange={(e) => setConfig({ ...config, dailyStartTime: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="runEveryDays">每隔几天</Label>
+                <Input
+                  id="runEveryDays"
+                  type="number"
+                  min={1}
+                  max={14}
+                  value={config.runEveryDays}
+                  onChange={(e) => setConfig({ ...config, runEveryDays: Number(e.target.value) })}
                 />
               </div>
               <div className="space-y-2">
@@ -209,7 +262,7 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
                 <p className="text-xs text-muted-foreground">任一章节低于阈值即自动停止当次连载任务</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pl-4 border-l-2 border-primary/20">
+              <div className="grid grid-cols-1 gap-3 border-l-2 border-primary/20 pl-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label className="text-xs">最低写作质量分</Label>
                   <Input

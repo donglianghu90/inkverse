@@ -32,11 +32,12 @@ export class BookAgentPipelineService {
   async initDefault(bookId: string): Promise<void> {
     const existing = await this.pipelineRepo.findOneBy({ bookId });
     if (existing) return;
+    const defaults = this.cloneDefaultNodes();
     await this.pipelineRepo.save(
       this.pipelineRepo.create({
         bookId,
-        draftNodes: DEFAULT_PIPELINE_NODES,
-        publishedNodes: DEFAULT_PIPELINE_NODES,
+        draftNodes: defaults,
+        publishedNodes: this.cloneDefaultNodes(),
         publishedAt: new Date(),
       }),
     );
@@ -49,26 +50,29 @@ export class BookAgentPipelineService {
       await this.initDefault(bookId);
       entity = await this.pipelineRepo.findOneBy({ bookId });
     }
-    return this.toView(entity!);
+    entity = await this.ensureEntityNormalized(entity!);
+    return this.toView(entity);
   }
 
   async saveDraft(bookId: string, nodes: AgentNodeConfig[]): Promise<PipelineView> {
-    this.validateNodes(nodes);
+    const normalizedDraft = this.normalizeNodes(nodes);
+    this.validateNodes(normalizedDraft);
     let entity = await this.pipelineRepo.findOneBy({ bookId });
     if (!entity) {
       await this.initDefault(bookId);
       entity = await this.pipelineRepo.findOneBy({ bookId });
     }
-    entity!.draftNodes = nodes;
+    entity!.draftNodes = normalizedDraft;
     await this.pipelineRepo.save(entity!);
-    this.logger.log(`[Pipeline] 草稿已保存 bookId=${bookId} nodes=${nodes.length}`);
+    this.logger.log(`[Pipeline] 草稿已保存 bookId=${bookId} nodes=${normalizedDraft.length}`);
     return this.toView(entity!);
   }
 
   async publish(bookId: string): Promise<PipelineView> {
-    const entity = await this.pipelineRepo.findOneBy({ bookId });
+    let entity = await this.pipelineRepo.findOneBy({ bookId });
     if (!entity) throw new NotFoundException(`Pipeline not found: ${bookId}`);
-    entity.publishedNodes = entity.draftNodes;
+    entity = await this.ensureEntityNormalized(entity);
+    entity.publishedNodes = this.normalizeNodes(entity.draftNodes);
     entity.publishedAt = new Date();
     await this.pipelineRepo.save(entity);
     this.logger.log(`[Pipeline] 已发布 bookId=${bookId}`);
@@ -77,19 +81,83 @@ export class BookAgentPipelineService {
 
   async getPublishedNodes(bookId: string): Promise<AgentNodeConfig[]> {
     const entity = await this.pipelineRepo.findOneBy({ bookId });
-    if (!entity?.publishedNodes) return DEFAULT_PIPELINE_NODES;
-    return entity.publishedNodes;
+    if (!entity?.publishedNodes) return this.cloneDefaultNodes();
+    const normalized = this.normalizeNodes(entity.publishedNodes);
+    if (JSON.stringify(normalized) !== JSON.stringify(entity.publishedNodes)) {
+      entity.publishedNodes = normalized;
+      await this.pipelineRepo.save(entity);
+    }
+    return normalized;
   }
 
   private validateNodes(nodes: AgentNodeConfig[]): void {
-    const coreIds = ['intent', 'creative-writer', 'recorder'];
+    const coreIds = ['intent', 'arc-director', 'creative-writer', 'recorder'];
     for (const coreId of coreIds) {
       const node = nodes.find((n) => n.id === coreId);
       if (!node) throw new BadRequestException(`核心节点 ${coreId} 不能删除`);
       if (!node.isEnabled) throw new BadRequestException(`核心节点 ${coreId} 不能禁用`);
     }
-    const writerNode = nodes.find((n) => n.id === 'creative-writer');
-    if (!writerNode) throw new BadRequestException('creative-writer 节点不能删除');
+  }
+
+  private cloneDefaultNodes(): AgentNodeConfig[] {
+    return DEFAULT_PIPELINE_NODES.map((n) => ({
+      ...n,
+      rfPosition: { ...n.rfPosition },
+      ...(n.customConfig ? { customConfig: { ...n.customConfig } } : {}),
+    }));
+  }
+
+  private normalizeNodes(nodes: AgentNodeConfig[] | null | undefined): AgentNodeConfig[] {
+    const current = (nodes ?? []).map((n) => ({
+      ...n,
+      rfPosition: { ...(n.rfPosition ?? { x: 300, y: 0 }) },
+      ...(n.customConfig ? { customConfig: { ...n.customConfig } } : {}),
+    }));
+    const byId = new Map(current.map((n) => [n.id, n]));
+    const ordered: AgentNodeConfig[] = [];
+
+    for (const fallback of this.cloneDefaultNodes()) {
+      const existing = byId.get(fallback.id);
+      if (existing) {
+        ordered.push({
+          ...fallback,
+          ...existing,
+          rfPosition: existing.rfPosition ?? fallback.rfPosition,
+        });
+        byId.delete(fallback.id);
+      } else {
+        ordered.push(fallback);
+      }
+    }
+
+    const customNodes = current
+      .filter((n) => byId.has(n.id))
+      .sort((a, b) => a.position - b.position);
+    ordered.push(...customNodes);
+
+    return ordered.map((n, idx) => ({
+      ...n,
+      position: idx,
+      rfPosition: n.rfPosition ?? { x: 300, y: idx * 160 },
+    }));
+  }
+
+  private async ensureEntityNormalized(
+    entity: BookAgentPipelineEntity,
+  ): Promise<BookAgentPipelineEntity> {
+    const normalizedDraft = this.normalizeNodes(entity.draftNodes);
+    const normalizedPublished = entity.publishedNodes
+      ? this.normalizeNodes(entity.publishedNodes)
+      : null;
+    const changed =
+      JSON.stringify(normalizedDraft) !== JSON.stringify(entity.draftNodes) ||
+      JSON.stringify(normalizedPublished) !== JSON.stringify(entity.publishedNodes);
+    if (!changed) return entity;
+
+    entity.draftNodes = normalizedDraft;
+    entity.publishedNodes = normalizedPublished;
+    await this.pipelineRepo.save(entity);
+    return entity;
   }
 
   private toView(entity: BookAgentPipelineEntity): PipelineView {

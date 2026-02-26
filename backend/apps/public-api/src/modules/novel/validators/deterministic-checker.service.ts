@@ -114,6 +114,53 @@ export class DeterministicCheckerService {
       }
     }
 
+    // ── 讲述而非展示 (telling vs showing) ──
+    const tellingPatterns = content.match(/[他她](?:感到|感受到|觉得|意识到|知道|明白|认为|确信|心想|心中暗想|心中暗道|内心深处)/g);
+    const tellingCount = tellingPatterns?.length ?? 0;
+    if (tellingCount > 5) {
+      failedChecks.push({
+        rule: 'telling_not_showing',
+        detail: `"讲述而非展示"出现 ${tellingCount} 次（上限5），用动作/感官替代直述情绪`,
+      });
+    }
+
+    // ── 段首句式重复 ──
+    const lines = content.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+    let maxConsecutiveSameStart = 1, curRun = 1, lastStart = '';
+    for (const line of lines) {
+      const first = line.charAt(0);
+      if (first === lastStart && /[他她]/.test(first)) { curRun++; maxConsecutiveSameStart = Math.max(maxConsecutiveSameStart, curRun); }
+      else { curRun = 1; }
+      lastStart = first;
+    }
+    if (maxConsecutiveSameStart >= 4) {
+      failedChecks.push({
+        rule: 'paragraph_start_repetition',
+        detail: `连续 ${maxConsecutiveSameStart} 段以相同字（他/她）开头，缺乏句式变化`,
+      });
+    }
+
+    // ── AI味深层检测 ──
+    const aiSmellPhrases = ['不禁', '不由得', '不由自主', '深吸一口气', '长舒一口气', '嘴角微扬', '嘴角上扬', '眼中闪过一丝', '目光微凝'];
+    const aiSmellHits = aiSmellPhrases.filter((p) => content.includes(p));
+    if (aiSmellHits.length >= 4) {
+      failedChecks.push({
+        rule: 'ai_smell_patterns',
+        detail: `AI味套路表达 ${aiSmellHits.length} 种：${aiSmellHits.join('、')}`,
+      });
+    }
+
+    // ── 对话标签重复 ──
+    const dialogueTags = content.match(/[说道](?:：|:)/g);
+    const dialogueTagCount = dialogueTags?.length ?? 0;
+    const dialogueLines = content.match(/["「].+?["」]/g)?.length ?? 0;
+    if (dialogueLines >= 5 && dialogueTagCount / Math.max(dialogueLines, 1) > 0.7) {
+      failedChecks.push({
+        rule: 'monotone_dialogue_tags',
+        detail: `对话标签过于单调（${dialogueTagCount}/${dialogueLines}句用"说/道"），需增加动作标签`,
+      });
+    }
+
     return {
       pass: failedChecks.length === 0,
       failedChecks,

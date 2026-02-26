@@ -24,6 +24,14 @@ export class ConfigureAutoSerializationDto {
   @Max(50)
   chaptersPerRun!: number;
 
+  @ApiPropertyOptional({ description: '每隔几天运行一次（1 表示每天）', default: 1, minimum: 1, maximum: 14, example: 2 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(14)
+  runEveryDays?: number;
+
   @ApiPropertyOptional({ description: '每章最大修复轮数', default: 2, minimum: 1, maximum: 8, example: 2 })
   @IsOptional()
   @Type(() => Number)

@@ -16,6 +16,8 @@ import {
   REVIEWER_RUBRIC_PLAYBOOK,
   CONTINUITY_BASELINE_PLAYBOOK,
   CHARACTER_ARC_PLAYBOOK,
+  PROSE_CRAFT_PLAYBOOK,
+  CHAPTER_RHYTHM_PLAYBOOK,
   buildCompactContext,
 } from '../prompting/novel-playbook';
 
@@ -112,7 +114,10 @@ ${cal.genreSpecificChecks.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 - overallScore < 6.0 或有critical → "major_issues"
 
 ${CONTINUITY_BASELINE_PLAYBOOK}
-${CHARACTER_ARC_PLAYBOOK}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
+${CHARACTER_ARC_PLAYBOOK}
+${PROSE_CRAFT_PLAYBOOK}
+${CHAPTER_RHYTHM_PLAYBOOK}
+${state.bookPromptProfile?.writerGuide ? `\n=== 主题检查 ===\n${state.seed.thematicCore ? `核心命题：${state.seed.thematicCore.centralQuestion}\n本章是否在某个层面触及了核心命题？不需要每章直接讨论，但读者应该能隐约感受到。完全脱离主题的纯过渡章——engagement扣分。` : '（无主题内核，跳过）'}` : ''}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
       })(),
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}
@@ -157,7 +162,17 @@ strengths 要求：
 
 suggestedFix 要求：
 - 每个 issue 必须给出具体可执行的修改建议。
-- 示例："第5段的'他心中一惊'改为具体反应，如手中物品跌落或动作停顿"。`,
+- 示例："第5段的'他心中一惊'改为具体反应，如手中物品跌落或动作停顿"。
+${(() => {
+  const fs = state.feedbackState;
+  if (!fs?.lastAnalysis || fs.confidence === 'none') return '';
+  const a = fs.lastAnalysis;
+  const lines: string[] = ['\n读者反馈审查（额外检查项）：'];
+  if (a.bookLevel.neverAgain.length) lines.push(`□ 永久红线（触发即critical）：${a.bookLevel.neverAgain.join('；')}`);
+  const painPoints = [...a.bookLevel.coreIssues, ...a.arcLevel.suggestions].filter((s) => s.verdict === 'adopt').map((s) => s.suggestion);
+  if (painPoints.length) lines.push(`□ 已确认的读者痛点（出现则moderate）：${painPoints.join('；')}`);
+  return lines.length > 1 ? lines.join('\n') : '';
+})()}`,
       temperature: 0.4,
     });
   }

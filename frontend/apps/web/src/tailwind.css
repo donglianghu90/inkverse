@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Serif+SC:wght@400;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -100,5 +102,27 @@
   }
   ::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.35);
+  }
+}
+
+/* Global smooth transitions for interactive elements */
+@layer base {
+  button, a, input, textarea, select {
+    @apply transition-colors duration-150;
+  }
+}
+
+/* Selection color */
+@layer base {
+  ::selection {
+    background: hsl(var(--primary) / 0.2);
+    color: hsl(var(--foreground));
+  }
+}
+
+/* Placeholder text style */
+@layer base {
+  ::placeholder {
+    @apply text-muted-foreground/50;
   }
 }

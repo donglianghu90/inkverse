@@ -508,5 +508,91 @@ export class DetailStoreService {
     store.items = items;
     await this.save(bookId, store);
   }
-}
 
+  /**
+   * 删除指定章节在细节仓中的章节级记录（用于手动改章后的重算前清理）。
+   * 注意：不删除 location sensoryAnchors（无 chapter 维度）。
+   */
+  async removeChapterContributions(
+    bookId: string,
+    chapterNumber: number,
+  ): Promise<void> {
+    const store = await this.load(bookId);
+    let changed = false;
+
+    const nextCharacters = (store.characters ?? [])
+      .map((c) => {
+        const nextSnippets = (c.descriptionSnippets ?? []).filter(
+          (s) => s.chapterNumber !== chapterNumber,
+        );
+        if (nextSnippets.length !== (c.descriptionSnippets ?? []).length) changed = true;
+        return {
+          ...c,
+          descriptionSnippets: nextSnippets,
+        };
+      })
+      .filter((c) => c.signatureActions.length > 0 || c.descriptionSnippets.length > 0);
+
+    const nextLocations = (store.locations ?? [])
+      .map((l) => {
+        const nextVisits = (l.visitMemories ?? []).filter(
+          (v) => v.chapterNumber !== chapterNumber,
+        );
+        const nextSnippets = (l.descriptionSnippets ?? []).filter(
+          (s) => s.chapterNumber !== chapterNumber,
+        );
+        if (
+          nextVisits.length !== (l.visitMemories ?? []).length ||
+          nextSnippets.length !== (l.descriptionSnippets ?? []).length
+        ) {
+          changed = true;
+        }
+        return {
+          ...l,
+          visitMemories: nextVisits,
+          descriptionSnippets: nextSnippets,
+        };
+      })
+      .filter(
+        (l) =>
+          (l.sensoryAnchors?.length ?? 0) > 0 ||
+          (l.visitMemories?.length ?? 0) > 0 ||
+          (l.descriptionSnippets?.length ?? 0) > 0,
+      );
+
+    const nextItems = (store.items ?? [])
+      .map((i) => {
+        const nextEffects = (i.activationEffects ?? []).filter(
+          (e) => e.chapterNumber !== chapterNumber,
+        );
+        const nextSnippets = (i.descriptionSnippets ?? []).filter(
+          (s) => s.chapterNumber !== chapterNumber,
+        );
+        if (
+          nextEffects.length !== (i.activationEffects ?? []).length ||
+          nextSnippets.length !== (i.descriptionSnippets ?? []).length
+        ) {
+          changed = true;
+        }
+        return {
+          ...i,
+          activationEffects: nextEffects,
+          descriptionSnippets: nextSnippets,
+        };
+      })
+      .filter(
+        (i) =>
+          (i.sensorySignature && Object.keys(i.sensorySignature).length > 0) ||
+          (i.activationEffects?.length ?? 0) > 0 ||
+          (i.descriptionSnippets?.length ?? 0) > 0,
+      );
+
+    if (!changed) return;
+
+    await this.save(bookId, {
+      characters: nextCharacters,
+      locations: nextLocations,
+      items: nextItems,
+    });
+  }
+}

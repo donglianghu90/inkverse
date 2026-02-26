@@ -60,6 +60,7 @@ const DEFAULT_TASK_TIER: Record<string, ModelTier> = {
   'character-canon-arbiter': 'lightweight',
   // V2 agents
   'seed-analyzer': 'standard',
+  'arc-director': 'standard',
   'chapter-intent': 'standard',
   'creative-writer': 'creative',
   'chapter-reviewer': 'standard',
@@ -74,6 +75,12 @@ const DEFAULT_TASK_TIER: Record<string, ModelTier> = {
   'style-anchoring': 'lightweight',
   'location-sensory-extract': 'lightweight',
   'item-sensory-extract': 'lightweight',
+  'scene-planner': 'standard', // 场景规划需要逻辑能力
+  'scene-writer': 'creative', // 场景写作需要创造力
+  'scene-stitcher': 'creative', // 场景缝合需要文学功底
+  'volume-director': 'standard', // 大卷规划需要全局视野
+  'volume-foreshadowing': 'standard', // 前瞻式伏笔需要通盘考虑
+  'reader-pulse-analyzer': 'standard', // 读者反馈分析需要准确判断
 };
 
 interface LlmCachedConfig {

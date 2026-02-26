@@ -20,6 +20,7 @@ import {
   Save,
   X,
 } from 'lucide-react';
+import emptyBookshelfImg from '@/assets/illustrations/empty-bookshelf.png';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -29,7 +30,7 @@ import { cn } from '@/lib/utils';
 import {
   getBook,
   listChapters,
-  generateChapter,
+  getAutoSerialization,
   updateChapter,
   type BookInfo,
   type ChapterItem,
@@ -94,7 +95,15 @@ const Workbench: React.FC = () => {
   const [editCharCount, setEditCharCount] = useState(0);
   const [saving, setSaving] = useState(false);
   const [contentVersion, setContentVersion] = useState(0);
+  const [interventionAlert, setInterventionAlert] = useState<{
+    reason: string | null;
+    failingChapterNumber: number | null;
+    consecutiveLowQualityRuns: number;
+    threshold: number;
+  } | null>(null);
+  const [interventionMarkerChapters, setInterventionMarkerChapters] = useState<number[]>([]);
   const articleRef = useRef<HTMLDivElement>(null);
+  const esRef = useRef<EventSource | null>(null);
 
   const fetchData = useCallback(async () => {
     if (!bookId) return;
@@ -103,9 +112,26 @@ const Workbench: React.FC = () => {
         getBook(bookId),
         listChapters(bookId),
       ]);
+      const auto = await getAutoSerialization(bookId).catch(() => null);
       setBook(bookInfo);
       const sorted = [...chaptersRes.chapters].sort((a, b) => a.chapterNumber - b.chapterNumber);
       setChapters(sorted);
+      setInterventionAlert(
+        auto?.intervention?.required
+          ? {
+              reason: auto.intervention.reason,
+              failingChapterNumber: auto.intervention.failingChapterNumber,
+              consecutiveLowQualityRuns: auto.intervention.consecutiveLowQualityRuns,
+              threshold: auto.intervention.threshold,
+            }
+          : null,
+      );
+      setInterventionMarkerChapters(
+        auto?.intervention?.markerChapterNumbers ??
+        (auto?.intervention?.markerChapterNumber
+          ? [auto.intervention.markerChapterNumber]
+          : []),
+      );
       if (sorted.length > 0 && !selectedChapter) {
         setSelectedChapter(sorted[sorted.length - 1]);
       }
@@ -120,17 +146,68 @@ const Workbench: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
+  useEffect(() => () => { esRef.current?.close(); }, []);
+
   const handleGenerate = useCallback(async () => {
     if (!bookId) return;
     setGenerating(true);
     setGenProgress(0);
     setGenStep('');
+    const baselineChapterCount = book?.chaptersGenerated ?? chapters.length;
 
     const proxyBase = '/api/novel';
     const url = `${proxyBase}/books/${bookId}/chapters/generate-sse`;
+    esRef.current?.close();
     const es = new EventSource(url);
+    esRef.current = es;
+
+    let settled = false;
+    const STALE_MS = 300_000;
+    let staleTimer: ReturnType<typeof setTimeout>;
+
+    const syncLatestData = async (preferChapterNumber?: number) => {
+      const [bookInfo, chaptersRes] = await Promise.all([
+        getBook(bookId),
+        listChapters(bookId),
+      ]);
+      setBook(bookInfo);
+      const sorted = [...chaptersRes.chapters].sort((a, b) => a.chapterNumber - b.chapterNumber);
+      setChapters(sorted);
+      if (preferChapterNumber) {
+        const preferred = sorted.find((ch) => ch.chapterNumber === preferChapterNumber);
+        if (preferred) { setSelectedChapter(preferred); return; }
+      }
+      if (sorted.length > 0) setSelectedChapter(sorted[sorted.length - 1]);
+    };
+
+    const recover = async () => {
+      setGenStep('连接中断，正在确认生成结果...');
+      let confirmed = false;
+      for (let i = 0; i < 10; i += 1) {
+        try {
+          const latestBook = await getBook(bookId);
+          if (latestBook.chaptersGenerated > baselineChapterCount) {
+            await syncLatestData();
+            confirmed = true;
+            break;
+          }
+        } catch { /* retry */ }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      if (!confirmed) message.error('生成连接中断，未确认到新章节，请稍后刷新重试');
+      setGenerating(false);
+      setGenProgress(0);
+      setGenStep('');
+    };
+
+    const touchStale = () => {
+      clearTimeout(staleTimer);
+      staleTimer = setTimeout(() => { if (!settled) { settled = true; es.close(); recover(); } }, STALE_MS);
+    };
+    touchStale();
 
     es.onmessage = (event) => {
+      touchStale();
       try {
         const data = JSON.parse(event.data);
         if (data.totalSteps > 0) {
@@ -138,26 +215,21 @@ const Workbench: React.FC = () => {
         }
         setGenStep(data.message ?? '');
         if (data.done) {
+          settled = true;
+          clearTimeout(staleTimer);
           es.close();
           (async () => {
-            const [bookInfo, chaptersRes] = await Promise.all([
-              getBook(bookId),
-              listChapters(bookId),
-            ]);
-            setBook(bookInfo);
-            const sorted = [...chaptersRes.chapters].sort((a, b) => a.chapterNumber - b.chapterNumber);
-            setChapters(sorted);
-            if (data.chapterNumber) {
-              const newCh = sorted.find((ch: any) => ch.chapterNumber === data.chapterNumber);
-              if (newCh) setSelectedChapter(newCh);
-            }
+            await syncLatestData(data.chapterNumber);
             setGenerating(false);
             setGenProgress(0);
             setGenStep('');
           })();
         }
         if (data.error) {
+          settled = true;
+          clearTimeout(staleTimer);
           es.close();
+          message.error(data.error || '生成失败，请重试');
           setGenerating(false);
           setGenProgress(0);
           setGenStep('');
@@ -166,26 +238,13 @@ const Workbench: React.FC = () => {
     };
 
     es.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(staleTimer);
       es.close();
-      (async () => {
-        try {
-          const result = await generateChapter(bookId);
-          const [bookInfo, chaptersRes] = await Promise.all([
-            getBook(bookId),
-            listChapters(bookId),
-          ]);
-          setBook(bookInfo);
-          const sorted = [...chaptersRes.chapters].sort((a, b) => a.chapterNumber - b.chapterNumber);
-          setChapters(sorted);
-          const newChapter = sorted.find((ch) => ch.chapterNumber === result.chapterNumber);
-          if (newChapter) setSelectedChapter(newChapter);
-        } catch {}
-        setGenerating(false);
-        setGenProgress(0);
-        setGenStep('');
-      })();
+      recover();
     };
-  }, [bookId]);
+  }, [bookId, book?.chaptersGenerated, chapters.length]);
 
   const handleBatchDone = useCallback(() => {
     setShowBatchDialog(false);
@@ -311,11 +370,13 @@ const Workbench: React.FC = () => {
   }
 
   return (
-    <div className="flex h-[calc(100vh-57px)]">
+    <div className="flex min-h-[calc(100vh-57px)] flex-col lg:h-[calc(100vh-57px)] lg:flex-row">
       {/* Sidebar */}
-      <div className="flex w-80 flex-col border-r bg-card/50">
+      <div className="flex w-full flex-col border-b bg-card/50 lg:h-full lg:w-80 lg:border-b-0 lg:border-r">
         {/* Book Header */}
-        <div className="border-b p-4 bg-card">
+        <div className="border-b bg-card">
+          <div className="h-0.5 bg-gradient-to-r from-primary/60 via-primary/20 to-transparent" />
+          <div className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <Button
               variant="ghost"
@@ -325,7 +386,7 @@ const Workbench: React.FC = () => {
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
-            <h2 className="font-semibold truncate text-sm">《{book.title}》</h2>
+            <h2 className="font-bold truncate text-base tracking-tight">《{book.title}》</h2>
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground ml-9">
             {book.genre && <Badge variant="secondary" className="text-xs">{book.genre}</Badge>}
@@ -347,13 +408,26 @@ const Workbench: React.FC = () => {
               </>
             )}
           </div>
+          {interventionAlert && (
+            <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-2.5 py-2 text-[11px] text-red-700">
+              <p className="font-medium">需要人工介入</p>
+              <p className="mt-1">
+                连续低分 {interventionAlert.consecutiveLowQualityRuns}/{interventionAlert.threshold} 次。
+                {interventionAlert.failingChapterNumber
+                  ? ` 重点检查第 ${interventionAlert.failingChapterNumber} 章。`
+                  : ''}
+              </p>
+              {interventionAlert.reason ? <p className="mt-1">{interventionAlert.reason}</p> : null}
+            </div>
+          )}
+          </div>
         </div>
 
         {/* Sidebar Tabs */}
         <Tabs
           value={sidebarTab}
           onValueChange={(v) => setSidebarTab(v as 'chapters' | 'quality')}
-          className="flex-1 flex flex-col min-h-0"
+          className="flex flex-col min-h-0 lg:flex-1"
         >
           <TabsList className="mx-4 mt-3 grid w-auto grid-cols-2">
             <TabsTrigger value="chapters" className="gap-1 text-xs">
@@ -366,8 +440,8 @@ const Workbench: React.FC = () => {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="chapters" className="flex-1 mt-0 overflow-hidden">
-            <ScrollArea className="h-full">
+          <TabsContent value="chapters" className="mt-0 overflow-hidden lg:flex-1">
+            <ScrollArea className="max-h-72 lg:h-full lg:max-h-none">
               <div className="p-2 space-y-0.5">
                 {chapters.length === 0 ? (
                   <div className="flex flex-col items-center py-12 text-muted-foreground text-sm gap-2">
@@ -398,9 +472,16 @@ const Workbench: React.FC = () => {
                           {ch.chapterNumber}
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className={cn('truncate', isActive ? 'font-semibold' : 'font-medium')}>
-                            {ch.title}
-                          </p>
+                          <div className="flex items-center gap-1.5">
+                            <p className={cn('truncate', isActive ? 'font-semibold' : 'font-medium')}>
+                              {ch.title}
+                            </p>
+                            {interventionMarkerChapters.includes(ch.chapterNumber) ? (
+                              <span className="rounded border border-amber-300 bg-amber-50 px-1 py-0 text-[10px] text-amber-700">
+                                问题标记
+                              </span>
+                            ) : null}
+                          </div>
                           <p className="text-xs text-muted-foreground mt-0.5">
                             {new Date(ch.createdAt).toLocaleDateString('zh-CN')}
                           </p>
@@ -417,8 +498,8 @@ const Workbench: React.FC = () => {
             </ScrollArea>
           </TabsContent>
 
-          <TabsContent value="quality" className="flex-1 mt-0 overflow-hidden">
-            <ScrollArea className="h-full">
+          <TabsContent value="quality" className="mt-0 overflow-hidden lg:flex-1">
+            <ScrollArea className="max-h-72 lg:h-full lg:max-h-none">
               <div className="p-4">
                 <QualityDashboard latestKpi={book.latestKpi} />
               </div>
@@ -502,8 +583,8 @@ const Workbench: React.FC = () => {
         {selectedChapter ? (
           <>
             {/* Chapter Header */}
-            <div className="flex items-center justify-between border-b px-8 py-4 bg-card/30">
-              <div className="min-w-0 flex-1 mr-4">
+            <div className="flex flex-col gap-3 border-b bg-card/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-8 sm:py-4">
+              <div className="min-w-0 flex-1 sm:mr-4">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1.5 uppercase tracking-wider font-medium">
                   <BookOpen className="h-3.5 w-3.5" />
                   第 {selectedChapter.chapterNumber} 章
@@ -519,7 +600,7 @@ const Workbench: React.FC = () => {
                   <h1 className="text-xl font-bold tracking-tight">{selectedChapter.title}</h1>
                 )}
               </div>
-              <div className="flex items-center gap-3 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 shrink-0 sm:gap-3">
                 {isEditing ? (
                   <>
                     <span className="text-xs text-muted-foreground tabular-nums">
@@ -583,7 +664,7 @@ const Workbench: React.FC = () => {
                 key={`${selectedChapter.chapterNumber}-${contentVersion}`}
                 ref={articleRef}
                 className={cn(
-                  'mx-auto max-w-2xl px-8 py-10 outline-none transition-shadow rounded-lg',
+                  'mx-auto max-w-2xl rounded-lg px-4 py-6 outline-none transition-shadow sm:px-8 sm:py-10',
                   isEditing && 'ring-1 ring-primary/10 bg-card/30 cursor-text',
                 )}
                 contentEditable={isEditing}
@@ -597,10 +678,8 @@ const Workbench: React.FC = () => {
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center">
-            <div className="text-center space-y-3">
-              <div className="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center mx-auto">
-                <BookOpen className="h-8 w-8 text-muted-foreground/30" />
-              </div>
+            <div className="text-center space-y-2">
+              <img src={emptyBookshelfImg} alt="" className="w-48 h-auto mx-auto mb-2 pointer-events-none select-none opacity-80" draggable={false} />
               <p className="text-muted-foreground font-medium">选择一个章节开始阅读</p>
               <p className="text-sm text-muted-foreground">
                 或者点击「生成下一章」创作新内容
@@ -611,7 +690,7 @@ const Workbench: React.FC = () => {
 
         {/* Generation Progress Bar */}
         {generating && (
-          <div className="border-t bg-card px-8 py-4">
+          <div className="border-t bg-card px-4 py-3 sm:px-8 sm:py-4">
             <div className="flex items-center gap-4">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
