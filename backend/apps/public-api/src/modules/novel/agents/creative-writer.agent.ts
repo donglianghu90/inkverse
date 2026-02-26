@@ -15,8 +15,9 @@ import {
 } from '../schemas/novel-state.schemas';
 import { ChapterDraft, chapterDraftSchema } from '../schemas/novel.schemas';
 import {
-  FIRST_CHAPTERS_PLAYBOOK,
+  buildFirstChaptersPlaybook,
   CHAPTER_TYPE_TEMPLATES,
+  THREAD_AWARENESS_PLAYBOOK,
   buildCompactContextProse,
   buildKpiTrendHints,
   buildStyleDNA,
@@ -38,16 +39,14 @@ export class CreativeWriterAgent {
     state: StoryState,
   ): { type: 'setup' | 'rising' | 'climax' | 'relief' | 'general'; temperature: number } {
     const beat = this.findCurrentBeat(intent, state);
-    if (beat?.role) {
-      const map: Record<string, { type: 'setup' | 'rising' | 'climax' | 'relief'; temperature: number }> = {
-        setup: { type: 'setup', temperature: 0.80 },
-        escalation: { type: 'rising', temperature: 0.82 },
-        twist: { type: 'climax', temperature: 0.88 },
-        climax: { type: 'climax', temperature: 0.90 },
-        aftermath: { type: 'relief', temperature: 0.78 },
-        transition: { type: 'relief', temperature: 0.78 },
+    if (beat) {
+      const typeMap: Record<string, 'setup' | 'rising' | 'climax' | 'relief'> = {
+        setup: 'setup', escalation: 'rising', twist: 'climax',
+        climax: 'climax', aftermath: 'relief', transition: 'relief',
       };
-      return map[beat.role] ?? { type: 'general', temperature: 0.85 };
+      const type = typeMap[beat.role] ?? 'general';
+      const temperature = Math.min(0.95, 0.75 + beat.tensionLevel * 0.02); // tensionLevel 1→0.77, 5→0.85, 10→0.95
+      return { type, temperature };
     }
     return { type: 'general', temperature: 0.85 };
   }
@@ -87,7 +86,7 @@ export class CreativeWriterAgent {
       blocks.push(soul.join('\n'));
     }
     const soul: string[] = [profile.writerGuide.coreIdentity];
-    soul.push('你的使命是"创作故事"而非"执行任务"。意图给方向，你有完全的创作自由。好的意外比严格执行计划更有价值。');
+    soul.push('你的使命是"创作故事"而非"执行任务"。意图给方向，铁律是安全边界，边界内你拥有充分的创作自由——好的意外比严格执行计划更有价值。');
     soul.push(`题材核心：${profile.writerGuide.genreRules.slice(0, 3).join('；')}`);
     soul.push(`节奏：${profile.writerGuide.pacingGuide}`);
     soul.push(`对话：${profile.writerGuide.dialogueGuide}，调性：${profile.writerGuide.toneGuide}`);
@@ -97,7 +96,7 @@ export class CreativeWriterAgent {
     // ── 第三层：本章技法 ──
     const template = CHAPTER_TYPE_TEMPLATES[chapterType];
     if (template) blocks.push(template);
-    if (intent.chapterNumber <= 3) blocks.push(FIRST_CHAPTERS_PLAYBOOK);
+    if (intent.chapterNumber <= 3) blocks.push(buildFirstChaptersPlaybook(profile.worldProfile?.goldenFingerApplicable));
     if (profile.writerGuide.craftExamples.length > 0) {
       blocks.push(`=== 正反例 ===\n${profile.writerGuide.craftExamples.slice(0, 2).map((e) => `坏：${e.bad} → 好：${e.good}`).join('\n')}`);
     }
@@ -111,6 +110,7 @@ export class CreativeWriterAgent {
     if (clicheNames.length > 0) limits.push(`反套话（每个最多1次）：${clicheNames.join('、')}`);
     limits.push('杀死AI味：角色不要对自己情绪过于自知，事件不要过于顺滑，对话允许停顿和词不达意');
     blocks.push(limits.join('\n'));
+    blocks.push(THREAD_AWARENESS_PLAYBOOK);
 
     const kpiHints = buildKpiTrendHints(state);
     if (kpiHints.length > 0) blocks.push(kpiHints.join('\n'));
@@ -312,7 +312,7 @@ ${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSect
 === 铁律 ===
 1. 只输出本场景正文（中文），禁止标题/编号/元叙述。
 2. 视角：${povChar?.name ?? scene.povCharacterId}——所有描写必须从此角色的感官和认知出发。
-3. 字数约 ${scene.estimatedWords} 字（±15%）。
+3. 字数硬约束：${Math.round(scene.estimatedWords * 0.85)}-${Math.round(scene.estimatedWords * 1.1)}字。超过${Math.round(scene.estimatedWords * 1.15)}字会严重影响全章节奏，宁可精炼也不要注水。
 
 === 本场景使命 ===
 - 类型：${scene.purpose}（${PURPOSE_HINT[scene.purpose] ?? ''}）
@@ -382,7 +382,7 @@ ${scene.characterMoment ? `\n=== 角色深度时刻 ===\n${charMap.get(scene.cha
       if (lines.length) userPrompt += `读者反馈红线（必须遵守neverAgain，人气仅参考）：\n${lines.join('\n')}\n\n`;
     }
 
-    userPrompt += `现在请写第${scene.sceneIndex + 1}场景（约${scene.estimatedWords}字）。只输出正文。`;
+    userPrompt += `现在请写第${scene.sceneIndex + 1}场景（${Math.round(scene.estimatedWords * 0.85)}-${Math.round(scene.estimatedWords * 1.1)}字，硬上限${Math.round(scene.estimatedWords * 1.15)}字）。只输出正文。`;
 
     return this.llm.generateStructured({
       taskName: 'scene-writer',
@@ -397,7 +397,7 @@ ${scene.characterMoment ? `\n=== 角色深度时刻 ===\n${charMap.get(scene.cha
       },
       systemPrompt,
       userPrompt,
-      temperature: Math.min(temperature + 0.03, 0.95), // 场景级略高创造性
+      temperature: Math.min(temperature + 0.08, 0.95),
     });
   }
 }

@@ -12,6 +12,7 @@ import {
 } from '../schemas/novel-state.schemas';
 import {
   XIANXIA_REFERENCE_PROFILE,
+  ROMANCE_REFERENCE_PROFILE,
   formatProfileAsExample,
 } from '../prompting/reference-profiles';
 
@@ -29,8 +30,15 @@ interface ProfileInput {
 export class PromptProfilerAgent {
   constructor(private readonly llm: LlmService) {}
 
+  private selectReference(genre: string): BookPromptProfile { // 根据题材选择最接近的参考Profile
+    const g = genre.toLowerCase();
+    if (g.includes('言情') || g.includes('恋爱') || g.includes('都市') || g.includes('青春') || g.includes('romance')) return ROMANCE_REFERENCE_PROFILE;
+    return XIANXIA_REFERENCE_PROFILE;
+  }
+
   async generate(input: ProfileInput): Promise<BookPromptProfile> {
-    const referenceExample = formatProfileAsExample(XIANXIA_REFERENCE_PROFILE);
+    const bestRef = this.selectReference(input.genre);
+    const referenceExample = formatProfileAsExample(bestRef);
 
     return this.llm.generateStructured({
       taskName: 'prompt-profiler',
@@ -59,8 +67,10 @@ ${referenceExample}
   - 这些规则应该是具体可执行的，不是空泛的"写好角色"。
 
 3.【节奏指南 pacingGuide】
-  - 这个题材的理想节奏是什么样的？
-  - 多少章一个小高潮？什么时候该加速/减速？
+  - 描述这个题材的理想节奏"感觉"和原则。
+  - ⚠️ 禁止写死绝对章数间隔（如"每3-5章一个高潮"）——不同规模的小说（100章 vs 600章）需要完全不同的间隔。
+  - 用描述性语言说明节奏模式（如"铺垫不宜太长，尽快给小爽点"而非"不超过2章"），具体的爽感/满足间隔由 IntentAgent 根据实时状态动态决定。
+  - 说明什么时候该加速/减速，以及长短篇的节奏差异。
 
 4.【对话指南 dialogueGuide】
   - 这个题材的角色说话应该是什么风格？

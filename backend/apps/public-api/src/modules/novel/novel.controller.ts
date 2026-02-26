@@ -32,6 +32,8 @@ import { SubmitFeedbackDto } from './dto/submit-feedback.dto';
 import { NovelService } from './novel.service';
 import { NovelProgressService } from './novel-progress.service';
 import { BookAgentPipelineService } from './book-agent-pipeline.service';
+import { BookPromptTemplateService } from './book-prompt-template.service';
+import { WorkflowExecutionService } from './workflow-execution.service';
 import { AgentNodeConfig } from './entities/book-agent-pipeline.entity';
 import { Public } from '@packages/common/guards';
 import { CreateBookSessionService } from './create-book-session.service';
@@ -48,6 +50,8 @@ export class NovelController {
     private readonly progressService: NovelProgressService,
     private readonly pipelineService: BookAgentPipelineService,
     private readonly createBookSessionService: CreateBookSessionService,
+    private readonly promptTemplateService: BookPromptTemplateService,
+    private readonly executionService: WorkflowExecutionService,
   ) {}
 
   @Get('books')
@@ -272,6 +276,53 @@ export class NovelController {
     return this.novelService.listChapters(bookId, query.limit ?? 50);
   }
 
+  @Get('books/:bookId/generation-status')
+  @Public()
+  @ApiOperation({ summary: '查询生成状态', description: '返回书籍当前是否正在生成章节' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '成功' })
+  getGenerationStatus(@Param('bookId') bookId: string): unknown {
+    return this.progressService.isGenerating(bookId);
+  }
+
+  @Sse('books/:bookId/chapters/generate-sse')
+  @Public()
+  @ApiOperation({ summary: '生成章节（SSE）', description: '通过 SSE 流式推送章节生成进度，同一书籍并发调用返回当前进度而非重复生成' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  generateChapterSse(
+    @Param('bookId') bookId: string,
+  ): Observable<MessageEvent> {
+    const subject = new Subject<MessageEvent>();
+    const alreadyRunning = !this.progressService.markGenerating(bookId);
+
+    const unsubscribe = this.progressService.subscribe(bookId, (event) => {
+      subject.next({ data: event } as MessageEvent);
+      if (event.done || event.error) {
+        setTimeout(() => subject.complete(), 100);
+      }
+    });
+
+    if (alreadyRunning) {
+      const status = this.progressService.isGenerating(bookId);
+      subject.next({ data: { reconnected: true, message: '已重连到正在进行的生成任务', ...status } } as MessageEvent);
+      return subject.asObservable();
+    }
+
+    setTimeout(async () => {
+      try {
+        await this.novelService.generateChapter(bookId);
+      } catch (err: any) {
+        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
+        subject.complete();
+      } finally {
+        this.progressService.clearGenerating(bookId);
+        unsubscribe();
+      }
+    }, 0);
+
+    return subject.asObservable();
+  }
+
   @Get('books/:bookId/chapters/:chapterNumber')
   @Public()
   @ApiOperation({ summary: '获取指定章节', description: '返回章节完整内容' })
@@ -328,36 +379,6 @@ export class NovelController {
     @Param('jobId') jobId: string,
   ): Promise<unknown> {
     return this.novelService.getChapterResyncJob(bookId, jobId);
-  }
-
-  @Sse('books/:bookId/chapters/generate-sse')
-  @Public()
-  @ApiOperation({ summary: '生成章节（SSE）', description: '通过 SSE 流式推送章节生成进度' })
-  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
-  generateChapterSse(
-    @Param('bookId') bookId: string,
-  ): Observable<MessageEvent> {
-    const subject = new Subject<MessageEvent>();
-
-    const unsubscribe = this.progressService.subscribe(bookId, (event) => {
-      subject.next({ data: event } as MessageEvent);
-      if (event.done || event.error) {
-        setTimeout(() => subject.complete(), 100);
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-        await this.novelService.generateChapter(bookId);
-      } catch (err: any) {
-        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
-        subject.complete();
-      } finally {
-        unsubscribe();
-      }
-    }, 0);
-
-    return subject.asObservable();
   }
 
   @Get('books/:bookId/world')
@@ -532,6 +553,87 @@ export class NovelController {
   @ApiResponse({ status: 201, description: '发布成功' })
   async publishPipeline(@Param('bookId') bookId: string): Promise<unknown> {
     return this.pipelineService.publish(bookId);
+  }
+
+  @Get('books/:bookId/pipeline/topology')
+  @Public()
+  @ApiOperation({ summary: '获取工作流完整拓扑', description: '返回反映后端真实执行逻辑的完整工作流拓扑描述（含条件、循环、并行）' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '成功' })
+  async getTopology(@Param('bookId') bookId: string): Promise<unknown> {
+    return this.pipelineService.getTopology(bookId);
+  }
+
+  @Put('books/:bookId/pipeline/workflow-params')
+  @Public()
+  @ApiOperation({ summary: '更新工作流参数', description: '更新质量阈值、重写轮数等可配置参数' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '更新成功' })
+  async saveWorkflowParams(
+    @Param('bookId') bookId: string,
+    @Body() body: { qualityPassScore?: number; maxRepairRounds?: number; editorPolishThreshold?: number; longRangeMemoryThreshold?: number },
+  ): Promise<unknown> {
+    return this.pipelineService.saveWorkflowParams(bookId, body);
+  }
+
+  // ── Prompt Templates ─────────────────────────────────────────────────────
+
+  @Get('books/:bookId/prompt-templates')
+  @Public()
+  @ApiOperation({ summary: '获取 Prompt 模板', description: '返回当前书籍的所有 Prompt 模板（含 Playbooks 和 Agent 区块）' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  async getPromptTemplates(@Param('bookId') bookId: string): Promise<unknown> {
+    return this.promptTemplateService.getTemplates(bookId);
+  }
+
+  @Put('books/:bookId/prompt-templates/playbooks/:name')
+  @Public()
+  @ApiOperation({ summary: '更新 Playbook', description: '更新指定 Playbook 的内容' })
+  async updatePlaybook(
+    @Param('bookId') bookId: string,
+    @Param('name') name: string,
+    @Body() body: { content: string },
+  ): Promise<unknown> {
+    return this.promptTemplateService.updatePlaybook(bookId, name, body.content);
+  }
+
+  @Put('books/:bookId/prompt-templates/agents/:agentId/sections/:sectionKey')
+  @Public()
+  @ApiOperation({ summary: '更新 Agent Prompt 区块', description: '更新指定 Agent 的指定区块内容（锁定区块不可编辑）' })
+  async updateAgentSection(
+    @Param('bookId') bookId: string,
+    @Param('agentId') agentId: string,
+    @Param('sectionKey') sectionKey: string,
+    @Body() body: { content: string },
+  ): Promise<unknown> {
+    return this.promptTemplateService.updateAgentSection(bookId, agentId, sectionKey, body.content);
+  }
+
+  @Post('books/:bookId/prompt-templates/reset')
+  @Public()
+  @ApiOperation({ summary: '重置 Prompt 模板', description: '将所有模板重置为系统默认值' })
+  async resetPromptTemplates(@Param('bookId') bookId: string): Promise<unknown> {
+    return this.promptTemplateService.resetToDefaults(bookId);
+  }
+
+  // ── Workflow Executions ──────────────────────────────────────────────────
+
+  @Get('books/:bookId/executions')
+  @Public()
+  @ApiOperation({ summary: '执行记录列表', description: '返回最近的工作流执行记录' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  async listExecutions(@Param('bookId') bookId: string, @Query('limit') limit?: string): Promise<unknown> {
+    return this.executionService.listRuns(bookId, limit ? parseInt(limit, 10) : 20);
+  }
+
+  @Get('books/:bookId/chapters/:chapterNumber/execution')
+  @Public()
+  @ApiOperation({ summary: '章节最新执行记录', description: '返回指定章节最近一次的工作流执行数据' })
+  async getChapterExecution(
+    @Param('bookId') bookId: string,
+    @Param('chapterNumber', ParseIntPipe) chapterNumber: number,
+  ): Promise<unknown> {
+    return this.executionService.getLatestRun(bookId, chapterNumber);
   }
 
   // =========================================================================

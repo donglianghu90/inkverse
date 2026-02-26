@@ -293,6 +293,9 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
    * 1 LLM call: seed analysis + rough outline.
    */
   async createBook(dto: CreateBookDto, options?: CreateBookRuntimeOptions): Promise<unknown> {
+    let createdBookId = '';
+    return this.llmUsageTracker.runWithChapterScope({ bookId: '__creating__', chapterNumber: 0 }, async () => {
+      try {
     const t0 = Date.now();
     this.logger.log(
       `[createBook] ========== 极轻量开书 ==========\n` +
@@ -363,6 +366,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     emitCreate('init', 2, '初始化角色与世界');
     const bookEntity = await this.bookStateRepo.createEmpty();
     const bookId = bookEntity.bookId;
+    createdBookId = bookId;
     const now = new Date().toISOString();
 
     const protagonist = {
@@ -445,6 +449,14 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       currentArcAcceptance: state.currentArcAcceptance ?? null,
       completedArcAcceptanceReports: state.completedArcAcceptanceReports ?? [],
     };
+      } finally {
+        const usage = this.llmUsageTracker.consumeCurrentSummary();
+        if (usage && createdBookId) {
+          usage.bookId = createdBookId;
+          try { await this.persistArtifact(createdBookId, 0, 'llm_usage_summary', usage); } catch {}
+        }
+      }
+    });
   }
 
   async listBooks(): Promise<unknown> {
@@ -467,6 +479,49 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         };
       }),
     };
+  }
+
+  async getBookTokenUsage(bookId: string): Promise<unknown> {
+    await this.loadBookState(bookId);
+    const artifacts = await this.artifactRepo.find({ where: { bookId, name: 'llm_usage_summary' }, order: { chapterNumber: 'ASC' } });
+    let totalPromptTokens = 0, totalCompletionTokens = 0, totalTokens = 0, totalCostUsd = 0, totalCalls = 0;
+    const providerAgg = new Map<string, { calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number }>();
+    const modelAgg = new Map<string, { provider: string; tier: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; totalDurationMs: number }>();
+
+    const chapters = artifacts.map((a) => {
+      const p = a.payload as Record<string, any>;
+      const pt = typeof p.promptTokens === 'number' ? p.promptTokens : 0;
+      const ct = typeof p.completionTokens === 'number' ? p.completionTokens : 0;
+      const tt = typeof p.totalTokens === 'number' ? p.totalTokens : 0;
+      const cost = typeof p.estimatedCostUsd === 'number' ? p.estimatedCostUsd : 0;
+      const calls = typeof p.totalCalls === 'number' ? p.totalCalls : 0;
+      totalPromptTokens += pt; totalCompletionTokens += ct; totalTokens += tt; totalCostUsd += cost; totalCalls += calls;
+      // 聚合per-provider（从已持久化的byProvider字段）
+      if (Array.isArray(p.byProvider)) {
+        for (const bp of p.byProvider) {
+          const k = bp.provider ?? 'unknown';
+          const cur = providerAgg.get(k) ?? { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 };
+          cur.calls += bp.calls ?? 0; cur.promptTokens += bp.promptTokens ?? 0; cur.completionTokens += bp.completionTokens ?? 0;
+          cur.totalTokens += bp.totalTokens ?? 0; cur.estimatedCostUsd += bp.estimatedCostUsd ?? 0;
+          providerAgg.set(k, cur);
+        }
+      }
+      if (Array.isArray(p.byModel)) {
+        for (const bm of p.byModel) {
+          const k = bm.model ?? 'unknown';
+          const cur = modelAgg.get(k) ?? { provider: bm.provider ?? '', tier: bm.tier ?? '', calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0, totalDurationMs: 0 };
+          cur.calls += bm.calls ?? 0; cur.promptTokens += bm.promptTokens ?? 0; cur.completionTokens += bm.completionTokens ?? 0;
+          cur.totalTokens += bm.totalTokens ?? 0; cur.estimatedCostUsd += bm.estimatedCostUsd ?? 0; cur.totalDurationMs += (bm.avgDurationMs ?? 0) * (bm.calls ?? 1);
+          modelAgg.set(k, cur);
+        }
+      }
+      return { chapterNumber: a.chapterNumber, promptTokens: pt, completionTokens: ct, totalTokens: tt, estimatedCostUsd: Number(cost.toFixed(6)), totalCalls: calls, byProvider: p.byProvider ?? [] };
+    });
+
+    const byProvider = [...providerAgg.entries()].map(([provider, b]) => ({ provider, ...b, estimatedCostUsd: Number(b.estimatedCostUsd.toFixed(6)) })).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
+    const byModel = [...modelAgg.entries()].map(([model, b]) => ({ model, provider: b.provider, tier: b.tier, calls: b.calls, promptTokens: b.promptTokens, completionTokens: b.completionTokens, totalTokens: b.totalTokens, estimatedCostUsd: Number(b.estimatedCostUsd.toFixed(6)), avgDurationMs: Number((b.totalDurationMs / Math.max(1, b.calls)).toFixed(2)) })).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
+
+    return { bookId, totalPromptTokens, totalCompletionTokens, totalTokens, totalCostUsd: Number(totalCostUsd.toFixed(6)), totalCalls, byProvider, byModel, chapters };
   }
 
   async getBook(bookId: string): Promise<unknown> {

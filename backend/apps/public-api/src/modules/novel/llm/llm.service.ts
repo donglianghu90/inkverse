@@ -1,16 +1,16 @@
-/**
- * Unified LLM gateway for all novel agents.
- * - Uses Gemini via LangChain ChatGoogleGenerativeAI.
- * - Supports structured output with Zod schema.
- * - Supports deterministic mock in dry-run/no-key mode.
- */
+/** 多Provider LLM网关 — 支持 Gemini + Claude，按任务自动路由最优模型，per-tier精确计费 */
 import { Injectable, Logger } from '@nestjs/common';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { RunnableConfig } from '@langchain/core/runnables';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
+import { ChatAnthropic } from '@langchain/anthropic';
+import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import { z, ZodTypeAny } from 'zod';
 import { LlmUsageTrackerService } from './llm-usage-tracker.service';
 import { ConfigService } from '@packages/modules';
+
+export type LlmProvider = 'gemini' | 'claude';
+export type ModelTier = 'creative' | 'standard' | 'lightweight';
 
 interface StructuredGenerationInput<T extends ZodTypeAny> {
   taskName: string;
@@ -29,67 +29,79 @@ interface TokenUsageExtraction {
   source: 'usage_metadata' | 'response_metadata' | 'missing';
 }
 
-interface CostRates {
-  inputRateUsdPer1M: number;
-  outputRateUsdPer1M: number;
+interface CostRates { inputRateUsdPer1M: number; outputRateUsdPer1M: number; }
+
+interface ProviderConfig {
+  apiKey: string;
+  baseUrl?: string; // Claude代理地址
+  models: Record<ModelTier, string>;
+  costRates: Record<ModelTier, CostRates>; // 按tier区分费率（Opus≠Sonnet）
+  enabled: boolean;
 }
 
-type ModelTier = 'creative' | 'standard' | 'lightweight';
+export interface TaskRoute { provider: LlmProvider; tier: ModelTier; }
 
-interface ModelTierConfig {
-  creative: string;
-  standard: string;
-  lightweight: string;
-}
-
-const DEFAULT_TASK_TIER: Record<string, ModelTier> = {
-  // V1 agents
-  'draft-writer': 'creative',
-  'style-director': 'creative',
-  'patch-rewriter': 'creative',
-  'editor-in-chief': 'standard',
-  'ip-bible-architect': 'standard',
-  'cast-bootstrap': 'standard',
-  'arc-architect': 'standard',
-  'chapter-contract-manager': 'standard',
-  'scene-designer': 'standard',
-  'continuity-auditor': 'standard',
-  'reader-jury': 'standard',
-  'plot-economy-planner': 'lightweight',
-  'lore-recorder': 'lightweight',
-  'character-canon-arbiter': 'lightweight',
-  // V2 agents
-  'seed-analyzer': 'standard',
-  'arc-director': 'standard',
-  'chapter-intent': 'standard',
-  'creative-writer': 'creative',
-  'chapter-reviewer': 'standard',
-  'chapter-editor': 'creative',
-  'chapter-recorder': 'lightweight',
-  'bible-crystallization': 'standard',
-  'outline-revision': 'standard',
-  'consistency-audit': 'standard',
-  'canon-arbitration': 'lightweight',
-  'thread-health-check': 'lightweight',
-  'arc-planning': 'standard',
-  'style-anchoring': 'lightweight',
-  'location-sensory-extract': 'lightweight',
-  'item-sensory-extract': 'lightweight',
-  'scene-planner': 'standard', // 场景规划需要逻辑能力
-  'scene-writer': 'creative', // 场景写作需要创造力
-  'scene-stitcher': 'creative', // 场景缝合需要文学功底
-  'volume-director': 'standard', // 大卷规划需要全局视野
-  'volume-foreshadowing': 'standard', // 前瞻式伏笔需要通盘考虑
-  'reader-pulse-analyzer': 'standard', // 读者反馈分析需要准确判断
+/**
+ * 任务→模型路由表
+ * Claude Opus: 读者可见的创作内容（写作/编辑/缝合）
+ * Claude Sonnet: 需要深度推理的规划/审核/分析
+ * Gemini: 结构化数据提取/轻量检查（成本最低、JSON Schema原生支持）
+ */
+const TASK_ROUTES: Record<string, TaskRoute> = {
+  // ═══ Claude Opus — 文学创作（读者直接看到的内容） ═══
+  'creative-writer':    { provider: 'claude', tier: 'creative' },
+  'scene-writer':       { provider: 'claude', tier: 'creative' },
+  'scene-stitcher':     { provider: 'claude', tier: 'creative' },
+  'chapter-editor':     { provider: 'claude', tier: 'creative' },
+  'hook-crafter':       { provider: 'claude', tier: 'creative' },
+  'draft-writer':       { provider: 'claude', tier: 'creative' },
+  'style-director':     { provider: 'claude', tier: 'creative' },
+  'patch-rewriter':     { provider: 'claude', tier: 'creative' },
+  // ═══ Claude Sonnet — 规划/审核/分析（需要深度推理） ═══
+  'seed-analyzer':      { provider: 'claude', tier: 'standard' },
+  'arc-director':       { provider: 'claude', tier: 'standard' },
+  'chapter-intent':     { provider: 'claude', tier: 'standard' },
+  'scene-planner':      { provider: 'claude', tier: 'standard' },
+  'chapter-reviewer':   { provider: 'claude', tier: 'standard' },
+  'bible-crystallization': { provider: 'claude', tier: 'standard' },
+  'outline-revision':   { provider: 'claude', tier: 'standard' },
+  'volume-director':    { provider: 'claude', tier: 'standard' },
+  'volume-foreshadowing': { provider: 'claude', tier: 'standard' },
+  'reader-pulse-analyzer': { provider: 'claude', tier: 'standard' },
+  'consistency-audit':  { provider: 'claude', tier: 'standard' },
+  'editor-in-chief':    { provider: 'claude', tier: 'standard' },
+  'ip-bible-architect': { provider: 'claude', tier: 'standard' },
+  'cast-bootstrap':     { provider: 'claude', tier: 'standard' },
+  'arc-architect':      { provider: 'claude', tier: 'standard' },
+  'arc-planning':       { provider: 'claude', tier: 'standard' },
+  'character-voice-coach': { provider: 'claude', tier: 'standard' },
+  // ═══ Gemini — 结构化提取/轻量任务（成本最低） ═══
+  'text-analyzer':      { provider: 'gemini', tier: 'lightweight' },
+  'narrative-extractor': { provider: 'gemini', tier: 'lightweight' },
+  'world-extractor':    { provider: 'gemini', tier: 'lightweight' },
+  'chapter-recorder':   { provider: 'gemini', tier: 'lightweight' },
+  'canon-arbitration':  { provider: 'gemini', tier: 'lightweight' },
+  'thread-health-check': { provider: 'gemini', tier: 'lightweight' },
+  'style-anchoring':    { provider: 'gemini', tier: 'lightweight' },
+  'location-sensory-extract': { provider: 'gemini', tier: 'lightweight' },
+  'item-sensory-extract': { provider: 'gemini', tier: 'lightweight' },
+  'pacing-analyzer':    { provider: 'gemini', tier: 'standard' },
+  'continuity-guard':   { provider: 'gemini', tier: 'standard' },
+  'prompt-profiler':    { provider: 'gemini', tier: 'standard' },
+  'chapter-contract-manager': { provider: 'gemini', tier: 'standard' },
+  'scene-designer':     { provider: 'gemini', tier: 'standard' },
+  'continuity-auditor': { provider: 'gemini', tier: 'standard' },
+  'reader-jury':        { provider: 'gemini', tier: 'standard' },
+  'plot-economy-planner': { provider: 'gemini', tier: 'lightweight' },
+  'lore-recorder':      { provider: 'gemini', tier: 'lightweight' },
+  'character-canon-arbiter': { provider: 'gemini', tier: 'lightweight' },
+  'retrospective-learner': { provider: 'gemini', tier: 'standard' },
 };
 
 interface LlmCachedConfig {
-  apiKey: string;
-  modelName: string;
-  modelTiers: ModelTierConfig;
-  fallbackModelName: string;
+  providers: Record<LlmProvider, ProviderConfig>;
+  fallbackProvider: LlmProvider;
   maxPromptChars: number;
-  costRates: CostRates;
   tracingEnabled: boolean;
   tracingProject: string;
 }
@@ -103,332 +115,249 @@ export class LlmService {
     private readonly usageTracker: LlmUsageTrackerService,
     private readonly configService: ConfigService,
   ) {
-    const llm = this.configService.get('llm') ?? ({} as Record<string, unknown>);
-    const langchain = this.configService.get('langchain') ?? ({} as Record<string, unknown>);
-    const langsmith = this.configService.get('langsmith') ?? ({} as Record<string, unknown>);
-    const cost = (llm as Record<string, unknown>)?.cost ?? ({} as Record<string, unknown>);
+    const llm = (this.configService.get('llm') ?? {}) as Record<string, unknown>;
+    const langchain = (this.configService.get('langchain') ?? {}) as Record<string, unknown>;
+    const langsmith = (this.configService.get('langsmith') ?? {}) as Record<string, unknown>;
 
-    const llmRecord = llm as Record<string, unknown>;
-    const defaultModel = String(llmRecord?.gemini?.['model'] || llmRecord?.google?.['model'] || 'gemini-2.5-pro');
-    const tiers = (llmRecord?.tiers ?? {}) as Record<string, unknown>;
+    const geminiCfg = (llm.gemini ?? llm.google ?? {}) as Record<string, unknown>;
+    const claudeCfg = (llm.claude ?? {}) as Record<string, unknown>;
+    const costGemini = (llm.cost ?? {}) as Record<string, unknown>;
+    const costClaude = (claudeCfg.cost ?? {}) as Record<string, unknown>;
+    const geminiTiers = (llm.tiers ?? {}) as Record<string, unknown>;
+    const claudeTiers = (claudeCfg.tiers ?? {}) as Record<string, unknown>;
+
+    const defaultGeminiModel = String(geminiCfg.model || 'gemini-2.5-pro');
 
     this.cfg = {
-      apiKey: String(llmRecord?.gemini?.['apiKey'] || llmRecord?.google?.['apiKey'] || ''),
-      modelName: defaultModel,
-      modelTiers: {
-        creative: String(tiers.creative || defaultModel),
-        standard: String(tiers.standard || defaultModel),
-        lightweight: String(tiers.lightweight || defaultModel),
+      providers: {
+        gemini: {
+          apiKey: String(geminiCfg.apiKey || ''),
+          models: {
+            creative: String(geminiTiers.creative || defaultGeminiModel),
+            standard: String(geminiTiers.standard || defaultGeminiModel),
+            lightweight: String(geminiTiers.lightweight || defaultGeminiModel),
+          },
+          costRates: LlmService.parseTierCostRates(costGemini, { inputRateUsdPer1M: 0, outputRateUsdPer1M: 0 }),
+          enabled: Boolean(geminiCfg.apiKey),
+        },
+        claude: {
+          apiKey: String(claudeCfg.apiKey || ''),
+          baseUrl: claudeCfg.baseUrl ? String(claudeCfg.baseUrl) : undefined,
+          models: {
+            creative: String(claudeTiers.creative || 'claude-opus-4-20250514'),
+            standard: String(claudeTiers.standard || 'claude-sonnet-4-20250514'),
+            lightweight: String(claudeTiers.lightweight || 'claude-sonnet-4-20250514'),
+          },
+          costRates: LlmService.parseTierCostRates(costClaude, { inputRateUsdPer1M: 5, outputRateUsdPer1M: 25 }),
+          enabled: Boolean(claudeCfg.apiKey),
+        },
       },
-      fallbackModelName: String(llmRecord?.fallbackModel || defaultModel),
-      maxPromptChars: this.readNonNegativeNumber(llmRecord?.maxPromptChars as string | undefined, 400_000),
-      costRates: {
-        inputRateUsdPer1M: this.readNonNegativeNumber((cost as Record<string, unknown>)?.inputUsdPer1M as string | undefined, 0),
-        outputRateUsdPer1M: this.readNonNegativeNumber((cost as Record<string, unknown>)?.outputUsdPer1M as string | undefined, 0),
-      },
-      tracingEnabled:
-        ((langchain as Record<string, unknown>)?.tracingV2 ?? '').toString().toLowerCase() === 'true' ||
-        Boolean((langsmith as Record<string, unknown>)?.tracing),
-      tracingProject: String((langchain as Record<string, unknown>)?.project ?? 'novel-engine'),
+      fallbackProvider: (llm.fallbackProvider as LlmProvider) || 'gemini',
+      maxPromptChars: LlmService.num(llm.maxPromptChars, 400_000),
+      tracingEnabled: String(langchain.tracingV2 ?? '').toLowerCase() === 'true' || Boolean(langsmith.tracing),
+      tracingProject: String(langchain.project ?? 'novel-engine'),
     };
+
+    const ep = Object.entries(this.cfg.providers).filter(([, v]) => v.enabled).map(([k]) => k);
+    this.logger.log(`LLM providers initialized: [${ep.join(', ')}]`);
   }
 
-  /**
-   * Generate schema-validated structured output for a specific task.
-   * Supports tiered model routing by task name and automatic fallback on failure.
-   */
-  async generateStructured<T extends ZodTypeAny>(
-    input: StructuredGenerationInput<T>,
-  ): Promise<z.infer<T>> {
-    const startedAt = new Date();
-    const { apiKey, costRates: rates } = this.cfg;
-    const temperature = input.temperature ?? 0.6;
-    const tags = this.buildTags(input);
-    const primaryModel = this.resolveModelForTask(input.taskName);
-
-    if (!apiKey) {
-      throw new Error(`[${input.taskName}] GEMINI_API_KEY 未配置，无法调用 LLM`);
+  /** 解析tier级费率，支持 cost.creative.inputUsdPer1M 和 cost.inputUsdPer1M 两种格式 */
+  private static parseTierCostRates(costObj: Record<string, unknown>, fallback: CostRates): Record<ModelTier, CostRates> {
+    const tiers: ModelTier[] = ['creative', 'standard', 'lightweight'];
+    const globalIn = LlmService.num(costObj.inputUsdPer1M, fallback.inputRateUsdPer1M);
+    const globalOut = LlmService.num(costObj.outputUsdPer1M, fallback.outputRateUsdPer1M);
+    const result = {} as Record<ModelTier, CostRates>;
+    for (const tier of tiers) {
+      const tierObj = (costObj[tier] ?? {}) as Record<string, unknown>;
+      result[tier] = {
+        inputRateUsdPer1M: LlmService.num(tierObj.inputUsdPer1M, globalIn),
+        outputRateUsdPer1M: LlmService.num(tierObj.outputUsdPer1M, globalOut),
+      };
     }
+    return result;
+  }
+
+  async generateStructured<T extends ZodTypeAny>(input: StructuredGenerationInput<T>): Promise<z.infer<T>> {
+    const temperature = input.temperature ?? 0.6;
+    const tags = ['novel-engine', input.taskName, ...(input.tags ?? [])];
+    const route = this.resolveRoute(input.taskName);
 
     this.logger.log(
       `[${input.taskName}] ====== LLM 调用开始 ======\n` +
-      `  模型: ${primaryModel} (tier: ${DEFAULT_TASK_TIER[input.taskName] ?? 'standard'}) | 温度: ${temperature}\n` +
-      `  metadata: ${JSON.stringify(input.metadata ?? {})}\n` +
-      `  tags: [${tags.join(', ')}]`,
+      `  provider: ${route.provider} | 模型: ${route.model} (tier: ${route.tier}) | 温度: ${temperature}\n` +
+      `  metadata: ${JSON.stringify(input.metadata ?? {})}\n  tags: [${tags.join(', ')}]`,
     );
-    this.logger.debug(
-      `[${input.taskName}] SYSTEM PROMPT (${input.systemPrompt.length} chars):\n${this.truncate(input.systemPrompt, 1500)}`,
-    );
-    this.logger.debug(
-      `[${input.taskName}] USER PROMPT (${input.userPrompt.length} chars):\n${this.truncate(input.userPrompt, 2000)}`,
-    );
+    this.logger.debug(`[${input.taskName}] SYSTEM (${input.systemPrompt.length}c) USER (${input.userPrompt.length}c)`);
 
-    const promptCharCount = input.systemPrompt.length + input.userPrompt.length;
-    if (promptCharCount > this.cfg.maxPromptChars) {
-      this.logger.warn(
-        `[${input.taskName}] prompt size ${promptCharCount} chars exceeds budget ${this.cfg.maxPromptChars}`,
-      );
-    }
+    const promptLen = input.systemPrompt.length + input.userPrompt.length;
+    if (promptLen > this.cfg.maxPromptChars) this.logger.warn(`[${input.taskName}] prompt ${promptLen}c > budget ${this.cfg.maxPromptChars}`);
 
-    const modelsToTry = [primaryModel];
-    if (this.cfg.fallbackModelName !== primaryModel) {
-      modelsToTry.push(this.cfg.fallbackModelName);
-    }
-
+    const attempts = this.buildAttemptChain(route);
     let lastError: unknown;
-    for (const modelName of modelsToTry) {
+    for (const attempt of attempts) {
       try {
-        return await this.callModelWithTracking(input, modelName, temperature, tags);
+        return await this.callModel(input, attempt.provider, attempt.tier, attempt.model, temperature, tags);
       } catch (error) {
         lastError = error;
-        if (modelName !== modelsToTry[modelsToTry.length - 1]) {
-          this.logger.warn(
-            `[${input.taskName}] model ${modelName} failed, falling back to ${modelsToTry[modelsToTry.indexOf(modelName) + 1]}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
+        const isLast = attempts.indexOf(attempt) >= attempts.length - 1;
+        this.logger.warn(`[${input.taskName}] ${attempt.provider}/${attempt.model} failed${isLast ? '' : ', trying next'}: ${(error as Error).message?.slice(0, 200)}`);
       }
     }
     throw lastError;
   }
 
-  private resolveModelForTask(taskName: string): string {
-    const tier = DEFAULT_TASK_TIER[taskName] ?? 'standard';
-    return this.cfg.modelTiers[tier];
+  private resolveRoute(taskName: string): { provider: LlmProvider; tier: ModelTier; model: string } {
+    const route = TASK_ROUTES[taskName] ?? { provider: this.cfg.fallbackProvider, tier: 'standard' as ModelTier };
+    const providerCfg = this.cfg.providers[route.provider];
+    if (!providerCfg?.enabled) {
+      const fb = this.cfg.providers[this.cfg.fallbackProvider];
+      return { provider: this.cfg.fallbackProvider, tier: route.tier, model: fb.models[route.tier] };
+    }
+    return { ...route, model: providerCfg.models[route.tier] };
   }
 
-  private async callModelWithTracking<T extends ZodTypeAny>(
-    input: StructuredGenerationInput<T>,
-    modelName: string,
-    temperature: number,
-    tags: string[],
+  private buildAttemptChain(route: { provider: LlmProvider; tier: ModelTier; model: string }) {
+    const chain = [{ provider: route.provider, tier: route.tier, model: route.model }];
+    if (route.provider !== this.cfg.fallbackProvider && this.cfg.providers[this.cfg.fallbackProvider]?.enabled) {
+      const fb = this.cfg.providers[this.cfg.fallbackProvider];
+      chain.push({ provider: this.cfg.fallbackProvider, tier: route.tier, model: fb.models[route.tier] });
+    }
+    return chain;
+  }
+
+  private async callModel<T extends ZodTypeAny>(
+    input: StructuredGenerationInput<T>, provider: LlmProvider, tier: ModelTier, modelName: string, temperature: number, tags: string[],
   ): Promise<z.infer<T>> {
-    const callStartedAt = new Date();
-    const { apiKey, costRates: rates } = this.cfg;
-
-    const model = new ChatGoogleGenerativeAI({
-      apiKey,
-      model: modelName,
-      temperature,
-      maxRetries: 3,
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const structuredModel = (model as any).withStructuredOutput(input.schema, {
-      includeRaw: true,
-    });
-
-    const messages = [
-      new SystemMessage(input.systemPrompt),
-      new HumanMessage(input.userPrompt),
-    ];
+    const t0 = Date.now();
+    const providerCfg = this.cfg.providers[provider];
+    const rates = providerCfg.costRates[tier];
+    const chatModel = this.createChatModel(provider, providerCfg, modelName, temperature);
+    const schema = provider === 'gemini' ? LlmService.sanitizeSchemaForGemini(toJsonSchema(input.schema as any)) : input.schema;
+    const structuredModel = (chatModel as any).withStructuredOutput(schema, { includeRaw: true });
+    const messages = [new SystemMessage(input.systemPrompt), new HumanMessage(input.userPrompt)];
 
     let response: unknown;
     try {
-      response = await structuredModel.invoke(
-        messages,
-        this.buildInvokeConfig(input),
-      );
+      const config: RunnableConfig = { runName: input.taskName, tags, metadata: { taskName: input.taskName, provider, model: modelName, tier, ...input.metadata } };
+      if (this.cfg.tracingEnabled) this.logger.log(`[${input.taskName}] LangSmith tracing (project=${this.cfg.tracingProject})`);
+      response = await structuredModel.invoke(messages, config);
     } catch (error) {
-      const durationMs = new Date().getTime() - callStartedAt.getTime();
-      this.logger.error(
-        `[${input.taskName}] ====== LLM 调用失败 (${modelName}) ====== ${durationMs}ms\n` +
-        `  错误: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      this.logger.error(`[${input.taskName}] ====== LLM 调用失败 (${provider}/${modelName}) ====== ${Date.now() - t0}ms\n  错误: ${(error as Error).message}`);
       throw error;
     }
-    const finishedAt = new Date();
-    const durationMs = finishedAt.getTime() - callStartedAt.getTime();
-    const wrapped = this.unwrapStructuredResponse<z.infer<T>>(response);
-    const usage = this.extractTokenUsage(wrapped.raw);
-    const estimatedCostUsd = this.estimateCostUsd(
-      usage.promptTokens,
-      usage.completionTokens,
-      rates,
-    );
+
+    const durationMs = Date.now() - t0;
+    const wrapped = this.unwrapResponse<z.infer<T>>(response);
+    const usage = this.extractUsage(wrapped.raw, provider);
+    const cost = LlmService.estimateCost(usage.promptTokens, usage.completionTokens, rates);
 
     this.logger.log(
-      `[${input.taskName}] ====== LLM 调用完成 (${modelName}) ====== ${durationMs}ms\n` +
-      `  tokens: prompt=${usage.promptTokens} completion=${usage.completionTokens} total=${usage.totalTokens}\n` +
-      `  费用: $${estimatedCostUsd} (source: ${usage.source})`,
+      `[${input.taskName}] ====== LLM 调用完成 (${provider}/${modelName}) ====== ${durationMs}ms\n` +
+      `  tokens: in=${usage.promptTokens} out=${usage.completionTokens} total=${usage.totalTokens}\n` +
+      `  费率: $${rates.inputRateUsdPer1M}/$${rates.outputRateUsdPer1M} per 1M | 费用: $${cost} (source: ${usage.source})`,
     );
-    this.logger.debug(
-      `[${input.taskName}] AI 输出 (parsed):\n${this.truncate(JSON.stringify(wrapped.parsed, null, 2), 2000)}`,
-    );
+    this.logger.debug(`[${input.taskName}] AI 输出:\n${this.truncate(JSON.stringify(wrapped.parsed, null, 2), 2000)}`);
 
     this.usageTracker.recordCall({
-      taskName: input.taskName,
-      model: modelName,
-      provider: 'gemini',
-      startedAt: callStartedAt.toISOString(),
-      finishedAt: finishedAt.toISOString(),
-      durationMs,
-      promptTokens: usage.promptTokens,
-      completionTokens: usage.completionTokens,
-      totalTokens: usage.totalTokens,
-      estimatedCostUsd,
-      inputRateUsdPer1M: rates.inputRateUsdPer1M,
-      outputRateUsdPer1M: rates.outputRateUsdPer1M,
-      tokenSource: usage.source,
-      temperature,
-      tags,
+      taskName: input.taskName, model: modelName, provider, tier,
+      startedAt: new Date(t0).toISOString(), finishedAt: new Date().toISOString(), durationMs,
+      promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, totalTokens: usage.totalTokens,
+      estimatedCostUsd: cost, inputRateUsdPer1M: rates.inputRateUsdPer1M,
+      outputRateUsdPer1M: rates.outputRateUsdPer1M, tokenSource: usage.source, temperature, tags,
     });
-
     return wrapped.parsed;
   }
 
-  private buildInvokeConfig<T extends ZodTypeAny>(
-    input: StructuredGenerationInput<T>,
-  ): RunnableConfig {
-    const tags = this.buildTags(input);
-    const metadata = {
-      taskName: input.taskName,
-      model: this.cfg.modelName,
-      provider: 'gemini',
-      storyStore: 'postgres',
-      ...input.metadata,
-    };
-
-    if (this.cfg.tracingEnabled) {
-      this.logger.log(
-        `[${input.taskName}] LangSmith tracing enabled (project=${this.cfg.tracingProject})`,
-      );
+  private createChatModel(provider: LlmProvider, cfg: ProviderConfig, model: string, temperature: number) {
+    if (provider === 'claude') {
+      return new ChatAnthropic({
+        anthropicApiKey: cfg.apiKey,
+        anthropicApiUrl: cfg.baseUrl,
+        model, temperature, maxRetries: 3, maxTokens: 16384,
+        clientOptions: cfg.baseUrl ? { defaultHeaders: { 'User-Agent': 'Mozilla/5.0' } } : undefined, // 代理端Cloudflare会拦截SDK默认UA
+      });
     }
-
-    return {
-      runName: input.taskName,
-      tags,
-      metadata,
-    };
+    return new ChatGoogleGenerativeAI({ apiKey: cfg.apiKey, model, temperature, maxRetries: 3 });
   }
 
-  private buildTags<T extends ZodTypeAny>(
-    input: StructuredGenerationInput<T>,
-  ): string[] {
-    return ['novel-engine', input.taskName, ...(input.tags ?? [])];
-  }
+  // ═══ Token提取 — 兼容Gemini和Claude两种response格式 ═══
 
-  private unwrapStructuredResponse<T>(response: unknown): {
-    parsed: T;
-    raw: Record<string, unknown> | null;
-  } {
-    if (
-      this.isRecord(response) &&
-      'parsed' in response
-    ) {
-      return {
-        parsed: response.parsed as T,
-        raw:
-          this.isRecord(response.raw)
-            ? (response.raw as Record<string, unknown>)
-            : null,
-      };
+  private extractUsage(raw: Record<string, unknown> | null, provider: LlmProvider): TokenUsageExtraction {
+    if (!raw) return { promptTokens: 0, completionTokens: 0, totalTokens: 0, source: 'missing' };
+    // Claude: usage_metadata.input_tokens / output_tokens（LangChain统一格式）
+    // Gemini: usage_metadata.input_tokens / output_tokens
+    const um = this.toRecord(raw.usage_metadata);
+    if (um) {
+      const p = this.toInt(um.input_tokens), c = this.toInt(um.output_tokens);
+      return { promptTokens: p, completionTokens: c, totalTokens: this.toInt(um.total_tokens) || p + c, source: 'usage_metadata' };
     }
-    return {
-      parsed: response as T,
-      raw: null,
-    };
-  }
-
-  private extractTokenUsage(raw: Record<string, unknown> | null): TokenUsageExtraction {
-    if (!raw) {
-      return {
-        promptTokens: 0,
-        completionTokens: 0,
-        totalTokens: 0,
-        source: 'missing',
-      };
-    }
-
-    const usageMetadata = this.toRecord(raw.usage_metadata);
-    if (usageMetadata) {
-      const promptTokens = this.toNonNegativeInteger(usageMetadata.input_tokens);
-      const completionTokens = this.toNonNegativeInteger(usageMetadata.output_tokens);
-      const totalTokens =
-        this.toNonNegativeInteger(usageMetadata.total_tokens) ||
-        promptTokens + completionTokens;
-      return {
-        promptTokens,
-        completionTokens,
-        totalTokens,
-        source: 'usage_metadata',
-      };
-    }
-
-    const responseMetadata = this.toRecord(raw.response_metadata);
-    if (responseMetadata) {
-      const usageFromResponse =
-        this.toRecord(responseMetadata.tokenUsage) ??
-        this.toRecord(responseMetadata.usage) ??
-        this.toRecord(responseMetadata.usage_metadata);
-      if (usageFromResponse) {
-        const promptTokens =
-          this.toNonNegativeInteger(usageFromResponse.promptTokens) ||
-          this.toNonNegativeInteger(usageFromResponse.prompt_tokens) ||
-          this.toNonNegativeInteger(usageFromResponse.input_tokens);
-        const completionTokens =
-          this.toNonNegativeInteger(usageFromResponse.completionTokens) ||
-          this.toNonNegativeInteger(usageFromResponse.completion_tokens) ||
-          this.toNonNegativeInteger(usageFromResponse.output_tokens);
-        const totalTokens =
-          this.toNonNegativeInteger(usageFromResponse.totalTokens) ||
-          this.toNonNegativeInteger(usageFromResponse.total_tokens) ||
-          promptTokens + completionTokens;
-        return {
-          promptTokens,
-          completionTokens,
-          totalTokens,
-          source: 'response_metadata',
-        };
+    // fallback: response_metadata（部分LangChain版本）
+    const rm = this.toRecord(raw.response_metadata);
+    if (rm) {
+      // Claude原生: rm.usage.input_tokens / output_tokens
+      const u = this.toRecord(rm.usage) ?? this.toRecord(rm.tokenUsage) ?? this.toRecord(rm.usage_metadata);
+      if (u) {
+        const p = this.toInt(u.input_tokens) || this.toInt(u.prompt_tokens) || this.toInt(u.promptTokens);
+        const c = this.toInt(u.output_tokens) || this.toInt(u.completion_tokens) || this.toInt(u.completionTokens);
+        return { promptTokens: p, completionTokens: c, totalTokens: this.toInt(u.total_tokens) || this.toInt(u.totalTokens) || p + c, source: 'response_metadata' };
       }
     }
-
-    return {
-      promptTokens: 0,
-      completionTokens: 0,
-      totalTokens: 0,
-      source: 'missing',
-    };
+    return { promptTokens: 0, completionTokens: 0, totalTokens: 0, source: 'missing' };
   }
 
-  private estimateCostUsd(
-    promptTokens: number,
-    completionTokens: number,
-    rates: CostRates,
-  ): number {
-    const inputCost = (promptTokens / 1_000_000) * rates.inputRateUsdPer1M;
-    const outputCost = (completionTokens / 1_000_000) * rates.outputRateUsdPer1M;
-    return Number((inputCost + outputCost).toFixed(8));
-  }
+  // ═══ Schema清理（仅Gemini需要） ═══
 
-  private readNonNegativeNumber(value: string | undefined, fallback: number): number {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      return fallback;
+  private static readonly GEMINI_UNSUPPORTED_KEYS = new Set([
+    'additionalProperties', '$schema', 'strict', 'default', 'not', 'if', 'then', 'else',
+    'patternProperties', 'dependentRequired', 'dependentSchemas', 'unevaluatedProperties',
+    'unevaluatedItems', 'contentEncoding', 'contentMediaType', 'uniqueItems',
+    '$id', '$ref', '$defs', 'definitions', '$anchor', '$dynamicRef', '$dynamicAnchor',
+    'prefixItems', '$comment', 'examples', 'deprecated', 'readOnly', 'writeOnly',
+  ]);
+
+  static sanitizeSchemaForGemini(obj: unknown): Record<string, unknown> {
+    if (typeof obj !== 'object' || obj === null) return obj as Record<string, unknown>;
+    const o = { ...obj } as Record<string, unknown>;
+    for (const k of LlmService.GEMINI_UNSUPPORTED_KEYS) delete o[k];
+    if ('exclusiveMinimum' in o) { const v = o['exclusiveMinimum'] as number; o['minimum'] = Number.isInteger(v) ? v + 1 : v; delete o['exclusiveMinimum']; }
+    if ('exclusiveMaximum' in o) { const v = o['exclusiveMaximum'] as number; o['maximum'] = Number.isInteger(v) ? v - 1 : v; delete o['exclusiveMaximum']; }
+    if ('minItems' in o && typeof o['minItems'] === 'number' && o['minItems'] <= 0) delete o['minItems'];
+    if ('minLength' in o && typeof o['minLength'] === 'number' && o['minLength'] <= 0) delete o['minLength'];
+    if (Array.isArray(o['type'])) { const types = (o['type'] as string[]).filter((t) => t !== 'null'); o['type'] = types[0] ?? 'string'; o['nullable'] = true; }
+    if (Array.isArray(o['anyOf'])) {
+      const vs = o['anyOf'] as Record<string, unknown>[], nonNull = vs.filter((v) => v['type'] !== 'null');
+      if (nonNull.length === 1 && nonNull.length < vs.length) { Object.assign(o, LlmService.sanitizeSchemaForGemini(nonNull[0])); o['nullable'] = true; delete o['anyOf']; }
+      else { o['anyOf'] = vs.map((v) => LlmService.sanitizeSchemaForGemini(v)); }
     }
-    return parsed;
-  }
-
-  private toNonNegativeInteger(value: unknown): number {
-    if (typeof value !== 'number' || !Number.isFinite(value)) {
-      return 0;
+    if (Array.isArray(o['oneOf'])) {
+      const vs = o['oneOf'] as Record<string, unknown>[], nonNull = vs.filter((v) => v['type'] !== 'null');
+      if (nonNull.length === 1 && nonNull.length < vs.length) { Object.assign(o, LlmService.sanitizeSchemaForGemini(nonNull[0])); o['nullable'] = true; delete o['oneOf']; }
+      else { o['oneOf'] = vs.map((v) => LlmService.sanitizeSchemaForGemini(v)); }
     }
-    const normalized = Math.floor(value);
-    return normalized >= 0 ? normalized : 0;
-  }
-
-  private isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === 'object' && value !== null;
-  }
-
-  private toRecord(value: unknown): Record<string, unknown> | null {
-    if (!this.isRecord(value)) {
-      return null;
+    if (o['const'] !== undefined) { o['enum'] = [o['const']]; delete o['const']; }
+    for (const key of Object.keys(o)) {
+      if (key === 'anyOf' || key === 'oneOf' || key === 'enum') continue;
+      if (Array.isArray(o[key])) o[key] = (o[key] as unknown[]).map((item) => LlmService.sanitizeSchemaForGemini(item));
+      else if (typeof o[key] === 'object' && o[key] !== null) o[key] = LlmService.sanitizeSchemaForGemini(o[key]);
     }
-    return value;
+    return o;
   }
 
-  private truncate(text: string, maxLen: number): string {
-    if (text.length <= maxLen) return text;
-    return text.slice(0, maxLen) + `\n... [截断，共 ${text.length} 字符]`;
+  // ═══ 工具方法 ═══
+
+  static estimateCost(promptTokens: number, completionTokens: number, rates: CostRates): number {
+    return Number(((promptTokens / 1e6) * rates.inputRateUsdPer1M + (completionTokens / 1e6) * rates.outputRateUsdPer1M).toFixed(8));
   }
 
+  private unwrapResponse<T>(response: unknown): { parsed: T; raw: Record<string, unknown> | null } {
+    if (this.isRecord(response) && 'parsed' in response) return { parsed: response.parsed as T, raw: this.isRecord(response.raw) ? response.raw as Record<string, unknown> : null };
+    return { parsed: response as T, raw: null };
+  }
+
+  private static num(value: unknown, fallback: number): number { const n = Number(value); return Number.isFinite(n) && n >= 0 ? n : fallback; }
+  private toInt(value: unknown): number { return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0; }
+  private isRecord(v: unknown): v is Record<string, unknown> { return typeof v === 'object' && v !== null; }
+  private toRecord(v: unknown): Record<string, unknown> | null { return this.isRecord(v) ? v : null; }
+  private truncate(text: string, maxLen: number): string { return text.length <= maxLen ? text : text.slice(0, maxLen) + `\n... [截断，共 ${text.length} 字符]`; }
 }

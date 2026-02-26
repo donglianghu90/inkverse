@@ -23,12 +23,15 @@ export interface AgentNodeData extends AgentNodeConfig {
   isSelected?: boolean;
   onDelete?: (id: string) => void;
   onToggle?: (id: string) => void;
+  status?: string; // 'idle' | 'running' | 'completed' | 'skipped' | 'failed'
+  statusMessage?: string;
+  durationMs?: number;
 }
 
 export function AgentNode({ data, selected }: NodeProps<AgentNodeData>) {
   const meta = AGENT_META[data.type] ?? AGENT_META.custom;
   const isCustom = data.type === 'custom';
-  const stepNum = data.position + 1;
+  const stepNum = typeof data.position === 'number' ? data.position + 1 : null;
 
   return (
     <div
@@ -37,17 +40,21 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeData>) {
         meta.color,
         selected && 'ring-2 ring-primary ring-offset-2 shadow-md',
         !data.isEnabled && 'opacity-45 grayscale',
+        data.status === 'running' && 'ring-2 ring-blue-400 animate-pulse shadow-md',
+        data.status === 'completed' && 'ring-2 ring-emerald-400',
+        data.status === 'failed' && 'ring-2 ring-red-400',
+        data.status === 'skipped' && 'opacity-40',
       )}
     >
       {/* Step badge */}
-      <div className={cn(
-        'absolute -left-3 top-4 flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold shadow-sm',
-        data.isCore
-          ? 'bg-primary text-primary-foreground'
-          : 'bg-muted text-muted-foreground border',
-      )}>
-        {stepNum}
-      </div>
+      {stepNum != null && (
+        <div className={cn(
+          'absolute -left-3 top-4 flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold shadow-sm',
+          data.isCore ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground border',
+        )}>
+          {stepNum}
+        </div>
+      )}
 
       <Handle
         type="target"
@@ -95,17 +102,15 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeData>) {
 
         <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{data.description}</p>
 
-        <div className="mt-3 flex items-center gap-1.5">
-          <div className={cn(
-            'h-1.5 w-1.5 rounded-full',
-            data.isEnabled ? 'bg-emerald-500' : 'bg-muted-foreground/40',
-          )} />
+        <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+          <div className={cn('h-1.5 w-1.5 rounded-full', data.isEnabled ? 'bg-emerald-500' : 'bg-muted-foreground/40')} />
           <span className="text-xs text-muted-foreground">{data.isEnabled ? '已启用' : '已禁用'}</span>
-          {data.additionalSystemPrompt && (
-            <>
-              <span className="text-muted-foreground/40 text-xs">·</span>
-              <span className="text-xs text-primary/70">有补充指令</span>
-            </>
+          {data.additionalSystemPrompt && (<><span className="text-muted-foreground/40 text-xs">·</span><span className="text-xs text-primary/70">有补充指令</span></>)}
+          {data.status === 'completed' && data.durationMs != null && (
+            <><span className="text-muted-foreground/40 text-xs">·</span><span className="text-xs text-emerald-600">{data.durationMs > 1000 ? `${(data.durationMs / 1000).toFixed(1)}s` : `${data.durationMs}ms`}</span></>
+          )}
+          {data.status === 'skipped' && data.statusMessage && (
+            <><span className="text-muted-foreground/40 text-xs">·</span><span className="text-xs text-muted-foreground">{data.statusMessage}</span></>
           )}
         </div>
       </div>

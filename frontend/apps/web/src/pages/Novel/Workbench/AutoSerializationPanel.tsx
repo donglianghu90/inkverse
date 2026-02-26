@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, Loader2, Play, Power, PowerOff, Save } from 'lucide-react';
+import { Clock, Loader2, Play, Power, PowerOff, Save, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { cn } from '@/lib/utils';
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,12 @@ import {
   runAutoSerializationNow,
 } from '@/services/novel';
 
+const SERIALIZATION_PRESETS = [
+  { label: '日更 3 章', runEveryDays: 1, chaptersPerRun: 3, desc: '起点推荐期 / 番茄进阶全勤', emoji: '🔥' },
+  { label: '日更 2 章', runEveryDays: 1, chaptersPerRun: 2, desc: '起点/番茄基础全勤线', emoji: '📝' },
+  { label: '日更 1 章', runEveryDays: 1, chaptersPerRun: 1, desc: '精品打磨，稳定输出', emoji: '✨' },
+];
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -34,6 +41,7 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
   const [loading, setLoading] = useState(false);
   const [hasConfig, setHasConfig] = useState(false);
   const [nextRunAt, setNextRunAt] = useState<string | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [intervention, setIntervention] = useState<{
     required: boolean;
     expired: boolean;
@@ -205,52 +213,105 @@ export const AutoSerializationPanel: React.FC<Props> = ({ open, onOpenChange, bo
               </>
             )}
 
-            {/* Schedule Config */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="dailyTime">每日生成时间</Label>
-                <Input
-                  id="dailyTime"
-                  type="time"
-                  value={config.dailyStartTime}
-                  onChange={(e) => setConfig({ ...config, dailyStartTime: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="runEveryDays">每隔几天</Label>
-                <Input
-                  id="runEveryDays"
-                  type="number"
-                  min={1}
-                  max={14}
-                  value={config.runEveryDays}
-                  onChange={(e) => setConfig({ ...config, runEveryDays: Number(e.target.value) })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="chaptersPerRun">每次生成章数</Label>
-                <Input
-                  id="chaptersPerRun"
-                  type="number"
-                  min={1}
-                  max={50}
-                  value={config.chaptersPerRun}
-                  onChange={(e) => setConfig({ ...config, chaptersPerRun: Number(e.target.value) })}
-                />
-              </div>
-            </div>
+            {/* Preset cards */}
+            {(() => {
+              const isCustom = !SERIALIZATION_PRESETS.some(
+                (p) => p.runEveryDays === config.runEveryDays && p.chaptersPerRun === config.chaptersPerRun,
+              );
+              return <>
+                <div className="grid grid-cols-3 gap-2">
+                  {SERIALIZATION_PRESETS.map((preset) => {
+                    const selected = config.runEveryDays === preset.runEveryDays && config.chaptersPerRun === preset.chaptersPerRun;
+                    return (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        className={cn(
+                          'rounded-xl border p-2.5 text-center transition-all hover:border-primary/50',
+                          selected ? 'border-primary bg-primary/5 shadow-sm ring-2 ring-primary/20' : 'border-border bg-background/60',
+                        )}
+                        onClick={() => setConfig({ ...config, runEveryDays: preset.runEveryDays, chaptersPerRun: preset.chaptersPerRun })}
+                      >
+                        <span className="text-lg leading-none">{preset.emoji}</span>
+                        <p className="text-sm font-semibold mt-1">{preset.label}</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5 leading-tight">{preset.desc}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+                {isCustom && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <Badge variant="outline" className="text-[11px] px-1.5 py-0 border-amber-400/50 text-amber-600 bg-amber-50">自定义</Badge>
+                    <span className="text-muted-foreground">
+                      每 {config.runEveryDays} 天更新 {config.chaptersPerRun} 章 · 点击上方卡片可恢复预设
+                    </span>
+                  </div>
+                )}
+              </>;
+            })()}
 
+            {/* Trigger time */}
             <div className="space-y-2">
-              <Label htmlFor="autoRepair">最大修复轮次</Label>
+              <Label htmlFor="dailyTime">触发时间</Label>
               <Input
-                id="autoRepair"
-                type="number"
-                min={1}
-                max={8}
-                value={config.maxRepairRounds}
-                onChange={(e) => setConfig({ ...config, maxRepairRounds: Number(e.target.value) })}
+                id="dailyTime"
+                type="time"
+                value={config.dailyStartTime}
+                onChange={(e) => setConfig({ ...config, dailyStartTime: e.target.value })}
               />
             </div>
+
+            {/* Advanced toggle */}
+            <button
+              type="button"
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showAdvanced && 'rotate-180')} />
+              高级设置
+            </button>
+
+            {showAdvanced && (
+              <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">更新频率（天）</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={14}
+                      className="h-8 text-sm"
+                      value={config.runEveryDays}
+                      onChange={(e) => setConfig({ ...config, runEveryDays: Number(e.target.value) })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">每次生成章数</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={50}
+                      className="h-8 text-sm"
+                      value={config.chaptersPerRun}
+                      onChange={(e) => setConfig({ ...config, chaptersPerRun: Number(e.target.value) })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">自动修复轮次</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={8}
+                      className="h-8 text-sm"
+                      value={config.maxRepairRounds}
+                      onChange={(e) => setConfig({ ...config, maxRepairRounds: Number(e.target.value) })}
+                    />
+                    <p className="text-[11px] text-muted-foreground leading-tight">质量不达标时自动重写的最大次数</p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground">修改频率或章数后，上方预设会自动取消选中</p>
+              </div>
+            )}
 
             <Separator />
 

@@ -40,9 +40,10 @@ import {
 } from './schemas/novel-state.schemas';
 import { ChapterDraft, LoreRecord } from './schemas/novel.schemas';
 
-const DEFAULT_QUALITY_PASS_SCORE = 8.5;
-const DEFAULT_MAX_REPAIR_ROUNDS = 2;
-const EDITOR_POLISH_THRESHOLD = 7.0;
+import { DEFAULT_WORKFLOW_PARAMS } from './entities/book-agent-pipeline.entity';
+const DEFAULT_QUALITY_PASS_SCORE = DEFAULT_WORKFLOW_PARAMS.qualityPassScore;
+const DEFAULT_MAX_REPAIR_ROUNDS = DEFAULT_WORKFLOW_PARAMS.maxRepairRounds;
+const EDITOR_POLISH_THRESHOLD = DEFAULT_WORKFLOW_PARAMS.editorPolishThreshold;
 
 interface DraftAttempt {
   draft: ChapterDraft;
@@ -102,16 +103,11 @@ export class ChapterWorkflowService {
     message: string,
     done = false,
     error?: string,
+    extra?: { nodeId?: string; loopAttempt?: number; score?: number; durationMs?: number; skipped?: boolean; phase?: string },
   ): void {
     this.progressService.emit({
-      bookId,
-      chapterNumber,
-      step,
-      stepIndex,
-      totalSteps: 8,
-      message,
-      done,
-      error,
+      bookId, chapterNumber, step, stepIndex, totalSteps: 8, message, done, error,
+      ...(extra ?? {}),
     });
   }
 
@@ -313,12 +309,25 @@ export class ChapterWorkflowService {
         );
       }
 
+      // Deterministic check inside quality loop — 硬规则前置，可在重写中修复
+      const loopDetCheck = this.deterministicChecker.check(state, intent, draft);
+      if (!loopDetCheck.pass) {
+        this.logger.warn(
+          `[Chapter ${chapterNumber}] 轮${attempt}确定性检查失败: ${loopDetCheck.failedChecks.map((c) => c.rule).join(', ')}`,
+        );
+      }
+
       // Review
       t0 = Date.now();
       this.emitProgress(state.bookId, chapterNumber, 'review', 4, `审阅第${attempt}轮`);
       const review = isEnabled('reviewer')
         ? await this.reviewer.review(state, intent, draft, getPrompt('reviewer'))
         : this.buildDefaultReview();
+      if (!loopDetCheck.pass) { // 将硬规则失败注入review的issues
+        for (const c of loopDetCheck.failedChecks) {
+          review.issuesFound.push({ category: 'other' as const, severity: 'critical' as const, description: `硬规则: ${c.rule} - ${c.detail}`, suggestedFix: `修复 ${c.rule}` });
+        }
+      }
       const weightedScore = this.calculateWeightedScore(review, state);
       this.logger.log(
         `[Chapter ${chapterNumber}] 审阅完成 — ${Date.now() - t0}ms | ` +
@@ -332,7 +341,8 @@ export class ChapterWorkflowService {
         bestAttempt = attemptResult;
       }
 
-      if (weightedScore >= qualityPassScore && !review.issuesFound.some((i) => i.severity === 'critical')) {
+      const hasCriticalIssues = review.issuesFound.some((i) => i.severity === 'critical');
+      if (weightedScore >= qualityPassScore && !hasCriticalIssues && loopDetCheck.pass) {
         this.logger.log(
           `[Chapter ${chapterNumber}] 质量门控通过！加权分 ${weightedScore} >= ${qualityPassScore}（第${attempt}轮）`,
         );
@@ -341,7 +351,7 @@ export class ChapterWorkflowService {
 
       if (attempt < maxAttempts) {
         this.logger.log(
-          `[Chapter ${chapterNumber}] 质量门控未通过（${weightedScore} < ${qualityPassScore}），准备第${attempt + 1}轮重写`,
+          `[Chapter ${chapterNumber}] 质量门控未通过（${weightedScore} < ${qualityPassScore}${!loopDetCheck.pass ? ' + 硬规则失败' : ''}），准备第${attempt + 1}轮重写`,
         );
       }
     }
@@ -479,10 +489,19 @@ export class ChapterWorkflowService {
       t0 = Date.now();
       this.logger.log(`[Chapter ${chapterNumber}] 终稿复评（编辑/钩子后）`);
       this.emitProgress(state.bookId, chapterNumber, 'review', 4, '终稿复评');
-      finalReview = isEnabled('reviewer')
+      const postEditReview = isEnabled('reviewer')
         ? await this.reviewer.review(state, intent, finalDraft, getPrompt('reviewer'))
         : this.buildDefaultReview();
-      finalWeightedScore = this.calculateWeightedScore(finalReview, state);
+      const postEditScore = this.calculateWeightedScore(postEditReview, state);
+      if (postEditScore >= finalWeightedScore) { // 编辑后分数不低于原分才采纳，防止精修反降质
+        finalReview = postEditReview;
+        finalWeightedScore = postEditScore;
+      } else {
+        this.logger.warn(
+          `[Chapter ${chapterNumber}] 编辑后分数下降 ${finalWeightedScore} → ${postEditScore}，保留原审阅结果`,
+        );
+        finalDraft = finalAttempt.draft; // 回退到编辑前的稿件
+      }
       this.logger.log(
         `[Chapter ${chapterNumber}] 终稿复评完成 — ${Date.now() - t0}ms | ` +
         `裁决: ${finalReview.overallVerdict} | 加权分: ${finalWeightedScore}`,

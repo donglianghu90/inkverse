@@ -11,6 +11,8 @@ import { ArtifactEntity } from './entities/artifact.entity';
 import { AutoSerializationJobEntity } from './entities/auto-serialization-job.entity';
 import { ChapterResyncJobEntity } from './entities/chapter-resync-job.entity';
 import { BookAgentPipelineEntity } from './entities/book-agent-pipeline.entity';
+import { BookPromptTemplateEntity } from './entities/book-prompt-template.entity';
+import { WorkflowExecutionEntity } from './entities/workflow-execution.entity';
 import { ChapterMemoryEntity } from './entities/chapter-memory.entity';
 import { ArcSummaryEntity, VolumeSummaryEntity } from './entities/summary-pyramid.entity';
 import {
@@ -19,6 +21,9 @@ import {
   BookFactionEntity, BookCommitmentEntity,
 } from './entities/book-state-entities';
 import { BookAgentPipelineService } from './book-agent-pipeline.service';
+import { WorkflowTopologyService } from './workflow-topology.service';
+import { BookPromptTemplateService } from './book-prompt-template.service';
+import { WorkflowExecutionService } from './workflow-execution.service';
 import { BookStateRepository } from './book-state.repository';
 import { AUTO_SERIALIZATION_QUEUE } from './auto-serialization.processor';
 import { CHAPTER_RESYNC_QUEUE } from './chapter-resync.queue';
@@ -79,6 +84,8 @@ import { MemoryRetrieverService } from './memory-retriever.service';
       BookCharacterEntity, BookPlotThreadEntity, BookTimelineEventEntity,
       BookCharacterFactEntity, BookRelationEntity, BookChapterSummaryEntity,
       BookFactionEntity, BookCommitmentEntity,
+      BookPromptTemplateEntity,
+      WorkflowExecutionEntity,
     ]),
     BullModule.registerQueue(
       { name: AUTO_SERIALIZATION_QUEUE },
@@ -124,6 +131,9 @@ import { MemoryRetrieverService } from './memory-retriever.service';
     AutoSerializationProcessor,
     ChapterResyncProcessor,
     BookAgentPipelineService,
+    WorkflowTopologyService,
+    BookPromptTemplateService,
+    WorkflowExecutionService,
     BookStateRepository,
     DetailStoreService,
     DetailContextService,

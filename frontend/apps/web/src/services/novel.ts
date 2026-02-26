@@ -93,6 +93,7 @@ export interface BookPromptProfile {
 export interface MiniArcChapterBeat {
   chapterNumber: number;
   role: 'setup' | 'escalation' | 'twist' | 'climax' | 'aftermath' | 'transition';
+  technique?: string; // AI自由输出的中文叙事技法标签
   tensionLevel: number;
   briefGoal: string;
   satisfactionType: 'none' | 'minor_payoff' | 'major_payoff' | 'emotional_peak' | 'relief';
@@ -476,6 +477,24 @@ export interface WorldData {
   chapterSummaries: Array<{ chapterNumber: number; summary: string }>;
 }
 
+/* ========== Token 用量统计 ========== */
+
+export interface BookTokenUsage {
+  bookId: string;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTokens: number;
+  totalCostUsd: number;
+  totalCalls: number;
+  byProvider: Array<{ provider: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number }>;
+  byModel: Array<{ model: string; provider: string; tier: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; avgDurationMs: number }>;
+  chapters: Array<{ chapterNumber: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; totalCalls: number }>;
+}
+
+export async function getBookTokenUsage(bookId: string): Promise<BookTokenUsage> {
+  return request(`${BASE}/books/${bookId}/token-usage`);
+}
+
 export async function getBookProfile(bookId: string): Promise<BookPromptProfile> {
   return request(`${BASE}/books/${bookId}/profile`);
 }
@@ -502,6 +521,52 @@ export interface GenerationProgressEvent {
   message: string;
   done: boolean;
   error?: string;
+  nodeId?: string;
+  loopAttempt?: number;
+  score?: number;
+  durationMs?: number;
+  skipped?: boolean;
+  phase?: string;
+}
+
+export type NodeStatus = 'pending' | 'running' | 'completed' | 'skipped' | 'failed';
+
+export interface NodeExecution {
+  nodeId: string;
+  status: NodeStatus;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  loopAttempt?: number;
+  score?: number;
+  skippedReason?: string;
+  errorMessage?: string;
+}
+
+export interface ExecutionSummary {
+  totalDurationMs: number;
+  totalLoopAttempts: number;
+  finalScore?: number;
+  finalVerdict?: string;
+  nodeCount: number;
+  failedNodes: string[];
+}
+
+export interface WorkflowExecution {
+  id: string;
+  bookId: string;
+  chapterNumber: number;
+  nodes: NodeExecution[];
+  summary: ExecutionSummary | null;
+  status: 'running' | 'completed' | 'failed';
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface GenerationStatus { generating: boolean; startedAt: number | null; lastStep: string | null; progress: number; }
+
+export async function getGenerationStatus(bookId: string): Promise<GenerationStatus> {
+  return request(`${BASE}/books/${bookId}/generation-status`);
 }
 
 export function getGenerateSSEUrl(bookId: string): string {
@@ -548,35 +613,142 @@ export interface AgentNodeConfig {
   customConfig?: CustomAgentConfig;
 }
 
+export interface WorkflowParams {
+  qualityPassScore: number;
+  maxRepairRounds: number;
+  editorPolishThreshold: number;
+  longRangeMemoryThreshold: number;
+}
+
 export interface PipelineView {
   bookId: string;
   draftNodes: AgentNodeConfig[];
   publishedNodes: AgentNodeConfig[] | null;
   publishedAt: string | null;
   hasDraft: boolean;
+  workflowParams: WorkflowParams;
+}
+
+export type WfNodeType = 'agent' | 'condition' | 'check' | 'parallel_fork' | 'parallel_join' | 'loop_entry' | 'loop_exit' | 'phase_header';
+export type WfEdgeType = 'normal' | 'conditional_true' | 'conditional_false' | 'retry' | 'rollback' | 'parallel';
+
+export interface ConfigParam {
+  key: string;
+  label: string;
+  type: 'number' | 'boolean';
+  value: number | boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+  description: string;
+}
+
+export interface WfNode {
+  id: string;
+  label: string;
+  type: WfNodeType;
+  agentType?: string;
+  icon?: string;
+  isCore: boolean;
+  isEnabled: boolean;
+  condition?: string;
+  configParams?: ConfigParam[];
+  phaseId: string;
+}
+
+export interface WfEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: WfEdgeType;
+  label?: string;
+  animated?: boolean;
+}
+
+export interface WfPhase {
+  id: string;
+  label: string;
+  type: 'sequential' | 'loop' | 'parallel_group';
+  nodeIds: string[];
+}
+
+export interface WorkflowTopology {
+  phases: WfPhase[];
+  nodes: WfNode[];
+  edges: WfEdge[];
+  params: WorkflowParams;
 }
 
 export async function getPipeline(bookId: string): Promise<PipelineView> {
   return request(`${BASE}/books/${bookId}/pipeline`);
 }
 
-export async function savePipelineDraft(
-  bookId: string,
-  nodes: AgentNodeConfig[],
-): Promise<PipelineView> {
-  return request(`${BASE}/books/${bookId}/pipeline/draft`, {
-    method: 'PUT',
-    data: { nodes },
-  });
+export async function savePipelineDraft(bookId: string, nodes: AgentNodeConfig[]): Promise<PipelineView> {
+  return request(`${BASE}/books/${bookId}/pipeline/draft`, { method: 'PUT', data: { nodes } });
 }
 
 export async function publishPipeline(bookId: string): Promise<PipelineView> {
   return request(`${BASE}/books/${bookId}/pipeline/publish`, { method: 'POST' });
 }
 
+export async function getTopology(bookId: string): Promise<WorkflowTopology> {
+  return request(`${BASE}/books/${bookId}/pipeline/topology`);
+}
+
+export async function saveWorkflowParams(bookId: string, params: Partial<WorkflowParams>): Promise<PipelineView> {
+  return request(`${BASE}/books/${bookId}/pipeline/workflow-params`, { method: 'PUT', data: params });
+}
+
 export function createBookSseUrl(progressChannel: string): string {
   const params = new URLSearchParams({ progressChannel });
   return `${BASE}/books/create-sse?${params.toString()}`;
+}
+
+// ── Prompt Templates ──────────────────────────────────────────────────────
+
+export interface PromptSection {
+  key: string;
+  label: string;
+  content: string;
+  isLocked: boolean;
+}
+
+export interface AgentPromptConfig {
+  agentId: string;
+  sections: PromptSection[];
+}
+
+export interface PromptTemplateView {
+  bookId: string;
+  playbooks: Record<string, string>;
+  agents: Record<string, AgentPromptConfig>;
+  updatedAt: string;
+}
+
+export async function getPromptTemplates(bookId: string): Promise<PromptTemplateView> {
+  return request(`${BASE}/books/${bookId}/prompt-templates`);
+}
+
+export async function updatePlaybook(bookId: string, name: string, content: string): Promise<PromptTemplateView> {
+  return request(`${BASE}/books/${bookId}/prompt-templates/playbooks/${name}`, { method: 'PUT', data: { content } });
+}
+
+export async function updateAgentSection(bookId: string, agentId: string, sectionKey: string, content: string): Promise<PromptTemplateView> {
+  return request(`${BASE}/books/${bookId}/prompt-templates/agents/${agentId}/sections/${sectionKey}`, { method: 'PUT', data: { content } });
+}
+
+export async function resetPromptTemplates(bookId: string): Promise<PromptTemplateView> {
+  return request(`${BASE}/books/${bookId}/prompt-templates/reset`, { method: 'POST' });
+}
+
+// ── Workflow Executions ───────────────────────────────────────────────────
+
+export async function listExecutions(bookId: string, limit = 20): Promise<WorkflowExecution[]> {
+  return request(`${BASE}/books/${bookId}/executions?limit=${limit}`);
+}
+
+export async function getChapterExecution(bookId: string, chapterNumber: number): Promise<WorkflowExecution | null> {
+  return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}/execution`);
 }
 
 // =========================================================================

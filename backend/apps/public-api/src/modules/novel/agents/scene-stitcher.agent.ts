@@ -9,7 +9,7 @@ import {
   StoryState,
 } from '../schemas/novel-state.schemas';
 import { ChapterDraft, chapterDraftSchema } from '../schemas/novel.schemas';
-import { PROSE_CRAFT_PLAYBOOK, buildStyleDNA, buildWritingLessonsHint } from '../prompting/novel-playbook';
+import { PROSE_CRAFT_PLAYBOOK, buildStyleDNA, buildWritingLessonsHint, buildCompactContextProse } from '../prompting/novel-playbook';
 
 const PACE_CN: Record<string, string> = {
   slow_burn: '慢热', steady: '稳健', accelerating: '加速', breakneck: '极速', stillness: '静谧',
@@ -29,6 +29,7 @@ export class SceneStitcherAgent {
     const profile = state.bookPromptProfile;
     const sorted = sceneDrafts.sort((a, b) => a.sceneIndex - b.sceneIndex);
     const rawConcat = sorted.map((d, i) => `【场景${i + 1}】\n${d.content}`).join('\n\n');
+    const storyContext = buildCompactContextProse(state, { maxCharacters: 6, maxChapterSummaries: 3, maxOpenThreads: 5, maxTimelineEvents: 5 });
 
     const seamAnalysis = this.analyzeSeams(scenePlan.scenes, sorted);
     const redundancies = this.detectRedundancies(sorted);
@@ -74,12 +75,15 @@ ${seamAnalysis}
 
 ${rhythmContrast}
 
-${redundancies ? `=== 冗余警告（必须改写去重）===\n${redundancies}\n` : ''}场景素材（按顺序）：
+${redundancies ? `=== 冗余警告（必须改写去重）===\n${redundancies}\n` : ''}故事上下文（验证角色称呼/时间连续性）：
+${storyContext}
+
+场景素材（按顺序）：
 ${rawConcat}
 
 请输出缝合后的完整章节（chapterNumber=${intent.chapterNumber}）。
 重点关注：① 首段钩子 ② 尾段悬崖 ③ 每个接缝的自然过渡 ④ 节奏对比 ⑤ 冗余去重。`,
-      temperature: 0.7,
+      temperature: 0.52,
     });
   }
 

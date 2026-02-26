@@ -22,7 +22,7 @@ import {
 import { buildCompactContext } from '../prompting/novel-playbook';
 
 const textAnalysisSchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   summary: z.string(),
   newCharacters: z.array(newCharacterSchema).default([]),
   newLocations: z.array(newLocationSchema).default([]),
@@ -35,7 +35,7 @@ const textAnalysisSchema = z.object({
     level: z.number().int().nonnegative().optional(),
     addInventoryItemIds: z.array(z.string()).default([]),
     removeInventoryItemIds: z.array(z.string()).default([]),
-    plannedReturnChapter: z.number().int().positive().nullable().optional(),
+    plannedReturnChapter: z.number().int().min(1).nullable().optional(),
     narrativeImportance: narrativeImportanceSchema.optional(),
     dormantReference: z.boolean().optional(),
     evidence: z.string().default(''),

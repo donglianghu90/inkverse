@@ -31,8 +31,11 @@ import {
   getBook,
   listChapters,
   getAutoSerialization,
+  getBookTokenUsage,
+  getGenerationStatus,
   updateChapter,
   type BookInfo,
+  type BookTokenUsage,
   type ChapterItem,
 } from '@/services/novel';
 import { AutoSerializationPanel } from './AutoSerializationPanel';
@@ -40,10 +43,19 @@ import { BatchGenerateDialog } from './BatchGenerateDialog';
 import { QualityDashboard } from './QualityDashboard';
 
 const SERIF_FONT = '"Noto Serif SC", "Source Han Serif SC", Georgia, "Times New Roman", serif';
-const P_CLASS = 'text-[15px] leading-[2] text-foreground/85 indent-[2em] mb-5 tracking-wide';
+const P_CLASS = 'text-[15px] leading-[1.9] text-foreground/85 indent-[2em] mb-4 tracking-wide';
 
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function relativeDate(dateStr: string): string {
+  const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86_400_000);
+  if (diff <= 0) return '今天';
+  if (diff === 1) return '昨天';
+  if (diff < 7) return `${diff}天前`;
+  if (diff < 30) return `${Math.floor(diff / 7)}周前`;
+  return new Date(dateStr).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
 }
 
 function contentToHtml(content: string): string {
@@ -102,75 +114,29 @@ const Workbench: React.FC = () => {
     threshold: number;
   } | null>(null);
   const [interventionMarkerChapters, setInterventionMarkerChapters] = useState<number[]>([]);
+  const [tokenUsage, setTokenUsage] = useState<BookTokenUsage | null>(null);
   const articleRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
 
-  const fetchData = useCallback(async () => {
-    if (!bookId) return;
-    try {
-      const [bookInfo, chaptersRes] = await Promise.all([
-        getBook(bookId),
-        listChapters(bookId),
-      ]);
-      const auto = await getAutoSerialization(bookId).catch(() => null);
-      setBook(bookInfo);
-      const sorted = [...chaptersRes.chapters].sort((a, b) => a.chapterNumber - b.chapterNumber);
-      setChapters(sorted);
-      setInterventionAlert(
-        auto?.intervention?.required
-          ? {
-              reason: auto.intervention.reason,
-              failingChapterNumber: auto.intervention.failingChapterNumber,
-              consecutiveLowQualityRuns: auto.intervention.consecutiveLowQualityRuns,
-              threshold: auto.intervention.threshold,
-            }
-          : null,
-      );
-      setInterventionMarkerChapters(
-        auto?.intervention?.markerChapterNumbers ??
-        (auto?.intervention?.markerChapterNumber
-          ? [auto.intervention.markerChapterNumber]
-          : []),
-      );
-      if (sorted.length > 0 && !selectedChapter) {
-        setSelectedChapter(sorted[sorted.length - 1]);
-      }
-    } catch (e: any) {
-      setError(e?.message ?? '加载失败');
-    } finally {
-      setLoading(false);
-    }
-  }, [bookId]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  useEffect(() => () => { esRef.current?.close(); }, []);
-
-  const handleGenerate = useCallback(async () => {
-    if (!bookId) return;
-    setGenerating(true);
-    setGenProgress(0);
-    setGenStep('');
-    const baselineChapterCount = book?.chaptersGenerated ?? chapters.length;
-
+  const connectSSE = useCallback((bookIdVal: string, baselineChapterCount: number) => {
     const proxyBase = '/api/novel';
-    const url = `${proxyBase}/books/${bookId}/chapters/generate-sse`;
+    const url = `${proxyBase}/books/${bookIdVal}/chapters/generate-sse`;
     esRef.current?.close();
     const es = new EventSource(url);
     esRef.current = es;
 
     let settled = false;
-    const STALE_MS = 300_000;
+    const STALE_MS = 600_000;
     let staleTimer: ReturnType<typeof setTimeout>;
 
     const syncLatestData = async (preferChapterNumber?: number) => {
-      const [bookInfo, chaptersRes] = await Promise.all([
-        getBook(bookId),
-        listChapters(bookId),
+      const [bookInfo, chaptersRes, usage] = await Promise.all([
+        getBook(bookIdVal),
+        listChapters(bookIdVal),
+        getBookTokenUsage(bookIdVal).catch(() => null),
       ]);
       setBook(bookInfo);
+      setTokenUsage(usage);
       const sorted = [...chaptersRes.chapters].sort((a, b) => a.chapterNumber - b.chapterNumber);
       setChapters(sorted);
       if (preferChapterNumber) {
@@ -185,7 +151,7 @@ const Workbench: React.FC = () => {
       let confirmed = false;
       for (let i = 0; i < 10; i += 1) {
         try {
-          const latestBook = await getBook(bookId);
+          const latestBook = await getBook(bookIdVal);
           if (latestBook.chaptersGenerated > baselineChapterCount) {
             await syncLatestData();
             confirmed = true;
@@ -210,6 +176,7 @@ const Workbench: React.FC = () => {
       touchStale();
       try {
         const data = JSON.parse(event.data);
+        if (data.reconnected) return;
         if (data.totalSteps > 0) {
           setGenProgress(Math.round(((data.stepIndex + (data.done ? 1 : 0.5)) / data.totalSteps) * 100));
         }
@@ -244,7 +211,69 @@ const Workbench: React.FC = () => {
       es.close();
       recover();
     };
-  }, [bookId, book?.chaptersGenerated, chapters.length]);
+  }, []);
+
+  const fetchData = useCallback(async () => {
+    if (!bookId) return;
+    try {
+      const [bookInfo, chaptersRes, genStatus] = await Promise.all([
+        getBook(bookId),
+        listChapters(bookId),
+        getGenerationStatus(bookId).catch(() => ({ generating: false, startedAt: null, lastStep: null, progress: 0 })),
+      ]);
+      const [auto, usage] = await Promise.all([
+        getAutoSerialization(bookId).catch(() => null),
+        getBookTokenUsage(bookId).catch(() => null),
+      ]);
+      setBook(bookInfo);
+      setTokenUsage(usage);
+      const sorted = [...chaptersRes.chapters].sort((a, b) => a.chapterNumber - b.chapterNumber);
+      setChapters(sorted);
+      setInterventionAlert(
+        auto?.intervention?.required
+          ? {
+              reason: auto.intervention.reason,
+              failingChapterNumber: auto.intervention.failingChapterNumber,
+              consecutiveLowQualityRuns: auto.intervention.consecutiveLowQualityRuns,
+              threshold: auto.intervention.threshold,
+            }
+          : null,
+      );
+      setInterventionMarkerChapters(
+        auto?.intervention?.markerChapterNumbers ??
+        (auto?.intervention?.markerChapterNumber
+          ? [auto.intervention.markerChapterNumber]
+          : []),
+      );
+      if (sorted.length > 0 && !selectedChapter) {
+        setSelectedChapter(sorted[sorted.length - 1]);
+      }
+      if (genStatus.generating) {
+        setGenerating(true);
+        setGenProgress(genStatus.progress);
+        setGenStep(genStatus.lastStep ?? '');
+        connectSSE(bookId, bookInfo.chaptersGenerated);
+      }
+    } catch (e: any) {
+      setError(e?.message ?? '加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [bookId, connectSSE]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  useEffect(() => () => { esRef.current?.close(); }, []);
+
+  const handleGenerate = useCallback(async () => {
+    if (!bookId || generating) return;
+    setGenerating(true);
+    setGenProgress(0);
+    setGenStep('');
+    connectSSE(bookId, book?.chaptersGenerated ?? chapters.length);
+  }, [bookId, generating, book?.chaptersGenerated, chapters.length, connectSSE]);
 
   const handleBatchDone = useCallback(() => {
     setShowBatchDialog(false);
@@ -388,9 +417,9 @@ const Workbench: React.FC = () => {
             </Button>
             <h2 className="font-bold truncate text-base tracking-tight">《{book.title}》</h2>
           </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground ml-9">
-            {book.genre && <Badge variant="secondary" className="text-xs">{book.genre}</Badge>}
-            <span>{book.chaptersGenerated} 章</span>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground ml-9">
+            {book.genre && <Badge variant="secondary" className="text-xs max-w-[140px] truncate">{book.genre}</Badge>}
+            <span className="shrink-0">{chapters.length} 章</span>
             {book.currentArc && (
               <>
                 <span>·</span>
@@ -442,7 +471,7 @@ const Workbench: React.FC = () => {
 
           <TabsContent value="chapters" className="mt-0 overflow-hidden lg:flex-1">
             <ScrollArea className="max-h-72 lg:h-full lg:max-h-none">
-              <div className="p-2 space-y-0.5">
+              <div className="p-1.5 space-y-0.5">
                 {chapters.length === 0 ? (
                   <div className="flex flex-col items-center py-12 text-muted-foreground text-sm gap-2">
                     <BookOpen className="h-8 w-8 opacity-30" />
@@ -452,43 +481,49 @@ const Workbench: React.FC = () => {
                 ) : (
                   [...chapters].reverse().map((ch) => {
                     const isActive = selectedChapter?.chapterNumber === ch.chapterNumber;
+                    const displayTitle = ch.title.replace(/^第\d+章\s*/, '');
+                    const wc = ch.content?.length ?? 0;
                     return (
                       <button
                         key={ch.chapterNumber}
                         className={cn(
-                          'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-all',
+                          'group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-all',
                           isActive
-                            ? 'bg-primary/8 text-primary ring-1 ring-primary/15'
-                            : 'hover:bg-accent',
+                            ? 'bg-primary/8 ring-1 ring-primary/20'
+                            : 'hover:bg-accent/60',
                         )}
                         onClick={() => handleChapterSelect(ch)}
                       >
                         <span className={cn(
-                          'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-semibold tabular-nums transition-colors',
+                          'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold tabular-nums transition-all',
                           isActive
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-muted text-muted-foreground',
+                            ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
+                            : 'bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary',
                         )}>
                           {ch.chapterNumber}
                         </span>
-                        <div className="min-w-0 flex-1">
+                        <div className="min-w-0 flex-1 space-y-px">
                           <div className="flex items-center gap-1.5">
-                            <p className={cn('truncate', isActive ? 'font-semibold' : 'font-medium')}>
-                              {ch.title}
+                            <p className={cn('truncate text-[13px] leading-none', isActive ? 'font-semibold text-primary' : 'font-medium')}>
+                              {displayTitle || ch.title}
                             </p>
                             {interventionMarkerChapters.includes(ch.chapterNumber) ? (
-                              <span className="rounded border border-amber-300 bg-amber-50 px-1 py-0 text-[10px] text-amber-700">
-                                问题标记
+                              <span className="shrink-0 rounded-full border border-amber-300/80 bg-amber-50 px-1.5 text-[10px] text-amber-600 font-medium">
+                                需修复
                               </span>
                             ) : null}
                           </div>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {new Date(ch.createdAt).toLocaleDateString('zh-CN')}
-                          </p>
+                          <div className="flex items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
+                            <span>{new Date(ch.createdAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</span>
+                            {wc > 0 && <>
+                              <span className="opacity-30">·</span>
+                              <span>{wc >= 1000 ? `${(wc / 1000).toFixed(1)}k` : wc} 字</span>
+                            </>}
+                          </div>
                         </div>
                         <ChevronRight className={cn(
-                          'h-4 w-4 shrink-0 transition-colors',
-                          isActive ? 'text-primary/50' : 'text-muted-foreground/30',
+                          'h-3.5 w-3.5 shrink-0 transition-all',
+                          isActive ? 'text-primary/60' : 'text-muted-foreground/20 group-hover:text-muted-foreground/50',
                         )} />
                       </button>
                     );
@@ -501,7 +536,7 @@ const Workbench: React.FC = () => {
           <TabsContent value="quality" className="mt-0 overflow-hidden lg:flex-1">
             <ScrollArea className="max-h-72 lg:h-full lg:max-h-none">
               <div className="p-4">
-                <QualityDashboard latestKpi={book.latestKpi} />
+                <QualityDashboard latestKpi={book.latestKpi} tokenUsage={tokenUsage} />
               </div>
             </ScrollArea>
           </TabsContent>
@@ -583,74 +618,64 @@ const Workbench: React.FC = () => {
         {selectedChapter ? (
           <>
             {/* Chapter Header */}
-            <div className="flex flex-col gap-3 border-b bg-card/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-8 sm:py-4">
+            <div className="flex flex-col gap-2 border-b bg-card/30 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-8 sm:py-3">
               <div className="min-w-0 flex-1 sm:mr-4">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1.5 uppercase tracking-wider font-medium">
-                  <BookOpen className="h-3.5 w-3.5" />
-                  第 {selectedChapter.chapterNumber} 章
-                </div>
                 {isEditing ? (
                   <input
-                    className="w-full text-xl font-bold tracking-tight bg-transparent border-b-2 border-primary/30 focus:border-primary outline-none py-0.5 transition-colors"
+                    className="w-full text-lg font-bold tracking-tight bg-transparent border-b-2 border-primary/30 focus:border-primary outline-none py-0.5 transition-colors"
                     value={editTitle}
                     onChange={(e) => setEditTitle(e.target.value)}
                     placeholder="章节标题"
                   />
                 ) : (
-                  <h1 className="text-xl font-bold tracking-tight">{selectedChapter.title}</h1>
+                  <h1 className="text-lg font-bold tracking-tight">
+                    <span className="text-muted-foreground font-medium">第{selectedChapter.chapterNumber}章</span>
+                    {' '}
+                    {selectedChapter.title.replace(/^第\d+章\s*/, '')}
+                  </h1>
                 )}
               </div>
-              <div className="flex flex-wrap items-center gap-2 shrink-0 sm:gap-3">
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
                 {isEditing ? (
                   <>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {editCharCount} 字
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1.5 text-muted-foreground hover:text-foreground"
-                      onClick={handleCancelEdit}
-                      disabled={saving}
-                    >
+                    <span className="text-xs text-muted-foreground tabular-nums">{editCharCount} 字</span>
+                    <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground hover:text-foreground" onClick={handleCancelEdit} disabled={saving}>
                       <X className="h-4 w-4" />
                       取消
                     </Button>
-                    <Button
-                      size="sm"
-                      className="gap-1.5"
-                      onClick={handleSaveEdit}
-                      disabled={saving}
-                    >
-                      {saving ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Save className="h-4 w-4" />
-                      )}
+                    <Button size="sm" className="gap-1.5" onClick={handleSaveEdit} disabled={saving}>
+                      {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                       {saving ? '保存中...' : '保存'}
                     </Button>
                   </>
                 ) : (
                   <>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                      <div className="flex items-center gap-1">
-                        <Clock className="h-3.5 w-3.5" />
-                        {new Date(selectedChapter.createdAt).toLocaleDateString('zh-CN', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric',
-                        })}
-                      </div>
-                      <div className="w-px h-3 bg-border" />
-                      <span>约 {selectedChapter.content.length} 字</span>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 ml-2"
-                      onClick={handleStartEdit}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {selectedChapter.content.length >= 1000
+                        ? `${(selectedChapter.content.length / 1000).toFixed(1)}k`
+                        : selectedChapter.content.length} 字
+                    </span>
+                    <span className="text-xs text-muted-foreground">·</span>
+                    <span className="text-xs text-muted-foreground">{new Date(selectedChapter.createdAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</span>
+                    {(() => {
+                      const cu = tokenUsage?.chapters?.find((c: any) => c.chapterNumber === selectedChapter.chapterNumber);
+                      if (!cu) return null;
+                      const fmt = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
+                      return (
+                        <>
+                          <span className="text-xs text-muted-foreground">·</span>
+                          <span className="text-[11px] tabular-nums text-muted-foreground" title={`输入 ${cu.promptTokens.toLocaleString()} / 输出 ${cu.completionTokens.toLocaleString()} tokens · ${cu.totalCalls} 次调用 · $${cu.estimatedCostUsd.toFixed(4)}`}>
+                            <span className="text-blue-500">入{fmt(cu.promptTokens)}</span>
+                            <span className="opacity-40"> / </span>
+                            <span className="text-violet-500">出{fmt(cu.completionTokens)}</span>
+                            {' '}
+                            <span className="text-amber-500">${cu.estimatedCostUsd < 0.01 ? cu.estimatedCostUsd.toFixed(4) : cu.estimatedCostUsd.toFixed(2)}</span>
+                          </span>
+                        </>
+                      );
+                    })()}
+                    <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs ml-1" onClick={handleStartEdit}>
+                      <Pencil className="h-3 w-3" />
                       编辑
                     </Button>
                   </>
@@ -664,7 +689,7 @@ const Workbench: React.FC = () => {
                 key={`${selectedChapter.chapterNumber}-${contentVersion}`}
                 ref={articleRef}
                 className={cn(
-                  'mx-auto max-w-2xl rounded-lg px-4 py-6 outline-none transition-shadow sm:px-8 sm:py-10',
+                  'mx-auto max-w-2xl rounded-lg px-4 py-4 outline-none transition-shadow sm:px-8 sm:py-6',
                   isEditing && 'ring-1 ring-primary/10 bg-card/30 cursor-text',
                 )}
                 contentEditable={isEditing}
@@ -697,7 +722,7 @@ const Workbench: React.FC = () => {
               </div>
               <div className="flex-1 space-y-2">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="font-medium">正在生成第 {book.chaptersGenerated + 1} 章</span>
+                  <span className="font-medium">正在生成第 {chapters.length + 1} 章</span>
                   <span className="text-xs text-muted-foreground">{genStep || 'AI 创作中'}</span>
                 </div>
                 <Progress value={genProgress} className="h-1.5" />

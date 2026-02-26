@@ -1,17 +1,13 @@
-/**
- * In-process LLM usage tracker.
- * - Uses AsyncLocalStorage to isolate one chapter run context.
- * - Aggregates per-call token/cost metrics into one chapter summary payload.
- */
+/** 进程内LLM用量追踪 — AsyncLocalStorage隔离章节作用域，按task/provider/model多维聚合 */
 import { Injectable } from '@nestjs/common';
 import { AsyncLocalStorage } from 'async_hooks';
 
-// One LLM call usage record captured from LlmService.
 export interface LlmUsageCallRecord {
   callIndex: number;
   taskName: string;
   model: string;
   provider: string;
+  tier: string;
   startedAt: string;
   finishedAt: string;
   durationMs: number;
@@ -26,7 +22,8 @@ export interface LlmUsageCallRecord {
   tags: string[];
 }
 
-// Aggregated chapter-level usage payload persisted as artifact.
+interface AggBucket { calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; totalDurationMs: number; }
+
 export interface LlmChapterUsageSummary {
   bookId: string;
   chapterNumber: number;
@@ -39,15 +36,9 @@ export interface LlmChapterUsageSummary {
   estimatedCostUsd: number;
   currency: 'USD';
   missingUsageCalls: number;
-  byTask: Array<{
-    taskName: string;
-    calls: number;
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-    estimatedCostUsd: number;
-    avgDurationMs: number;
-  }>;
+  byTask: Array<{ taskName: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; avgDurationMs: number; }>;
+  byProvider: Array<{ provider: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; }>;
+  byModel: Array<{ model: string; provider: string; tier: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; avgDurationMs: number; }>;
   calls: LlmUsageCallRecord[];
 }
 
@@ -64,109 +55,79 @@ interface UsageScope {
 export class LlmUsageTrackerService {
   private readonly storage = new AsyncLocalStorage<UsageScope>();
 
-  // Run one chapter generation inside an isolated usage tracking scope.
-  async runWithChapterScope<T>(
-    input: { bookId: string; chapterNumber: number },
-    job: () => Promise<T>,
-  ): Promise<T> {
-    const scope: UsageScope = {
-      bookId: input.bookId,
-      chapterNumber: input.chapterNumber,
-      startedAt: new Date().toISOString(),
-      callSequence: 0,
-      consumed: false,
-      calls: [],
-    };
-    return this.storage.run(scope, job);
+  async runWithChapterScope<T>(input: { bookId: string; chapterNumber: number }, job: () => Promise<T>): Promise<T> {
+    return this.storage.run({ bookId: input.bookId, chapterNumber: input.chapterNumber, startedAt: new Date().toISOString(), callSequence: 0, consumed: false, calls: [] }, job);
   }
 
-  // Record one LLM call usage under current scope; no-op if no scope is active.
   recordCall(input: Omit<LlmUsageCallRecord, 'callIndex'>): void {
     const scope = this.storage.getStore();
-    if (!scope) {
-      return;
-    }
+    if (!scope) return;
     scope.callSequence += 1;
-    scope.calls.push({
-      callIndex: scope.callSequence,
-      ...input,
-    });
+    scope.calls.push({ callIndex: scope.callSequence, ...input });
   }
 
-  // Build and consume current scope summary; returns null when scope is absent/already consumed.
   consumeCurrentSummary(): LlmChapterUsageSummary | null {
     const scope = this.storage.getStore();
-    if (!scope || scope.consumed) {
-      return null;
-    }
+    if (!scope || scope.consumed) return null;
     scope.consumed = true;
-    const finishedAt = new Date().toISOString();
 
-    const promptTokens = scope.calls.reduce((sum, call) => sum + call.promptTokens, 0);
-    const completionTokens = scope.calls.reduce((sum, call) => sum + call.completionTokens, 0);
-    const totalTokens = scope.calls.reduce((sum, call) => sum + call.totalTokens, 0);
-    const estimatedCostUsd = Number(
-      scope.calls.reduce((sum, call) => sum + call.estimatedCostUsd, 0).toFixed(8),
-    );
-    const missingUsageCalls = scope.calls.filter((call) => call.tokenSource === 'missing').length;
-
-    const grouped = new Map<
-      string,
-      {
-        calls: number;
-        promptTokens: number;
-        completionTokens: number;
-        totalTokens: number;
-        estimatedCostUsd: number;
-        totalDurationMs: number;
-      }
-    >();
-    scope.calls.forEach((call) => {
-      const current =
-        grouped.get(call.taskName) ?? {
-          calls: 0,
-          promptTokens: 0,
-          completionTokens: 0,
-          totalTokens: 0,
-          estimatedCostUsd: 0,
-          totalDurationMs: 0,
-        };
-      current.calls += 1;
-      current.promptTokens += call.promptTokens;
-      current.completionTokens += call.completionTokens;
-      current.totalTokens += call.totalTokens;
-      current.estimatedCostUsd += call.estimatedCostUsd;
-      current.totalDurationMs += call.durationMs;
-      grouped.set(call.taskName, current);
-    });
-
-    const byTask = [...grouped.entries()]
-      .map(([taskName, value]) => ({
-        taskName,
-        calls: value.calls,
-        promptTokens: value.promptTokens,
-        completionTokens: value.completionTokens,
-        totalTokens: value.totalTokens,
-        estimatedCostUsd: Number(value.estimatedCostUsd.toFixed(8)),
-        avgDurationMs: Number((value.totalDurationMs / Math.max(1, value.calls)).toFixed(2)),
-      }))
-      .sort((left, right) => right.estimatedCostUsd - left.estimatedCostUsd);
+    const promptTokens = scope.calls.reduce((s, c) => s + c.promptTokens, 0);
+    const completionTokens = scope.calls.reduce((s, c) => s + c.completionTokens, 0);
+    const totalTokens = scope.calls.reduce((s, c) => s + c.totalTokens, 0);
+    const estimatedCostUsd = Number(scope.calls.reduce((s, c) => s + c.estimatedCostUsd, 0).toFixed(8));
+    const missingUsageCalls = scope.calls.filter((c) => c.tokenSource === 'missing').length;
 
     return {
-      bookId: scope.bookId,
-      chapterNumber: scope.chapterNumber,
-      startedAt: scope.startedAt,
-      finishedAt,
-      totalCalls: scope.calls.length,
-      promptTokens,
-      completionTokens,
-      totalTokens,
-      estimatedCostUsd,
-      currency: 'USD',
-      missingUsageCalls,
-      byTask,
+      bookId: scope.bookId, chapterNumber: scope.chapterNumber,
+      startedAt: scope.startedAt, finishedAt: new Date().toISOString(),
+      totalCalls: scope.calls.length, promptTokens, completionTokens, totalTokens, estimatedCostUsd,
+      currency: 'USD', missingUsageCalls,
+      byTask: LlmUsageTrackerService.aggregateByTask(scope.calls),
+      byProvider: LlmUsageTrackerService.aggregateByProvider(scope.calls),
+      byModel: LlmUsageTrackerService.aggregateByModel(scope.calls),
       calls: scope.calls,
     };
   }
-}
 
+  private static aggregateByTask(calls: LlmUsageCallRecord[]) {
+    const m = new Map<string, AggBucket>();
+    for (const c of calls) {
+      const b = m.get(c.taskName) ?? { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0, totalDurationMs: 0 };
+      b.calls++; b.promptTokens += c.promptTokens; b.completionTokens += c.completionTokens; b.totalTokens += c.totalTokens; b.estimatedCostUsd += c.estimatedCostUsd; b.totalDurationMs += c.durationMs;
+      m.set(c.taskName, b);
+    }
+    return [...m.entries()].map(([taskName, b]) => ({
+      taskName, calls: b.calls, promptTokens: b.promptTokens, completionTokens: b.completionTokens,
+      totalTokens: b.totalTokens, estimatedCostUsd: Number(b.estimatedCostUsd.toFixed(8)),
+      avgDurationMs: Number((b.totalDurationMs / Math.max(1, b.calls)).toFixed(2)),
+    })).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
+  }
+
+  private static aggregateByProvider(calls: LlmUsageCallRecord[]) {
+    const m = new Map<string, Omit<AggBucket, 'totalDurationMs'>>();
+    for (const c of calls) {
+      const b = m.get(c.provider) ?? { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 };
+      b.calls++; b.promptTokens += c.promptTokens; b.completionTokens += c.completionTokens; b.totalTokens += c.totalTokens; b.estimatedCostUsd += c.estimatedCostUsd;
+      m.set(c.provider, b);
+    }
+    return [...m.entries()].map(([provider, b]) => ({
+      provider, calls: b.calls, promptTokens: b.promptTokens, completionTokens: b.completionTokens,
+      totalTokens: b.totalTokens, estimatedCostUsd: Number(b.estimatedCostUsd.toFixed(8)),
+    })).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
+  }
+
+  private static aggregateByModel(calls: LlmUsageCallRecord[]) {
+    const m = new Map<string, AggBucket & { provider: string; tier: string }>();
+    for (const c of calls) {
+      const b = m.get(c.model) ?? { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0, totalDurationMs: 0, provider: c.provider, tier: c.tier };
+      b.calls++; b.promptTokens += c.promptTokens; b.completionTokens += c.completionTokens; b.totalTokens += c.totalTokens; b.estimatedCostUsd += c.estimatedCostUsd; b.totalDurationMs += c.durationMs;
+      m.set(c.model, b);
+    }
+    return [...m.entries()].map(([model, b]) => ({
+      model, provider: b.provider, tier: b.tier, calls: b.calls,
+      promptTokens: b.promptTokens, completionTokens: b.completionTokens, totalTokens: b.totalTokens,
+      estimatedCostUsd: Number(b.estimatedCostUsd.toFixed(8)),
+      avgDurationMs: Number((b.totalDurationMs / Math.max(1, b.calls)).toFixed(2)),
+    })).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
+  }
+}

@@ -25,6 +25,7 @@ export class HookCrafterAgent {
     const hookTypes = profile.hookTypes.map((h) => `${h.id}(${h.label}): ${h.description}`).join('\n');
     const recentHooks = (state.recentHookTypes ?? []).slice(-3);
     const recentHookStr = recentHooks.map((h) => h.hookType).join('→');
+    const storyContext = buildCompactContextProse(state, { maxCharacters: 6, maxChapterSummaries: 3, maxOpenThreads: 6, maxTimelineEvents: 8 });
 
     const paragraphs = draft.content.split('\n');
     const lastParagraphs = paragraphs.slice(-12).join('\n');
@@ -70,7 +71,10 @@ ${(() => {
 
 本书可用钩子类型：
 ${hookTypes}`,
-      userPrompt: `钩子方向：${intent.hookDirection}
+      userPrompt: `故事上下文（精简）：
+${storyContext}
+
+钩子方向：${intent.hookDirection}
 近期钩子类型：${recentHookStr || '暂无'}
 ${recentHooks.length >= 2 && new Set(recentHooks.map((h) => h.hookType)).size === 1
   ? '⚠️ 连续使用相同类型！请换一种。'

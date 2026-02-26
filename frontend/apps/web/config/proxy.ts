@@ -3,12 +3,13 @@
  * 在开发环境下将 API 请求代理到后端服务
  */
 export default {
-  // 开发环境
   dev: {
     '/api/novel': {
       target: 'http://localhost:8099',
       changeOrigin: true,
       pathRewrite: { '^/api/novel': '/api/inkverse/novel' },
+      timeout: 900_000,      // SSE/LLM长连接需要足够超时
+      proxyTimeout: 900_000, // 代理端也需要
     },
     '/api/auth': {
       target: 'http://localhost:8099',

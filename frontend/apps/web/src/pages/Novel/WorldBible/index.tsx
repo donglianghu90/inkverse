@@ -32,6 +32,13 @@ const ROLE_CONFIG: Record<string, { label: string; color: string; icon: React.Re
   npc: { label: 'NPC', color: 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200', icon: <Users className="h-3 w-3" /> },
 };
 
+const PHASE_LABEL: Record<string, string> = {
+  opening: '开篇', development: '发展', climax: '高潮', resolution: '结局',
+};
+const BEAT_ROLE_LABEL: Record<string, string> = {
+  setup: '铺垫', escalation: '升级', twist: '转折', climax: '高潮', aftermath: '善后', transition: '过渡',
+};
+
 const DANGER_CONFIG: Record<string, { label: string; color: string }> = {
   low: { label: '安全', color: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' },
   mid: { label: '中等', color: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200' },
@@ -221,7 +228,7 @@ const WorldBible: React.FC = () => {
               <CardContent className="space-y-3">
                 {world.roughOutline.points.map((pt, i) => (
                   <div key={i} className="flex gap-3 text-sm">
-                    <Badge variant="outline" className="shrink-0 text-xs capitalize">{pt.phase}</Badge>
+                    <Badge variant="outline" className="shrink-0 text-xs">{PHASE_LABEL[pt.phase] ?? pt.phase}</Badge>
                     <div>
                       <p>{pt.description}</p>
                       <p className="text-xs text-muted-foreground">章节: {pt.tentativeChapterRange}</p>
@@ -269,7 +276,7 @@ const WorldBible: React.FC = () => {
                     {world.currentArc.chapterBeats.map((beat) => (
                       <div key={beat.chapterNumber} className="flex items-center gap-2 text-xs">
                         <Badge variant="outline">第 {beat.chapterNumber} 章</Badge>
-                        <span>{beat.role}</span>
+                        <span>{beat.technique || BEAT_ROLE_LABEL[beat.role] || beat.role}</span>
                         <span className="text-muted-foreground">张力 {beat.tensionLevel}/10</span>
                         <span className="text-muted-foreground">· {beat.briefGoal}</span>
                       </div>

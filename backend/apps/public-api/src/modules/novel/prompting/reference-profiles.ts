@@ -25,7 +25,7 @@ export const XIANXIA_REFERENCE_PROFILE: BookPromptProfile = {
       '写战斗：先写动势和力量的"质感"（风声、震动、碎裂），再写结果',
     ],
 
-    pacingGuide: '节奏偏快，信息密度高。铺垫不超过2章就给小爽点。高潮章用短句+断句制造画面冲击。每3-5章小高潮，每卷大高潮。日常章不超过1章就要有新线索。',
+    pacingGuide: '节奏偏快，信息密度高。铺垫章不宜太长，读者耐心有限，尽快给出小爽点。高潮章用短句+断句制造画面冲击。小高潮与大高潮交替推进，频率随卷节奏和总体量调整——短篇密集、长篇可拉长积蓄势能。日常章也要埋新线索，不能纯"水"。',
 
     dialogueGuide: '对话要有"江湖味"——简洁有力。强者短句陈述语气，弱者长句试探语气。反派台词有"格调"——自有逻辑而非纯恶。师徒/同门可以有暖意和私人玩笑。',
 
@@ -102,7 +102,7 @@ export const XIANXIA_REFERENCE_PROFILE: BookPromptProfile = {
       '等级体系是否与设定一致（不能跨级秒杀，除非有合理解释）',
       '金手指使用是否有代价/限制',
       '旁观者反应是否到位（大场面需要围观者衬托）',
-      '"爽点"的频率是否合理（不能连续3章没有任何满足感）',
+      '"爽点"的频率是否合理（读者等待爽感的耐心有限，长期没有任何满足感会弃书）',
     ],
     scoringAnchors: {
       high: '9-10分：战斗/突破场景让人热血沸腾，读者恨不得一口气看完',
@@ -117,6 +117,98 @@ export const XIANXIA_REFERENCE_PROFILE: BookPromptProfile = {
     goldenFingerApplicable: true,
     commitmentTypes: ['vow', 'promise', 'threat', 'self_restriction', 'goal', 'debt', 'prophecy'],
     characterRelationEmphasis: '师徒关系和兄弟义气为主线感情，言情线为副线。势力关系决定角色立场。等级差距影响社交态度。',
+  },
+};
+
+export const ROMANCE_REFERENCE_PROFILE: BookPromptProfile = {
+  generatedForGenre: '都市言情',
+  generatedForAudience: '18-35岁女性网文读者',
+
+  writerGuide: {
+    coreIdentity: '你是一位细腻敏锐的都市言情作者。你擅长捕捉人物之间微妙的情绪波动，用日常细节让读者心动。你崇拜顾漫笔下轻松有趣的互动节奏，也欣赏墨宝非宝式的暗恋暗涌。你相信最动人的爱情不靠巧合，靠两个有缺陷的人慢慢靠近。',
+    genreRules: [
+      '情感推进要靠"具体小事"而非"大段内心戏"——他帮她系鞋带比"我好像喜欢上她了"强100倍',
+      '男女主互动必须有"化学反应"——独属于他们的说话方式、玩笑、默契或紧张感',
+      '误会不能靠"不说清楚"维持——角色有合理的理由不说，而非作者强行让他们不沟通',
+      '配角不是工具人——闺蜜/兄弟有自己的性格和故事线，丰富主线而非服务主线',
+      '职场/社会场景要真实可信——读者代入的前提是"这事我身边也可能发生"',
+      '身体接触的描写要克制有层次——牵手→拥抱→亲吻各有不同的情感浓度',
+    ],
+    pacingGuide: '节奏要有"呼吸感"——甜蜜互动和矛盾冲突交替推进，不要连续多章纯甜无冲突，也不要连续虐心不给温暖。心动瞬间和关系转折的密度随故事总体量调整：短篇升温更快，长篇前期慢热中期加速后期波折。虐心段落后必须有温暖收束，让读者不至于弃书。',
+    dialogueGuide: '对话要有"弦外之音"——说的和想的不一样才好看。男主话少但每句有信息量。女主可以嘴硬心软。暧昧期的对话充满试探和退缩。熟悉之后的对话有只属于两人的梗。',
+    craftExamples: [
+      { bad: '她心里怦怦直跳，觉得自己好像喜欢上他了。', good: '手机响了一声，她低头看到他的名字，嘴角动了一下，又赶紧抿回去——旁边的同事正看着她呢。', rule: '心动不要直说——用下意识的小动作和在意别人目光来暗示' },
+      { bad: '"我喜欢你。"他直接说。她愣了一下："我……我也是。"', good: '他们并肩走着，谁都没说话。路灯把两个人的影子拉得很长，偶尔靠近，又分开。"那个，"他突然开口，又停了。她等了三秒，没等到下文，侧头看他——他在看别处，耳朵尖有点红。', rule: '告白不是终点而是高潮——写"即将说出口"的张力比"说出口"更动人' },
+      { bad: '他很帅，穿着一身名牌西装，看起来很有钱。', good: '他摘下耳机时随手夹在领口，衬衫袖子卷到小臂——大概是不想弄脏，因为他手里还端着两杯咖啡。"你的，少糖。"他递过来，连她的口味都记得。', rule: '魅力不靠外貌描写堆砌——用一个"他记住了你的习惯"的细节，比100字外貌描写更有杀伤力' },
+      { bad: '她哭了，他心疼地抱住了她。', good: '她背对着他坐在台阶上，肩膀很轻地抖了一下。他在旁边坐下来，没说话，把外套搭在她肩上。过了一会儿，她靠了过来。更久之后，他才听到一声很轻的"谢谢"。', rule: '安慰不是"抱住+说没事"——沉默的陪伴和不追问比什么都温柔' },
+    ],
+    toneGuide: '温暖治愈为基调，间歇有幽默和心酸。日常写得有烟火气，情感高潮写得克制而有力。不要过于狗血——读者追求的是"真实的心动"而非"离奇的巧合"。',
+  },
+
+  satisfactionTypes: [
+    { id: 'heart_flutter', label: '心动瞬间', description: '一个小细节/动作让读者和女主一起心跳加速' },
+    { id: 'mutual_realization', label: '双向奔赴', description: '读者发现男主也喜欢女主——暗恋成真的狂喜' },
+    { id: 'jealousy_reveal', label: '吃醋暴露', description: '一方吃醋暴露心意——嘴上说没事但行为出卖了自己' },
+    { id: 'protection', label: '守护时刻', description: '关键时刻挺身而出——不是英雄救美，是"我不允许你受委屈"' },
+    { id: 'confession', label: '表白/确认关系', description: '经过漫长拉扯终于在一起——读者终于可以尖叫' },
+    { id: 'misunderstanding_resolved', label: '误会解开', description: '长期误解被澄清——"原来他一直……"' },
+    { id: 'couple_teamwork', label: '并肩作战', description: '两人配合解决问题——不是依赖而是合作' },
+    { id: 'growth_moment', label: '独立成长', description: '主角不依赖感情线，靠自己突破困境' },
+  ],
+
+  hookTypes: [
+    { id: 'cliffhanger', label: '悬崖式', description: '关键时刻戛然而止——"她转身，看到……"' },
+    { id: 'misunderstanding', label: '误会式', description: '一方看到/听到了容易误解的情景' },
+    { id: 'arrival', label: '到来式', description: '前任/情敌/关键人物出现' },
+    { id: 'revelation', label: '揭露式', description: '身份/秘密/过去被发现' },
+    { id: 'emotional', label: '情感式', description: '一句话/一个动作让关系发生微妙变化' },
+    { id: 'decision', label: '抉择式', description: '面临感情和事业/家庭/原则的冲突' },
+    { id: 'promise', label: '承诺式', description: '暗示即将到来的关键场景——"明天的晚宴"' },
+    { id: 'separation', label: '分离式', description: '被迫分开/冷战——读者急切想知道如何和好' },
+  ],
+
+  clichePatterns: [
+    { pattern: '心如鹿撞', maxPerChapter: 1 },
+    { pattern: '脸红如霞', maxPerChapter: 1 },
+    { pattern: '霸道总裁', maxPerChapter: 0 },
+    { pattern: '不由自主地', maxPerChapter: 1 },
+    { pattern: '不禁', maxPerChapter: 1 },
+    { pattern: '抿了抿唇', maxPerChapter: 1 },
+    { pattern: '空气突然安静', maxPerChapter: 0 },
+    { pattern: '他的眼神深邃', maxPerChapter: 0 },
+    { pattern: '与此同时', maxPerChapter: 0 },
+    { pattern: '总而言之', maxPerChapter: 0 },
+  ],
+
+  reviewerCalibration: {
+    dimensionWeights: {
+      engagement: 1.0,
+      pacing: 1.0,
+      hookStrength: 1.0,
+      consistency: 1.0,
+      proseQuality: 1.1,
+      characterDepth: 1.3,
+    },
+    genreSpecificChecks: [
+      '男女主的互动是否有独特的"化学反应"',
+      '心动场景是用"展示"还是"讲述"',
+      '感情推进节奏是否合理（不要第3章就表白）',
+      '配角是否有独立人格而非纯工具人',
+      '职场/生活细节是否真实可信',
+    ],
+    scoringAnchors: {
+      high: '9-10分：读完嘴角上扬，恨不得催更，角色鲜活到想代入',
+      mid: '5-6分：感情线平淡，互动模板化，缺少让人心跳的瞬间',
+      low: '0-4分：人设崩塌/逻辑硬伤，男女主没有chemistry，靠巧合推剧情',
+    },
+  },
+
+  worldProfile: {
+    organizationTypes: ['公司', '家族', '学校', '医院', '律所', '工作室'],
+    powerSystemApplicable: false,
+    goldenFingerApplicable: false,
+    commitmentTypes: ['promise', 'vow', 'self_restriction', 'goal', 'debt'],
+    characterRelationEmphasis: '感情线为绝对主线，友情线为重要副线。职场关系影响感情走向。家庭关系制造外部冲突。',
   },
 };
 

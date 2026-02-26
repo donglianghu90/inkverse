@@ -26,9 +26,9 @@ export const characterStateSchema = z.object({
   level: z.number().int().nonnegative(),
   inventory: z.array(z.string()),
   lifecycleStatus: characterLifecycleStatusSchema.optional(),
-  firstSeenChapter: z.number().int().positive().optional(),
-  lastSeenChapter: z.number().int().positive().optional(),
-  plannedReturnChapter: z.number().int().positive().nullable().optional(),
+  firstSeenChapter: z.number().int().min(1).optional(),
+  lastSeenChapter: z.number().int().min(1).optional(),
+  plannedReturnChapter: z.number().int().min(1).nullable().optional(),
   narrativeImportance: narrativeImportanceSchema.optional(),
   dormantReference: z.boolean().optional(),
 });
@@ -63,7 +63,7 @@ export const characterVoiceSchema = z.object({
     thoughtPatterns: z.string().default(''), // 内心戏风格（如"冷静分析型，像在下棋"）
   }).default({}),
   voiceEvolution: z.array(z.object({
-    chapterNumber: z.number().int().positive(),
+    chapterNumber: z.number().int().min(1),
     change: z.string(), // 声音变化（如"经历背叛后对话变得更加警惕和试探"）
   })).max(10).default([]),
   catchphrases: z.array(z.string()).max(5).default([]), // 经典语录（从已写章节中积累）
@@ -74,12 +74,12 @@ export const characterAbilitySchema = z.object({
   name: z.string(),
   level: z.string(),
   description: z.string(),
-  acquiredAtChapter: z.number().int().positive().optional(),
+  acquiredAtChapter: z.number().int().min(1).optional(),
 });
 
 // Timestamped change record — tracks how a character evolves over the story.
 export const characterChangeRecordSchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   change: z.string(),
 });
 
@@ -136,7 +136,7 @@ export const factionMemberSchema = z.object({
   characterId: z.string(),
   rank: z.string(),
   title: z.string().optional(),
-  joinedAtChapter: z.number().int().positive().optional(),
+  joinedAtChapter: z.number().int().min(1).optional(),
 });
 
 // Faction/organization schema.
@@ -158,7 +158,7 @@ export const factionSchema = z.object({
   })).default([]),
   culture: z.string().optional(),
   rules: z.array(z.string()).default([]),
-  firstSeenChapter: z.number().int().positive().optional(),
+  firstSeenChapter: z.number().int().min(1).optional(),
 });
 
 // Character commitment / vow / flag.
@@ -177,17 +177,17 @@ export const characterCommitmentSchema = z.object({
   content: z.string(),
   targetCharacterId: z.string().optional(),
   deadline: z.string().optional(),
-  deadlineChapter: z.number().int().positive().optional(),
+  deadlineChapter: z.number().int().min(1).optional(),
   status: z.enum(['active', 'fulfilled', 'broken', 'expired', 'forgotten']).default('active'),
-  seededAtChapter: z.number().int().positive(),
-  resolvedAtChapter: z.number().int().positive().optional(),
+  seededAtChapter: z.number().int().min(1),
+  resolvedAtChapter: z.number().int().min(1).optional(),
   urgency: z.enum(['background', 'active', 'imminent', 'overdue']).default('background'),
 });
 
 // Story actor profile.
 // Character psychology — dynamic emotional state machine (跨章节追踪).
 export const emotionalMemorySchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   trigger: z.string(), // 什么引发了这个情绪
   emotion: z.string(), // 核心情绪
   intensity: z.number().min(0).max(1), // 强度 0-1
@@ -235,7 +235,7 @@ export const characterKnowledgeEntrySchema = z.object({
   content: z.string(), // 该角色知道的内容
   source: z.enum(['witnessed', 'told', 'overheard', 'deduced', 'rumor', 'false_info']),
   confidence: z.enum(['certain', 'suspected', 'vague', 'wrong']).default('certain'),
-  acquiredAtChapter: z.number().int().positive(),
+  acquiredAtChapter: z.number().int().min(1),
   isSecret: z.boolean().default(false), // 该角色是否意识到这是秘密
 });
 
@@ -245,7 +245,7 @@ export const characterKnowledgeStateSchema = z.object({
     factId: z.string(),
     wrongBelief: z.string(),
     truthId: z.string().optional(), // 对应的真实factId
-    acquiredAtChapter: z.number().int().positive(),
+    acquiredAtChapter: z.number().int().min(1),
   })).default([]),
   blindSpots: z.array(z.string()).default([]), // 该角色明确不知道的关键事项
 }).optional();
@@ -310,7 +310,7 @@ export const itemProfileSchema = z.object({
   evolutionStages: z.array(z.object({
     stage: z.string(),
     description: z.string(),
-    unlockedAtChapter: z.number().int().positive().optional(),
+    unlockedAtChapter: z.number().int().min(1).optional(),
   })).default([]),
 }).optional();
 
@@ -333,8 +333,8 @@ export const relationshipEdgeSchema = z.object({
   relationType: z.string(),
   strength: z.number().min(-10).max(10),
   status: z.enum(['active', 'historical', 'hidden']),
-  validFromChapter: z.number().int().positive(),
-  validToChapter: z.number().int().positive().nullable(),
+  validFromChapter: z.number().int().min(1),
+  validToChapter: z.number().int().min(1).nullable(),
   evidenceEventId: z.string().nullable(),
   notes: z.string(),
 });
@@ -342,7 +342,7 @@ export const relationshipEdgeSchema = z.object({
 // Timeline event ledger item for chapter-level cause/effect chain tracking.
 export const timelineEventSchema = z.object({
   id: z.string(),
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   sequence: z.number().int().nonnegative(),
   eventType: z.string(),
   title: z.string(),
@@ -358,10 +358,10 @@ export const plotThreadSchema = z.object({
   id: z.string(),
   label: z.string(),
   status: z.enum(['open', 'payoff', 'expired']),
-  setupChapter: z.number().int().positive(),
-  lastTouchedChapter: z.number().int().positive(),
-  plannedPayoffStartChapter: z.number().int().positive().nullable(),
-  plannedPayoffEndChapter: z.number().int().positive().nullable(),
+  setupChapter: z.number().int().min(1),
+  lastTouchedChapter: z.number().int().min(1),
+  plannedPayoffStartChapter: z.number().int().min(1).nullable(),
+  plannedPayoffEndChapter: z.number().int().min(1).nullable(),
   relatedCharacterIds: z.array(z.string()),
   relatedLocationIds: z.array(z.string()),
   relatedItemIds: z.array(z.string()),
@@ -388,9 +388,9 @@ export const characterFactSchema = z.object({
   ]),
   status: z.enum(['active', 'deprecated', 'rumor']),
   confidence: z.number().min(0).max(1),
-  firstSeenChapter: z.number().int().positive(),
-  lastConfirmedChapter: z.number().int().positive(),
-  sourceChapter: z.number().int().positive(),
+  firstSeenChapter: z.number().int().min(1),
+  lastConfirmedChapter: z.number().int().min(1),
+  sourceChapter: z.number().int().min(1),
   sourceEventId: z.string().nullable(),
   notes: z.string(),
 });
@@ -442,7 +442,7 @@ export const editorialPlanSchema = z.object({
 
 // Volume-level arc planning.
 export const volumePlanSchema = z.object({
-  volumeNumber: z.number().int().positive(),
+  volumeNumber: z.number().int().min(1),
   title: z.string(),
   theme: z.string(),
   villain: z.string(),
@@ -452,7 +452,7 @@ export const volumePlanSchema = z.object({
 
 // Chapter execution contract, consumed by planner/writer/validators.
 export const chapterContractSchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   chapterTitle: z.string(),
   mission: z.string(),
   // Opening carryover anchor that must bridge from previous chapter unresolved hook.
@@ -465,14 +465,14 @@ export const chapterContractSchema = z.object({
   targetEmotion: z.string(),
   hookRequirement: z.string(),
   wordCountRange: z.object({
-    min: z.number().int().positive(),
-    max: z.number().int().positive(),
+    min: z.number().int().min(1),
+    max: z.number().int().min(1),
   }),
 });
 
 // Plot-thread economy policy per chapter to avoid uncontrolled thread inflation.
 export const plotEconomyPolicySchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   maxNewThreads: z.number().int().min(0).max(3),
   minThreadTouches: z.number().int().min(0).max(4),
   minPayoffOrExpire: z.number().int().min(0).max(3),
@@ -487,18 +487,18 @@ export const sceneBeatSchema = z.object({
   conflict: z.string(),
   turningPoint: z.string(),
   requiredCharacters: z.array(z.string()),
-  estimatedWords: z.number().int().positive(),
+  estimatedWords: z.number().int().min(1),
 });
 
 // Chapter scene plan.
 export const scenePlanSchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   beats: z.array(sceneBeatSchema).min(3),
 });
 
 // Draft chapter payload.
 export const chapterDraftSchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   title: z.string(),
   content: z.string(),
 });
@@ -554,7 +554,7 @@ export const newItemSchema = z.object({
 
 // Lore writeback record for state mutation after each chapter.
 export const loreRecordSchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   summary: z.string(),
   openLoops: z.array(z.string()).default([]),
   closedLoops: z.array(z.string()).default([]),
@@ -573,7 +573,7 @@ export const loreRecordSchema = z.object({
         level: z.number().int().nonnegative().optional(),
         addInventoryItemIds: z.array(z.string()).default([]),
         removeInventoryItemIds: z.array(z.string()).default([]),
-        plannedReturnChapter: z.number().int().positive().nullable().optional(),
+        plannedReturnChapter: z.number().int().min(1).nullable().optional(),
         narrativeImportance: narrativeImportanceSchema.optional(),
         dormantReference: z.boolean().optional(),
         evidence: z.string().default(''),
@@ -588,7 +588,7 @@ export const loreRecordSchema = z.object({
         relationType: z.string(),
         strength: z.number().min(-10).max(10),
         status: z.enum(['active', 'historical', 'hidden']).default('active'),
-        closeAtChapter: z.number().int().positive().nullable().default(null),
+        closeAtChapter: z.number().int().min(1).nullable().default(null),
         evidence: z.string().default(''),
       }),
     )
@@ -612,8 +612,8 @@ export const loreRecordSchema = z.object({
         threadId: z.string(),
         label: z.string(),
         action: z.enum(['open', 'touch', 'payoff', 'expire']),
-        plannedPayoffStartChapter: z.number().int().positive().nullable().default(null),
-        plannedPayoffEndChapter: z.number().int().positive().nullable().default(null),
+        plannedPayoffStartChapter: z.number().int().min(1).nullable().default(null),
+        plannedPayoffEndChapter: z.number().int().min(1).nullable().default(null),
         relatedCharacterIds: z.array(z.string()).default([]),
         relatedLocationIds: z.array(z.string()).default([]),
         relatedItemIds: z.array(z.string()).default([]),
@@ -716,7 +716,7 @@ export const loreRecordSchema = z.object({
   foreshadowingOpportunities: z
     .array(
       z.object({
-        targetChapterNumber: z.number().int().positive(),
+        targetChapterNumber: z.number().int().min(1),
         insertionType: z.enum(['sentence', 'paragraph', 'inner_thought', 'background_detail']),
         suggestedContent: z.string(),
         insertAfterParagraph: z.number().int().nonnegative(),
@@ -810,7 +810,7 @@ export const loreRecordSchema = z.object({
 
 // Canon arbitration report for persona consistency conflicts and normalized deltas.
 export const characterCanonReportSchema = z.object({
-  chapterNumber: z.number().int().positive(),
+  chapterNumber: z.number().int().min(1),
   pass: z.boolean(),
   conflicts: z.array(z.string()),
   patchPlan: z.array(z.string()),

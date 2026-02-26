@@ -9,8 +9,11 @@ import { Repository } from 'typeorm';
 import {
   BookAgentPipelineEntity,
   AgentNodeConfig,
+  WorkflowParams,
   DEFAULT_PIPELINE_NODES,
+  DEFAULT_WORKFLOW_PARAMS,
 } from './entities/book-agent-pipeline.entity';
+import { WorkflowTopologyService, WorkflowTopology } from './workflow-topology.service';
 
 export interface PipelineView {
   bookId: string;
@@ -18,6 +21,7 @@ export interface PipelineView {
   publishedNodes: AgentNodeConfig[] | null;
   publishedAt: string | null;
   hasDraft: boolean;
+  workflowParams: WorkflowParams;
 }
 
 @Injectable()
@@ -27,6 +31,7 @@ export class BookAgentPipelineService {
   constructor(
     @InjectRepository(BookAgentPipelineEntity)
     private readonly pipelineRepo: Repository<BookAgentPipelineEntity>,
+    private readonly topologyService: WorkflowTopologyService,
   ) {}
 
   async initDefault(bookId: string): Promise<void> {
@@ -77,6 +82,20 @@ export class BookAgentPipelineService {
     await this.pipelineRepo.save(entity);
     this.logger.log(`[Pipeline] 已发布 bookId=${bookId}`);
     return this.toView(entity);
+  }
+
+  async getTopology(bookId: string): Promise<WorkflowTopology> {
+    const view = await this.getPipeline(bookId);
+    return this.topologyService.buildTopology(view.draftNodes, view.workflowParams);
+  }
+
+  async saveWorkflowParams(bookId: string, params: Partial<WorkflowParams>): Promise<PipelineView> {
+    let entity = await this.pipelineRepo.findOneBy({ bookId });
+    if (!entity) { await this.initDefault(bookId); entity = await this.pipelineRepo.findOneBy({ bookId }); }
+    entity!.workflowParams = { ...DEFAULT_WORKFLOW_PARAMS, ...(entity!.workflowParams ?? {}), ...params };
+    await this.pipelineRepo.save(entity!);
+    this.logger.log(`[Pipeline] workflowParams 已更新 bookId=${bookId}`);
+    return this.toView(entity!);
   }
 
   async getPublishedNodes(bookId: string): Promise<AgentNodeConfig[]> {
@@ -161,14 +180,14 @@ export class BookAgentPipelineService {
   }
 
   private toView(entity: BookAgentPipelineEntity): PipelineView {
-    const isDifferent =
-      JSON.stringify(entity.draftNodes) !== JSON.stringify(entity.publishedNodes);
+    const isDifferent = JSON.stringify(entity.draftNodes) !== JSON.stringify(entity.publishedNodes);
     return {
       bookId: entity.bookId,
       draftNodes: entity.draftNodes,
       publishedNodes: entity.publishedNodes,
       publishedAt: entity.publishedAt?.toISOString() ?? null,
       hasDraft: isDifferent,
+      workflowParams: { ...DEFAULT_WORKFLOW_PARAMS, ...(entity.workflowParams ?? {}) },
     };
   }
 }

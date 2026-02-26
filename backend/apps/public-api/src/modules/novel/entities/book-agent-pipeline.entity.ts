@@ -47,6 +47,20 @@ export interface AgentNodeConfig {
   customConfig?: CustomAgentConfig;
 }
 
+export interface WorkflowParams {
+  qualityPassScore: number;        // 质量门控通过分数，默认 8.5
+  maxRepairRounds: number;         // 最大重写轮数，默认 2
+  editorPolishThreshold: number;   // 编辑精修触发阈值，默认 7.0
+  longRangeMemoryThreshold: number; // 长程记忆检索章节阈值，默认 10
+}
+
+export const DEFAULT_WORKFLOW_PARAMS: WorkflowParams = {
+  qualityPassScore: 8.5,
+  maxRepairRounds: 2,
+  editorPolishThreshold: 7.0,
+  longRangeMemoryThreshold: 10,
+};
+
 export const DEFAULT_PIPELINE_NODES: AgentNodeConfig[] = [
   { id: 'arc-director', type: 'arc-director', label: '卷级导演', description: '将当前卷合同转成单章硬约束，防止章节偏卷', isEnabled: true, isDeletable: false, isCore: true, position: 0, rfPosition: { x: 300, y: 0 }, additionalSystemPrompt: '' },
   { id: 'intent', type: 'intent', label: '意图规划', description: '为下一章设定目标、情绪方向和钩子方向', isEnabled: true, isDeletable: false, isCore: true, position: 1, rfPosition: { x: 300, y: 160 }, additionalSystemPrompt: '' },
@@ -75,6 +89,9 @@ export class BookAgentPipelineEntity {
 
   @Column({ name: 'published_at', type: 'timestamptz', nullable: true })
   publishedAt: Date | null;
+
+  @Column({ name: 'workflow_params', type: 'jsonb', nullable: true })
+  workflowParams: WorkflowParams | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

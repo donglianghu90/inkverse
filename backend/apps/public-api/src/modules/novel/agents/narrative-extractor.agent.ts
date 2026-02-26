@@ -44,7 +44,7 @@ const narrativeExtractionSchema = z.object({
     audienceImpact: z.string().optional(),
   })).optional(),
   foreshadowingOpportunities: z.array(z.object({
-    targetChapterNumber: z.number().int().positive(),
+    targetChapterNumber: z.number().int().min(1),
     insertionType: z.enum(['sentence', 'paragraph', 'inner_thought', 'background_detail']),
     suggestedContent: z.string(),
     insertAfterParagraph: z.number().int().nonnegative(),

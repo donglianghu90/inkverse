@@ -73,12 +73,16 @@ export class EditorAgent {
 - 检查关键对话是否有"潜台词"层次——太直白的对话加入弦外之音。
 - 确保章内有情绪弧线（从A情绪到B情绪），如果情绪平坦，增加微波动。
 - 把"讲述"改为"展示"：每个"他感到XX"都改为具体的动作/感官/细节。
-- 在合适的位置添加一个"金句候选"——一句简短有力、有态度的话。
+- 如果发现自然契合的位置，可以考虑插入一句"金句"——简短有力、有态度。但不要为了金句而强行制造，自然为先。
 
 写作技法参考：
 ${PROSE_CRAFT_PLAYBOOK}
 
 套话替换清单：${clicheList}
+
+=== 题材专属规则 ===
+${profile.writerGuide.genreRules.slice(0, 4).map((r, i) => `${i + 1}. ${r}`).join('\n')}
+${profile.writerGuide.craftExamples.length > 0 ? `\n=== 正反例参考 ===\n${profile.writerGuide.craftExamples.slice(0, 2).map((e) => `坏：${e.bad}\n好：${e.good}\n规则：${e.rule}`).join('\n\n')}` : ''}
 
 ${EDITOR_DISCIPLINE_PLAYBOOK}
 ${CONTINUITY_BASELINE_PLAYBOOK}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
@@ -109,7 +113,7 @@ ${draft.content}
 - 字数必须在 ${intent.wordCountRange.min}-${intent.wordCountRange.max} 范围内。
 - 不得削弱原文优点。
 - 优先修复 critical 和 moderate 级别问题。`,
-      temperature: 0.75,
+      temperature: 0.55,
     });
   }
 }

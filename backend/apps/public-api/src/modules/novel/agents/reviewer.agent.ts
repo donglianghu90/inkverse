@@ -13,11 +13,10 @@ import {
 } from '../schemas/novel-state.schemas';
 import { ChapterDraft } from '../schemas/novel.schemas';
 import {
-  REVIEWER_RUBRIC_PLAYBOOK,
   CONTINUITY_BASELINE_PLAYBOOK,
   CHARACTER_ARC_PLAYBOOK,
   PROSE_CRAFT_PLAYBOOK,
-  CHAPTER_RHYTHM_PLAYBOOK,
+  buildChapterRhythmPlaybook,
   buildCompactContext,
 } from '../prompting/novel-playbook';
 
@@ -104,19 +103,19 @@ AI味检测——以下套话频繁出现则扣分：${clicheExamples}
 ${cal.genreSpecificChecks.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
 === 反虚高铁律 ===
-- 平均分不超过8.0，除非章节真的接近出版水准
-- "还可以"=6，"不错"=7，"很好"=8，"惊艳"=9，"完美"=10
-- 不给安慰分。每个8+分都必须说出具体优秀表现。
+- overallScore（总分）不超过8.5，除非章节真的接近出版水准。各维度分数同理。
+- 锚定标准："还可以"=6，"不错"=7，"很好"=8，"优秀"=8.5，"惊艳"=9，"完美"=10
+- 不给安慰分。任何8+的分数都必须在 strengths 中给出具体优秀表现作为依据。
 
-=== 裁决 ===
-- overallScore >= 8.5 且无critical → "good"
-- overallScore >= 6.0 或有moderate → "needs_edit"
-- overallScore < 6.0 或有critical → "major_issues"
+=== 裁决（三档互斥，从上到下匹配第一条即停） ===
+- overallScore < 6.0 或有critical级问题 → "major_issues"
+- overallScore >= 8.5 且无critical且无moderate → "good"
+- 其余情况（6.0-8.4 或存在moderate） → "needs_edit"
 
 ${CONTINUITY_BASELINE_PLAYBOOK}
 ${CHARACTER_ARC_PLAYBOOK}
 ${PROSE_CRAFT_PLAYBOOK}
-${CHAPTER_RHYTHM_PLAYBOOK}
+${buildChapterRhythmPlaybook(state.seed.targetChapterWordCount ?? 3000)}
 ${state.bookPromptProfile?.writerGuide ? `\n=== 主题检查 ===\n${state.seed.thematicCore ? `核心命题：${state.seed.thematicCore.centralQuestion}\n本章是否在某个层面触及了核心命题？不需要每章直接讨论，但读者应该能隐约感受到。完全脱离主题的纯过渡章——engagement扣分。` : '（无主题内核，跳过）'}` : ''}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
       })(),
       userPrompt: `故事上下文：

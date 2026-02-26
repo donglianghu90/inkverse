@@ -13,6 +13,8 @@ import {
   Settings2,
   FileEdit,
   Save,
+  Clock,
+  ChevronDown,
 } from 'lucide-react';
 import worldCreatingImg from '@/assets/illustrations/world-creating.png';
 import creativeInspirationImg from '@/assets/illustrations/creative-inspiration.png';
@@ -74,9 +76,9 @@ const SCALE_PRESETS = [
 ];
 
 const SERIALIZATION_PRESETS = [
-  { label: '日更 3 章', runEveryDays: 1, chaptersPerRun: 3, desc: '平台冲刺期常见节奏' },
-  { label: '日更 2 章', runEveryDays: 1, chaptersPerRun: 2, desc: '稳定连载主流节奏' },
-  { label: '2 天 1 章', runEveryDays: 2, chaptersPerRun: 1, desc: '慢节奏精品向' },
+  { label: '日更 3 章', runEveryDays: 1, chaptersPerRun: 3, desc: '起点推荐期 / 番茄进阶全勤', emoji: '🔥' },
+  { label: '日更 2 章', runEveryDays: 1, chaptersPerRun: 2, desc: '起点/番茄基础全勤线', emoji: '📝' },
+  { label: '日更 1 章', runEveryDays: 1, chaptersPerRun: 1, desc: '精品打磨，稳定输出', emoji: '✨' },
 ];
 
 const FORM_STEPS = [
@@ -105,6 +107,7 @@ const CreateBook: React.FC = () => {
 
   const [generatingGoal, setGeneratingGoal] = useState(false);
   const [goalAlternatives, setGoalAlternatives] = useState<string[]>([]);
+  const [showSerialAdvanced, setShowSerialAdvanced] = useState(false);
 
   const [createdBookId, setCreatedBookId] = useState<string | null>(null);
   const [generatedProfile, setGeneratedProfile] = useState<BookPromptProfile | null>(null);
@@ -227,7 +230,7 @@ const CreateBook: React.FC = () => {
 
     const controller = new AbortController();
     abortRef.current = controller;
-    const STALE_MS = 300_000;
+    const STALE_MS = 600_000; // LLM调用可能超过5分钟，增大至10分钟
     let staleTimer!: ReturnType<typeof setTimeout>;
     const touchStale = () => { clearTimeout(staleTimer); staleTimer = setTimeout(() => controller.abort(), STALE_MS); };
     let streamError: string | null = null;
@@ -839,11 +842,14 @@ const CreateBook: React.FC = () => {
           <Card className="border-primary/20 bg-primary/5">
             <CardContent className="space-y-4 p-3.5 sm:p-4">
               <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium">自动连载节奏</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    默认开启。系统先自动修复，连续低分才升级人工介入。
-                  </p>
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                    <Clock className="h-4 w-4 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">自动连载</p>
+                    <p className="text-xs text-muted-foreground">按设定节奏自动生成并质检章节</p>
+                  </div>
                 </div>
                 <Button
                   type="button"
@@ -856,98 +862,133 @@ const CreateBook: React.FC = () => {
               </div>
 
               {form.autoSerializationEnabled ? (
-                <>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    {SERIALIZATION_PRESETS.map((preset) => {
-                      const selected =
-                        form.autoSerializationRunEveryDays === preset.runEveryDays &&
-                        form.autoSerializationChaptersPerRun === preset.chaptersPerRun;
-                      return (
-                        <button
-                          key={preset.label}
-                          className={cn(
-                            'rounded-lg border p-3 text-left transition-all hover:border-primary/50',
-                            selected
-                              ? 'border-primary bg-background ring-2 ring-primary/20'
-                              : 'border-border bg-background/70',
-                          )}
-                          onClick={() => setForm({
-                            ...form,
-                            autoSerializationRunEveryDays: preset.runEveryDays,
-                            autoSerializationChaptersPerRun: preset.chaptersPerRun,
-                          })}
-                        >
-                          <p className="text-sm font-medium">{preset.label}</p>
-                          <p className="text-xs text-muted-foreground mt-1">{preset.desc}</p>
-                        </button>
-                      );
-                    })}
-                  </div>
+                (() => {
+                  const isCustom = !SERIALIZATION_PRESETS.some(
+                    (p) => p.runEveryDays === form.autoSerializationRunEveryDays && p.chaptersPerRun === form.autoSerializationChaptersPerRun,
+                  );
+                  const dailyRate = (form.autoSerializationChaptersPerRun ?? 3) / Math.max(1, form.autoSerializationRunEveryDays ?? 1);
+                  return <>
+                    <div className="grid grid-cols-3 gap-2">
+                      {SERIALIZATION_PRESETS.map((preset) => {
+                        const selected =
+                          form.autoSerializationRunEveryDays === preset.runEveryDays &&
+                          form.autoSerializationChaptersPerRun === preset.chaptersPerRun;
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            className={cn(
+                              'rounded-xl border p-3 text-center transition-all hover:border-primary/50',
+                              selected
+                                ? 'border-primary bg-background shadow-sm ring-2 ring-primary/20'
+                                : 'border-border bg-background/60',
+                            )}
+                            onClick={() => setForm({
+                              ...form,
+                              autoSerializationRunEveryDays: preset.runEveryDays,
+                              autoSerializationChaptersPerRun: preset.chaptersPerRun,
+                            })}
+                          >
+                            <span className="text-xl leading-none">{preset.emoji}</span>
+                            <p className="text-sm font-semibold mt-1.5">{preset.label}</p>
+                            <p className="text-[11px] text-muted-foreground mt-0.5 leading-tight">{preset.desc}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <div className="space-y-1">
-                      <Label className="text-xs">每日触发时间</Label>
-                      <Input
-                        type="time"
-                        className="h-8 text-sm"
-                        value={form.autoSerializationDailyStartTime}
-                        onChange={(e) => setForm({ ...form, autoSerializationDailyStartTime: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">每隔几天</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={14}
-                        className="h-8 text-sm"
-                        value={form.autoSerializationRunEveryDays}
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          if (!Number.isNaN(v)) {
-                            setForm({ ...form, autoSerializationRunEveryDays: Math.min(14, Math.max(1, v)) });
-                          }
-                        }}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">每次几章</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={50}
-                        className="h-8 text-sm"
-                        value={form.autoSerializationChaptersPerRun}
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          if (!Number.isNaN(v)) {
-                            setForm({ ...form, autoSerializationChaptersPerRun: Math.min(50, Math.max(1, v)) });
-                          }
-                        }}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">修复轮数</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={8}
-                        className="h-8 text-sm"
-                        value={form.autoSerializationMaxRepairRounds}
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          if (!Number.isNaN(v)) {
-                            setForm({ ...form, autoSerializationMaxRepairRounds: Math.min(8, Math.max(1, v)) });
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
+                    {isCustom && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <Badge variant="outline" className="text-[11px] px-1.5 py-0 border-amber-400/50 text-amber-600 bg-amber-50">
+                          自定义
+                        </Badge>
+                        <span className="text-muted-foreground">
+                          每 {form.autoSerializationRunEveryDays} 天更新 {form.autoSerializationChaptersPerRun} 章 · 点击上方卡片可恢复预设
+                        </span>
+                      </div>
+                    )}
 
-                  <p className="text-xs text-muted-foreground">
-                    预估日均更新：{((form.autoSerializationChaptersPerRun ?? 3) / Math.max(1, form.autoSerializationRunEveryDays ?? 1)).toFixed(2)} 章/天
-                  </p>
-                </>
+                    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-background/80 border px-3 py-2.5">
+                      <div className="flex items-center gap-1.5 text-sm">
+                        <span className="text-muted-foreground text-xs">触发时间</span>
+                        <Input
+                          type="time"
+                          className="h-7 w-[6.5rem] text-sm px-2"
+                          value={form.autoSerializationDailyStartTime}
+                          onChange={(e) => setForm({ ...form, autoSerializationDailyStartTime: e.target.value })}
+                        />
+                      </div>
+                      <div className="h-4 w-px bg-border hidden sm:block" />
+                      <p className="text-sm">
+                        预计日均{' '}
+                        <span className="font-semibold text-primary">{dailyRate.toFixed(1)}</span>{' '}
+                        章/天
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => setShowSerialAdvanced((v) => !v)}
+                    >
+                      <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showSerialAdvanced && 'rotate-180')} />
+                      高级设置
+                    </button>
+
+                    {showSerialAdvanced && (
+                      <div className="space-y-3 rounded-lg border bg-background/50 p-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="space-y-1.5">
+                            <Label className="text-xs text-muted-foreground">更新频率（天）</Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={14}
+                              className="h-8 text-sm"
+                              value={form.autoSerializationRunEveryDays}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                if (!Number.isNaN(v)) setForm({ ...form, autoSerializationRunEveryDays: Math.min(14, Math.max(1, v)) });
+                              }}
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs text-muted-foreground">每次生成章数</Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={50}
+                              className="h-8 text-sm"
+                              value={form.autoSerializationChaptersPerRun}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                if (!Number.isNaN(v)) setForm({ ...form, autoSerializationChaptersPerRun: Math.min(50, Math.max(1, v)) });
+                              }}
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs text-muted-foreground">自动修复轮次</Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={8}
+                              className="h-8 text-sm"
+                              value={form.autoSerializationMaxRepairRounds}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                if (!Number.isNaN(v)) setForm({ ...form, autoSerializationMaxRepairRounds: Math.min(8, Math.max(1, v)) });
+                              }}
+                            />
+                            <p className="text-[11px] text-muted-foreground leading-tight">质量不达标时自动重写的最大次数</p>
+                          </div>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground leading-tight">
+                          修改频率或章数后，上方预设会自动取消选中；点击预设卡片可快速恢复
+                        </p>
+                      </div>
+                    )}
+                  </>;
+                })()
               ) : (
                 <p className="text-xs text-muted-foreground">
                   关闭后将不自动更新，可在工作台手动开启。

@@ -8,7 +8,8 @@ import {
   chapterIntentSchema,
 } from '../schemas/novel-state.schemas';
 import {
-  FIRST_CHAPTERS_PLAYBOOK,
+  buildFirstChaptersPlaybook,
+  THREAD_AWARENESS_PLAYBOOK,
   buildCompactContext,
   buildCharacterArcContext,
   buildKpiTrendHints,
@@ -76,16 +77,19 @@ export class IntentAgent {
 === 原则 ===
 - goals 2-3个，每个必须有冲突感。"被迫做选择"比"了解信息"好100倍。
 - 给方向不给细节——Writer需要创作空间，不要规定具体场景和对话。
-- 连续两章不能相同主情绪走向——读者需要变化。
+- 尽量避免连续多章相同主情绪走向——读者需要情绪变化，但如果叙事弧确实需要持续某种情绪基调（如危机高潮连续章），可以在情绪强度或侧重点上做出区分。
 - 预期管理：先让读者期待A，再给B（更好或更糟），比直接给A更有力量。
 
 === 悬念规则 ===
-- overdue悬念（15章+）本章必须推进。chaptersSinceLastPayoff>=5时安排至少一个小揭晓。
-- 悬念存量保持3-7个，explosive级信息差至少再憋3-5章。
+- 长期未推进的悬念容易被读者遗忘——overdue悬念应优先推进或至少提及。payoff间隔太长时安排一个小揭晓维持兴趣。
+- 悬念存量不宜太多（读者记不住）也不能太少（失去追更动力），根据当前故事复杂度动态平衡。
+- explosive级信息差是大杀器——揭晓前需要足够铺垫和读者期待积累，不要轻易消耗。
+
+${THREAD_AWARENESS_PLAYBOOK}
 
 === 数据直觉（读状态数据时用） ===
-- 爽感：距小爽≥3章安排小爽点，距中爽≥8章必须有中等回报，距大爽≥15章考虑高潮
-- 信息差：dramatic_irony型→安排"差点发现真相"场景；explosive级至少再憋3章
+- 爽感：关注dopamineSchedule的chaptersSince数值。数值越大读者越饥渴——小爽间隔过长时优先安排，中爽和大爽的间隔应匹配当前卷节奏和故事总体量（短篇密集、长篇可拉长积蓄势能让爆发更猛）。不要机械地按固定间隔安排，要在叙事自然的位置给出爽感。
+- 信息差：dramatic_irony型→安排"差点发现真相"场景制造焦虑；explosive级需要充分铺垫后揭晓才有最大冲击力
 - 角色：focusCharacterIds选1-2个深刻刻画（不是"发展角色"而是"展示他对XX的矛盾"），弧线预警角色本章必须有内心戏
 - 承诺：imminent制造紧张感，overdue必须推进，不能连续遗忘同一承诺
 
@@ -94,7 +98,7 @@ export class IntentAgent {
 - return_planned但未到章的角色仅允许伏笔提及。
 ${state.seed.thematicCore ? `\n=== 主题内核 ===\n核心命题：${state.seed.thematicCore.centralQuestion}\n本章的目标/冲突应该能从某个角度触及这个命题——不需要回答，只需要让读者感受到。` : ''}
 ${arcDirective ? `\n=== 卷级导演指令（必须满足）===\n- 阶段：${arcDirective.arcStage}，使命：${arcDirective.chapterMission}\n- 必须命中：${arcDirective.mustHit.join('；') || '无'}，应规避：${arcDirective.shouldAvoid.join('；') || '无'}\n- 节奏：${arcDirective.pacingDirective || '无'}，钩子：${arcDirective.hookDirective || '无'}，风险：${arcDirective.riskBudget}` : ''}
-${isEarly ? '\n' + FIRST_CHAPTERS_PLAYBOOK : ''}${kpiHints.length > 0 ? '\n动态提示：\n' + kpiHints.join('\n') : ''}
+${isEarly ? '\n' + buildFirstChaptersPlaybook(state.bookPromptProfile?.worldProfile?.goldenFingerApplicable) : ''}${kpiHints.length > 0 ? '\n动态提示：\n' + kpiHints.join('\n') : ''}
 ${buildWritingLessonsHint(state.writingLessons ?? [], ['pacing', 'hook', 'structure', 'emotion'])}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}
@@ -125,12 +129,7 @@ ${(() => {
   const recentStr = recent3.map((h) => hookLabelMap[h] ?? h).join('→');
   return `- 钩子趋势：${recentStr}${repeated ? ' ⚠️连续相同，需换类型' : ''}`;
 })()}
-${arcDirective ? `\n卷级导演指令：
-- 阶段：${arcDirective.arcStage}
-- 本章使命：${arcDirective.chapterMission}
-- 必须命中：${arcDirective.mustHit.join('；') || '无'}
-- 应规避：${arcDirective.shouldAvoid.join('；') || '无'}
-- 伏线回收：${arcDirective.payoffThreadIds.join('、') || '无'}
+${arcDirective ? `\n（卷级导演指令已在系统提示中给出，此处不再重复。）
 - 节奏：${arcDirective.pacingDirective || '无'}
 - 钩子：${arcDirective.hookDirective || '无'}
 - 风险预算：${arcDirective.riskBudget}` : ''}

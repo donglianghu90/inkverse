@@ -40,19 +40,20 @@ export class GlobalFilter implements ExceptionFilter {
       message = exception.message;
     }
 
-    // 记录错误日志
     this.logError(exception, request, status, message);
-    
-    // 使用统一的响应格式
-    const errorResponse = {
-      code: status,
-      message: message,
-      data: null
-    };
 
-    // 对于非 401 错误，返回 200 状态码，但 code 字段保持原错误码
-    // 401 错误（token 过期等）保持原样返回
-    const httpStatus = status === HttpStatus.UNAUTHORIZED ? status : HttpStatus.OK;
+    const isSse = (request.headers['accept'] || '').includes('text/event-stream'); // SSE请求用SSE格式返回错误
+    if (isSse && !response.headersSent) {
+      response.setHeader('Content-Type', 'text/event-stream');
+      response.setHeader('Cache-Control', 'no-cache');
+      response.setHeader('Connection', 'keep-alive');
+      response.write(`data: ${JSON.stringify({ error: message, done: true })}\n\n`);
+      response.end();
+      return;
+    }
+
+    const errorResponse = { code: status, message, data: null };
+    const httpStatus = status === HttpStatus.UNAUTHORIZED ? status : HttpStatus.OK; // 非401统一返回200
     response.status(httpStatus).json(errorResponse);
   }
 

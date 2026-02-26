@@ -84,6 +84,7 @@ export class ArcDirectorAgent {
       .map((b) => ({
         chapterNumber: b.chapterNumber,
         role: b.role,
+        technique: b.technique,
         tensionLevel: b.tensionLevel,
         briefGoal: b.briefGoal,
       }));
@@ -106,7 +107,7 @@ ${techniqueHint}
 - chapterNumber 必须是当前章号。
 - arcId 必须等于当前卷 arcId。
 - arcStage 只能从当前节拍和卷进度推导，禁止随意跳阶段。
-- chapterMission 必须是一个可执行动作句，避免空话。
+- chapterMission 必须是一个可执行动作句，避免空话。参考当前节拍的technique（叙事技法）来制定具体策略。
 - mustHit: 1-4 条，本章必须达成。
 - shouldAvoid: 1-4 条，本章应规避，尤其是破坏卷节奏的行为。
 - payoffThreadIds: 只能从卷合同 mustPayoffThreadIds 中选择，最多 3 条。

@@ -658,13 +658,10 @@ climaxPattern 字段描述本卷高潮的模式（如"boss战""揭秘""背叛反
 - emotionalTheme 字段要明确这卷的情感主线
 - 卷的高潮不只是战力高潮，也应该是情感高潮
 
-=== chapterBeats role ===
-- setup(铺垫): tensionLevel 3-5
-- escalation(升温): tensionLevel 5-7
-- twist(转折): tensionLevel 7-9
-- climax(高潮): tensionLevel 9-10
-- aftermath(善后): tensionLevel 2-4
-- transition(过渡): tensionLevel 3-5
+=== chapterBeats ===
+role（结构分类）：setup/escalation/twist/climax/aftermath/transition
+technique（叙事技法，中文自由填写）：描述本章的具体叙事手法，如"打脸逆转""突破蜕变""暗线揭晓""奇遇机缘""权谋布局""日常温馨""悬崖勾引""连锁爆发"等，不受固定枚举约束。
+tensionLevel 参考：setup 3-5, escalation 5-7, twist 7-9, climax 9-10, aftermath 2-4, transition 3-5
 
 === satisfactionType ===
 - none: 普通推进
@@ -686,7 +683,8 @@ climaxPattern 字段描述本卷高潮的模式（如"boss战""揭秘""背叛反
 - cooldownTag: 用于避免连续同构卷（如"dungeon_like"）
 - narrativeTechnique: 本卷叙事技法（必须从枚举中选择）
 - structuralInnovation: 一句话描述本卷叙事创新
-- climaxPattern: 本卷高潮模式（必须与已用模式不同）`,
+- climaxPattern: 本卷高潮模式（必须与已用模式不同）
+- chapterBeats 每个节拍必须填写 technique 字段：用中文描述本章的具体叙事技法（如"打脸逆转""突破蜕变""暗线揭晓""奇遇机缘""权谋布局""日常温馨"等），不受固定枚举限制`,
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}
 
@@ -838,7 +836,7 @@ ${arcHistory.length > 0 ? JSON.stringify(arcHistory, null, 2) : '无（这是第
       const paragraphs = ch.content.split(/\n\n+/).filter((p) => p.trim().length > 50);
       for (const p of paragraphs.slice(0, 15)) {
         const hasDialogue = /["「].+?["」]/.test(p);
-        const hasAction = p.length > 80 && /[打斩冲跃挥劈]|[剑刀拳掌]/.test(p);
+        const hasAction = p.length > 80 && /[打斩冲跃挥劈撞闪扑逃追]|[剑刀拳掌枪]|碰撞|爆炸|冲刺|闪避|猛地|一把|飞速/.test(p);
         const hasEmotion = /[心胸眼眸]|[怒哀喜惧]|沉默|颤抖|咬/.test(p) && !hasDialogue;
         if (hasDialogue && dialogueSamples.length < 2) dialogueSamples.push(p.slice(0, 300));
         else if (hasAction && actionSamples.length < 2) actionSamples.push(p.slice(0, 300));

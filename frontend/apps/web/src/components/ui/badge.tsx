@@ -21,10 +21,13 @@ const badgeVariants = cva(
   },
 );
 
-export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {}
+export interface BadgeProps extends React.HTMLAttributes<HTMLElement>, VariantProps<typeof badgeVariants> {
+  as?: 'span' | 'button';
+}
 
-function Badge({ className, variant, ...props }: BadgeProps) {
-  return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
+function Badge({ className, variant, as, ...props }: BadgeProps) {
+  const Tag = as ?? (props.onClick ? 'button' : 'span'); // 有onClick时自动用button保证可访问性
+  return <Tag className={cn(badgeVariants({ variant }), className)} {...(props as any)} />;
 }
 
 export { Badge, badgeVariants };

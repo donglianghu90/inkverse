@@ -36,53 +36,56 @@ export class RecorderAgent {
     additionalSystemPrompt?: string,
   ): Promise<LoreRecord> {
     const t0 = Date.now();
-    this.logger.log(
-      `[Recorder] 并行提取开始 | 章节: ${draft.chapterNumber}`,
-    );
+    this.logger.log(`[Recorder] 并行提取开始 | 章节: ${draft.chapterNumber}`);
 
-    const [textResult, worldResult, narrativeResult] = await Promise.all([
+    const [textSettled, worldSettled, narrativeSettled] = await Promise.allSettled([
       this.textAnalyzer.analyze(state, draft, additionalSystemPrompt),
       this.worldExtractor.extract(state, draft, additionalSystemPrompt),
       this.narrativeExtractor.extract(state, draft, additionalSystemPrompt),
     ]);
 
+    const textResult = textSettled.status === 'fulfilled' ? textSettled.value : null;
+    const worldResult = worldSettled.status === 'fulfilled' ? worldSettled.value : null;
+    const narrativeResult = narrativeSettled.status === 'fulfilled' ? narrativeSettled.value : null;
+    if (textSettled.status === 'rejected') this.logger.error(`[Recorder] text-analyzer 失败: ${textSettled.reason}`);
+    if (worldSettled.status === 'rejected') this.logger.error(`[Recorder] world-extractor 失败: ${worldSettled.reason}`);
+    if (narrativeSettled.status === 'rejected') this.logger.error(`[Recorder] narrative-extractor 失败: ${narrativeSettled.reason}`);
+
     this.logger.log(
       `[Recorder] 并行提取完成 — ${Date.now() - t0}ms | ` +
-      `新角色: ${textResult.newCharacters.length} | ` +
-      `关系变更: ${worldResult.relationshipDeltas.length} | ` +
-      `伏线变更: ${worldResult.plotThreadDeltas.length}`,
+      `text:${textResult ? '✓' : '✗'} world:${worldResult ? '✓' : '✗'} narrative:${narrativeResult ? '✓' : '✗'}`,
     );
 
     return {
       chapterNumber: draft.chapterNumber,
-      summary: textResult.summary,
-      openLoops: narrativeResult.openLoops,
-      closedLoops: narrativeResult.closedLoops,
-      stateChanges: narrativeResult.stateChanges,
-      knowledgeFragments: narrativeResult.knowledgeFragments,
-      newCharacters: textResult.newCharacters,
-      newLocations: textResult.newLocations,
-      newItems: textResult.newItems,
-      characterLifecycleDeltas: textResult.characterLifecycleDeltas,
-      relationshipDeltas: worldResult.relationshipDeltas,
-      timelineEventDeltas: worldResult.timelineEventDeltas,
-      plotThreadDeltas: worldResult.plotThreadDeltas,
-      characterAliasDeltas: textResult.characterAliasDeltas,
-      characterFactDeltas: textResult.characterFactDeltas,
-      characterProfileDeltas: textResult.characterProfileDeltas,
-      characterVoiceDeltas: textResult.characterVoiceDeltas,
-      curiosityDeltas: narrativeResult.curiosityDeltas,
-      informationGapDeltas: narrativeResult.informationGapDeltas,
-      satisfactionEvents: narrativeResult.satisfactionEvents,
-      foreshadowingOpportunities: narrativeResult.foreshadowingOpportunities,
-      timeDelta: worldResult.timeDelta,
-      addressDeltas: worldResult.addressDeltas,
-      sceneSnapshot: worldResult.sceneSnapshot,
-      locationProfileDeltas: worldResult.locationProfileDeltas,
-      itemProfileDeltas: worldResult.itemProfileDeltas,
-      factionDeltas: worldResult.factionDeltas,
-      commitmentDeltas: worldResult.commitmentDeltas,
-      hookClassification: narrativeResult.hookClassification,
+      summary: textResult?.summary ?? `第${draft.chapterNumber}章摘要（提取失败，自动降级）`,
+      openLoops: narrativeResult?.openLoops ?? [],
+      closedLoops: narrativeResult?.closedLoops ?? [],
+      stateChanges: narrativeResult?.stateChanges ?? [],
+      knowledgeFragments: narrativeResult?.knowledgeFragments ?? [],
+      newCharacters: textResult?.newCharacters ?? [],
+      newLocations: textResult?.newLocations ?? [],
+      newItems: textResult?.newItems ?? [],
+      characterLifecycleDeltas: textResult?.characterLifecycleDeltas ?? [],
+      relationshipDeltas: worldResult?.relationshipDeltas ?? [],
+      timelineEventDeltas: worldResult?.timelineEventDeltas ?? [],
+      plotThreadDeltas: worldResult?.plotThreadDeltas ?? [],
+      characterAliasDeltas: textResult?.characterAliasDeltas,
+      characterFactDeltas: textResult?.characterFactDeltas,
+      characterProfileDeltas: textResult?.characterProfileDeltas,
+      characterVoiceDeltas: textResult?.characterVoiceDeltas,
+      curiosityDeltas: narrativeResult?.curiosityDeltas,
+      informationGapDeltas: narrativeResult?.informationGapDeltas,
+      satisfactionEvents: narrativeResult?.satisfactionEvents,
+      foreshadowingOpportunities: narrativeResult?.foreshadowingOpportunities,
+      timeDelta: worldResult?.timeDelta,
+      addressDeltas: worldResult?.addressDeltas,
+      sceneSnapshot: worldResult?.sceneSnapshot,
+      locationProfileDeltas: worldResult?.locationProfileDeltas,
+      itemProfileDeltas: worldResult?.itemProfileDeltas,
+      factionDeltas: worldResult?.factionDeltas,
+      commitmentDeltas: worldResult?.commitmentDeltas,
+      hookClassification: narrativeResult?.hookClassification,
     };
   }
 

@@ -133,7 +133,7 @@ export const BatchGenerateDialog: React.FC<Props> = ({ open, onOpenChange, bookI
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="maxRepairRounds">每章最大修复轮数</Label>
+                <Label htmlFor="maxRepairRounds">每章自动修复轮次</Label>
                 <Input
                   id="maxRepairRounds"
                   type="number"
@@ -142,7 +142,7 @@ export const BatchGenerateDialog: React.FC<Props> = ({ open, onOpenChange, bookI
                   value={config.maxRepairRounds}
                   onChange={(e) => setConfig({ ...config, maxRepairRounds: Number(e.target.value) })}
                 />
-                <p className="text-xs text-muted-foreground">越高越稳，但生成耗时会增加</p>
+                <p className="text-xs text-muted-foreground">质量不达标时自动重写的最大次数，越高越稳但耗时增加</p>
               </div>
 
               <div className="space-y-2 rounded-lg bg-muted/40 p-3">
