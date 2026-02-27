@@ -27,6 +27,8 @@ import { SceneStitcherAgent } from './agents/scene-stitcher.agent';
 import { MemoryRetrieverService, LongRangeContext } from './memory-retriever.service';
 import { DeterministicCheckerService } from './validators/deterministic-checker.service';
 import { NovelProgressService } from './novel-progress.service';
+import { WorkflowExecutionService } from './workflow-execution.service';
+import { BookPromptTemplateService } from './book-prompt-template.service';
 import { AgentNodeConfig } from './entities/book-agent-pipeline.entity';
 import {
   ArcDirectorDirective,
@@ -93,6 +95,8 @@ export class ChapterWorkflowService {
     private readonly memoryRetriever: MemoryRetrieverService,
     private readonly deterministicChecker: DeterministicCheckerService,
     private readonly progressService: NovelProgressService,
+    private readonly executionService: WorkflowExecutionService,
+    private readonly promptTplService: BookPromptTemplateService,
   ) {}
 
   private emitProgress(
@@ -144,11 +148,16 @@ export class ChapterWorkflowService {
     const maxAttempts = 1 + maxRepairRounds;
     const chapterNumber = state.chapterCursor;
     const workflowStart = Date.now();
+    const runId = await this.executionService.createRun(state.bookId, chapterNumber);
     this.logger.log(
       `[Chapter ${chapterNumber}] ========== 工作流开始（多轮质量门控） ==========\n` +
-      `  bookId: ${state.bookId} | 质量门槛: ${qualityPassScore} | 最大修复轮数: ${maxRepairRounds}`,
+      `  bookId: ${state.bookId} | runId: ${runId} | 质量门槛: ${qualityPassScore} | 最大修复轮数: ${maxRepairRounds}`,
     );
 
+    const checkpoint = (step: string) => this.executionService.saveCheckpoint(runId, step);
+    const playbooks = (await this.promptTplService.getTemplates(state.bookId)).playbooks; // 加载本书 playbooks
+
+    try {
     // ── Step 1: Arc Director ──
     let t0 = Date.now();
     let arcDirective: ArcDirectorDirective | undefined;
@@ -165,12 +174,13 @@ export class ChapterWorkflowService {
       this.logger.log(`[Chapter ${chapterNumber}] 步骤 1/8: 跳过卷级导演`);
       this.emitProgress(state.bookId, chapterNumber, 'arc-director', 0, '跳过卷级导演');
     }
+    await checkpoint('arc-director');
 
     // ── Step 2: Intent ──
     t0 = Date.now();
     this.logger.log(`[Chapter ${chapterNumber}] 步骤 2/8: 意图设定`);
     this.emitProgress(state.bookId, chapterNumber, 'intent', 1, '意图设定');
-    const intent = await this.intentAgent.buildIntent(state, arcDirective, getPrompt('intent'));
+    const intent = await this.intentAgent.buildIntent(state, arcDirective, getPrompt('intent'), playbooks);
     this.emitProgress(state.bookId, chapterNumber, 'intent', 1, '意图完成');
     this.logger.log(
       `[Chapter ${chapterNumber}] 意图完成 — ${Date.now() - t0}ms | ` +
@@ -199,6 +209,7 @@ export class ChapterWorkflowService {
       );
     }
     this.emitProgress(state.bookId, chapterNumber, 'continuity-check', 2, '预检完成');
+    await checkpoint('continuity-check');
 
     // ── Step 3.5: Long-range memory retrieval ──
     let longRangeContext: LongRangeContext = { memories: [], pyramidLayers: [], contextText: '' };
@@ -264,7 +275,7 @@ export class ChapterWorkflowService {
           this.emitProgress(state.bookId, chapterNumber, 'scene-write', 3,
             `场景${si + 1}/${scenePlan.scenes.length}(${scene.purpose})`);
           const sd = await this.creativeWriter.writeScene(
-            state, intent, scene, prevText, getPrompt('creative-writer'), extraInjections,
+            state, intent, scene, prevText, getPrompt('creative-writer'), extraInjections, playbooks,
           );
           sceneDrafts.push(sd);
           this.logger.log(
@@ -275,7 +286,7 @@ export class ChapterWorkflowService {
         // 场景缝合
         t0 = Date.now();
         this.emitProgress(state.bookId, chapterNumber, 'scene-stitch', 3, '场景缝合');
-        draft = await this.sceneStitcher.stitch(state, intent, scenePlan, sceneDrafts, getPrompt('scene-stitcher'));
+        draft = await this.sceneStitcher.stitch(state, intent, scenePlan, sceneDrafts, getPrompt('scene-stitcher'), playbooks);
         this.logger.log(
           `[Chapter ${chapterNumber}] 场景缝合完成 — ${Date.now() - t0}ms | 标题: ${draft.title} | 字数: ${draft.content.length}`,
         );
@@ -302,7 +313,7 @@ export class ChapterWorkflowService {
         }
         draft = await this.creativeWriter.write(
           state, intent, previousChapterEnding,
-          getPrompt('creative-writer'), rewriteGuidance, continuityInjections,
+          getPrompt('creative-writer'), rewriteGuidance, continuityInjections, playbooks,
         );
         this.logger.log(
           `[Chapter ${chapterNumber}] ${stepLabel}完成 — ${Date.now() - t0}ms | 标题: ${draft.title} | 字数: ${draft.content.length}`,
@@ -321,7 +332,7 @@ export class ChapterWorkflowService {
       t0 = Date.now();
       this.emitProgress(state.bookId, chapterNumber, 'review', 4, `审阅第${attempt}轮`);
       const review = isEnabled('reviewer')
-        ? await this.reviewer.review(state, intent, draft, getPrompt('reviewer'))
+        ? await this.reviewer.review(state, intent, draft, getPrompt('reviewer'), playbooks)
         : this.buildDefaultReview();
       if (!loopDetCheck.pass) { // 将硬规则失败注入review的issues
         for (const c of loopDetCheck.failedChecks) {
@@ -366,6 +377,7 @@ export class ChapterWorkflowService {
     );
     this.emitProgress(state.bookId, chapterNumber, 'writing', 3,
       `写作完成（${attempts.length}轮，最佳${finalAttempt.weightedScore}分）`);
+    await checkpoint('quality-loop');
 
     // ── Step 4.5: Voice + Pacing Analysis (parallel) ──
     t0 = Date.now();
@@ -452,7 +464,7 @@ export class ChapterWorkflowService {
         ];
       }
 
-      finalDraft = await this.editor.edit(state, intent, finalDraft, editReview, getPrompt('editor'));
+      finalDraft = await this.editor.edit(state, intent, finalDraft, editReview, getPrompt('editor'), playbooks);
       wasEdited = true;
       this.emitProgress(state.bookId, chapterNumber, 'edit', 5, '精修完成');
       this.logger.log(
@@ -490,7 +502,7 @@ export class ChapterWorkflowService {
       this.logger.log(`[Chapter ${chapterNumber}] 终稿复评（编辑/钩子后）`);
       this.emitProgress(state.bookId, chapterNumber, 'review', 4, '终稿复评');
       const postEditReview = isEnabled('reviewer')
-        ? await this.reviewer.review(state, intent, finalDraft, getPrompt('reviewer'))
+        ? await this.reviewer.review(state, intent, finalDraft, getPrompt('reviewer'), playbooks)
         : this.buildDefaultReview();
       const postEditScore = this.calculateWeightedScore(postEditReview, state);
       if (postEditScore >= finalWeightedScore) { // 编辑后分数不低于原分才采纳，防止精修反降质
@@ -515,6 +527,7 @@ export class ChapterWorkflowService {
       );
     }
 
+    await checkpoint('post-process');
     // ── Step 8: Record ──
     t0 = Date.now();
     this.logger.log(`[Chapter ${chapterNumber}] 步骤 8/8: 知识记录`);
@@ -529,6 +542,11 @@ export class ChapterWorkflowService {
     this.emitProgress(state.bookId, chapterNumber, 'done', 7, '生成完成', true);
 
     const elapsed = Date.now() - workflowStart;
+    await this.executionService.completeRun(runId, {
+      totalDurationMs: elapsed, totalLoopAttempts: attempts.length,
+      finalScore: finalWeightedScore, finalVerdict: finalReview.overallVerdict,
+      nodeCount: 8, failedNodes: [],
+    });
     this.logger.log(
       `[Chapter ${chapterNumber}] ========== 工作流完成 ========== ${elapsed}ms\n` +
       `  标题: ${finalDraft.title}\n` +
@@ -551,6 +569,10 @@ export class ChapterWorkflowService {
       allAttemptScores: allScores,
       bestAttemptIndex: bestIndex,
     };
+    } catch (error) {
+      await this.executionService.failRun(runId, (error as Error).message?.slice(0, 500));
+      throw error;
+    }
   }
 
   private identifyPreserveParagraphs(attempt: DraftAttempt): { index: number; reason: string }[] {

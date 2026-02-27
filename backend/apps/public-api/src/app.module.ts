@@ -117,12 +117,14 @@ import { AuthModule } from "./modules/auth/auth.module";
         return {
           defaultJobOptions: {
             removeOnComplete: true,
-            removeOnFail: true,
+            removeOnFail: { count: 50, age: 86400 }, // 失败任务保留50个/1天，方便快速排查
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 5000 },
           },
-          maxRetriesPerRequest: 3,
           connection: {
             host: redis_config?.addr,
             password: redis_config?.pass || undefined,
+            maxRetriesPerRequest: 3,
           },
         };
       },

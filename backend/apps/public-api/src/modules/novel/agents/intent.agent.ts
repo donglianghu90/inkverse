@@ -24,6 +24,7 @@ export class IntentAgent {
     state: StoryState,
     arcDirective?: ArcDirectorDirective,
     additionalSystemPrompt?: string,
+    playbooks?: Record<string, string>,
   ): Promise<ChapterIntent> {
     const chapterNumber = state.chapterCursor;
     const context = buildCompactContext(state, {
@@ -85,7 +86,7 @@ export class IntentAgent {
 - 悬念存量不宜太多（读者记不住）也不能太少（失去追更动力），根据当前故事复杂度动态平衡。
 - explosive级信息差是大杀器——揭晓前需要足够铺垫和读者期待积累，不要轻易消耗。
 
-${THREAD_AWARENESS_PLAYBOOK}
+${playbooks?.['THREAD_AWARENESS_PLAYBOOK'] ?? THREAD_AWARENESS_PLAYBOOK}
 
 === 数据直觉（读状态数据时用） ===
 - 爽感：关注dopamineSchedule的chaptersSince数值。数值越大读者越饥渴——小爽间隔过长时优先安排，中爽和大爽的间隔应匹配当前卷节奏和故事总体量（短篇密集、长篇可拉长积蓄势能让爆发更猛）。不要机械地按固定间隔安排，要在叙事自然的位置给出爽感。

@@ -10,6 +10,8 @@ import {
   X,
   ChevronDown,
   ChevronRight,
+  Info,
+  AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,18 +27,32 @@ interface ProfileEditorProps {
   readOnly?: boolean;
 }
 
+type RiskLevel = 'low' | 'medium' | 'high';
+const riskConfig: Record<RiskLevel, { label: string; cls: string; bg: string }> = {
+  low: { label: '低风险', cls: 'text-emerald-600', bg: 'bg-emerald-50 border-emerald-200 text-emerald-800' },
+  medium: { label: '中风险', cls: 'text-amber-600', bg: 'bg-amber-50 border-amber-200 text-amber-800' },
+  high: { label: '高风险', cls: 'text-rose-600', bg: 'bg-rose-50 border-rose-200 text-rose-800' },
+};
+
 function Section({
   title,
   icon: Icon,
   defaultOpen = false,
+  description,
+  impact,
+  risk,
   children,
 }: {
   title: string;
   icon: React.ElementType;
   defaultOpen?: boolean;
+  description?: string;
+  impact?: string;
+  risk?: RiskLevel;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const rc = risk ? riskConfig[risk] : null;
   return (
     <Card>
       <button
@@ -45,13 +61,27 @@ function Section({
       >
         <Icon className="h-5 w-5 text-primary shrink-0" />
         <span className="text-sm font-semibold flex-1">{title}</span>
+        {rc && <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${rc.cls} border-current`}>{rc.label}</Badge>}
         {open ? (
           <ChevronDown className="h-4 w-4 text-muted-foreground" />
         ) : (
           <ChevronRight className="h-4 w-4 text-muted-foreground" />
         )}
       </button>
-      {open && <CardContent className="pt-0 pb-4 px-4 space-y-4">{children}</CardContent>}
+      {open && (
+        <CardContent className="pt-0 pb-4 px-4 space-y-4">
+          {(description || impact) && (
+            <div className={`flex items-start gap-2 rounded-md border p-2.5 text-xs leading-relaxed ${rc?.bg ?? 'bg-muted/50 border-border text-muted-foreground'}`}>
+              {risk === 'high' ? <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" /> : <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />}
+              <div>
+                {description && <p>{description}</p>}
+                {impact && <p className="mt-1 font-medium">修改影响：{impact}</p>}
+              </div>
+            </div>
+          )}
+          {children}
+        </CardContent>
+      )}
     </Card>
   );
 }
@@ -195,7 +225,11 @@ const ProfileEditor: React.FC<ProfileEditorProps> = ({ profile, onChange, readOn
       </div>
 
       {/* Writer Guide */}
-      <Section title="写手身份与题材规则" icon={Sparkles} defaultOpen>
+      <Section title="写手身份与题材规则" icon={Sparkles} defaultOpen
+        description="定义 AI 写手的创作人格和题材底线。写手身份决定 AI 以什么角色和心态写作；题材规则是所有章节必须遵守的硬性约束；节奏、对话、调性指南控制行文风格。"
+        impact="修改写手身份会导致后续章节的文风和叙事口吻发生明显变化；删除题材规则可能导致生成内容偏离类型读者的期望。"
+        risk="high"
+      >
         <TextBlock
           label="写手身份"
           value={profile.writerGuide.coreIdentity}
@@ -229,7 +263,11 @@ const ProfileEditor: React.FC<ProfileEditorProps> = ({ profile, onChange, readOn
       </Section>
 
       {/* Craft Examples */}
-      <Section title="写作正反例" icon={BookOpen}>
+      <Section title="写作正反例" icon={BookOpen}
+        description="提供具体的好写法和坏写法对比示例，AI 写手在生成每一章时都会参考这些示例来避免常见问题。相当于给 AI 的「写作课笔记」。"
+        impact="删除示例会让 AI 失去具体的写法参照，质量可能波动；添加新示例可以针对性地纠正反复出现的写作问题。"
+        risk="medium"
+      >
         <div className="space-y-4">
           {profile.writerGuide.craftExamples.map((ex, i) => (
             <Card key={i} className="bg-muted/30">
@@ -307,7 +345,11 @@ const ProfileEditor: React.FC<ProfileEditorProps> = ({ profile, onChange, readOn
       </Section>
 
       {/* Satisfaction Types */}
-      <Section title="爽感类型" icon={Sparkles}>
+      <Section title="爽感类型" icon={Sparkles}
+        description="定义故事中可以使用的「爽点」类型（如打脸、升级、逆袭等）。系统会根据这些类型自动调度爽点的出现频率和间距，避免读者疲劳或枯燥。"
+        impact="删除某类爽感会让后续章节不再出现该类高潮场景；修改描述会改变 AI 对该类爽点的理解和表现方式。"
+        risk="medium"
+      >
         <div className="space-y-2">
           {profile.satisfactionTypes.map((s, i) => (
             <div key={i} className="flex items-start gap-2">
@@ -342,7 +384,11 @@ const ProfileEditor: React.FC<ProfileEditorProps> = ({ profile, onChange, readOn
       </Section>
 
       {/* Hook Types */}
-      <Section title="钩子类型" icon={MessageSquare}>
+      <Section title="钩子类型" icon={MessageSquare}
+        description="定义每章结尾可以使用的悬念手法（如悬疑钩子、情感钩子、反转钩子等）。系统会自动轮换不同钩子类型，确保章末的吸引力不重复。"
+        impact="删除钩子类型会缩小章末悬念的创作空间；类型过少会导致钩子手法重复、读者审美疲劳。"
+        risk="medium"
+      >
         <div className="space-y-2">
           {profile.hookTypes.map((h, i) => (
             <div key={i} className="flex items-start gap-2">
@@ -376,7 +422,11 @@ const ProfileEditor: React.FC<ProfileEditorProps> = ({ profile, onChange, readOn
       </Section>
 
       {/* Cliche Patterns */}
-      <Section title="套话黑名单" icon={Shield}>
+      <Section title="套话黑名单" icon={Shield}
+        description="列出需要限制使用频率的常见套话或陈词滥调（如「不由得」「竟然」等）。系统在生成和审核时会自动检测并限制这些表达的出现次数。"
+        impact="删除黑名单条目会让对应表达不再受限；添加新条目可以抑制你发现的重复用语。设为 0 次表示完全禁止。"
+        risk="low"
+      >
         <div className="space-y-2">
           {profile.clichePatterns.map((c, i) => (
             <div key={i} className="flex items-center gap-2">
@@ -410,7 +460,11 @@ const ProfileEditor: React.FC<ProfileEditorProps> = ({ profile, onChange, readOn
       </Section>
 
       {/* Reviewer Calibration */}
-      <Section title="评审校准" icon={Gauge}>
+      <Section title="评审校准" icon={Gauge}
+        description="控制 AI 评审员对每章质量的评分标准。维度权重决定哪些方面更重要（如节奏 vs 文笔）；评分锚点定义了高分和低分的具体标准。评分低于阈值的章节会被自动要求重写。"
+        impact="调高某个维度的权重会让评审更严格地审查该方面，可能增加重写次数；修改评分锚点会改变「什么算好章节」的判定标准。"
+        risk="high"
+      >
         <div>
           <Label className="text-xs mb-2 block">维度权重（0.5-2.0，越高越重要）</Label>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -468,7 +522,11 @@ const ProfileEditor: React.FC<ProfileEditorProps> = ({ profile, onChange, readOn
       </Section>
 
       {/* World Profile */}
-      <Section title="世界观配置" icon={Globe}>
+      <Section title="世界观配置" icon={Globe}
+        description="控制故事世界的结构特征。「力量体系」决定是否存在修炼/等级系统；「金手指」决定主角是否有外挂能力；组织类型影响势力/门派的生成方向。"
+        impact="关闭力量体系或金手指会让后续章节不再生成相关内容，已有的设定仍会保留但不再扩展。对玄幻/修仙类小说影响极大。"
+        risk="high"
+      >
         <div>
           <Label className="text-xs mb-2 block">组织类型</Label>
           <StringListEditor

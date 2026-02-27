@@ -1,7 +1,8 @@
-/** 工作流执行记录 — 每次章节生成的逐节点执行数据 */
+/** 工作流执行记录 — 每次章节生成的逐节点执行数据，含检查点和故障恢复信息 */
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, Index } from 'typeorm';
 
 export type NodeStatus = 'pending' | 'running' | 'completed' | 'skipped' | 'failed';
+export type ExecutionStatus = 'running' | 'completed' | 'failed' | 'interrupted';
 
 export interface NodeExecution {
   nodeId: string;
@@ -45,7 +46,13 @@ export class WorkflowExecutionEntity {
   summary: ExecutionSummary | null;
 
   @Column({ name: 'status', type: 'varchar', length: 20, default: 'running' })
-  status: 'running' | 'completed' | 'failed';
+  status: ExecutionStatus;
+
+  @Column({ name: 'last_checkpoint', type: 'varchar', length: 50, nullable: true })
+  lastCheckpoint: string | null; // 最后完成的工作流步骤名称
+
+  @Column({ name: 'failure_reason', type: 'text', nullable: true })
+  failureReason: string | null; // 失败/中断原因
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

@@ -226,6 +226,10 @@ export class LlmService {
     return chain;
   }
 
+  private static readonly RETRYABLE_STATUS = new Set([403, 408, 429, 500, 502, 503, 504, 529]); // SDK不重试403，这里补上代理端瞬态拦截
+  private static readonly CALL_MAX_RETRIES = 3;
+  private static readonly CALL_BASE_DELAY_MS = 2000;
+
   private async callModel<T extends ZodTypeAny>(
     input: StructuredGenerationInput<T>, provider: LlmProvider, tier: ModelTier, modelName: string, temperature: number, tags: string[],
   ): Promise<z.infer<T>> {
@@ -238,14 +242,28 @@ export class LlmService {
     const messages = [new SystemMessage(input.systemPrompt), new HumanMessage(input.userPrompt)];
 
     let response: unknown;
-    try {
-      const config: RunnableConfig = { runName: input.taskName, tags, metadata: { taskName: input.taskName, provider, model: modelName, tier, ...input.metadata } };
-      if (this.cfg.tracingEnabled) this.logger.log(`[${input.taskName}] LangSmith tracing (project=${this.cfg.tracingProject})`);
-      response = await structuredModel.invoke(messages, config);
-    } catch (error) {
-      this.logger.error(`[${input.taskName}] ====== LLM 调用失败 (${provider}/${modelName}) ====== ${Date.now() - t0}ms\n  错误: ${(error as Error).message}`);
-      throw error;
+    let lastErr: unknown;
+    for (let retry = 0; retry <= LlmService.CALL_MAX_RETRIES; retry++) {
+      try {
+        const config: RunnableConfig = { runName: input.taskName, tags, metadata: { taskName: input.taskName, provider, model: modelName, tier, ...input.metadata } };
+        if (retry === 0 && this.cfg.tracingEnabled) this.logger.log(`[${input.taskName}] LangSmith tracing (project=${this.cfg.tracingProject})`);
+        response = await structuredModel.invoke(messages, config);
+        if (retry > 0) this.logger.log(`[${input.taskName}] 第${retry}次重试成功 (${provider}/${modelName})`);
+        break;
+      } catch (error) {
+        lastErr = error;
+        const status = (error as any)?.status ?? (error as any)?.statusCode ?? (error as any)?.code;
+        const retryable = LlmService.RETRYABLE_STATUS.has(Number(status));
+        if (!retryable || retry >= LlmService.CALL_MAX_RETRIES) {
+          this.logger.error(`[${input.taskName}] ====== LLM 调用失败 (${provider}/${modelName}) ====== ${Date.now() - t0}ms\n  错误: ${(error as Error).message}${retry > 0 ? ` (已重试${retry}次)` : ''}`);
+          throw error;
+        }
+        const delay = LlmService.CALL_BASE_DELAY_MS * Math.pow(2, retry) * (0.5 + Math.random() * 0.5); // 指数退避+抖动
+        this.logger.warn(`[${input.taskName}] ${provider}/${modelName} 返回 ${status}，${Math.round(delay)}ms 后第${retry + 1}次重试`);
+        await new Promise(r => setTimeout(r, delay));
+      }
     }
+    if (!response) throw lastErr;
 
     const durationMs = Date.now() - t0;
     const wrapped = this.unwrapResponse<z.infer<T>>(response);

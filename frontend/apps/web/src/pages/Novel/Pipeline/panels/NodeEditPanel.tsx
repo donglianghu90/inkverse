@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
-import { X, Lock, ChevronDown, ChevronRight, Loader2, Save, RotateCcw } from 'lucide-react';
+/** Agent 节点编辑面板 — 控制单个 AI 角色的工作方式 */
+import { useState, useEffect } from 'react';
+import { X, Lock, ChevronDown, ChevronRight, Loader2, Save, RotateCcw, Info } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
@@ -77,31 +78,40 @@ export function NodeEditPanel({ node, onClose, onChange }: Props) {
         <div><h3 className="font-semibold text-sm">{node.label}</h3><p className="text-xs text-muted-foreground mt-0.5">{node.description}</p></div>
         <button onClick={onClose} className="p-1 rounded hover:bg-accent transition-colors"><X className="h-4 w-4" /></button>
       </div>
+      <div className="mx-4 mt-3 rounded-md bg-sky-50/60 dark:bg-sky-950/20 border border-sky-200/50 px-3 py-2 flex items-start gap-2">
+        <Info className="h-3.5 w-3.5 text-sky-500 shrink-0 mt-0.5" />
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          这里控制 <strong>{node.label}</strong> 的角色定义和工作方式。文笔标准、题材规则等通用设置请在「写作规则」中修改。
+        </p>
+      </div>
       <Tabs defaultValue="template" className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="mx-4 mt-3 grid grid-cols-3 shrink-0">
-          <TabsTrigger value="template" className="text-xs">Prompt 模板</TabsTrigger>
-          <TabsTrigger value="extra" className="text-xs">补充指令</TabsTrigger>
+          <TabsTrigger value="template" className="text-xs">角色指令</TabsTrigger>
+          <TabsTrigger value="extra" className="text-xs">补充指示</TabsTrigger>
           <TabsTrigger value="settings" className="text-xs">设置</TabsTrigger>
         </TabsList>
 
         <TabsContent value="template" className="flex-1 overflow-y-auto px-4 pb-4 space-y-3 mt-3">
+          <p className="text-[10px] text-muted-foreground leading-relaxed">定义这个 AI 角色"是谁、怎么做"。修改后只影响该角色，不影响其他节点。</p>
           {loadingTpl ? (
             <div className="flex items-center justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
           ) : sections.length > 0 ? (
             sections.map((s) => <SectionEditor key={s.key} bookId={bookId!} section={s} agentId={node.id} />)
           ) : (
-            <p className="text-sm text-muted-foreground text-center py-8">此节点无 Prompt 模板区块</p>
+            <p className="text-sm text-muted-foreground text-center py-8">此节点无角色指令</p>
           )}
         </TabsContent>
 
         <TabsContent value="extra" className="flex-1 overflow-y-auto px-4 pb-4 space-y-4 mt-3">
           <div className="space-y-2">
-            <Label className="text-xs font-medium">补充指令</Label>
-            <p className="text-xs text-muted-foreground">追加到 system prompt 末尾，作为「作者补充指示」区块。</p>
+            <Label className="text-xs font-medium">补充指示</Label>
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              追加给该角色的额外指令。适合临时调整，如"本章对话多一些幽默感"。修改后只影响该角色。
+            </p>
             <Textarea
               value={node.additionalSystemPrompt}
               onChange={(e) => onChange({ ...node, additionalSystemPrompt: e.target.value })}
-              placeholder={`例如：本书风格偏向轻松幽默...`}
+              placeholder="例如：本章风格偏向轻松幽默，对话多用短句..."
               className="min-h-[120px] text-sm resize-none"
             />
             <div className="text-right text-[10px] text-muted-foreground/50">{node.additionalSystemPrompt.length} 字</div>

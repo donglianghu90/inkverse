@@ -29,6 +29,7 @@ export class EditorAgent {
     draft: ChapterDraft,
     review: ChapterReview,
     additionalSystemPrompt?: string,
+    playbooks?: Record<string, string>,
   ): Promise<ChapterDraft> {
     const context = buildCompactContext(state, {
       maxCharacters: 8,
@@ -76,7 +77,7 @@ export class EditorAgent {
 - 如果发现自然契合的位置，可以考虑插入一句"金句"——简短有力、有态度。但不要为了金句而强行制造，自然为先。
 
 写作技法参考：
-${PROSE_CRAFT_PLAYBOOK}
+${playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK}
 
 套话替换清单：${clicheList}
 
@@ -84,8 +85,8 @@ ${PROSE_CRAFT_PLAYBOOK}
 ${profile.writerGuide.genreRules.slice(0, 4).map((r, i) => `${i + 1}. ${r}`).join('\n')}
 ${profile.writerGuide.craftExamples.length > 0 ? `\n=== 正反例参考 ===\n${profile.writerGuide.craftExamples.slice(0, 2).map((e) => `坏：${e.bad}\n好：${e.good}\n规则：${e.rule}`).join('\n\n')}` : ''}
 
-${EDITOR_DISCIPLINE_PLAYBOOK}
-${CONTINUITY_BASELINE_PLAYBOOK}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
+${playbooks?.['EDITOR_DISCIPLINE_PLAYBOOK'] ?? EDITOR_DISCIPLINE_PLAYBOOK}
+${playbooks?.['CONTINUITY_BASELINE_PLAYBOOK'] ?? CONTINUITY_BASELINE_PLAYBOOK}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
       })(),
       userPrompt: `故事上下文（精简）：
 ${JSON.stringify(context, null, 2)}

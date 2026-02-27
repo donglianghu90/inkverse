@@ -29,6 +29,7 @@ export class ReviewerAgent {
     intent: ChapterIntent,
     draft: ChapterDraft,
     additionalSystemPrompt?: string,
+    playbooks?: Record<string, string>,
   ): Promise<ChapterReview> {
     const context = buildCompactContext(state, {
       maxCharacters: 8,
@@ -112,9 +113,9 @@ ${cal.genreSpecificChecks.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 - overallScore >= 8.5 且无critical且无moderate → "good"
 - 其余情况（6.0-8.4 或存在moderate） → "needs_edit"
 
-${CONTINUITY_BASELINE_PLAYBOOK}
-${CHARACTER_ARC_PLAYBOOK}
-${PROSE_CRAFT_PLAYBOOK}
+${playbooks?.['CONTINUITY_BASELINE_PLAYBOOK'] ?? CONTINUITY_BASELINE_PLAYBOOK}
+${playbooks?.['CHARACTER_ARC_PLAYBOOK'] ?? CHARACTER_ARC_PLAYBOOK}
+${playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK}
 ${buildChapterRhythmPlaybook(state.seed.targetChapterWordCount ?? 3000)}
 ${state.bookPromptProfile?.writerGuide ? `\n=== 主题检查 ===\n${state.seed.thematicCore ? `核心命题：${state.seed.thematicCore.centralQuestion}\n本章是否在某个层面触及了核心命题？不需要每章直接讨论，但读者应该能隐约感受到。完全脱离主题的纯过渡章——engagement扣分。` : '（无主题内核，跳过）'}` : ''}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
       })(),

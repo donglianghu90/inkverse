@@ -157,13 +157,10 @@ const ProfilePage: React.FC = () => {
           <Card className="border-amber-200 bg-amber-50/50 mb-6">
             <CardContent className="flex items-start gap-3 p-4">
               <FileEdit className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
-              <div className="text-sm text-amber-800">
-                <p className="font-medium mb-1">关于写作手册</p>
-                <p>
-                  写作手册是 AI 在创建书籍时根据题材和读者自动生成的指导文档。
-                  它控制着写手的语气、节奏、正反例参考、爽感类型定义、钩子类型、套话黑名单、评审标准等。
-                  修改这些内容会直接影响后续所有章节的生成质量。
-                </p>
+              <div className="text-sm text-amber-800 space-y-1.5">
+                <p className="font-medium">关于写作手册</p>
+                <p>写作手册是 AI 创建书籍时根据题材和读者画像自动生成的创作指南，相当于给 AI 写手的「操作手册」。它贯穿整个章节生成流水线——从写作、评审到修改的每个环节都会参照这份手册。</p>
+                <p>每个模块旁标注了<span className="font-medium text-rose-700">风险等级</span>，帮助你了解修改该项对后续章节的影响程度。展开模块后顶部有详细的功能说明和修改影响提示。</p>
               </div>
             </CardContent>
           </Card>

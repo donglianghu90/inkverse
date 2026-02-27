@@ -69,6 +69,7 @@ import { DetailStoreService } from './detail-store.service';
 import { DetailContextService } from './detail-context.service';
 import { CreateBookSessionService } from './create-book-session.service';
 import { MemoryRetrieverService } from './memory-retriever.service';
+import { TaskRecoveryService } from './task-recovery.service';
 
 @Module({
   imports: [
@@ -139,6 +140,7 @@ import { MemoryRetrieverService } from './memory-retriever.service';
     DetailContextService,
     CreateBookSessionService,
     MemoryRetrieverService,
+    TaskRecoveryService,
   ],
 })
 export class NovelModule {}

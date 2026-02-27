@@ -21,7 +21,7 @@ export const narrativeImportanceSchema = z.enum(['core', 'major', 'minor', 'came
 
 // Character state snapshot inside world simulation.
 export const characterStateSchema = z.object({
-  locationId: z.string(),
+  locationId: z.string().nullable(),
   state: z.string(),
   level: z.number().int().nonnegative(),
   inventory: z.array(z.string()),

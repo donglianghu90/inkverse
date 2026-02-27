@@ -25,6 +25,7 @@ export class SceneStitcherAgent {
     scenePlan: ChapterScenePlan,
     sceneDrafts: SceneDraft[],
     additionalSystemPrompt?: string,
+    playbooks?: Record<string, string>,
   ): Promise<ChapterDraft> {
     const profile = state.bookPromptProfile;
     const sorted = sceneDrafts.sort((a, b) => a.sceneIndex - b.sceneIndex);
@@ -63,7 +64,7 @@ export class SceneStitcherAgent {
 - 章节标题要有冲突感和吸引力（禁止"第X章"模板）。
 - 只输出合并后的完整中文章节正文。
 
-${PROSE_CRAFT_PLAYBOOK}
+${playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK}
 ${state.styleAnchor ? '\n' + buildStyleDNA(state.styleAnchor) : ''}
 ${buildWritingLessonsHint(state.writingLessons ?? [], ['prose', 'pacing', 'structure'])}
 ${additionalSystemPrompt ? '\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,

@@ -116,7 +116,7 @@ export class AutoSerializationProcessor extends WorkerHost {
       .where('bookId = :bookId', { bookId })
       .andWhere('enabled = TRUE')
       .andWhere(
-        '(running = FALSE OR (run_started_at IS NOT NULL AND run_started_at < NOW() - INTERVAL \'6 hours\'))',
+        '(running = FALSE OR (run_started_at IS NOT NULL AND run_started_at < NOW() - INTERVAL \'2 hours\'))', // 与TaskRecoveryService超时阈值一致
       )
       .andWhere(
         force

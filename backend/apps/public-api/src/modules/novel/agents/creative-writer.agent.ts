@@ -65,6 +65,7 @@ export class CreativeWriterAgent {
     chapterType: string,
     state: StoryState,
     intent: ChapterIntent,
+    playbooks?: Record<string, string>,
   ): string {
     const profile = state.bookPromptProfile;
     const blocks: string[] = [];
@@ -110,7 +111,7 @@ export class CreativeWriterAgent {
     if (clicheNames.length > 0) limits.push(`反套话（每个最多1次）：${clicheNames.join('、')}`);
     limits.push('杀死AI味：角色不要对自己情绪过于自知，事件不要过于顺滑，对话允许停顿和词不达意');
     blocks.push(limits.join('\n'));
-    blocks.push(THREAD_AWARENESS_PLAYBOOK);
+    blocks.push(playbooks?.['THREAD_AWARENESS_PLAYBOOK'] ?? THREAD_AWARENESS_PLAYBOOK);
 
     const kpiHints = buildKpiTrendHints(state);
     if (kpiHints.length > 0) blocks.push(kpiHints.join('\n'));
@@ -128,6 +129,7 @@ export class CreativeWriterAgent {
     additionalSystemPrompt?: string,
     rewriteGuidance?: import('../schemas/novel-state.schemas').RewriteGuidance,
     continuityInjections?: string[],
+    playbooks?: Record<string, string>,
   ): Promise<ChapterDraft> {
     const proseContext = buildCompactContextProse(state, {
       maxCharacters: 12,
@@ -144,7 +146,7 @@ export class CreativeWriterAgent {
       intent,
     );
 
-    let systemPrompt = this.buildDynamicRules(chapterType, state, intent) +
+    let systemPrompt = this.buildDynamicRules(chapterType, state, intent, playbooks) +
       (additionalSystemPrompt ? `\n\n=== 作者补充指示 ===\n${additionalSystemPrompt}` : '');
 
     if (detailCtx && detailCtx.trim().length > 0) {
@@ -259,9 +261,10 @@ ${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSect
     state: StoryState,
     intent: ChapterIntent,
     scene: SceneContract,
-    previousText?: string, // 上一场景结尾 或 上一章结尾
+    previousText?: string,
     additionalSystemPrompt?: string,
     continuityInjections?: string[],
+    playbooks?: Record<string, string>,
   ): Promise<SceneDraft> {
     const profile = state.bookPromptProfile;
     const { temperature } = this.resolveChapterType(intent, state);
