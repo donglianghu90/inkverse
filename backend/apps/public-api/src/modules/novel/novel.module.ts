@@ -25,7 +25,7 @@ import { WorkflowTopologyService } from './workflow-topology.service';
 import { BookPromptTemplateService } from './book-prompt-template.service';
 import { WorkflowExecutionService } from './workflow-execution.service';
 import { BookStateRepository } from './book-state.repository';
-import { AUTO_SERIALIZATION_QUEUE } from './auto-serialization.processor';
+import { AUTO_SERIALIZATION_QUEUE } from './auto-serialization.queue';
 import { CHAPTER_RESYNC_QUEUE } from './chapter-resync.queue';
 
 import { NovelController } from './novel.controller';

@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { history } from '@umijs/max';
-import { Plus, Loader2, AlertCircle, Sparkles } from 'lucide-react';
+import { Plus, Loader2, AlertCircle, Sparkles, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { listBooks, getAutoSerialization, type BookListItem } from '@/services/novel';
+import { listBooks, getAutoSerialization, deleteBook, type BookListItem } from '@/services/novel';
 import emptyImg from '@/assets/illustrations/empty-bookshelf.png';
 
 const GENRE_GRADIENTS: Record<string, string> = {
@@ -39,24 +40,24 @@ function formatRelativeTime(isoStr: string): string {
 }
 
 /* ─── BookCard ─── */
-const BookCard: React.FC<{ book: BookListItem; isRunning: boolean }> = ({ book, isRunning }) => (
+const BookCard: React.FC<{
+  book: BookListItem;
+  isRunning: boolean;
+  onDelete: (book: BookListItem) => void;
+}> = ({ book, isRunning, onDelete }) => (
   <div
     className="group cursor-pointer"
     onClick={() => history.push(`/novel/book/${book.bookId}`)}
   >
-    {/* Cover — 2:3 book proportion */}
     <div className={cn(
       'relative rounded-lg overflow-hidden shadow-md',
       'group-hover:shadow-xl group-hover:-translate-y-1',
       'transition-all duration-300 aspect-[2/3] bg-gradient-to-br',
       getBookGradient(book.genre),
     )}>
-      {/* Book spine shadow */}
       <div className="absolute left-0 top-0 bottom-0 w-3 bg-gradient-to-r from-black/30 to-transparent z-10" />
-      {/* Light sheen */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_rgba(255,255,255,0.18),_transparent_60%)]" />
 
-      {/* Running badge */}
       {isRunning && (
         <div className="absolute top-2 left-4 z-20">
           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-semibold text-white shadow">
@@ -66,7 +67,6 @@ const BookCard: React.FC<{ book: BookListItem; isRunning: boolean }> = ({ book, 
         </div>
       )}
 
-      {/* Genre tag */}
       {book.genre && (
         <div className="absolute top-2 right-2 z-20">
           <span className="inline-flex rounded-md bg-black/25 backdrop-blur-sm px-1.5 py-0.5 text-[10px] font-medium text-white/90">
@@ -75,16 +75,22 @@ const BookCard: React.FC<{ book: BookListItem; isRunning: boolean }> = ({ book, 
         </div>
       )}
 
-      {/* Title overlay at bottom */}
+      {/* Delete button — hover only */}
+      <button
+        className="absolute top-2 left-4 z-30 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md bg-red-500/80 hover:bg-red-600 text-white"
+        onClick={(e) => { e.stopPropagation(); onDelete(book); }}
+        title="删除书籍"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+
       <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/70 via-black/30 to-transparent z-10">
         <h3 className="text-sm font-bold text-white leading-snug line-clamp-2">{book.title}</h3>
       </div>
 
-      {/* Hover dim */}
       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/8 transition-colors duration-200" />
     </div>
 
-    {/* Meta below cover */}
     <div className="mt-2 px-0.5">
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">{book.chaptersGenerated} 章</span>
@@ -128,32 +134,45 @@ const Bookshelf: React.FC = () => {
   const [runningMap, setRunningMap] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<BookListItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await listBooks();
-        const sorted = [...res.books].sort(
-          (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-        );
-        setBooks(sorted);
-
-        // Fetch auto-serialization running status for all books in parallel
-        const results = await Promise.allSettled(sorted.map(b => getAutoSerialization(b.bookId)));
-        const map: Record<string, boolean> = {};
-        results.forEach((r, i) => {
-          if (r.status === 'fulfilled' && r.value?.scheduler?.running) {
-            map[sorted[i].bookId] = true;
-          }
-        });
-        setRunningMap(map);
-      } catch (e: any) {
-        setError(e?.message ?? '加载失败');
-      } finally {
-        setLoading(false);
-      }
-    })();
+  const fetchBooks = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await listBooks();
+      const sorted = [...res.books].sort(
+        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+      );
+      setBooks(sorted);
+      const results = await Promise.allSettled(sorted.map(b => getAutoSerialization(b.bookId)));
+      const map: Record<string, boolean> = {};
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled' && r.value?.scheduler?.running) map[sorted[i].bookId] = true;
+      });
+      setRunningMap(map);
+    } catch (e: any) {
+      setError(e?.message ?? '加载失败');
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => { fetchBooks(); }, [fetchBooks]);
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await deleteBook(deleteTarget.bookId);
+      setBooks((prev) => prev.filter((b) => b.bookId !== deleteTarget.bookId));
+      setDeleteTarget(null);
+    } catch (e: any) {
+      setError(e?.message ?? '删除失败');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -225,12 +244,31 @@ const Bookshelf: React.FC = () => {
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 sm:gap-5 lg:grid-cols-5 xl:grid-cols-6">
             {books.map(book => (
-              <BookCard key={book.bookId} book={book} isRunning={!!runningMap[book.bookId]} />
+              <BookCard key={book.bookId} book={book} isRunning={!!runningMap[book.bookId]} onDelete={setDeleteTarget} />
             ))}
             <CreateBookCard />
           </div>
         </div>
       )}
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>确认删除</DialogTitle>
+            <DialogDescription>
+              即将永久删除《{deleteTarget?.title}》及其全部章节、世界观、执行记录等数据，此操作不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>取消</Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
+              {deleting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              {deleting ? '删除中…' : '确认删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

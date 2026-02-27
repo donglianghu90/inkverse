@@ -57,9 +57,8 @@ export class ReviewerAgent {
           .map((c) => `"${c.pattern}"`)
           .join('、');
 
-        return `你是一位严格但公正的${profile.generatedForGenre}网文第一读者（目标读者：${profile.generatedForAudience}）。
-
-核心问题只有一个：作为付费读者，我想不想看下一章？
+        return `${playbooks?.['agent:reviewer:role'] ?? `你是一位严格但公正的${profile.generatedForGenre}网文第一读者。核心问题只有一个：作为付费读者，我想不想看下一章？`}
+（目标读者：${profile.generatedForAudience}）
 
 === 评价维度（0-10分，加权计算） ===
 - engagement（吸引力×${cal.dimensionWeights.engagement}）
@@ -70,21 +69,7 @@ export class ReviewerAgent {
 - characterDepth（角色深度×${cal.dimensionWeights.characterDepth}）
 
 === 体验级评分锚点（用感受校准分数） ===
-
-翻页欲（engagement最核心的标尺）：
-- 9-10: 读到一半忘了呼吸，读完最后一行立刻想看下一章
-- 7-8: 一口气读完没走神，但不会为了看下一章熬夜
-- 5-6: 中途想看手机，读完可以心安理得放下
-- 4以下: 跳着读或直接弃
-
-可记忆性（是否有让你想截图/分享的段落）：
-- 有"金句"或名场面（加分）
-- 有让人会心一笑的幽默（加分）
-- 有让人胸口一紧的瞬间（加分）
-- 读完脑子里一片空白，说不出印象最深的情节（扣分）
-
-沉浸度（多久让你忘记这是AI写的）：
-- 第一段就入戏 vs 读了几段才进入状态 vs 始终有"被安排"的感觉
+${playbooks?.['agent:reviewer:experience_anchors'] ?? `翻页欲：9-10读完立刻想看下一章；7-8一口气读完不走神；5-6中途想看手机；4以下跳着读。\n可记忆性：有金句/名场面加分；读完脑子一片空白扣分。\n沉浸度：第一段入戏 vs 始终有被安排的感觉。`}
 
 proseQuality 文笔质量（重点）：
 - 10: 句句有画面，零AI味，展示而非讲述，有金句
@@ -104,14 +89,10 @@ AI味检测——以下套话频繁出现则扣分：${clicheExamples}
 ${cal.genreSpecificChecks.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
 === 反虚高铁律 ===
-- overallScore（总分）不超过8.5，除非章节真的接近出版水准。各维度分数同理。
-- 锚定标准："还可以"=6，"不错"=7，"很好"=8，"优秀"=8.5，"惊艳"=9，"完美"=10
-- 不给安慰分。任何8+的分数都必须在 strengths 中给出具体优秀表现作为依据。
+${playbooks?.['agent:reviewer:anti_inflation'] ?? '- overallScore不超过8.5，除非接近出版水准。\n- 锚定：还可以=6，不错=7，很好=8，优秀=8.5，惊艳=9，完美=10。\n- 不给安慰分。8+必须有具体优秀表现依据。'}
 
 === 裁决（三档互斥，从上到下匹配第一条即停） ===
-- overallScore < 6.0 或有critical级问题 → "major_issues"
-- overallScore >= 8.5 且无critical且无moderate → "good"
-- 其余情况（6.0-8.4 或存在moderate） → "needs_edit"
+${playbooks?.['agent:reviewer:verdict_rules'] ?? '- < 6.0 或有 critical → "major_issues"\n- ≥ 8.5 且无 critical 且无 moderate → "good"\n- 其余 → "needs_edit"'}
 
 ${playbooks?.['CONTINUITY_BASELINE_PLAYBOOK'] ?? CONTINUITY_BASELINE_PLAYBOOK}
 ${playbooks?.['CHARACTER_ARC_PLAYBOOK'] ?? CHARACTER_ARC_PLAYBOOK}

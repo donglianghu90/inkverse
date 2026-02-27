@@ -17,6 +17,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { Queue } from 'bullmq';
+import { WorkflowExecutionEntity } from './entities/workflow-execution.entity';
 import { randomUUID } from 'crypto';
 import { LlmService } from './llm/llm.service';
 import { LlmUsageTrackerService } from './llm/llm-usage-tracker.service';
@@ -28,10 +29,12 @@ import { ChapterWorkflowService, ChapterWorkflowResult } from './chapter-workflo
 import { DeepMaintenanceService } from './deep-maintenance.service';
 import { LoreApplicationService } from './lore-application.service';
 import { BookAgentPipelineService } from './book-agent-pipeline.service';
+import { BookPromptTemplateService } from './book-prompt-template.service';
 import { NovelProgressService } from './novel-progress.service';
 import { DetailStoreService } from './detail-store.service';
 import { MemoryRetrieverService } from './memory-retriever.service';
 import { ReaderPulseAnalyzerAgent } from './agents/reader-pulse-analyzer.agent';
+import { BookEntity } from './entities/book.entity';
 import { ChapterEntity } from './entities/chapter.entity';
 import { ArtifactEntity } from './entities/artifact.entity';
 import { BookStateRepository } from './book-state.repository';
@@ -40,6 +43,7 @@ import {
   ChapterResyncJobStatus,
 } from './entities/chapter-resync-job.entity';
 import { CHAPTER_RESYNC_QUEUE, ChapterResyncJobPayload } from './chapter-resync.queue';
+import { AUTO_SERIALIZATION_QUEUE, AutoSerializationJobPayload } from './auto-serialization.queue';
 import { CreateBookDto } from './dto/create-book.dto';
 import { GenerateChaptersBatchDto } from './dto/generate-chapters-batch.dto';
 import {
@@ -114,6 +118,7 @@ interface GenerateChapterRuntimeOptions {
 
 interface CreateBookRuntimeOptions {
   progressChannel?: string;
+  userId?: string;
 }
 
 type ChapterResyncStatus =
@@ -182,8 +187,12 @@ export class NovelService {
     private readonly artifactRepo: Repository<ArtifactEntity>,
     @InjectRepository(ChapterResyncJobEntity)
     private readonly chapterResyncJobRepo: Repository<ChapterResyncJobEntity>,
+    @InjectRepository(WorkflowExecutionEntity)
+    private readonly workflowExecutionRepo: Repository<WorkflowExecutionEntity>,
     @InjectQueue(CHAPTER_RESYNC_QUEUE)
     private readonly chapterResyncQueue: Queue<ChapterResyncJobPayload>,
+    @InjectQueue(AUTO_SERIALIZATION_QUEUE)
+    private readonly autoSerializationQueue: Queue<AutoSerializationJobPayload>,
     private readonly dataSource: DataSource,
     private readonly seedAnalyzer: SeedAnalyzerAgent,
     private readonly promptProfiler: PromptProfilerAgent,
@@ -195,6 +204,7 @@ export class NovelService {
     private readonly llmUsageTracker: LlmUsageTrackerService,
     private readonly llm: LlmService,
     private readonly pipelineService: BookAgentPipelineService,
+    private readonly promptTplService: BookPromptTemplateService,
     private readonly progressService: NovelProgressService,
     private readonly detailStore: DetailStoreService,
     private readonly memoryRetriever: MemoryRetrieverService,
@@ -354,17 +364,22 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         max: dto.plannedMaxChapters ?? 800,
       },
     });
+    const agentSectionsPromise = this.promptProfiler.generateAgentSections(dto.genre, bookPromptProfile).catch((e) => {
+      this.logger.warn(`[createBook] Agent sections 生成失败，将使用默认: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    });
+    const _ruleCount = bookPromptProfile.writerGuide?.genreRules?.length ?? 0;
     this.logger.log(
       `[createBook] 写作手册生成完成 — ${Date.now() - t0}ms\n` +
       `  题材: ${bookPromptProfile.generatedForGenre} | 受众: ${bookPromptProfile.generatedForAudience}\n` +
-      `  类型规则: ${bookPromptProfile.writerGuide.genreRules.length} 条 | 爽感类型: ${bookPromptProfile.satisfactionTypes.length} 种`,
+      `  类型规则: ${_ruleCount} 条 | 爽感类型: ${bookPromptProfile.satisfactionTypes?.length ?? 0} 种`,
     );
-    emitCreate('profile', 1, `写作手册生成完成 — ${bookPromptProfile.writerGuide.genreRules.length} 条题材规则`);
+    emitCreate('profile', 1, `写作手册生成完成 — ${_ruleCount} 条题材规则`);
 
     // Step 3: Persist
     this.logger.log(`[createBook] 步骤 3/4: 初始化角色与世界...`);
     emitCreate('init', 2, '初始化角色与世界');
-    const bookEntity = await this.bookStateRepo.createEmpty();
+    const bookEntity = await this.bookStateRepo.createEmpty(options?.userId);
     const bookId = bookEntity.bookId;
     createdBookId = bookId;
     const now = new Date().toISOString();
@@ -430,6 +445,12 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     await this.persistArtifact(bookId, 0, 'initial_state', state);
     await this.persistArtifact(bookId, 0, 'state_snapshot', state);
     await this.pipelineService.initDefault(bookId);
+    const generatedSections = await agentSectionsPromise;
+    if (generatedSections) {
+      await this.promptTplService.initWithGenerated(bookId, generatedSections);
+    } else {
+      await this.promptTplService.initDefault(bookId);
+    }
 
     this.logger.log(
       `[createBook] 步骤 4/4: 初始化完成 — ${Date.now() - t0}ms\n` +
@@ -459,8 +480,12 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     });
   }
 
-  async listBooks(): Promise<unknown> {
-    const books = await this.bookStateRepo.findAllLightweight(50);
+  async assertBookOwnership(bookId: string, userId: string): Promise<void> {
+    return this.bookStateRepo.assertOwnership(bookId, userId);
+  }
+
+  async listBooks(userId?: string): Promise<unknown> {
+    const books = await this.bookStateRepo.findAllLightweight(50, userId);
     return {
       count: books.length,
       books: books.map((b) => {
@@ -479,6 +504,31 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         };
       }),
     };
+  }
+
+  async deleteBook(bookId: string): Promise<{ deleted: true; bookId: string }> {
+    const exists = await this.bookStateRepo.exists(bookId);
+    if (!exists) throw new NotFoundException(`Book not found: ${bookId}`);
+    await this.cleanBullMqJobs(bookId);
+    await this.dataSource.transaction(async (em) => {
+      await em.delete(WorkflowExecutionEntity, { bookId }); // 无 FK CASCADE，手动删
+      await em.remove(await em.findOneByOrFail(BookEntity, { bookId })); // CASCADE 自动清理其余关联表
+    });
+    this.logger.log(`[deleteBook] bookId=${bookId} 已永久删除（含全部关联数据）`);
+    return { deleted: true, bookId };
+  }
+
+  private async cleanBullMqJobs(bookId: string): Promise<void> {
+    const repeatables = await this.autoSerializationQueue.getRepeatableJobs(0, 1000);
+    for (const r of repeatables) {
+      if (r.id?.includes(bookId)) await this.autoSerializationQueue.removeRepeatableByKey(r.key);
+    }
+    for (const q of [this.autoSerializationQueue, this.chapterResyncQueue] as Queue[]) {
+      const jobs = await q.getJobs(['waiting', 'delayed', 'paused']);
+      for (const j of jobs) {
+        if ((j.data as any)?.bookId === bookId) await j.remove().catch(() => {});
+      }
+    }
   }
 
   async getBookTokenUsage(bookId: string): Promise<unknown> {

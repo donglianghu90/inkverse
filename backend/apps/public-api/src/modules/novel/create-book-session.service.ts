@@ -7,6 +7,7 @@ type CreateSessionStatus = 'queued' | 'running' | 'completed' | 'failed';
 export interface CreateBookSessionRecord {
   progressChannel: string;
   dto: CreateBookDto;
+  userId: string | null;
   status: CreateSessionStatus;
   idempotencyKey: string | null;
   result: Record<string, unknown> | null;
@@ -22,7 +23,7 @@ export class CreateBookSessionService {
   private readonly byProgressChannel = new Map<string, CreateBookSessionRecord>();
   private readonly byIdempotencyKey = new Map<string, string>();
 
-  createOrReuse(dto: CreateBookDto, idempotencyKey?: string): {
+  createOrReuse(dto: CreateBookDto, idempotencyKey?: string, userId?: string): {
     session: CreateBookSessionRecord;
     reused: boolean;
   } {
@@ -44,6 +45,7 @@ export class CreateBookSessionService {
     const session: CreateBookSessionRecord = {
       progressChannel,
       dto: Object.assign(new CreateBookDto(), dto),
+      userId: userId ?? null,
       status: 'queued',
       idempotencyKey: key,
       result: null,

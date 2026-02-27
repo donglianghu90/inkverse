@@ -71,12 +71,7 @@ export class CreativeWriterAgent {
     const blocks: string[] = [];
 
     // ── 第一层：铁律 ──
-    blocks.push(`=== 铁律（违反即失败）===
-1. 禁止出场角色绝对不出现（死亡/退场/休眠）。
-2. 开头承接上章场景、语气和情绪。
-3. 结尾必须有让读者翻下一章的驱动力。
-4. 字数在意图范围内。
-5. 只输出中文小说正文，禁止元叙述/提纲/数据。`);
+    blocks.push(`=== 铁律（违反即失败）===\n${playbooks?.['agent:creative-writer:iron_rules'] ?? '1. 禁止出场角色绝对不出现（死亡/退场/休眠）。\n2. 开头承接上章场景、语气和情绪。\n3. 结尾必须有让读者翻下一章的驱动力。\n4. 字数在意图范围内。\n5. 只输出中文小说正文，禁止元叙述/提纲/数据。'}`);
 
     // ── 第二层：本书灵魂（深层文风DNA） ──
     if (state.styleAnchor) {
@@ -87,17 +82,21 @@ export class CreativeWriterAgent {
       blocks.push(soul.join('\n'));
     }
     const soul: string[] = [profile.writerGuide.coreIdentity];
-    soul.push('你的使命是"创作故事"而非"执行任务"。意图给方向，铁律是安全边界，边界内你拥有充分的创作自由——好的意外比严格执行计划更有价值。');
+    soul.push(playbooks?.['agent:creative-writer:writing_soul'] ?? '你的使命是"创作故事"而非"执行任务"。意图给方向，铁律是安全边界，边界内你拥有充分的创作自由——好的意外比严格执行计划更有价值。');
     soul.push(`题材核心：${profile.writerGuide.genreRules.slice(0, 3).join('；')}`);
     soul.push(`节奏：${profile.writerGuide.pacingGuide}`);
     soul.push(`对话：${profile.writerGuide.dialogueGuide}，调性：${profile.writerGuide.toneGuide}`);
-    soul.push('写作直觉：写"他感到XX"时停下改成动作和感官；每句对话至少完成两个任务；紧张短句平静长句长短交替像呼吸');
+    soul.push(playbooks?.['agent:creative-writer:writing_instinct'] ?? '写作直觉：写"他感到XX"时停下改成动作和感官；每句对话至少完成两个任务；紧张短句平静长句长短交替像呼吸');
     blocks.push(soul.join('\n'));
 
-    // ── 第三层：本章技法 ──
-    const template = CHAPTER_TYPE_TEMPLATES[chapterType];
+    // ── 第三层：本章技法（优先 Profile 动态字段，fallback 硬编码通用模板） ──
+    const dynamicTemplate = profile.chapterTypeTemplates?.[chapterType];
+    const template = dynamicTemplate || CHAPTER_TYPE_TEMPLATES[chapterType];
     if (template) blocks.push(template);
-    if (intent.chapterNumber <= 3) blocks.push(buildFirstChaptersPlaybook(profile.worldProfile?.goldenFingerApplicable));
+    if (intent.chapterNumber <= 3) {
+      const dynamicFirst = profile.firstChaptersStrategy;
+      blocks.push(dynamicFirst || buildFirstChaptersPlaybook(profile.worldProfile?.goldenFingerApplicable));
+    }
     if (profile.writerGuide.craftExamples.length > 0) {
       blocks.push(`=== 正反例 ===\n${profile.writerGuide.craftExamples.slice(0, 2).map((e) => `坏：${e.bad} → 好：${e.good}`).join('\n')}`);
     }
@@ -302,11 +301,12 @@ ${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSect
       accelerating: '加速——段落渐短，冲突升级', breakneck: '极速——短句断句，画面切换，零废话',
       stillness: '静谧——留白为王，沉默比语言更有力',
     };
+    const audienceGuide = profile.audienceReactionGuide || '旁观者阶梯震惊+金句';
     const PURPOSE_HINT: Record<string, string> = {
       hook_opening: '承接上章+第一段就抛出微钩子', conflict: '冲突升级，每段都有动作推进或关系变化',
       revelation: '信息揭露——用旁人反应衬托冲击力', emotional: '角色内心，用动作和环境映射情绪，禁止直述',
       action: '战斗/动作，短句+断句+画面感', dialogue_driven: '对话推进，潜台词+权力差异+沉默也是对话',
-      transition: '快速过渡+暗线推进，不能水', climax: '张力最高点，旁观者阶梯震惊+金句',
+      transition: '快速过渡+暗线推进，不能水', climax: `张力最高点，${audienceGuide}`,
       cliffhanger: '悬崖收尾——最紧张时刻戛然而止',
     };
 
@@ -327,7 +327,8 @@ ${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSect
 
 === 灵魂层 ===
 ${state.styleAnchor ? buildStyleDNA(state.styleAnchor, scene.purpose) : `${profile.writerGuide.coreIdentity}\n${profile.writerGuide.pacingGuide}\n${profile.writerGuide.dialogueGuide}`}
-写作直觉：写"他感到XX"时停下改成动作和感官；每句对话至少完成两个任务；紧张短句平静长句长短交替像呼吸。
+${playbooks?.['agent:creative-writer:writing_soul'] ?? '你的使命是"创作故事"而非"执行任务"。意图给方向，铁律是安全边界，边界内你拥有充分的创作自由——好的意外比严格执行计划更有价值。'}
+${playbooks?.['agent:creative-writer:writing_instinct'] ?? '写作直觉：写"他感到XX"时停下改成动作和感官；每句对话至少完成两个任务；紧张短句平静长句长短交替像呼吸'}
 
 === 反AI味 ===
 ${[...profile.clichePatterns.filter((c) => c.maxPerChapter <= 1).slice(0, 6).map((c) => `"${c.pattern}"`), ...(state.styleAnchor?.antiPatterns ?? []).map((a) => `"${a}"`)].join('、')}——每个最多出现1次。

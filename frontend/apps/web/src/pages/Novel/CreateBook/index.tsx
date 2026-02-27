@@ -37,6 +37,7 @@ import {
   type CreateBookParams,
   type BookPromptProfile,
 } from '@/services/novel';
+import { getToken } from '@/services/auth';
 import ProfileEditor from '../ProfileEditor';
 
 const GENRE_PRESETS = [
@@ -260,7 +261,7 @@ const CreateBook: React.FC = () => {
       touchStale();
       const response = await fetch(createBookSseUrl(session.progressChannel), {
         method: 'GET',
-        headers: { Accept: 'text/event-stream' },
+        headers: { Accept: 'text/event-stream', Authorization: `Bearer ${getToken()}` },
         signal: controller.signal,
       });
 
@@ -488,6 +489,7 @@ const CreateBook: React.FC = () => {
               id="mainIdea"
               placeholder="例如：一个少年在末世废墟中发现了通往平行世界的钥匙，每个平行世界都有不同的物理法则和文明形态..."
               className="min-h-[140px] sm:min-h-[160px] text-sm sm:text-base resize-none"
+              disabled={enhancing}
               value={form.mainIdea}
               onChange={(e) => {
                 setForm({ ...form, mainIdea: e.target.value });
@@ -532,17 +534,28 @@ const CreateBook: React.FC = () => {
           </div>
 
           {highlights.length > 0 && (
-            <Card className="border-emerald-200 bg-emerald-50/50 dark:border-emerald-900 dark:bg-emerald-950/30">
-              <CardContent className="p-3.5 sm:p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                  <p className="text-sm font-medium text-emerald-800 dark:text-emerald-300">AI 已优化你的创意，增强了以下亮点：</p>
+            <Card className="relative overflow-hidden border-emerald-200/60 bg-gradient-to-br from-emerald-50 via-white to-teal-50/50 dark:border-emerald-800/40 dark:from-emerald-950/40 dark:via-background dark:to-teal-950/20">
+              <div className="absolute inset-0 bg-[linear-gradient(110deg,transparent_25%,rgba(16,185,129,0.04)_50%,transparent_75%)] bg-[length:200%_100%] animate-shimmer pointer-events-none" />
+              <CardContent className="relative p-4 sm:p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-900/50">
+                    <Sparkles className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                  <span className="text-sm font-semibold leading-5 text-emerald-800 dark:text-emerald-300">AI 创意增强</span>
+                  <Badge variant="secondary" className="ml-auto text-[10px] h-5 px-1.5 bg-emerald-100/80 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400 border-0">
+                    {highlights.length} 项优化
+                  </Badge>
                 </div>
-                <ul className="space-y-1 ml-6">
+                <div className="space-y-2.5">
                   {highlights.map((h, i) => (
-                    <li key={i} className="text-sm text-emerald-700 dark:text-emerald-400 list-disc">{h}</li>
+                    <div key={i} className="flex items-start gap-3 animate-fade-in" style={{ animationDelay: `${i * 100}ms`, animationFillMode: 'backwards' }}>
+                      <span className="shrink-0 mt-[3px] flex items-center justify-center w-5 h-5 rounded-md bg-emerald-500/10 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">{i + 1}</span>
+                      <p className="text-sm leading-relaxed text-emerald-800/90 dark:text-emerald-300/90">
+                        {h.includes('：') ? (<><span className="font-semibold text-emerald-900 dark:text-emerald-200">{h.split('：')[0]}：</span>{h.split('：').slice(1).join('：')}</>) : h}
+                      </p>
+                    </div>
                   ))}
-                </ul>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -919,11 +932,11 @@ const CreateBook: React.FC = () => {
                         />
                       </div>
                       <div className="h-4 w-px bg-border hidden sm:block" />
-                      <p className="text-sm">
-                        预计日均{' '}
-                        <span className="font-semibold text-primary">{dailyRate.toFixed(1)}</span>{' '}
-                        章/天
-                      </p>
+                      <div className="flex items-center gap-1 text-sm h-7">
+                        <span>预计日均</span>
+                        <span className="font-semibold text-primary">{dailyRate.toFixed(1)}</span>
+                        <span>章/天</span>
+                      </div>
                     </div>
 
                     <button
@@ -1000,9 +1013,11 @@ const CreateBook: React.FC = () => {
           <Card className="border-primary/15 bg-gradient-to-br from-primary/3 via-transparent to-violet-500/3 overflow-hidden">
             <CardContent className="p-3.5 sm:p-4 relative">
               <div className="absolute -right-6 -bottom-6 w-28 h-28 bg-primary/5 rounded-full blur-2xl pointer-events-none" />
-              <div className="flex items-center gap-2 mb-3">
-                <BookOpen className="h-4 w-4 text-primary" />
-                <p className="text-sm font-semibold">创作摘要</p>
+              <div className="flex items-center gap-2.5 mb-3.5">
+                <div className="flex items-center justify-center w-6 h-6 rounded-md bg-primary/10 shrink-0">
+                  <BookOpen className="h-3.5 w-3.5 text-primary" />
+                </div>
+                <span className="text-sm font-semibold leading-none">创作摘要</span>
               </div>
               <div className="space-y-2.5 text-sm">
                 {[
@@ -1021,8 +1036,8 @@ const CreateBook: React.FC = () => {
                       : '创建后不自动连载',
                   },
                 ].map(({ label, value, clamp }) => (
-                  <div key={label} className="flex gap-2">
-                    <span className="shrink-0 w-14 sm:w-16 text-primary/80 font-semibold text-xs uppercase tracking-wider pt-0.5">{label}</span>
+                  <div key={label} className="flex items-baseline gap-2">
+                    <span className="shrink-0 w-14 sm:w-16 text-primary/80 font-semibold text-xs uppercase tracking-wider">{label}</span>
                     <span className={cn('text-muted-foreground', clamp && 'line-clamp-2')}>{value}</span>
                   </div>
                 ))}

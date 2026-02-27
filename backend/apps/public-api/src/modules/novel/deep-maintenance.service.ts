@@ -19,6 +19,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { LlmService } from './llm/llm.service';
+import { BookPromptTemplateService } from './book-prompt-template.service';
 import { VolumeDirectorAgent } from './agents/volume-director.agent';
 import { RetrospectiveLearnerAgent } from './agents/retrospective-learner.agent';
 import { MemoryRetrieverService } from './memory-retriever.service';
@@ -63,12 +64,22 @@ export class DeepMaintenanceService {
 
   constructor(
     private readonly llm: LlmService,
+    private readonly promptTplService: BookPromptTemplateService,
     private readonly volumeDirector: VolumeDirectorAgent,
     private readonly retrospectiveLearner: RetrospectiveLearnerAgent,
     private readonly memoryRetriever: MemoryRetrieverService,
     @InjectRepository(ChapterEntity)
     private readonly chapterRepo: Repository<ChapterEntity>,
   ) {}
+
+  private async loadSections(bookId: string): Promise<Record<string, string>> { // 加载 agent sections 打平为 key→content
+    const tpl = await this.promptTplService.getTemplates(bookId);
+    const map: Record<string, string> = {};
+    for (const [agentId, config] of Object.entries(tpl.agents)) {
+      for (const sec of config.sections) map[`agent:${agentId}:${sec.key}`] = sec.content;
+    }
+    return map;
+  }
 
   /**
    * Evaluate whether maintenance should trigger. Pure logic, no LLM.
@@ -627,6 +638,7 @@ ${JSON.stringify(state.chapterSummaries.slice(-10), null, 2)}
       'bottle_episode', 'slow_burn_reveal', 'dual_timeline', 'heist_plan',
     ].filter((t) => !usedTechniques.includes(t));
 
+    const sec = await this.loadSections(state.bookId);
     const newArc = await this.llm.generateStructured({
       taskName: 'arc-planning',
       schema: miniArcSchema,
@@ -642,21 +654,11 @@ structuralInnovation 字段用一句话描述本卷的叙事创新点。
 climaxPattern 字段描述本卷高潮的模式（如"boss战""揭秘""背叛反转""牺牲""大逃离""禁术觉醒"）。
 
 === 四幕结构（适配${arcRange.min}-${arcRange.max}章长卷） ===
-1) 第一幕-铺垫（~25%）：建立本卷冲突、引入新角色/势力、埋下本卷核心悬念。
-2) 第二幕-升温（~35%）：多条支线交织推进，角色内外压力递增，至少包含1-2个小爽点。
-3) 第三幕-高潮（~25%）：核心冲突爆发、角色面临最艰难选择、大爽点、情感高潮。
-4) 第四幕-余韵（~15%）：善后+伏笔下卷+角色内心消化，留更大悬念拉入下一卷。
-- 爽感循环：每卷至少2个完整"压制→准备→爆发"循环（长卷容纳更多层次）。
-- 呼吸节奏：连续2-3章紧张后需1章缓冲，但缓冲章也要暗推支线。
-- 角色深度：长卷的优势是有足够空间展开角色弧线，不要浪费——日常互动和内心挣扎比密集剧情更能塑造立体角色。
+${sec['agent:arc-planner:structure'] ?? '1) 第一幕-铺垫（~25%）：建立本卷冲突、引入新角色/势力、埋下本卷核心悬念。\n2) 第二幕-升温（~35%）：多条支线交织推进，角色内外压力递增，至少包含1-2个小爽点。\n3) 第三幕-高潮（~25%）：核心冲突爆发、角色面临最艰难选择、大爽点、情感高潮。\n4) 第四幕-余韵（~15%）：善后+伏笔下卷+角色内心消化，留更大悬念拉入下一卷。'}
+${sec['agent:arc-planner:pacing'] ?? '- 爽感循环：每卷至少2个完整"压制→准备→爆发"循环（长卷容纳更多层次）。\n- 呼吸节奏：连续2-3章紧张后需1章缓冲，但缓冲章也要暗推支线。\n- 角色深度：长卷有足够空间展开角色弧线——日常互动和内心挣扎比密集剧情更能塑造立体角色。'}
 
-=== 情感主题规划（新增——每卷的灵魂） ===
-每卷必须有一个情感主题——它是角色内心成长的维度，和剧情主线平行但更深入：
-- 例：第一卷剧情是"在宗门站稳脚跟"，情感主题是"孤独者找到归属"
-- 例：第二卷剧情是"应对势力阴谋"，情感主题是"信任被背叛后如何重建"
-- 例：某卷剧情是"比武大会"，情感主题是"证明自己vs接受自己"
-- emotionalTheme 字段要明确这卷的情感主线
-- 卷的高潮不只是战力高潮，也应该是情感高潮
+=== 情感主题规划 ===
+${sec['agent:arc-planner:emotion_theme'] ?? '每卷必须有一个情感主题——角色内心成长的维度，和剧情主线平行但更深入：\n- 例：第一卷剧情是"在宗门站稳脚跟"，情感主题是"孤独者找到归属"\n- 例：第二卷剧情是"应对势力阴谋"，情感主题是"信任被背叛后如何重建"\n- 卷的高潮不只是战力高潮，也应该是情感高潮。'}
 
 === chapterBeats ===
 role（结构分类）：setup/escalation/twist/climax/aftermath/transition
@@ -664,27 +666,10 @@ technique（叙事技法，中文自由填写）：描述本章的具体叙事�
 tensionLevel 参考：setup 3-5, escalation 5-7, twist 7-9, climax 9-10, aftermath 2-4, transition 3-5
 
 === satisfactionType ===
-- none: 普通推进
-- minor_payoff: 小爽点（打脸、小升级）
-- major_payoff: 大爽点（boss战、重大揭露）
-- emotional_peak: 情感高潮（告白/离别/重逢/醒悟）
-- relief: 喘息（日常/搞笑/温馨）
+${sec['agent:arc-planner:satisfaction'] ?? '- none: 普通推进\n- minor_payoff: 小爽点（打脸、小升级）\n- major_payoff: 大爽点（boss战、重大揭露）\n- emotional_peak: 情感高潮（告白/离别/重逢/醒悟）\n- relief: 喘息（日常/搞笑/温馨）\n至少包含 1 个 major_payoff 和 1 个 relief。'}
 
 === 卷合同字段（必须输出） ===
-- arcType: 卷类型（dungeon/sect_politics/journey/war/mystery/tournament/court/slice_of_life/transition/custom）
-- triggerReason: 为什么现在必须进入这一卷（要解决什么叙事问题）
-- entryCondition: 卷入口条件（角色/势力/时机）
-- exitCondition: 卷结束条件（必须达成什么才算出卷）
-- mustPayoffThreadIds: 本卷必须回收的 threadId（优先从已有开放伏线中选择）
-- rewardLossLedger.expectedGains: 本卷主角/阵营的预期收益
-- rewardLossLedger.expectedCosts: 本卷必须承担的代价
-- rewardLossLedger.irreversibleChanges: 本卷结束后不可逆变化
-- antagonistMilestones: 反派推进里程碑（章节号+目标+成功信号）
-- cooldownTag: 用于避免连续同构卷（如"dungeon_like"）
-- narrativeTechnique: 本卷叙事技法（必须从枚举中选择）
-- structuralInnovation: 一句话描述本卷叙事创新
-- climaxPattern: 本卷高潮模式（必须与已用模式不同）
-- chapterBeats 每个节拍必须填写 technique 字段：用中文描述本章的具体叙事技法（如"打脸逆转""突破蜕变""暗线揭晓""奇遇机缘""权谋布局""日常温馨"等），不受固定枚举限制`,
+${sec['agent:arc-planner:output_contract'] ?? '- arcType/triggerReason/entryCondition/exitCondition 必须填写\n- narrativeTechnique: 必须从枚举中选择（优先未用过的技法）\n- climaxPattern: 不能与已用模式重复\n- mustPayoffThreadIds 优先从当前 open thread 中选 1-3 条\n- rewardLossLedger 三个列表都要填写\n- antagonistMilestones 至少 1 条\n- chapterBeats 每个节拍必须填写 technique 字段'}`,
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}
 
@@ -848,21 +833,16 @@ ${arcHistory.length > 0 ? JSON.stringify(arcHistory, null, 2) : '无（这是第
     const allSamples = [...sampleParagraphs, ...dialogueSamples, ...actionSamples, ...emotionSamples];
     if (allSamples.length === 0) return state;
 
+    const styleSec = await this.loadSections(state.bookId);
     const anchor = await this.llm.generateStructured({
       taskName: 'style-anchoring',
       schema: styleAnchorSchema,
       systemPrompt: `你是一位顶级文风分析专家，专门研究中文网文的"文风DNA"。你需要从文本样本中提取深层风格特征——不是笼统的描述，而是具体到可以指导写作的"配方"。
 
 分析维度：
-1. **修辞指纹**（metaphorStyle）：这个作者偏爱什么类型的比喻？通感、具象化、古诗化、口语化？
-2. **描写手法**（descriptionApproach）：白描还是工笔？多用短句还是长句堆叠？关键时刻和日常场景的描写密度差异？
-3. **情绪技法**（emotionTechnique）：直接写"他感到悲伤"还是用环境/动作/感官间接表达？
-4. **节奏签名**（rhythmSignature）：紧张时句式怎么变？平静时段落密度如何？对话与叙述的比例？
-5. **招牌技法**（signatureTechniques）：这本书最独特的2-3个写作技巧，附原文示例。
-6. **场景密度**（proseDensityMap）：动作戏、对话戏、情感戏、世界观构建、过渡段各用什么密度？
-7. **反模式**（antiPatterns）：这本书的文风应该避免什么具体表达？
+${styleSec['agent:style-anchoring:analysis_dimensions'] ?? '1. 修辞指纹（metaphorStyle）：偏爱什么类型的比喻？通感、具象化、古诗化、口语化？\n2. 描写手法（descriptionApproach）：白描还是工笔？多用短句还是长句堆叠？\n3. 情绪技法（emotionTechnique）：直接写"他感到悲伤"还是用环境/动作/感官间接表达？\n4. 节奏签名（rhythmSignature）：紧张时句式怎么变？平静时段落密度如何？\n5. 招牌技法（signatureTechniques）：最独特的2-3个写作技巧+原文示例。\n6. 场景密度（proseDensityMap）：动作戏、对话戏、情感戏各用什么密度？\n7. 反模式（antiPatterns）：应避免什么具体表达？'}
 
-输出要精练、可操作——后续AI写手会以此为"文风宪法"保持风格一致。`,
+${styleSec['agent:style-anchoring:output_guide'] ?? '输出要精练、可操作——后续AI写手会以此为"文风宪法"保持风格一致。'}`,
       userPrompt: `以下是这部小说的代表性文字样本：
 
 通用段落：

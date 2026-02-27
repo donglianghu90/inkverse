@@ -155,7 +155,11 @@ export class ChapterWorkflowService {
     );
 
     const checkpoint = (step: string) => this.executionService.saveCheckpoint(runId, step);
-    const playbooks = (await this.promptTplService.getTemplates(state.bookId)).playbooks; // 加载本书 playbooks
+    const tpl = await this.promptTplService.getTemplates(state.bookId);
+    const playbooks: Record<string, string> = { ...tpl.playbooks }; // 加载本书 playbooks + agent sections
+    for (const [agentId, config] of Object.entries(tpl.agents)) {
+      for (const sec of config.sections) playbooks[`agent:${agentId}:${sec.key}`] = sec.content;
+    }
 
     try {
     // ── Step 1: Arc Director ──
@@ -164,7 +168,7 @@ export class ChapterWorkflowService {
     this.logger.log(`[Chapter ${chapterNumber}] 步骤 1/8: 卷级导演`);
     this.emitProgress(state.bookId, chapterNumber, 'arc-director', 0, '卷级导演');
     if (isEnabled('arc-director')) {
-      arcDirective = await this.arcDirector.direct(state, getPrompt('arc-director'));
+      arcDirective = await this.arcDirector.direct(state, getPrompt('arc-director'), playbooks);
       this.logger.log(
         `[Chapter ${chapterNumber}] 卷级指令完成 — ${Date.now() - t0}ms | ` +
         `阶段: ${arcDirective.arcStage} | 使命: ${arcDirective.chapterMission}`,
@@ -241,7 +245,7 @@ export class ChapterWorkflowService {
         // ── 首轮：场景级写作流水线 ──
         this.logger.log(`[Chapter ${chapterNumber}] 步骤 4/8: 场景规划`);
         this.emitProgress(state.bookId, chapterNumber, 'scene-plan', 3, '场景规划');
-        scenePlan = await this.scenePlanner.plan(state, intent, arcDirective, getPrompt('scene-planner'));
+        scenePlan = await this.scenePlanner.plan(state, intent, arcDirective, getPrompt('scene-planner'), playbooks);
         this.logger.log(
           `[Chapter ${chapterNumber}] 场景规划完成 — ${Date.now() - t0}ms | 场景数: ${scenePlan.scenes.length} | ` +
           `弧线: ${scenePlan.overallEmotionalArc}`,
@@ -481,7 +485,7 @@ export class ChapterWorkflowService {
       this.logger.log(`[Chapter ${chapterNumber}] 步骤 7/8: 钩子优化`);
       this.emitProgress(state.bookId, chapterNumber, 'hook', 6, '钩子优化');
       try {
-        const enhanced = await this.hookCrafter.enhanceHook(state, intent, finalDraft);
+        const enhanced = await this.hookCrafter.enhanceHook(state, intent, finalDraft, playbooks);
         if (enhanced.content !== finalDraft.content) {
           finalDraft = enhanced;
           this.logger.log(`[Chapter ${chapterNumber}] 钩子优化完成 — ${Date.now() - t0}ms`);

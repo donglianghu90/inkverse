@@ -17,6 +17,10 @@ export class BookEntity {
   @PrimaryGeneratedColumn('uuid', { name: 'book_id' })
   bookId: string;
 
+  @Index('idx_books_user_id')
+  @Column({ name: 'user_id', type: 'varchar', length: 64, nullable: true })
+  userId: string | null;
+
   @Column({ name: 'state_json', type: 'jsonb' })
   stateJson: Record<string, unknown>;
 

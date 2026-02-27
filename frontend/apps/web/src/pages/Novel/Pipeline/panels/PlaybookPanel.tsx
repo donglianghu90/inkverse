@@ -1,12 +1,13 @@
-/** 写作规则管理面板 — 通用规则 + 写作手册双 Tab 编辑 */
+/** 写作规则管理面板 — 通用规则 + 写作手册 + 维护Agent 三 Tab 编辑 */
 import { useState, useEffect, useCallback } from 'react';
-import { X, BookOpen, Save, Loader2, RotateCcw, AlertTriangle, Pen, Sliders } from 'lucide-react';
+import { X, BookOpen, Save, Loader2, RotateCcw, AlertTriangle, Pen, Sliders, Wrench, ChevronDown, ChevronRight, Lock, History, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import {
-  getPromptTemplates, updatePlaybook, resetPromptTemplates, type PromptTemplateView,
+  getPromptTemplates, updatePlaybook, resetPromptTemplates, updateAgentSection, revertPromptEdit,
+  type PromptTemplateView, type PromptSection, type PromptEditRecord,
   getBookProfile, updateBookProfile, type BookPromptProfile, type CraftExample,
 } from '@/services/novel';
 
@@ -152,6 +153,9 @@ const PROFILE_SECTIONS: Array<{ key: string; label: string; desc: string; impact
   { key: 'craftExamples', label: '正反例示范', desc: '坏写法 → 好写法的对比，AI 会参考学习', impact: '影响创作写手和编辑' },
   { key: 'clichePatterns', label: '套话黑名单', desc: '禁止或限制使用的套路表达', impact: '影响创作写手、编辑和审阅' },
   { key: 'dimensionWeights', label: '评分权重', desc: '调整审阅时各维度的重要性', impact: '影响审阅评分的加权计算' },
+  { key: 'chapterTypeTemplates', label: '章节类型模板', desc: '高潮/铺垫/升温/喘息四种章节类型的定制写作模板', impact: '影响创作写手的章节结构' },
+  { key: 'firstChaptersStrategy', label: '首章策略', desc: '前3章的特殊策略——此题材如何在开头抓住读者', impact: '影响前3章的写作方向' },
+  { key: 'audienceReactionGuide', label: '观众反应写法', desc: '关键时刻周围人如何反应来放大读者体验', impact: '影响高潮场景的烘托方式' },
 ];
 
 function ProfileTextEditor({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
@@ -292,6 +296,18 @@ function ProfileTab({ bookId }: { bookId: string }) {
                     <WeightSlider label="角色深度" value={w.characterDepth} onChange={(v) => updateWeight('characterDepth', v)} />
                   </div>
                 )}
+                {key === 'chapterTypeTemplates' && (
+                  <div className="space-y-2">
+                    {['climax', 'setup', 'rising', 'relief'].map((t) => (
+                      <div key={t} className="space-y-1">
+                        <span className="text-[10px] font-medium text-muted-foreground">{{ climax: '高潮章', setup: '铺垫章', rising: '升温章', relief: '喘息章' }[t]}</span>
+                        <Textarea value={(profile.chapterTypeTemplates ?? {})[t] ?? ''} onChange={(e) => update('chapterTypeTemplates', { ...(profile.chapterTypeTemplates ?? {}), [t]: e.target.value })} placeholder={`${t} 类型模板（留空使用通用默认）`} className="min-h-[60px] text-[11px] resize-y leading-relaxed" />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {key === 'firstChaptersStrategy' && <ProfileTextEditor label="首章策略" value={profile.firstChaptersStrategy ?? ''} onChange={(v) => update('firstChaptersStrategy', v)} />}
+                {key === 'audienceReactionGuide' && <ProfileTextEditor label="观众反应写法" value={profile.audienceReactionGuide ?? ''} onChange={(v) => update('audienceReactionGuide', v)} />}
               </div>
             )}
           </div>
@@ -308,10 +324,180 @@ function ProfileTab({ bookId }: { bookId: string }) {
   );
 }
 
+// ─── Tab 3: 维护 Agent（arc-planner / volume-director / volume-foreshadowing / style-anchoring） ───
+
+const MAINTENANCE_AGENTS: Array<{ id: string; label: string; desc: string; color: string }> = [
+  { id: 'arc-planner', label: '弧线规划师', desc: '规划卷级节奏结构、情感主题、爽感循环', color: 'text-violet-500' },
+  { id: 'volume-director', label: '大卷导演', desc: '规划大卷的宏观叙事弧、新鲜感创新、MiniArc 槽位', color: 'text-teal-500' },
+  { id: 'volume-foreshadowing', label: '伏笔大师', desc: '设计前瞻式伏笔的原则、嵌入方式、回收窗口', color: 'text-amber-500' },
+  { id: 'style-anchoring', label: '文风锚定', desc: '分析并提取文风 DNA 的维度和输出要求', color: 'text-rose-500' },
+];
+
+function MaintSecEditor({ bookId, section, agentId }: { bookId: string; section: PromptSection; agentId: string }) {
+  const [content, setContent] = useState(section.content);
+  const [saved, setSaved] = useState(section.content);
+  const [saving, setSaving] = useState(false);
+  const [open, setOpen] = useState(false);
+  const changed = content !== saved;
+
+  const handleSave = async () => {
+    if (section.isLocked) return;
+    setSaving(true);
+    try { await updateAgentSection(bookId, agentId, section.key, content); setSaved(content); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className={cn('rounded border overflow-hidden', section.isLocked ? 'border-dashed border-muted-foreground/30' : 'border-border')}>
+      <button className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-accent/30 transition-colors" onClick={() => setOpen(!open)}>
+        {section.isLocked && <Lock className="h-2.5 w-2.5 text-muted-foreground/50 shrink-0" />}
+        <span className={cn('text-[11px] flex-1 font-medium', section.isLocked ? 'text-muted-foreground' : 'text-foreground')}>{section.label}</span>
+        {changed && <div className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />}
+        {open ? <ChevronDown className="h-3 w-3 text-muted-foreground/50" /> : <ChevronRight className="h-3 w-3 text-muted-foreground/50" />}
+      </button>
+      {open && (
+        <div className="px-3 pb-2 space-y-1.5">
+          {section.isLocked ? (
+            <pre className="text-[10px] text-muted-foreground/70 whitespace-pre-wrap leading-relaxed font-sans">{section.content}</pre>
+          ) : (
+            <>
+              <Textarea value={content} onChange={(e) => setContent(e.target.value)} className="min-h-[80px] text-[11px] resize-y leading-relaxed font-mono" />
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] text-muted-foreground/50">{content.length} 字</span>
+                {changed && (
+                  <div className="flex gap-1.5">
+                    <Button variant="ghost" size="sm" className="h-5 text-[9px] px-1.5" onClick={() => setContent(saved)}><RotateCcw className="h-2.5 w-2.5 mr-0.5" />撤销</Button>
+                    <Button size="sm" className="h-5 text-[9px] px-1.5" onClick={handleSave} disabled={saving}>
+                      {saving ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Save className="h-2.5 w-2.5 mr-0.5" />}保存
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MaintenanceTab({ bookId }: { bookId: string }) {
+  const [tpl, setTpl] = useState<PromptTemplateView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+
+  useEffect(() => { setLoading(true); getPromptTemplates(bookId).then(setTpl).finally(() => setLoading(false)); }, [bookId]);
+
+  return (
+    <div className="flex flex-col flex-1 overflow-hidden">
+      <div className="mx-4 mt-3 rounded-md bg-violet-50/60 dark:bg-violet-950/20 border border-violet-200/50 px-3 py-2 flex items-start gap-2">
+        <Wrench className="h-3.5 w-3.5 text-violet-500 shrink-0 mt-0.5" />
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          维护 Agent 负责卷规划、伏笔设计、文风锚定等系统级任务。修改仅影响<strong>当前这本书</strong>。
+        </p>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+        {loading && <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
+        {tpl && MAINTENANCE_AGENTS.map(({ id, label, desc, color }) => {
+          const agent = tpl.agents[id];
+          const sections = agent?.sections ?? [];
+          const isExpanded = expandedAgent === id;
+          return (
+            <div key={id} className="rounded-lg border overflow-hidden">
+              <button className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-accent/30 transition-colors" onClick={() => setExpandedAgent(isExpanded ? null : id)}>
+                <Wrench className={cn('h-3.5 w-3.5 shrink-0', color)} />
+                <div className="flex-1 min-w-0">
+                  <span className="text-xs font-medium">{label}</span>
+                  <p className="text-[10px] text-muted-foreground truncate mt-0.5">{desc}</p>
+                </div>
+                {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/50" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />}
+              </button>
+              {isExpanded && (
+                <div className="px-3 pb-3 space-y-1.5 border-t bg-background/50">
+                  {sections.length > 0 ? sections.map((s) => (
+                    <MaintSecEditor key={s.key} bookId={bookId} section={s} agentId={id} />
+                  )) : (
+                    <p className="text-[10px] text-muted-foreground text-center py-4">此 Agent 无可编辑指令</p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── 编辑历史 Tab ───
+
+function HistoryTab({ bookId }: { bookId: string }) {
+  const [records, setRecords] = useState<PromptEditRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [reverting, setReverting] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const v = await getPromptTemplates(bookId); setRecords(v.editHistory ?? []); } finally { setLoading(false); }
+  }, [bookId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleRevert = async (idx: number) => {
+    if (!confirm('确定要回滚到此版本吗？当前内容会保存为新的历史记录。')) return;
+    setReverting(idx);
+    try { const v = await revertPromptEdit(bookId, idx); setRecords(v.editHistory ?? []); } finally { setReverting(null); }
+  };
+
+  const fmtTime = (iso: string) => {
+    const d = new Date(iso);
+    return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="flex flex-col flex-1 overflow-hidden">
+      <div className="mx-4 mt-3 mb-2 rounded-md bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/50 px-3 py-2">
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          每次修改 Playbook 或 Agent 指令时自动记录（最多保留 20 条）。点击「回滚」可将内容恢复到修改前的状态。
+        </p>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-2 space-y-1.5">
+        {loading && <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
+        {!loading && records.length === 0 && <p className="text-xs text-muted-foreground text-center py-8">暂无编辑历史</p>}
+        {records.map((r, idx) => (
+          <div key={`${r.timestamp}-${idx}`} className="rounded-lg border overflow-hidden">
+            <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent/30 transition-colors" onClick={() => setExpanded(expanded === idx ? null : idx)}>
+              <History className="h-3 w-3 text-muted-foreground/70 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <span className="text-[11px] font-medium">{r.label}</span>
+                <span className="text-[10px] text-muted-foreground ml-2">{r.target}</span>
+              </div>
+              <span className="text-[10px] text-muted-foreground shrink-0">{fmtTime(r.timestamp)}</span>
+              {expanded === idx ? <ChevronDown className="h-3 w-3 text-muted-foreground/50" /> : <ChevronRight className="h-3 w-3 text-muted-foreground/50" />}
+            </button>
+            {expanded === idx && (
+              <div className="px-3 pb-3 border-t bg-background/50 space-y-2">
+                <div className="mt-2">
+                  <p className="text-[10px] text-muted-foreground mb-1">修改前的内容：</p>
+                  <pre className="text-[10px] bg-muted/50 rounded p-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words">{r.oldContent}</pre>
+                </div>
+                <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1" disabled={reverting === idx} onClick={() => handleRevert(idx)}>
+                  {reverting === idx ? <Loader2 className="h-3 w-3 animate-spin" /> : <Undo2 className="h-3 w-3" />}
+                  回滚到此版本
+                </Button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── 主面板 ───
 
 export function PlaybookPanel({ bookId, onClose }: Props) {
-  const [tab, setTab] = useState<'playbook' | 'profile'>('playbook');
+  const [tab, setTab] = useState<'playbook' | 'profile' | 'maintenance' | 'history'>('playbook');
 
   return (
     <div className="flex flex-col h-full">
@@ -332,8 +518,17 @@ export function PlaybookPanel({ bookId, onClose }: Props) {
         <button className={cn('px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5', tab === 'profile' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')} onClick={() => setTab('profile')}>
           <Pen className="h-3 w-3" />写作手册
         </button>
+        <button className={cn('px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5', tab === 'maintenance' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')} onClick={() => setTab('maintenance')}>
+          <Wrench className="h-3 w-3" />维护 Agent
+        </button>
+        <button className={cn('px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5', tab === 'history' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')} onClick={() => setTab('history')}>
+          <History className="h-3 w-3" />编辑历史
+        </button>
       </div>
-      {tab === 'playbook' ? <PlaybookTab bookId={bookId} /> : <ProfileTab bookId={bookId} />}
+      {tab === 'playbook' && <PlaybookTab bookId={bookId} />}
+      {tab === 'profile' && <ProfileTab bookId={bookId} />}
+      {tab === 'maintenance' && <MaintenanceTab bookId={bookId} />}
+      {tab === 'history' && <HistoryTab bookId={bookId} />}
     </div>
   );
 }

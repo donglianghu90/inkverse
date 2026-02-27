@@ -88,6 +88,10 @@ export interface BookPromptProfile {
     commitmentTypes: string[];
     characterRelationEmphasis: string;
   };
+  styleReferenceTexts?: string[];
+  chapterTypeTemplates?: Record<string, string>;
+  firstChaptersStrategy?: string;
+  audienceReactionGuide?: string;
 }
 
 export interface MiniArcChapterBeat {
@@ -303,6 +307,10 @@ export async function createBookSession(
       idempotencyKey,
     },
   });
+}
+
+export async function deleteBook(bookId: string): Promise<{ deleted: true; bookId: string }> {
+  return request(`${BASE}/books/${bookId}`, { method: 'DELETE' });
 }
 
 export async function getBook(bookId: string): Promise<BookInfo> {
@@ -718,10 +726,13 @@ export interface AgentPromptConfig {
   sections: PromptSection[];
 }
 
+export interface PromptEditRecord { timestamp: string; target: string; label: string; oldContent: string }
+
 export interface PromptTemplateView {
   bookId: string;
   playbooks: Record<string, string>;
   agents: Record<string, AgentPromptConfig>;
+  editHistory: PromptEditRecord[];
   updatedAt: string;
 }
 
@@ -735,6 +746,10 @@ export async function updatePlaybook(bookId: string, name: string, content: stri
 
 export async function updateAgentSection(bookId: string, agentId: string, sectionKey: string, content: string): Promise<PromptTemplateView> {
   return request(`${BASE}/books/${bookId}/prompt-templates/agents/${agentId}/sections/${sectionKey}`, { method: 'PUT', data: { content } });
+}
+
+export async function revertPromptEdit(bookId: string, historyIndex: number): Promise<PromptTemplateView> {
+  return request(`${BASE}/books/${bookId}/prompt-templates/revert`, { method: 'POST', data: { historyIndex } });
 }
 
 export async function resetPromptTemplates(bookId: string): Promise<PromptTemplateView> {

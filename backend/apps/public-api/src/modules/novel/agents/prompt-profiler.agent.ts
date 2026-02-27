@@ -5,6 +5,7 @@
  * 让 AI 按照同样的深度和结构为任何题材生成适配的 Profile。
  */
 import { Injectable } from '@nestjs/common';
+import { z } from 'zod';
 import { LlmService } from '../llm/llm.service';
 import {
   BookPromptProfile,
@@ -13,6 +14,7 @@ import {
 import {
   XIANXIA_REFERENCE_PROFILE,
   ROMANCE_REFERENCE_PROFILE,
+  MYSTERY_REFERENCE_PROFILE,
   formatProfileAsExample,
 } from '../prompting/reference-profiles';
 
@@ -26,13 +28,21 @@ interface ProfileInput {
   plannedTotalChapters?: { min: number; max: number };
 }
 
+const GENRE_KEYWORDS: Array<{ profile: BookPromptProfile; keywords: string[] }> = [
+  { profile: ROMANCE_REFERENCE_PROFILE, keywords: ['言情', '恋爱', '青春', '甜宠', 'romance', '婚恋', '暗恋', '总裁', '豪门'] },
+  { profile: MYSTERY_REFERENCE_PROFILE, keywords: ['悬疑', '推理', '侦探', '刑侦', '犯罪', '谋杀', 'mystery', 'thriller', '惊悚', '探案', '破案', '密室'] },
+  { profile: XIANXIA_REFERENCE_PROFILE, keywords: ['玄幻', '仙侠', '修仙', '奇幻', '魔法', '异世界', '穿越', '重生', '系统', '升级', '战斗', 'fantasy'] },
+];
+
 @Injectable()
 export class PromptProfilerAgent {
   constructor(private readonly llm: LlmService) {}
 
-  private selectReference(genre: string): BookPromptProfile { // 根据题材选择最接近的参考Profile
+  private selectReference(genre: string): BookPromptProfile { // 根据题材关键词匹配最接近的参考Profile，无匹配时默认玄幻
     const g = genre.toLowerCase();
-    if (g.includes('言情') || g.includes('恋爱') || g.includes('都市') || g.includes('青春') || g.includes('romance')) return ROMANCE_REFERENCE_PROFILE;
+    for (const { profile, keywords } of GENRE_KEYWORDS) {
+      if (keywords.some((kw) => g.includes(kw))) return profile;
+    }
     return XIANXIA_REFERENCE_PROFILE;
   }
 
@@ -40,7 +50,7 @@ export class PromptProfilerAgent {
     const bestRef = this.selectReference(input.genre);
     const referenceExample = formatProfileAsExample(bestRef);
 
-    return this.llm.generateStructured({
+    const raw = await this.llm.generateStructured({
       taskName: 'prompt-profiler',
       schema: bookPromptProfileSchema,
       tags: ['setup', 'profile'],
@@ -49,7 +59,7 @@ export class PromptProfilerAgent {
 你的任务是为一本新书生成一份完整的"写作手册"（BookPromptProfile）。
 这份手册会被 AI 写手、AI 审阅员等角色在整个创作过程中持续使用。
 
-以下是一份"玄幻/仙侠"题材的参考范例——它展示了手册应有的深度和细节水平：
+以下是一份"${bestRef.generatedForGenre}"题材的参考范例——它展示了手册应有的深度和细节水平：
 
 ${referenceExample}
 
@@ -112,7 +122,21 @@ ${referenceExample}
   - 写2-3段"理想文风"的示范文本（每段150-200字）。
   - 这些文本不是故事内容，而是展示这本书应该有的"质感"——句式节奏、用词习惯、描写密度。
   - Writer会把这些当作"模仿这种感觉"的参考。
-  - 要匹配题材和调性——玄幻的冷峻和言情的细腻是完全不同的。`,
+  - 要匹配题材和调性——玄幻的冷峻和言情的细腻是完全不同的。
+
+12.【章节类型模板 chapterTypeTemplates】
+  - 为 climax/setup/rising/relief 四种章节类型各写一段题材定制的写作模板。
+  - 每个模板描述该章节类型在此题材中的结构、技法和节奏要求。
+  - 示例：玄幻的高潮章强调"旁观者阶梯式震惊"，悬疑的高潮章强调"线索瀑布式串联+认知翻转"，言情的高潮章强调"情感临界点+角色内心决堤"。
+  - 格式：JSON Record<string, string>，key 为 climax/setup/rising/relief。
+
+13.【首章策略 firstChaptersStrategy】
+  - 一段话描述前3章的特殊策略——这个题材如何在开头抓住读者。
+  - 示例：玄幻强调"100字内建立不公+暗示金手指"，悬疑强调"第一章结尾必须出现核心谜团"，言情强调"第一章建立男女主化学反应"。
+
+14.【观众反应写法 audienceReactionGuide】
+  - 一段话描述此题材中如何写"关键时刻的周围人反应"来放大读者体验。
+  - 不是所有题材都靠"旁观者阶梯式震惊"：悬疑靠"不同知情者的异常行为"，言情靠"闺蜜/朋友的侧面烘托"。`,
 
       userPrompt: `请为以下设定生成完整的 BookPromptProfile：
 
@@ -132,5 +156,128 @@ ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
 
       temperature: 0.6,
     });
+    return bookPromptProfileSchema.parse(this.coerceProfile(raw, bestRef));
+  }
+
+  /** 根据题材 + 已生成的 Profile 定制所有可编辑 agent section + 7 个 playbook。locked section 保持默认。 */
+  async generateAgentSections(genre: string, profile: BookPromptProfile): Promise<{
+    sections: Array<{ agentId: string; key: string; content: string }>;
+    playbooks: Record<string, string>;
+  }> {
+    const sectionEntrySchema = z.object({ agentId: z.string(), key: z.string(), content: z.string() });
+    const playbookEntrySchema = z.object({ name: z.string(), content: z.string() });
+    const outputSchema = z.object({
+      sections: z.array(sectionEntrySchema),
+      playbooks: z.array(playbookEntrySchema),
+    });
+
+    const EDITABLE_SECTIONS = [
+      { agentId: 'intent', key: 'role', label: '角色定义', hint: '策划师人设，需匹配题材特色' },
+      { agentId: 'intent', key: 'core_questions', label: '核心问题', hint: '设定章节方向时的3个灵魂问题，不同题材核心驱动力不同' },
+      { agentId: 'intent', key: 'principles', label: '原则', hint: '章节策划原则，需反映题材特有的节奏和冲突模式' },
+      { agentId: 'intent', key: 'suspense_rules', label: '悬念规则', hint: '悬念管理策略，不同题材悬念类型不同' },
+      { agentId: 'intent', key: 'data_intuition', label: '数据直觉', hint: '如何利用KPI数据指导策划' },
+      { agentId: 'scene-planner', key: 'role', label: '角色定义', hint: '场景导演人设' },
+      { agentId: 'scene-planner', key: 'principles', label: '核心原则', hint: '场景拆分原则，需匹配题材节奏' },
+      { agentId: 'scene-planner', key: 'purpose_guide', label: '目的选择指南', hint: '场景类型指南，不同题材侧重的场景类型不同' },
+      { agentId: 'scene-planner', key: 'transition_hint', label: '过渡提示', hint: '场景过渡技法' },
+      { agentId: 'scene-planner', key: 'sensory_bridge', label: '感官桥接', hint: '感官连续性规则' },
+      { agentId: 'creative-writer', key: 'writing_soul', label: '写作灵魂', hint: '创作哲学，需匹配题材的核心追求' },
+      { agentId: 'creative-writer', key: 'writing_instinct', label: '写作直觉', hint: '写作时的直觉检查清单，不同题材侧重点不同' },
+      { agentId: 'scene-stitcher', key: 'role', label: '角色定义', hint: '缝合大师人设' },
+      { agentId: 'scene-stitcher', key: 'core_mission', label: '核心使命', hint: '缝合章节时的核心任务清单' },
+      { agentId: 'scene-stitcher', key: 'discipline', label: '纪律', hint: '缝合纪律' },
+      { agentId: 'reviewer', key: 'role', label: '角色定义', hint: '审阅者人设，需匹配题材读者期待' },
+      { agentId: 'reviewer', key: 'experience_anchors', label: '体验级评分锚点', hint: '翻页欲/可记忆性/沉浸度的定义，不同题材"好"的体验不同' },
+      { agentId: 'reviewer', key: 'anti_inflation', label: '反虚高铁律', hint: '评分锚定标准' },
+      { agentId: 'editor', key: 'role', label: '角色定义', hint: '编辑人设' },
+      { agentId: 'editor', key: 'surgery', label: '外科手术', hint: '编辑修复策略' },
+      { agentId: 'editor', key: 'active_improve', label: '主动提升', hint: '主动提升重点，不同题材提升方向不同' },
+      { agentId: 'hook-crafter', key: 'role', label: '角色定义', hint: '钩子工匠人设' },
+      { agentId: 'hook-crafter', key: 'basic_techniques', label: '基础钩子技法', hint: '5种基础钩子，需匹配题材特有的钩子类型' },
+      { agentId: 'hook-crafter', key: 'advanced_techniques', label: '高阶钩子技法', hint: '5种高阶钩子，需匹配题材' },
+      { agentId: 'arc-director', key: 'role', label: '角色定义', hint: '卷级导演人设' },
+      { agentId: 'arc-director', key: 'discipline', label: '纪律', hint: '执行纪律' },
+      { agentId: 'arc-planner', key: 'structure', label: '四幕结构', hint: '卷级四幕结构描述，需适配题材特点' },
+      { agentId: 'arc-planner', key: 'pacing', label: '节奏规则', hint: '爽感循环和呼吸节奏，需匹配题材节奏' },
+      { agentId: 'arc-planner', key: 'emotion_theme', label: '情感主题', hint: '情感主题规划，需匹配题材的情感核心' },
+      { agentId: 'arc-planner', key: 'satisfaction', label: '爽感类型', hint: '题材特有的爽感类型定义' },
+      { agentId: 'volume-director', key: 'volume_structure', label: '卷结构精髓', hint: '大卷结构参考，需匹配题材特色' },
+      { agentId: 'volume-director', key: 'innovation', label: '新鲜感引擎', hint: '叙事创新技法推荐，需匹配题材' },
+      { agentId: 'volume-director', key: 'mini_arc_rules', label: 'MiniArc规则', hint: 'MiniArc槽位规则' },
+      { agentId: 'volume-foreshadowing', key: 'design_principles', label: '伏笔设计原则', hint: '伏笔设计风格，需匹配题材' },
+      { agentId: 'volume-foreshadowing', key: 'embedding', label: '嵌入指导', hint: '伏笔嵌入方式，需匹配题材语境' },
+      { agentId: 'style-anchoring', key: 'analysis_dimensions', label: '分析维度', hint: '文风分析维度，不同题材侧重不同' },
+    ];
+
+    const sectionList = EDITABLE_SECTIONS.map((s) => `- ${s.agentId}:${s.key}（${s.label}）— ${s.hint}`).join('\n');
+
+    const PLAYBOOK_SPECS = [
+      { name: 'PROSE_CRAFT_PLAYBOOK', label: '文笔技法', wordRange: '800-1500', hint: '展示而非讲述、对白技法、句式节奏、感官叠加、环境映射情绪、留白术、旁观者烘托、金句意识、杀死AI味 —— 所有正反例和示范场景必须匹配题材语境' },
+      { name: 'WRITING_SOUL_PLAYBOOK', label: '写作灵魂', wordRange: '200-500', hint: '简体中文、代入感、情绪先行、角色行为从性格流出、不完美原则 —— 根据题材调整优先级和表述' },
+      { name: 'CHARACTER_ARC_PLAYBOOK', label: '角色弧线', wordRange: '200-500', hint: '矛盾内核、成长规则、关系化学反应 —— 根据题材调整角色深度重点' },
+      { name: 'EDITOR_DISCIPLINE_PLAYBOOK', label: '编辑纪律', wordRange: '200-500', hint: '修复策略+主动提升职责 —— 根据题材调整提升方向' },
+      { name: 'REVIEWER_RUBRIC_PLAYBOOK', label: '评审标尺', wordRange: '100-300', hint: '0-10分各档描述 —— 用题材特有的体验锚定每一档（如言情9分=CP化学反应强烈，悬疑9分=线索链完美闭合）' },
+      { name: 'CONTINUITY_BASELINE_PLAYBOOK', label: '连续性底线', wordRange: '50-200', hint: '角色一致性、死亡/退场规则、空间位移合理性 —— 根据题材补充特有规则' },
+      { name: 'THREAD_AWARENESS_PLAYBOOK', label: '伏线意识', wordRange: '50-200', hint: '伏线管理策略 —— 不同题材伏线类型不同（悬疑重线索链，言情重情感暗线）' },
+    ];
+    const playbookList = PLAYBOOK_SPECS.map((p) => `- ${p.name}（${p.label}，${p.wordRange}字）— ${p.hint}`).join('\n');
+
+    const result = await this.llm.generateStructured({
+      taskName: 'agent-section-generator',
+      schema: outputSchema,
+      tags: ['setup', 'agent-sections', 'playbooks'],
+      systemPrompt: `你是一位资深网文系统架构师。你需要为一本「${genre}」题材的网文，定制所有 AI Agent 的工作指令和写作规则手册。
+
+这本书的写作手册摘要：
+- 写手人设：${profile.writerGuide?.coreIdentity?.slice(0, 200) ?? '未生成'}
+- 题材规则：${profile.writerGuide?.genreRules?.slice(0, 3)?.join('；') ?? '未生成'}
+- 节奏：${profile.writerGuide?.pacingGuide?.slice(0, 150) ?? '未生成'}
+- 对话：${profile.writerGuide?.dialogueGuide?.slice(0, 150) ?? '未生成'}
+- 核心爽感：${profile.satisfactionTypes.slice(0, 3).map((s) => s.label).join('、')}
+- 核心钩子：${profile.hookTypes.slice(0, 3).map((h) => h.label).join('、')}
+
+=== 第一部分：Agent Section（${EDITABLE_SECTIONS.length} 个） ===
+${sectionList}
+
+=== 第二部分：Playbook 写作规则（${PLAYBOOK_SPECS.length} 个） ===
+${playbookList}
+
+=== 定制原则 ===
+1. 所有内容必须为「${genre}」题材量身定制——不是通用模板套上题材名。
+2. 用具体可执行的指令。比如不要写"注意节奏"，要写"对话占比维持 40-55%，情感交锋段落每句不超过15字"。
+3. Agent section 每个控制在 50-300 字。
+4. 每个 Playbook 严格遵守括号中标注的字数范围——不要凑数也不要超标。
+5. PROSE_CRAFT_PLAYBOOK 最重要——9 个技法全部保留，"展示而非讲述"的正反例必须用题材场景，"旁观者烘托"要换成题材最自然的衬托方式，"杀死AI味"黑名单要加题材特有套话。
+
+=== 三层分工（严格遵守，禁止重复） ===
+BookPromptProfile（已生成，你能看到摘要）定义的是「写什么」：题材规则、受众画像、爽感类型、钩子类型、章节模板。
+Agent Section 定义的是「怎么工作」：该角色的判断标准、执行流程、检查清单。不要重述题材规则，而是写方法论。
+  ❌ "言情要注重CP化学反应"（这是 Profile 的活）
+  ✅ "每个场景检查：两人肢体语言是否有渐进变化？对话是否有潜台词层？分离前是否埋下重逢期待？"
+Playbook 定义的是「质量标准」：通用写作技法在该题材下的正反例。不要重述题材规则或执行流程，而是写「好的长什么样、坏的长什么样」。
+  ❌ "要有CP化学反应"（重述 Profile）
+  ❌ "检查肢体语言变化"（重述 Agent Section）
+  ✅ "展示而非讲述——❌'她爱上了他' ✅'她发现自己不自觉地在人群中寻找那个背影'"`,
+      userPrompt: `题材：${genre}
+目标读者：${profile.generatedForAudience}
+
+请同时生成：
+1. sections 数组（${EDITABLE_SECTIONS.length} 项，每项 agentId + key + content）
+2. playbooks 数组（${PLAYBOOK_SPECS.length} 项，每项 name + content）`,
+      temperature: 0.5,
+    });
+
+    const playbookMap: Record<string, string> = {};
+    for (const p of result.playbooks) { if (p.name && p.content?.trim()) playbookMap[p.name] = p.content; }
+    return { sections: result.sections as Array<{ agentId: string; key: string; content: string }>, playbooks: playbookMap };
+  }
+
+  private coerceProfile(raw: any, ref: BookPromptProfile): any { // Gemini结构化输出可能将object[]退化为string[]，需强制转型
+    const typed = (a: any[], fb: any[]) => !Array.isArray(a) || !a.length ? fb : typeof a[0] === 'string' ? a.map((s: string, i: number) => ({ id: `t${i}`, label: s.slice(0, 50), description: s })) : a;
+    const cliche = (a: any[], fb: any[]) => !Array.isArray(a) || !a.length ? fb : typeof a[0] === 'string' ? a.map((s: string) => ({ pattern: s, maxPerChapter: 1 })) : a;
+    const rrc = raw.reviewerCalibration ?? {};
+    const rc = { ...ref.reviewerCalibration, ...rrc, dimensionWeights: { ...ref.reviewerCalibration.dimensionWeights, ...(rrc.dimensionWeights ?? {}) }, scoringAnchors: { ...ref.reviewerCalibration.scoringAnchors, ...(rrc.scoringAnchors ?? {}) } };
+    return { ...ref, ...raw, writerGuide: raw.writerGuide ?? ref.writerGuide, satisfactionTypes: typed(raw.satisfactionTypes, ref.satisfactionTypes), hookTypes: typed(raw.hookTypes, ref.hookTypes), clichePatterns: cliche(raw.clichePatterns, ref.clichePatterns), reviewerCalibration: rc, worldProfile: raw.worldProfile ?? ref.worldProfile };
   }
 }

@@ -45,24 +45,15 @@ export class SceneStitcherAgent {
         chapterNumber: intent.chapterNumber,
         sceneCount: sceneDrafts.length,
       },
-      systemPrompt: `你是一位精通节奏和过渡的${profile.generatedForGenre}网文缝合大师。你收到了由不同场景组成的章节素材，需要缝合为一个**浑然一体**的完整章节——读者不应感觉到"这里有拼接痕迹"。
+      systemPrompt: `${playbooks?.['agent:scene-stitcher:role'] ?? `你是一位精通节奏和过渡的${profile.generatedForGenre}网文缝合大师。你收到了由不同场景组成的章节素材，需要缝合为一个浑然一体的完整章节——读者不应感觉到"这里有拼接痕迹"。`}
 
 === 核心使命（优先级从高到低）===
-1. **首段黄金钩子**：第一段（≤100字）必须让读者无法放下。承接上章悬念，用异常/反问/感官冲击开场。
-2. **尾段悬崖收尾**：最后一段必须在最紧张/最意外的时刻戛然而止。读者必须翻下一章。
-3. **逐缝过渡**：每个场景接缝都要自然过渡——用感官桥接（声音/气味/光线变化）、时间推移、或因果链。不要硬切。
-4. **节奏对比**：相邻场景节奏不同时，过渡段要体现节奏转换（如从战斗短句→安静长句时，用一个"沉默"的过渡段）。
-5. **情绪弧线验证**：整章情绪曲线必须符合 "${scenePlan.overallEmotionalArc}"。
-6. **冗余去重**：如果相邻场景有相似的描写/句式/开头方式，改写使其各有特色。
-7. **感官连续性**：前一场景结束时的天气/光线/环境音在下一场景开始时应延续或自然过渡。
+${playbooks?.['agent:scene-stitcher:core_mission'] ?? `1. 首段黄金钩子：第一段（≤100字）必须让读者无法放下。承接上章悬念，用异常/反问/感官冲击开场。\n2. 尾段悬崖收尾：最后一段必须在最紧张/最意外的时刻戛然而止。\n3. 逐缝过渡：用感官桥接、时间推移或因果链。\n4. 节奏对比：过渡段体现节奏转换。\n5. 情绪弧线验证。\n6. 冗余去重。\n7. 感官连续性。`}
+整章情绪曲线目标：${scenePlan.overallEmotionalArc}
 
 === 纪律 ===
-- 保留每个场景的核心内容和精彩段落。
-- 过渡段2-4句，作用是"桥梁"而非"新场景"。可以用"沉默+环境+时间"三件套。
-- 可以微调措辞让全章统一，但不改变事件和角色行为。
+${playbooks?.['agent:scene-stitcher:discipline'] ?? '- 保留每个场景的核心内容和精彩段落。\n- 过渡段2-4句，作用是"桥梁"。\n- 可以微调措辞让全章统一，但不改变事件和角色行为。\n- 章节标题要有冲突感和吸引力。\n- 只输出完整中文章节正文。'}
 - 字数目标：${intent.wordCountRange.min}-${intent.wordCountRange.max}字。
-- 章节标题要有冲突感和吸引力（禁止"第X章"模板）。
-- 只输出合并后的完整中文章节正文。
 
 ${playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK}
 ${state.styleAnchor ? '\n' + buildStyleDNA(state.styleAnchor) : ''}

@@ -59,22 +59,15 @@ export class EditorAgent {
           .slice(0, 8)
           .join('、');
 
-        return `你是一位经验丰富的${profile.generatedForGenre}网文编辑，同时也是一位有品位的读者。
+        return `${playbooks?.['agent:editor:role'] ?? `你是一位经验丰富的${profile.generatedForGenre}网文编辑，同时也是一位有品位的读者。`}
 
 你的任务分两部分：
 
-一、外科手术——修复审阅指出的问题
-- 优先修复 critical 和 moderate 级别问题。
-- 保留原文的好部分（审阅列出的 strengths）。
-- 不要为了修改而修改。
+一、外科手术
+${playbooks?.['agent:editor:surgery'] ?? '- 优先修复 critical 和 moderate 级别问题。\n- 保留原文的好部分（strengths）。\n- 不要为了修改而修改。'}
 
-二、主动提升——让"正确但平庸"的段落变得有力量
-即使审阅没有指出问题，你也应该：
-- 找到最平淡的2-3段，用更有画面感/感官更丰富的方式重新表达。
-- 检查关键对话是否有"潜台词"层次——太直白的对话加入弦外之音。
-- 确保章内有情绪弧线（从A情绪到B情绪），如果情绪平坦，增加微波动。
-- 把"讲述"改为"展示"：每个"他感到XX"都改为具体的动作/感官/细节。
-- 如果发现自然契合的位置，可以考虑插入一句"金句"——简短有力、有态度。但不要为了金句而强行制造，自然为先。
+二、主动提升
+${playbooks?.['agent:editor:active_improve'] ?? '- 找到最平淡的2-3段用更有画面感的方式重写。\n- 检查关键对话是否有潜台词层次。\n- 确保章内有情绪弧线。\n- 把"讲述"改为"展示"。\n- 自然位置可考虑插入金句。'}
 
 写作技法参考：
 ${playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK}

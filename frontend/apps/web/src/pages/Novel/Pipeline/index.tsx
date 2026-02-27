@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { history, useParams } from '@umijs/max';
 import ReactFlow, { Node, Edge, Controls, Background, BackgroundVariant, type NodeChange, applyNodeChanges } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { ArrowLeft, Loader2, AlertCircle, Clock, Save, Rocket, Info, RefreshCw, Diamond, ShieldCheck, GitFork, GitMerge, Play, Square, History, BookOpen } from 'lucide-react';
+import { ArrowLeft, Loader2, AlertCircle, Clock, Save, Rocket, Info, RefreshCw, ShieldCheck, GitFork, GitMerge, Play, Square, History, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -222,19 +222,36 @@ export default function PipelinePage() {
             <Controls showInteractive={false} className="!border-border !bg-card !shadow-sm" />
           </ReactFlow>
           <div className="absolute bottom-4 left-4 pointer-events-none">
-            <div className="rounded-xl bg-card/85 backdrop-blur border px-4 py-3 shadow-sm space-y-1.5 text-[11px] text-muted-foreground">
-              <div className="flex items-center gap-2 font-medium text-foreground/80"><Info className="h-3.5 w-3.5" /><span>图例</span></div>
-              <div className="flex items-center gap-2"><div className="h-4 w-4 rounded bg-card border shadow-sm flex items-center justify-center text-[8px]">🤖</div><span>Agent 节点</span></div>
-              <div className="flex items-center gap-2"><Diamond className="h-3.5 w-3.5 text-amber-500" /><span>条件判断</span></div>
-              <div className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 text-sky-500" /><span>确定性检查</span></div>
-              <div className="flex items-center gap-2"><RefreshCw className="h-3.5 w-3.5 text-violet-500" /><span>质量门控循环</span></div>
-              <div className="flex items-center gap-2"><GitFork className="h-3.5 w-3.5 text-teal-500" /><span>并行分支</span><GitMerge className="h-3.5 w-3.5 text-teal-500" /><span>汇合</span></div>
+            <div className="rounded-xl bg-card/90 backdrop-blur-sm border px-4 py-3 shadow-md space-y-2 text-[11px] text-muted-foreground">
+              <div className="flex items-center gap-2 font-semibold text-foreground/80"><Info className="h-3.5 w-3.5" /><span>图例</span></div>
+              <div className="flex items-center gap-2">
+                <div className="h-4 w-8 rounded border bg-card shadow-sm overflow-hidden"><div className="h-0.5 bg-blue-400" /></div>
+                <span>Agent 节点</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <svg className="h-4 w-4 shrink-0" viewBox="0 0 16 16"><path d="M8 1 L15 8 L8 15 L1 8 Z" className="fill-amber-50 dark:fill-amber-950/40 stroke-amber-400" strokeWidth="1.5" /></svg>
+                <span>条件判断</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-4 w-4 rounded-md bg-sky-100 dark:bg-sky-900/40 flex items-center justify-center"><ShieldCheck className="h-2.5 w-2.5 text-sky-500" /></div>
+                <span>确定性检查</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-4 w-4 rounded-md bg-violet-100 dark:bg-violet-900/40 flex items-center justify-center"><RefreshCw className="h-2.5 w-2.5 text-violet-500" /></div>
+                <span>质量门控循环</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-4 w-4 rounded-md bg-teal-100 dark:bg-teal-900/40 flex items-center justify-center"><GitFork className="h-2.5 w-2.5 text-teal-500" /></div>
+                <span>并行分支</span>
+                <div className="h-4 w-4 rounded-md bg-teal-100 dark:bg-teal-900/40 flex items-center justify-center"><GitMerge className="h-2.5 w-2.5 text-teal-500" /></div>
+                <span>汇合</span>
+              </div>
               <div className="flex items-center gap-2">
                 <div className="h-px w-4 bg-emerald-500" /><span>通过</span>
                 <div className="h-px w-4 border-t border-dashed border-muted-foreground/40" /><span>跳过</span>
-                <div className="h-px w-4 bg-violet-500" style={{ strokeDasharray: '4 3' }} /><span>重写</span>
+                <div className="h-px w-4 bg-violet-500" /><span>重写</span>
               </div>
-              {!selectedNodeId && <p className="text-muted-foreground/70 pt-0.5">点击节点查看详情和编辑</p>}
+              {!selectedNodeId && <p className="text-muted-foreground/60 pt-0.5 text-[10px]">点击节点查看详情和编辑</p>}
             </div>
           </div>
         </div>

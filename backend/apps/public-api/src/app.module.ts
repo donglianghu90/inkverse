@@ -124,7 +124,7 @@ import { AuthModule } from "./modules/auth/auth.module";
           connection: {
             host: redis_config?.addr,
             password: redis_config?.pass || undefined,
-            maxRetriesPerRequest: 3,
+            maxRetriesPerRequest: null,
           },
         };
       },

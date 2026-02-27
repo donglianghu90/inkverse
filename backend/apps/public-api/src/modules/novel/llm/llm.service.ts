@@ -1,15 +1,16 @@
-/** 多Provider LLM网关 — 支持 Gemini + Claude，按任务自动路由最优模型，per-tier精确计费 */
+/** 多Provider LLM网关 — 支持 Gemini + Claude + OpenAI(Responses API)，按任务自动路由最优模型，per-tier精确计费 */
 import { Injectable, Logger } from '@nestjs/common';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { RunnableConfig } from '@langchain/core/runnables';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { ChatAnthropic } from '@langchain/anthropic';
+import { ChatOpenAI } from '@langchain/openai';
 import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import { z, ZodTypeAny } from 'zod';
 import { LlmUsageTrackerService } from './llm-usage-tracker.service';
 import { ConfigService } from '@packages/modules';
 
-export type LlmProvider = 'gemini' | 'claude';
+export type LlmProvider = 'gemini' | 'claude' | 'openai';
 export type ModelTier = 'creative' | 'standard' | 'lightweight';
 
 interface StructuredGenerationInput<T extends ZodTypeAny> {
@@ -33,32 +34,35 @@ interface CostRates { inputRateUsdPer1M: number; outputRateUsdPer1M: number; }
 
 interface ProviderConfig {
   apiKey: string;
-  baseUrl?: string; // Claude代理地址
+  baseUrl?: string;
   models: Record<ModelTier, string>;
-  costRates: Record<ModelTier, CostRates>; // 按tier区分费率（Opus≠Sonnet）
+  costRates: Record<ModelTier, CostRates>;
   enabled: boolean;
 }
 
 export interface TaskRoute { provider: LlmProvider; tier: ModelTier; }
 
 /**
- * 任务→模型路由表
- * Claude Opus: 读者可见的创作内容（写作/编辑/缝合）
- * Claude Sonnet: 需要深度推理的规划/审核/分析
- * Gemini: 结构化数据提取/轻量检查（成本最低、JSON Schema原生支持）
+ * 任务→模型路由表（三Provider最优分配）
+ * Claude Opus: 读者直面的文学创作（写作/编辑/缝合/声音DNA）
+ * Claude Sonnet: 深度推理的规划/审核/分析
+ * OpenAI GPT-5: 初稿写作+多样性审阅（避免Claude自评自赞）
+ * Gemini Pro: 中等复杂度分析
+ * Gemini Flash: 结构化提取/轻量检查（成本最低）
  */
 const TASK_ROUTES: Record<string, TaskRoute> = {
-  // ═══ Claude Opus — 文学创作（读者直接看到的内容） ═══
+  // ═══ Claude Opus — 文学创作（读者直面内容） ═══
   'creative-writer':    { provider: 'claude', tier: 'creative' },
   'scene-writer':       { provider: 'claude', tier: 'creative' },
   'scene-stitcher':     { provider: 'claude', tier: 'creative' },
   'chapter-editor':     { provider: 'claude', tier: 'creative' },
   'hook-crafter':       { provider: 'claude', tier: 'creative' },
-  'draft-writer':       { provider: 'claude', tier: 'creative' },
-  'style-director':     { provider: 'claude', tier: 'creative' },
   'patch-rewriter':     { provider: 'claude', tier: 'creative' },
-  // ═══ Claude Sonnet — 规划/审核/分析（需要深度推理） ═══
-  'seed-analyzer':      { provider: 'claude', tier: 'standard' },
+  'character-voice-coach': { provider: 'claude', tier: 'creative' },
+  // ═══ OpenAI GPT-5 — 初稿写作+多样性审阅 ═══
+  'draft-writer':       { provider: 'openai', tier: 'creative' },
+  'reader-jury':        { provider: 'openai', tier: 'standard' },
+  // ═══ Claude Sonnet — 规划/审核/深度分析 ═══
   'arc-director':       { provider: 'claude', tier: 'standard' },
   'chapter-intent':     { provider: 'claude', tier: 'standard' },
   'scene-planner':      { provider: 'claude', tier: 'standard' },
@@ -67,15 +71,24 @@ const TASK_ROUTES: Record<string, TaskRoute> = {
   'outline-revision':   { provider: 'claude', tier: 'standard' },
   'volume-director':    { provider: 'claude', tier: 'standard' },
   'volume-foreshadowing': { provider: 'claude', tier: 'standard' },
-  'reader-pulse-analyzer': { provider: 'claude', tier: 'standard' },
-  'consistency-audit':  { provider: 'claude', tier: 'standard' },
   'editor-in-chief':    { provider: 'claude', tier: 'standard' },
   'ip-bible-architect': { provider: 'claude', tier: 'standard' },
   'cast-bootstrap':     { provider: 'claude', tier: 'standard' },
   'arc-architect':      { provider: 'claude', tier: 'standard' },
   'arc-planning':       { provider: 'claude', tier: 'standard' },
-  'character-voice-coach': { provider: 'claude', tier: 'standard' },
-  // ═══ Gemini — 结构化提取/轻量任务（成本最低） ═══
+  'scene-designer':     { provider: 'claude', tier: 'standard' },
+  'style-director':     { provider: 'claude', tier: 'standard' },
+  // ═══ Gemini Pro — 中等复杂度分析 ═══
+  'seed-analyzer':      { provider: 'gemini', tier: 'standard' },
+  'reader-pulse-analyzer': { provider: 'gemini', tier: 'standard' },
+  'consistency-audit':  { provider: 'gemini', tier: 'standard' },
+  'pacing-analyzer':    { provider: 'gemini', tier: 'standard' },
+  'continuity-guard':   { provider: 'gemini', tier: 'standard' },
+  'prompt-profiler':    { provider: 'gemini', tier: 'standard' },
+  'chapter-contract-manager': { provider: 'gemini', tier: 'standard' },
+  'continuity-auditor': { provider: 'gemini', tier: 'standard' },
+  'retrospective-learner': { provider: 'gemini', tier: 'standard' },
+  // ═══ Gemini Flash — 轻量提取（成本最低、速度最快） ═══
   'text-analyzer':      { provider: 'gemini', tier: 'lightweight' },
   'narrative-extractor': { provider: 'gemini', tier: 'lightweight' },
   'world-extractor':    { provider: 'gemini', tier: 'lightweight' },
@@ -85,17 +98,9 @@ const TASK_ROUTES: Record<string, TaskRoute> = {
   'style-anchoring':    { provider: 'gemini', tier: 'lightweight' },
   'location-sensory-extract': { provider: 'gemini', tier: 'lightweight' },
   'item-sensory-extract': { provider: 'gemini', tier: 'lightweight' },
-  'pacing-analyzer':    { provider: 'gemini', tier: 'standard' },
-  'continuity-guard':   { provider: 'gemini', tier: 'standard' },
-  'prompt-profiler':    { provider: 'gemini', tier: 'standard' },
-  'chapter-contract-manager': { provider: 'gemini', tier: 'standard' },
-  'scene-designer':     { provider: 'gemini', tier: 'standard' },
-  'continuity-auditor': { provider: 'gemini', tier: 'standard' },
-  'reader-jury':        { provider: 'gemini', tier: 'standard' },
   'plot-economy-planner': { provider: 'gemini', tier: 'lightweight' },
   'lore-recorder':      { provider: 'gemini', tier: 'lightweight' },
   'character-canon-arbiter': { provider: 'gemini', tier: 'lightweight' },
-  'retrospective-learner': { provider: 'gemini', tier: 'standard' },
 };
 
 interface LlmCachedConfig {
@@ -116,22 +121,26 @@ export class LlmService {
     private readonly configService: ConfigService,
   ) {
     const llm = (this.configService.get('llm') ?? {}) as Record<string, unknown>;
-    const langchain = (this.configService.get('langchain') ?? {}) as Record<string, unknown>;
     const langsmith = (this.configService.get('langsmith') ?? {}) as Record<string, unknown>;
 
     const geminiCfg = (llm.gemini ?? llm.google ?? {}) as Record<string, unknown>;
     const claudeCfg = (llm.claude ?? {}) as Record<string, unknown>;
+    const openaiCfg = (llm.openai ?? {}) as Record<string, unknown>;
     const costGemini = (llm.cost ?? {}) as Record<string, unknown>;
     const costClaude = (claudeCfg.cost ?? {}) as Record<string, unknown>;
-    const geminiTiers = (llm.tiers ?? {}) as Record<string, unknown>;
+    const costOpenai = (openaiCfg.cost ?? {}) as Record<string, unknown>;
+    const geminiTiers = (geminiCfg.tiers ?? {}) as Record<string, unknown>;
     const claudeTiers = (claudeCfg.tiers ?? {}) as Record<string, unknown>;
+    const openaiTiers = (openaiCfg.tiers ?? {}) as Record<string, unknown>;
 
     const defaultGeminiModel = String(geminiCfg.model || 'gemini-2.5-pro');
+    const defaultOpenaiModel = String(openaiCfg.model || 'gpt-5');
 
     this.cfg = {
       providers: {
         gemini: {
           apiKey: String(geminiCfg.apiKey || ''),
+          baseUrl: geminiCfg.baseUrl ? String(geminiCfg.baseUrl) : undefined,
           models: {
             creative: String(geminiTiers.creative || defaultGeminiModel),
             standard: String(geminiTiers.standard || defaultGeminiModel),
@@ -144,25 +153,45 @@ export class LlmService {
           apiKey: String(claudeCfg.apiKey || ''),
           baseUrl: claudeCfg.baseUrl ? String(claudeCfg.baseUrl) : undefined,
           models: {
-            creative: String(claudeTiers.creative || 'claude-opus-4-20250514'),
-            standard: String(claudeTiers.standard || 'claude-sonnet-4-20250514'),
-            lightweight: String(claudeTiers.lightweight || 'claude-sonnet-4-20250514'),
+            creative: String(claudeTiers.creative || 'claude-opus-4-6'),
+            standard: String(claudeTiers.standard || 'claude-sonnet-4-6'),
+            lightweight: String(claudeTiers.lightweight || 'claude-haiku-4-5-20251001'),
           },
           costRates: LlmService.parseTierCostRates(costClaude, { inputRateUsdPer1M: 5, outputRateUsdPer1M: 25 }),
           enabled: Boolean(claudeCfg.apiKey),
         },
+        openai: {
+          apiKey: String(openaiCfg.apiKey || ''),
+          baseUrl: openaiCfg.baseUrl ? String(openaiCfg.baseUrl) : undefined,
+          models: {
+            creative: String(openaiTiers.creative || defaultOpenaiModel),
+            standard: String(openaiTiers.standard || defaultOpenaiModel),
+            lightweight: String(openaiTiers.lightweight || defaultOpenaiModel),
+          },
+          costRates: LlmService.parseTierCostRates(costOpenai, { inputRateUsdPer1M: 2, outputRateUsdPer1M: 10 }),
+          enabled: Boolean(openaiCfg.apiKey),
+        },
       },
       fallbackProvider: (llm.fallbackProvider as LlmProvider) || 'gemini',
       maxPromptChars: LlmService.num(llm.maxPromptChars, 400_000),
-      tracingEnabled: String(langchain.tracingV2 ?? '').toLowerCase() === 'true' || Boolean(langsmith.tracing),
-      tracingProject: String(langchain.project ?? 'novel-engine'),
+      tracingEnabled: String(langsmith.tracing ?? '').toLowerCase() === 'true',
+      tracingProject: String(langsmith.project ?? 'novel-engine'),
     };
 
+    if (this.cfg.tracingEnabled) {
+      process.env.LANGSMITH_TRACING = 'true';
+      process.env.LANGCHAIN_TRACING_V2 = 'true';
+      process.env.LANGSMITH_PROJECT = this.cfg.tracingProject;
+      const apiKey = String(langsmith.apiKey ?? '');
+      const endpoint = String(langsmith.endpoint ?? 'https://api.smith.langchain.com');
+      if (apiKey) process.env.LANGSMITH_API_KEY = apiKey;
+      if (endpoint) process.env.LANGSMITH_ENDPOINT = endpoint;
+    }
+
     const ep = Object.entries(this.cfg.providers).filter(([, v]) => v.enabled).map(([k]) => k);
-    this.logger.log(`LLM providers initialized: [${ep.join(', ')}]`);
+    this.logger.log(`LLM providers initialized: [${ep.join(', ')}]${this.cfg.tracingEnabled ? ' | LangSmith tracing ON' : ''}`);
   }
 
-  /** 解析tier级费率，支持 cost.creative.inputUsdPer1M 和 cost.inputUsdPer1M 两种格式 */
   private static parseTierCostRates(costObj: Record<string, unknown>, fallback: CostRates): Record<ModelTier, CostRates> {
     const tiers: ModelTier[] = ['creative', 'standard', 'lightweight'];
     const globalIn = LlmService.num(costObj.inputUsdPer1M, fallback.inputRateUsdPer1M);
@@ -226,7 +255,7 @@ export class LlmService {
     return chain;
   }
 
-  private static readonly RETRYABLE_STATUS = new Set([403, 408, 429, 500, 502, 503, 504, 529]); // SDK不重试403，这里补上代理端瞬态拦截
+  private static readonly RETRYABLE_STATUS = new Set([403, 408, 429, 500, 502, 503, 504, 529]);
   private static readonly CALL_MAX_RETRIES = 3;
   private static readonly CALL_BASE_DELAY_MS = 2000;
 
@@ -258,7 +287,7 @@ export class LlmService {
           this.logger.error(`[${input.taskName}] ====== LLM 调用失败 (${provider}/${modelName}) ====== ${Date.now() - t0}ms\n  错误: ${(error as Error).message}${retry > 0 ? ` (已重试${retry}次)` : ''}`);
           throw error;
         }
-        const delay = LlmService.CALL_BASE_DELAY_MS * Math.pow(2, retry) * (0.5 + Math.random() * 0.5); // 指数退避+抖动
+        const delay = LlmService.CALL_BASE_DELAY_MS * Math.pow(2, retry) * (0.5 + Math.random() * 0.5);
         this.logger.warn(`[${input.taskName}] ${provider}/${modelName} 返回 ${status}，${Math.round(delay)}ms 后第${retry + 1}次重试`);
         await new Promise(r => setTimeout(r, delay));
       }
@@ -288,32 +317,41 @@ export class LlmService {
   }
 
   private createChatModel(provider: LlmProvider, cfg: ProviderConfig, model: string, temperature: number) {
+    const proxyHeaders = cfg.baseUrl ? { 'User-Agent': 'Mozilla/5.0' } : undefined;
     if (provider === 'claude') {
       return new ChatAnthropic({
-        anthropicApiKey: cfg.apiKey,
-        anthropicApiUrl: cfg.baseUrl,
+        anthropicApiKey: cfg.apiKey, anthropicApiUrl: cfg.baseUrl,
         model, temperature, maxRetries: 3, maxTokens: 16384,
-        clientOptions: cfg.baseUrl ? { defaultHeaders: { 'User-Agent': 'Mozilla/5.0' } } : undefined, // 代理端Cloudflare会拦截SDK默认UA
+        clientOptions: proxyHeaders ? { defaultHeaders: proxyHeaders } : undefined,
       });
     }
-    return new ChatGoogleGenerativeAI({ apiKey: cfg.apiKey, model, temperature, maxRetries: 3 });
+    if (provider === 'openai') {
+      return new ChatOpenAI({
+        apiKey: cfg.apiKey, model, temperature, maxRetries: 3,
+        useResponsesApi: true, streamUsage: false,
+        configuration: {
+          baseURL: cfg.baseUrl,
+          ...(proxyHeaders ? { defaultHeaders: proxyHeaders } : {}),
+        },
+      });
+    }
+    return new ChatGoogleGenerativeAI({
+      apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, model, temperature, maxRetries: 3,
+      ...(proxyHeaders ? { customHeaders: proxyHeaders } : {}),
+    });
   }
 
-  // ═══ Token提取 — 兼容Gemini和Claude两种response格式 ═══
+  // ═══ Token提取 — 兼容Gemini/Claude/OpenAI三种response格式 ═══
 
-  private extractUsage(raw: Record<string, unknown> | null, provider: LlmProvider): TokenUsageExtraction {
+  private extractUsage(raw: Record<string, unknown> | null, _provider: LlmProvider): TokenUsageExtraction {
     if (!raw) return { promptTokens: 0, completionTokens: 0, totalTokens: 0, source: 'missing' };
-    // Claude: usage_metadata.input_tokens / output_tokens（LangChain统一格式）
-    // Gemini: usage_metadata.input_tokens / output_tokens
     const um = this.toRecord(raw.usage_metadata);
     if (um) {
       const p = this.toInt(um.input_tokens), c = this.toInt(um.output_tokens);
       return { promptTokens: p, completionTokens: c, totalTokens: this.toInt(um.total_tokens) || p + c, source: 'usage_metadata' };
     }
-    // fallback: response_metadata（部分LangChain版本）
     const rm = this.toRecord(raw.response_metadata);
     if (rm) {
-      // Claude原生: rm.usage.input_tokens / output_tokens
       const u = this.toRecord(rm.usage) ?? this.toRecord(rm.tokenUsage) ?? this.toRecord(rm.usage_metadata);
       if (u) {
         const p = this.toInt(u.input_tokens) || this.toInt(u.prompt_tokens) || this.toInt(u.promptTokens);
@@ -324,7 +362,7 @@ export class LlmService {
     return { promptTokens: 0, completionTokens: 0, totalTokens: 0, source: 'missing' };
   }
 
-  // ═══ Schema清理（仅Gemini需要） ═══
+  // ═══ Schema清理（仅Gemini需要，Claude/OpenAI直传Zod） ═══
 
   private static readonly GEMINI_UNSUPPORTED_KEYS = new Set([
     'additionalProperties', '$schema', 'strict', 'default', 'not', 'if', 'then', 'else',

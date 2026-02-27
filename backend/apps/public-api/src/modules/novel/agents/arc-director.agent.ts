@@ -42,6 +42,7 @@ export class ArcDirectorAgent {
   async direct(
     state: StoryState,
     additionalSystemPrompt?: string,
+    playbooks?: Record<string, string>,
   ): Promise<ArcDirectorDirective> {
     const chapterNumber = state.chapterCursor;
     const arc = state.currentArc;
@@ -100,29 +101,13 @@ export class ArcDirectorAgent {
         chapterNumber,
         arcId: arc.arcId,
       },
-      systemPrompt: `你是网文项目的卷级导演（Arc Director）。
-你的职责：把"卷合同"转成"本章执行指令"，确保章节不会偏离卷级目标。
+      systemPrompt: `${playbooks?.['agent:arc-director:role'] ?? '你是网文项目的卷级导演（Arc Director）。\n你的职责：把"卷合同"转成"本章执行指令"，确保章节不会偏离卷级目标。'}
 ${techniqueHint}
 输出要求：
-- chapterNumber 必须是当前章号。
-- arcId 必须等于当前卷 arcId。
-- arcStage 只能从当前节拍和卷进度推导，禁止随意跳阶段。
-- chapterMission 必须是一个可执行动作句，避免空话。参考当前节拍的technique（叙事技法）来制定具体策略。
-- mustHit: 1-4 条，本章必须达成。
-- shouldAvoid: 1-4 条，本章应规避，尤其是破坏卷节奏的行为。
-- payoffThreadIds: 只能从卷合同 mustPayoffThreadIds 中选择，最多 3 条。
-- antagonistPressure: 描述反派/对手在本章的压力表现（可为心理、资源、行动）。
-- hookDirective: 指明本章结尾如何衔接下一章（对应当前 arcStage）。
-- pacingDirective: 指明节奏目标（快/中/慢 + 张力变化）。
-- riskBudget:
-  - entry/aftermath/transition 以 low 或 medium 为主
-  - build/twist 以 medium 为主
-  - climax 允许 high
+${playbooks?.['agent:arc-director:output_rules'] ?? '- chapterNumber 必须是当前章号。\n- arcId 必须等于当前卷 arcId。\n- arcStage 只能从当前节拍和卷进度推导，禁止随意跳阶段。\n- chapterMission 必须是一个可执行动作句，避免空话。参考当前节拍的technique（叙事技法）来制定具体策略。\n- mustHit: 1-4 条，本章必须达成。\n- shouldAvoid: 1-4 条，本章应规避，尤其是破坏卷节奏的行为。\n- payoffThreadIds: 只能从卷合同 mustPayoffThreadIds 中选择，最多 3 条。\n- antagonistPressure: 描述反派/对手在本章的压力表现（可为心理、资源、行动）。\n- hookDirective: 指明本章结尾如何衔接下一章（对应当前 arcStage）。\n- pacingDirective: 指明节奏目标（快/中/慢 + 张力变化）。\n- riskBudget: entry/aftermath/transition 以 low/medium 为主；build/twist 以 medium 为主；climax 允许 high'}
 
 纪律：
-- 不重复卷合同原文，要转为"本章可执行指令"。
-- 若当前章超出卷区间，使用 transition 或 off_arc 思路收束，不得硬拉高潮。
-- 指令必须服务读者体验：明确冲突、明确推进、明确钩子。
+${playbooks?.['agent:arc-director:discipline'] ?? '- 不重复卷合同原文，要转为"本章可执行指令"。\n- 若当前章超出卷区间，使用 transition 或 off_arc 思路收束，不得硬拉高潮。\n- 指令必须服务读者体验：明确冲突、明确推进、明确钩子。'}
 ${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
       userPrompt: `当前章：第${chapterNumber}章
 阶段提示：${stageHint}

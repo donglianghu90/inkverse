@@ -8,12 +8,23 @@ const PHASE_STYLE: Record<string, string> = {
   recording: 'bg-rose-100/70 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-300/60',
 };
 
+const PHASE_ICON: Record<string, string> = { preparation: '📋', quality_loop: '🔄', post_process: '✨', recording: '💾' };
+
+const PHASE_ACCENT: Record<string, string> = {
+  preparation: 'bg-blue-500', quality_loop: 'bg-violet-500', post_process: 'bg-emerald-500', recording: 'bg-rose-500',
+};
+
 export interface PhaseHeaderData { label: string; phaseId: string }
 
 export function PhaseHeader({ data }: NodeProps<PhaseHeaderData>) {
   return (
-    <div className={cn('rounded-lg border px-4 py-1.5 shadow-sm pointer-events-none select-none', PHASE_STYLE[data.phaseId] ?? 'bg-muted border-border text-muted-foreground')}>
-      <span className="text-xs font-bold tracking-wide uppercase">{data.label}</span>
+    <div className={cn(
+      'flex items-center gap-3 rounded-xl border px-5 py-2.5 shadow-sm pointer-events-none select-none',
+      PHASE_STYLE[data.phaseId] ?? 'bg-muted border-border text-muted-foreground',
+    )}>
+      <div className={cn('h-6 w-1 rounded-full', PHASE_ACCENT[data.phaseId] ?? 'bg-muted-foreground')} />
+      <span className="text-base leading-none">{PHASE_ICON[data.phaseId] ?? '📌'}</span>
+      <span className="text-xs font-bold tracking-wider uppercase">{data.label}</span>
     </div>
   );
 }

@@ -8,7 +8,7 @@ import {
   ArcDirectorDirective,
   chapterScenePlanSchema,
 } from '../schemas/novel-state.schemas';
-import { buildCompactContextProse, buildKpiTrendHints } from '../prompting/novel-playbook';
+import { THREAD_AWARENESS_PLAYBOOK, buildCompactContextProse, buildKpiTrendHints } from '../prompting/novel-playbook';
 
 @Injectable()
 export class ScenePlannerAgent {
@@ -19,6 +19,7 @@ export class ScenePlannerAgent {
     intent: ChapterIntent,
     arcDirective?: ArcDirectorDirective,
     additionalSystemPrompt?: string,
+    playbooks?: Record<string, string>,
   ): Promise<ChapterScenePlan> {
     const proseContext = buildCompactContextProse(state, {
       maxCharacters: 10,
@@ -47,13 +48,10 @@ export class ScenePlannerAgent {
       schema: chapterScenePlanSchema,
       tags: ['workflow', 'chapter', 'scene-plan'],
       metadata: { bookId: state.bookId, chapterNumber: intent.chapterNumber },
-      systemPrompt: `你是一位擅长场景拆分的网文导演。你的任务是把"章节意图"拆成3-5个独立场景，每个场景有明确的叙事任务。
+      systemPrompt: `${playbooks?.['agent:scene-planner:role'] ?? '你是一位擅长场景拆分的网文导演。你的任务是把"章节意图"拆成3-5个独立场景，每个场景有明确的叙事任务。'}
 
 === 核心原则 ===
-1. 每个场景是一个"微型故事"——有自己的入口情绪、冲突、转折、出口情绪。
-2. 场景之间的情绪变化构成章内弧线——不能平坦，要有起伏。
-3. 第一场景必须承接上章钩子+建立本章张力。最后一场景必须制造下章驱动力。
-4. 视角(POV)切换要有意义——切到另一个角色是为了利用信息差或展示不同立场。
+${playbooks?.['agent:scene-planner:principles'] ?? '1. 每个场景是一个"微型故事"——有自己的入口情绪、冲突、转折、出口情绪。\n2. 场景之间的情绪变化构成章内弧线——不能平坦，要有起伏。\n3. 第一场景必须承接上章钩子+建立本章张力。最后一场景必须制造下章驱动力。\n4. 视角(POV)切换要有意义——切到另一个角色是为了利用信息差或展示不同立场。'}
 
 === 场景分配策略（字数硬约束）===
 - 全章总字数硬上限 ${totalWords}字，所有场景 estimatedWords 之和必须 ≤ ${totalWords}
@@ -64,34 +62,19 @@ export class ScenePlannerAgent {
 - 高潮章可以有1个"战斗/动作"场景，用 breakneck 节奏
 
 === purpose 选择指南 ===
-- hook_opening: 仅第一场景。承接上章+建立本章悬念。
-- conflict/action: 推进主线冲突。
-- revelation: 揭露新信息/真相（爽感来源）。
-- emotional: 角色内心戏/关系深化（猫腻式安静力量）。
-- dialogue_driven: 对话推进+角色塑造+信息传递。
-- transition: 时空转换/暗线推进（最短，但要埋线索）。
-- climax: 本章高潮——张力最高点。
-- cliffhanger: 仅最后场景。制造无法抗拒的翻页冲动。
+${playbooks?.['agent:scene-planner:purpose_guide'] ?? 'hook_opening: 仅第一场景。承接上章+建立悬念。\nconflict/action: 推进主线冲突。\nrevelation: 揭露新信息/真相。\nemotional: 角色内心戏/关系深化。\ndialogue_driven: 对话推进+角色塑造。\ntransition: 时空转换/暗线推进。\nclimax: 本章高潮。\ncliffhanger: 仅最后场景。'}
 
 === transitionHint ===
-描述"这个场景结束后如何自然地引出下一个场景"。好的过渡：
-- 用环境描写做视角切换（"远处山巅，另一个人也在看着同一片天空"）
-- 用因果链（场景A的结果触发场景B）
-- 用时间推移（"三个时辰后"但要自然嵌入行动中）
-坏的过渡：硬切，读者感觉被强行拖走。
+${playbooks?.['agent:scene-planner:transition_hint'] ?? '好的过渡：用环境描写做视角切换、因果链、时间推移自然嵌入行动。\n坏的过渡：硬切，读者感觉被强行拖走。'}
 
 === 感官桥接（sensoryEndState）===
-每个场景结束时，填写 sensoryEndState 描述当时的感官状态：
-- timeOfDay: 结束时的时间段（如"黄昏""深夜"）
-- weather: 天气/光线（如"雨后的空气""昏暗的烛光"）
-- ambientSound: 环境音（如"远处鸦群归巢""兵刃撞击的余音"）
-- dominantSense: 主导感官（如"空气中的血腥味""地面的震颤"）
-这些信息会传递给缝合师，确保场景过渡时感官连续。
+${playbooks?.['agent:scene-planner:sensory_bridge'] ?? '每个场景结束时描述感官状态：timeOfDay, weather, ambientSound, dominantSense。确保场景过渡时感官连续。'}
 
 === 伏线分配 ===
 每个场景可以顺带处理1-2条伏线（touch/advance/payoff/seed），总量不超过意图中的maxNewThreads限制。
 
 ${profile.writerGuide.genreRules.slice(0, 3).map((r, i) => `${i + 1}. ${r}`).join('\n')}
+${playbooks?.['THREAD_AWARENESS_PLAYBOOK'] ?? THREAD_AWARENESS_PLAYBOOK}
 ${kpiHints.length > 0 ? '\n动态提示：\n' + kpiHints.join('\n') : ''}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
       userPrompt: `故事上下文：
 ${proseContext}

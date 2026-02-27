@@ -6,15 +6,11 @@ import { Repository } from 'typeorm';
 import { NovelService } from './novel.service';
 import { GenerateChaptersBatchDto } from './dto/generate-chapters-batch.dto';
 import { AutoSerializationJobEntity } from './entities/auto-serialization-job.entity';
+import { AUTO_SERIALIZATION_QUEUE, AutoSerializationJobPayload } from './auto-serialization.queue';
 
-export const AUTO_SERIALIZATION_QUEUE = 'novel-auto-serialization';
+export { AUTO_SERIALIZATION_QUEUE, AutoSerializationJobPayload };
 export const AUTO_INTERVENTION_THRESHOLD = 3;
 const MAX_AUTO_REPAIR_ROUNDS = 8;
-
-export interface AutoSerializationJobPayload {
-  bookId: string;
-  trigger: 'scheduled' | 'manual';
-}
 
 export interface AutoSerializationScheduleRecord {
   bookId: string;

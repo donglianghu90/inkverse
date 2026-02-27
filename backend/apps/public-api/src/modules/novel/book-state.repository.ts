@@ -94,16 +94,24 @@ export class BookStateRepository {
   }
 
   /** 创建空 Book 行（后续由 save 填充完整状态）。 */
-  async createEmpty(): Promise<BookEntity> {
-    return this.bookRepo.save(this.bookRepo.create({ stateJson: {} as Record<string, unknown> }));
+  async createEmpty(userId?: string): Promise<BookEntity> {
+    return this.bookRepo.save(this.bookRepo.create({ userId: userId ?? null, stateJson: {} as Record<string, unknown> }));
   }
 
   /** 轻量列表查询（只读核心 stateJson，不加载子表）。 */
-  async findAllLightweight(limit: number): Promise<BookEntity[]> {
-    return this.bookRepo.find({ order: { updatedAt: 'DESC' }, take: limit });
+  async findAllLightweight(limit: number, userId?: string): Promise<BookEntity[]> {
+    const where = userId ? { userId } : {};
+    return this.bookRepo.find({ where, order: { updatedAt: 'DESC' }, take: limit });
   }
 
   async exists(bookId: string): Promise<boolean> {
     return (await this.bookRepo.count({ where: { bookId } })) > 0;
+  }
+
+  /** 校验书籍归属，不匹配则抛 NotFoundException。 */
+  async assertOwnership(bookId: string, userId: string): Promise<void> {
+    const book = await this.bookRepo.findOne({ where: { bookId }, select: ['bookId', 'userId'] });
+    if (!book) throw new NotFoundException(`Book not found: ${bookId}`);
+    if (book.userId && book.userId !== userId) throw new NotFoundException(`Book not found: ${bookId}`);
   }
 }

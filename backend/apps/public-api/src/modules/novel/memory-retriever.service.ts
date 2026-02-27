@@ -9,7 +9,6 @@ import { ChapterIntent, MiniArc, StoryState, VolumeArc } from './schemas/novel-s
 import { ChapterDraft, LoreRecord } from './schemas/novel.schemas';
 import { EmbeddingService } from './llm/embedding.service';
 
-const VECTOR_DIM = 768;
 const W_VEC = 0.6;
 const W_STRUCT = 0.4;
 
@@ -54,18 +53,27 @@ export class MemoryRetrieverService implements OnModuleInit {
 
   async onModuleInit() { await this.initPgVector(); }
 
-  /** 初始化 pgvector 扩展、向量列、HNSW 索引；三张表统一处理。 */
+  /** 初始化 pgvector 扩展、向量列、HNSW 索引；三张表统一处理，维度不匹配自动重建。 */
   private async initPgVector(): Promise<void> {
     const qr = this.dataSource.createQueryRunner();
+    const dim = this.embeddingService.dimensions;
     try {
       await qr.query('CREATE EXTENSION IF NOT EXISTS vector');
       const tables = ['chapter_memories', 'arc_summaries', 'volume_summaries'];
       for (const tbl of tables) {
-        await qr.query(`DO $$ BEGIN ALTER TABLE ${tbl} ADD COLUMN embedding vector(${VECTOR_DIM}); EXCEPTION WHEN duplicate_column THEN NULL; END $$`);
+        const colCheck: { atttypmod: number }[] = await qr.query(
+          `SELECT a.atttypmod FROM pg_attribute a JOIN pg_class c ON a.attrelid = c.oid WHERE c.relname = $1 AND a.attname = 'embedding' AND NOT a.attisdropped`, [tbl],
+        );
+        if (colCheck.length > 0 && colCheck[0].atttypmod !== dim) { // 维度不匹配，先删旧列和索引
+          await qr.query(`DROP INDEX IF EXISTS idx_${tbl}_emb`);
+          await qr.query(`ALTER TABLE ${tbl} DROP COLUMN IF EXISTS embedding`);
+          this.logger.warn(`${tbl}.embedding 维度不匹配(${colCheck[0].atttypmod}→${dim})，已重建`);
+        }
+        await qr.query(`DO $$ BEGIN ALTER TABLE ${tbl} ADD COLUMN embedding vector(${dim}); EXCEPTION WHEN duplicate_column THEN NULL; END $$`);
         await qr.query(`CREATE INDEX IF NOT EXISTS idx_${tbl}_emb ON ${tbl} USING hnsw (embedding vector_cosine_ops)`);
       }
       this.vectorReady = true;
-      this.logger.log(`pgvector 三层金字塔初始化完成 (dim=${VECTOR_DIM})`);
+      this.logger.log(`pgvector 三层金字塔初始化完成 (dim=${dim})`);
     } catch (e) {
       this.logger.warn(`pgvector 初始化失败，降级纯结构化检索: ${e instanceof Error ? e.message : String(e)}`);
     } finally { await qr.release(); }

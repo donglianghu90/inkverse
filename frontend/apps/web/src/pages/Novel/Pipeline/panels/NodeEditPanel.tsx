@@ -13,16 +13,17 @@ import { getPromptTemplates, updateAgentSection } from '@/services/novel';
 
 interface Props { node: AgentNodeConfig; onClose: () => void; onChange: (updated: AgentNodeConfig) => void }
 
-function SectionEditor({ bookId, section, agentId }: { bookId: string; section: PromptSection; agentId: string }) {
+function SectionEditor({ bookId, section, agentId, onSaved }: { bookId: string; section: PromptSection; agentId: string; onSaved?: (key: string, content: string) => void }) {
   const [content, setContent] = useState(section.content);
+  const [saved, setSaved] = useState(section.content); // 记录已保存的基准值，不直接 mutate prop
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(!section.isLocked);
-  const changed = content !== section.content;
+  const changed = content !== saved;
 
   const handleSave = async () => {
     if (section.isLocked) return;
     setSaving(true);
-    try { await updateAgentSection(bookId, agentId, section.key, content); section.content = content; } finally { setSaving(false); }
+    try { await updateAgentSection(bookId, agentId, section.key, content); setSaved(content); onSaved?.(section.key, content); } finally { setSaving(false); }
   };
 
   return (
@@ -43,7 +44,7 @@ function SectionEditor({ bookId, section, agentId }: { bookId: string; section: 
                 <span className="text-[10px] text-muted-foreground/50">{content.length} 字</span>
                 {changed && (
                   <div className="flex gap-1.5">
-                    <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2" onClick={() => setContent(section.content)}><RotateCcw className="h-3 w-3 mr-1" />撤销</Button>
+                    <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2" onClick={() => setContent(saved)}><RotateCcw className="h-3 w-3 mr-1" />撤销</Button>
                     <Button size="sm" className="h-6 text-[10px] px-2" onClick={handleSave} disabled={saving}>
                       {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3 mr-1" />}保存
                     </Button>

@@ -74,6 +74,28 @@ export function buildDefaultTemplates(): BookPromptTemplates {
       'recorder': agentCfg('recorder', [
         s('role', '角色定义', '协调三个子提取器（文本分析、世界提取、叙事提取）从终稿中提取世界状态变化。'),
       ]),
+      'arc-planner': agentCfg('arc-planner', [
+        s('structure', '四幕结构', '1) 第一幕-铺垫（~25%）：建立本卷冲突、引入新角色/势力、埋下本卷核心悬念。\n2) 第二幕-升温（~35%）：多条支线交织推进，角色内外压力递增，至少包含1-2个小爽点。\n3) 第三幕-高潮（~25%）：核心冲突爆发、角色面临最艰难选择、大爽点、情感高潮。\n4) 第四幕-余韵（~15%）：善后+伏笔下卷+角色内心消化，留更大悬念拉入下一卷。'),
+        s('pacing', '节奏规则', '- 爽感循环：每卷至少2个完整"压制→准备→爆发"循环（长卷容纳更多层次）。\n- 呼吸节奏：连续2-3章紧张后需1章缓冲，但缓冲章也要暗推支线。\n- 角色深度：长卷有足够空间展开角色弧线——日常互动和内心挣扎比密集剧情更能塑造立体角色。'),
+        s('emotion_theme', '情感主题', '每卷必须有一个情感主题——角色内心成长的维度，和剧情主线平行但更深入：\n- 例：第一卷剧情是"在宗门站稳脚跟"，情感主题是"孤独者找到归属"\n- 例：第二卷剧情是"应对势力阴谋"，情感主题是"信任被背叛后如何重建"\n- 卷的高潮不只是战力高潮，也应该是情感高潮。'),
+        s('satisfaction', '爽感类型', '- none: 普通推进\n- minor_payoff: 小爽点（打脸、小升级）\n- major_payoff: 大爽点（boss战、重大揭露）\n- emotional_peak: 情感高潮（告白/离别/重逢/醒悟）\n- relief: 喘息（日常/搞笑/温馨）\n至少包含 1 个 major_payoff 和 1 个 relief。'),
+        s('output_contract', '输出合同字段', '- arcType/triggerReason/entryCondition/exitCondition 必须填写\n- narrativeTechnique: 必须从枚举中选择（优先未用过的技法）\n- climaxPattern: 不能与已用模式重复\n- mustPayoffThreadIds 优先从当前 open thread 中选 1-3 条\n- rewardLossLedger 三个列表都要填写\n- antagonistMilestones 至少 1 条\n- chapterBeats 每个节拍必须填写 technique 字段', true),
+      ]),
+      'volume-director': agentCfg('volume-director', [
+        s('volume_structure', '卷结构精髓', '=== 猫腻式 ===\n1. 开卷：看似平静的新环境，暗藏巨大的结构性矛盾\n2. 中段：多条线交织推进，主角在挑战中成长但总差一口气\n3. 转折：一个核心信息揭露改变所有人的立场\n4. 高潮：积蓄已久的力量爆发，但代价不小\n5. 收尾：看似解决但埋下更大伏笔，驱动下一卷\n\n=== 天蚕土豆式 ===\n1. 新地图 + 新的实力阶梯 + 新的社交圈\n2. 明确的升级目标 + 时间压力\n3. 逐步揭示的更强对手\n4. "打脸"高潮 + 更大世界的门打开'),
+        s('innovation', '新鲜感引擎', '每一卷必须在叙事形式上有创新——读者读了几百章后"新鲜感"比"套路"更重要。\n可选叙事技法：\n- 双线叙事：两条时间线或两个视角交替推进，在高潮交汇\n- 悬疑揭露：卷开头抛出一个谜，每个MiniArc揭示一层真相\n- 倒叙高潮：先展示高潮的震撼结果，再倒叙\n- 群像接力：不同MiniArc由不同配角视角驱动\n- 瓶中剧：限定空间/时间的高压叙事\n- 暗线反转：本卷一条看似无关的暗线在卷末颠覆认知\n- 缓急极端：前半极度日常温馨→后半极度残酷\n- 禁区探索：触及世界观的禁忌领域'),
+        s('mini_arc_rules', 'MiniArc规则', '- 每卷3-6个MiniArc\n- 第一个必须建立新卷的基调和矛盾\n- 中间交替节奏（紧张→缓→更紧张）\n- 最后一个是卷高潮\n- 至少有1个"过渡/日常"型（读者休息+角色深化）\n- MiniArc之间的arcType必须多样化，不可连续相同'),
+        s('hard_rules', '硬规则', '- volumeId 格式：vol_序号\n- powerProgression 必须具体（不能是"变强了"）\n- subPlots 至少包含1条main线+1条secondary线\n- forbiddenElements 继承上一卷的已用梗\n- characterGoals 至少覆盖主角+1个重要配角', true),
+      ]),
+      'volume-foreshadowing': agentCfg('volume-foreshadowing', [
+        s('design_principles', '伏笔设计原则', '1. 猫腻式：看似随意的一句话，数十章后读者恍然大悟。不动声色地在日常细节里藏炸弹。\n2. 天蚕土豆式：明线伏笔——让读者隐约猜到但不确定，制造期待感。\n3. 层次感：每卷至少包含3种不同category的伏笔，避免单一。\n4. 可回收性：payoffDescription要具体，不能是"以后有用"。'),
+        s('embedding', '嵌入指导', '描述如何自然嵌入（不能让读者当场察觉是伏笔）：\n- 好的："角色无意间注意到墙上一道奇怪的划痕"\n- 坏的："这道划痕似乎意味着什么重大的秘密"（太明显）'),
+        s('window_rules', '窗口规则', '- plantWindow: 越早越好，给足发酵时间\n- payoffWindow: 至少间隔卷跨度的15%章数\n- must_plant: 核心剧情必需\n- should_plant: 大幅提升后续冲击力\n- nice_to_have: 锦上添花，增加重读价值', true),
+      ]),
+      'style-anchoring': agentCfg('style-anchoring', [
+        s('analysis_dimensions', '分析维度', '1. 修辞指纹（metaphorStyle）：偏爱什么类型的比喻？通感、具象化、古诗化、口语化？\n2. 描写手法（descriptionApproach）：白描还是工笔？多用短句还是长句堆叠？\n3. 情绪技法（emotionTechnique）：直接写"他感到悲伤"还是用环境/动作/感官间接表达？\n4. 节奏签名（rhythmSignature）：紧张时句式怎么变？平静时段落密度如何？\n5. 招牌技法（signatureTechniques）：最独特的2-3个写作技巧+原文示例。\n6. 场景密度（proseDensityMap）：动作戏、对话戏、情感戏各用什么密度？\n7. 反模式（antiPatterns）：应避免什么具体表达？'),
+        s('output_guide', '输出要求', '输出要精练、可操作——后续AI写手会以此为"文风宪法"保持风格一致。\n- sampleParagraphs: 2-3段最能代表文风的短段落\n- signatureTechniques: 2-3个招牌技法[{ name, description, example }]\n- antiPatterns: 5-8个应避免的具体表达', true),
+      ]),
     },
   };
 }

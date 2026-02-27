@@ -14,9 +14,17 @@ export interface AgentPromptConfig {
   sections: PromptSection[];
 }
 
+export interface PromptEditRecord { // 单条编辑历史
+  timestamp: string;       // ISO 时间
+  target: string;          // 编辑目标：playbook name 或 "agent:{agentId}:{sectionKey}"
+  label: string;           // 显示名
+  oldContent: string;      // 修改前内容
+}
+
 export interface BookPromptTemplates {
   playbooks: Record<string, string>;                // playbookName -> content
   agents: Record<string, AgentPromptConfig>;        // agentId -> config
+  editHistory?: PromptEditRecord[];                 // 最近 20 条编辑历史
 }
 
 @Entity('book_prompt_templates')
