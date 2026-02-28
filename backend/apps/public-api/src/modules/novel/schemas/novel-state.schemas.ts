@@ -1030,6 +1030,9 @@ export const storyStateSchema = z.object({
     createdAtChapter: z.number().int().min(1),
   })).default([]),
 
+  // Agent sections generation status — 'generated' or 'pending' (fallback to defaults, retry on first chapter)
+  agentSectionsStatus: z.enum(['generated', 'pending']).default('generated'),
+
   // Maintenance tracking.
   maintenance: maintenanceStateSchema,
 });

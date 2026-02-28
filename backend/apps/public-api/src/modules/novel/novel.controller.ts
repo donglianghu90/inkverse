@@ -21,7 +21,7 @@ import {
   ApiResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { Observable, ReplaySubject, Subject } from 'rxjs';
+import { Observable, Subject } from 'rxjs';
 import { CurrentUser } from '@packages/common/decorators';
 import { AutoSerializationService } from './auto-serialization.service';
 import { ConfigureAutoSerializationDto } from './dto/configure-auto-serialization.dto';
@@ -37,6 +37,9 @@ import { BookPromptTemplateService } from './book-prompt-template.service';
 import { WorkflowExecutionService } from './workflow-execution.service';
 import { AgentNodeConfig } from './entities/book-agent-pipeline.entity';
 import { CreateBookSessionService } from './create-book-session.service';
+import { BookCreationSseService } from './book-creation-sse.service';
+import { GenreProfileTemplateService } from './genre-profile-template.service';
+import { CreateGenreProfileTemplateDto, UpdateGenreProfileTemplateDto, AiGenerateProfileDto } from './dto/genre-profile-template.dto';
 
 @ApiTags('Novel - 小说生成')
 @ApiBearerAuth('Authorization')
@@ -50,8 +53,10 @@ export class NovelController {
     private readonly progressService: NovelProgressService,
     private readonly pipelineService: BookAgentPipelineService,
     private readonly createBookSessionService: CreateBookSessionService,
+    private readonly bookCreationSseService: BookCreationSseService,
     private readonly promptTemplateService: BookPromptTemplateService,
     private readonly executionService: WorkflowExecutionService,
+    private readonly genreTemplateService: GenreProfileTemplateService,
   ) {}
 
   private async guard(bookId: string, userId: string): Promise<void> {
@@ -112,90 +117,8 @@ export class NovelController {
   @Sse('books/create-sse')
   @ApiOperation({ summary: '创建新书（SSE）', description: '通过 progressChannel 订阅创建进度，完成后返回书籍信息' })
   @ApiQuery({ name: 'progressChannel', required: true, description: '创建会话返回的进度通道 ID' })
-  async createBookSse(@Query('progressChannel') progressChannelQuery?: string): Promise<Observable<MessageEvent>> {
-    const progressChannel = progressChannelQuery?.trim();
-    if (!progressChannel) throw new BadRequestException('progressChannel is required');
-    const session = this.createBookSessionService.get(progressChannel)
-      ?? await this.createBookSessionService.getAsync(progressChannel);
-    if (!session) throw new BadRequestException(`会话不存在或已过期（progressChannel=${progressChannel}），请重新调用 POST /books/create-session 创建会话`);
-
-    const subject = new ReplaySubject<MessageEvent>(20);
-    let finished = false;
-    const HEARTBEAT_MS = 15_000; // 每15秒发送心跳，防止代理/浏览器断开空闲连接
-    const heartbeat = setInterval(() => { if (!finished) subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent); }, HEARTBEAT_MS);
-    const finish = (unsubscribe: () => void): void => {
-      if (finished) return;
-      finished = true;
-      clearInterval(heartbeat);
-      unsubscribe();
-      setTimeout(() => subject.complete(), 80);
-    };
-
-    if (session.status === 'completed') {
-      this.logger.log(`[createBookSse] 会话已完成，直接返回结果 channel=${progressChannel} result=${JSON.stringify(session.result)}`);
-      clearInterval(heartbeat);
-      subject.next({ data: { result: session.result, _type: 'result' } } as MessageEvent);
-      subject.complete();
-      return subject.asObservable();
-    }
-    if (session.status === 'failed') {
-      this.logger.warn(`[createBookSse] 会话已失败，直接返回错误 channel=${progressChannel} error=${session.error}`);
-      clearInterval(heartbeat);
-      subject.next({ data: { done: true, error: session.error ?? 'create book session failed' } } as MessageEvent);
-      subject.complete();
-      return subject.asObservable();
-    }
-
-    const unsubscribe = this.progressService.subscribe(progressChannel, (event) => {
-      this.logger.log(`[createBookSse] SSE推送进度 → channel=${progressChannel} data=${JSON.stringify(event)}`);
-      subject.next({ data: event } as MessageEvent);
-      if (event.done || event.error) {
-        const flushFinalResult = (attempt: number) => {
-          const latest = this.createBookSessionService.get(progressChannel);
-          if (latest?.status === 'completed') {
-            this.logger.log(`[createBookSse] SSE推送最终结果 → channel=${progressChannel} result=${JSON.stringify(latest.result)}`);
-            subject.next({ data: { result: latest.result, _type: 'result' } } as MessageEvent);
-            finish(unsubscribe);
-            return;
-          }
-          if (latest?.status === 'failed') {
-            this.logger.warn(`[createBookSse] SSE推送失败结果 → channel=${progressChannel} error=${latest.error}`);
-            subject.next({ data: { done: true, error: latest.error ?? 'create book session failed' } } as MessageEvent);
-            finish(unsubscribe);
-            return;
-          }
-          if (attempt >= 25) { finish(unsubscribe); return; }
-          setTimeout(() => flushFinalResult(attempt + 1), 200);
-        };
-        setTimeout(() => flushFinalResult(0), 120);
-      }
-    });
-
-    const statusBefore = session.status;
-    const markResult = this.createBookSessionService.markRunning(progressChannel);
-    const shouldStartCreate = statusBefore === 'queued' && markResult?.status === 'running';
-    if (!shouldStartCreate) return subject.asObservable();
-
-    setTimeout(async () => {
-      try {
-        this.logger.log(`[createBookSse] 开始创建新书 channel=${progressChannel}`);
-        const created = await this.novelService.createBook(session.dto, { progressChannel, userId: session.userId });
-        const result = await this.attachInitialAutoSerialization(created, session.dto);
-        this.createBookSessionService.markCompleted(progressChannel, result as Record<string, unknown>);
-        this.logger.log(`[createBookSse] SSE推送创建完成 → channel=${progressChannel} result=${JSON.stringify(result)}`);
-        subject.next({ data: { result, _type: 'result' } } as MessageEvent);
-      } catch (err: any) {
-        const message = err instanceof Error ? err.message : String(err);
-        this.logger.error(`[createBookSse] createBook 异常 channel=${progressChannel}: ${message}`);
-        this.createBookSessionService.markFailed(progressChannel, message);
-        this.logger.error(`[createBookSse] SSE推送创建异常 → channel=${progressChannel} error=${message}`);
-        subject.next({ data: { done: true, error: message } } as MessageEvent);
-      } finally {
-        finish(unsubscribe);
-      }
-    }, 0);
-
-    return subject.asObservable();
+  async createBookSse(@Query('progressChannel') progressChannel?: string): Promise<Observable<MessageEvent>> {
+    return this.bookCreationSseService.observe(progressChannel?.trim() ?? '');
   }
 
   @Get('books/:bookId/profile')
@@ -544,16 +467,16 @@ export class NovelController {
     return this.promptTemplateService.getTemplates(bookId);
   }
 
-  @Put('books/:bookId/prompt-templates/playbooks/:name')
-  @ApiOperation({ summary: '更新 Playbook', description: '更新指定 Playbook 的内容' })
-  async updatePlaybook(
+  @Put('books/:bookId/prompt-templates/rule-atoms/:atomId')
+  @ApiOperation({ summary: '更新 RuleAtom', description: '更新书籍中指定规则原子的内容' })
+  async updateRuleAtom(
     @Param('bookId') bookId: string,
-    @Param('name') name: string,
-    @Body() body: { content: string },
+    @Param('atomId') atomId: string,
+    @Body() body: Record<string, unknown>,
     @CurrentUser('id') userId: string,
   ): Promise<unknown> {
     await this.guard(bookId, userId);
-    return this.promptTemplateService.updatePlaybook(bookId, name, body.content);
+    return this.promptTemplateService.updateRuleAtom(bookId, atomId, body as any);
   }
 
   @Put('books/:bookId/prompt-templates/agents/:agentId/sections/:sectionKey')
@@ -648,6 +571,78 @@ export class NovelController {
   async getFeedbackState(@Param('bookId') bookId: string, @CurrentUser('id') userId: string): Promise<unknown> {
     await this.guard(bookId, userId);
     return this.novelService.getFeedbackState(bookId);
+  }
+
+  // ── Genre Profile Templates ───────────────────────────────────────────────
+
+  @Get('genre-templates')
+  @ApiOperation({ summary: '列出题材模板', description: '返回系统预置 + 当前用户的自定义模板' })
+  async listGenreTemplates(@CurrentUser('id') userId: string) {
+    return this.genreTemplateService.list(userId);
+  }
+
+  @Get('genre-templates/:id')
+  @ApiOperation({ summary: '获取题材模板详情' })
+  async getGenreTemplate(@Param('id') id: string) {
+    return this.genreTemplateService.getById(id);
+  }
+
+  @Post('genre-templates')
+  @ApiOperation({ summary: '创建自定义题材模板' })
+  async createGenreTemplate(@Body() dto: CreateGenreProfileTemplateDto, @CurrentUser('id') userId: string) {
+    return this.genreTemplateService.create(userId, dto);
+  }
+
+  @Put('genre-templates/:id')
+  @ApiOperation({ summary: '更新自定义题材模板' })
+  async updateGenreTemplate(@Param('id') id: string, @Body() dto: UpdateGenreProfileTemplateDto, @CurrentUser('id') userId: string) {
+    return this.genreTemplateService.update(id, userId, dto);
+  }
+
+  @Delete('genre-templates/:id')
+  @ApiOperation({ summary: '删除自定义题材模板' })
+  async deleteGenreTemplate(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    await this.genreTemplateService.remove(id, userId);
+    return { success: true };
+  }
+
+  @Post('genre-templates/:id/clone')
+  @ApiOperation({ summary: '克隆模板到自己的库' })
+  async cloneGenreTemplate(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.genreTemplateService.clone(id, userId);
+  }
+
+  @Post('genre-templates/ai-generate')
+  @ApiOperation({ summary: 'AI 生成题材模板', description: '根据题材描述 AI 自动生成完整 Profile + SeedHints' })
+  async aiGenerateGenreTemplate(@Body() dto: AiGenerateProfileDto) {
+    return this.genreTemplateService.aiGenerate(dto);
+  }
+
+  @Get('genre-templates/:id/system-diff')
+  @ApiOperation({ summary: '获取系统更新差异', description: '对比用户模板与系统最新版本的差异' })
+  async getGenreTemplateSystemDiff(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.genreTemplateService.getSystemDiff(id, userId);
+  }
+
+  @Post('genre-templates/:id/sync-system')
+  @ApiOperation({ summary: '同步系统模板', description: '用系统最新版本覆盖当前模板，重置用户修改' })
+  async syncGenreTemplateFromSystem(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.genreTemplateService.syncFromSystem(id, userId);
+  }
+
+  @Post('genre-templates/reseed')
+  @ApiOperation({ summary: '重新同步系统预置模板', description: '手动触发系统模板 seed（补充缺失的题材）' })
+  async reseedGenreTemplates() {
+    await this.genreTemplateService.seedSystemTemplates();
+    return { success: true, message: '系统模板同步完成（AI 生成在后台进行）' };
+  }
+
+  @Post('genre-templates/migrate-to-rule-atoms')
+  @ApiOperation({ summary: '迁移数据到 RuleAtom 结构', description: '一次性数据迁移：将题材模板和书籍模板的 playbook 文本解析为结构化 RuleAtom' })
+  async migrateToRuleAtoms() {
+    const genre = await this.genreTemplateService.migratePlaybookOverridesToRuleAtoms();
+    const book = await this.promptTemplateService.migratePlaybooksToRuleAtoms();
+    return { success: true, genre, book };
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────

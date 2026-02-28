@@ -14,7 +14,7 @@ import {
 } from '../schemas/novel-state.schemas';
 import { WRITING_SOUL_PLAYBOOK } from '../prompting/novel-playbook';
 
-interface SeedAnalysisInput {
+export interface SeedAnalysisInput {
   mainIdea: string;
   genre: string;
   targetAudience: string;
@@ -22,6 +22,11 @@ interface SeedAnalysisInput {
   mainStoryGoal?: string;
   targetChapterWordCount?: number;
   plannedTotalChapters?: { min: number; max: number };
+  seedHints?: { // 来自 DB 模板的题材定制提示
+    coreLoopPatterns?: string[];
+    goldenFingerGuidance?: string;
+    worldBuildingDirectives?: string;
+  };
 }
 
 const seedAnalysisOutputSchema = z.object({
@@ -30,13 +35,14 @@ const seedAnalysisOutputSchema = z.object({
 });
 
 type SeedAnalysisOutput = z.infer<typeof seedAnalysisOutputSchema>;
+type OutlinePhase = 'opening' | 'development' | 'climax' | 'resolution';
 
 @Injectable()
 export class SeedAnalyzerAgent {
   constructor(private readonly llm: LlmService) {}
 
   async analyze(input: SeedAnalysisInput): Promise<SeedAnalysisOutput> {
-    return this.llm.generateStructured({
+    const raw = await this.llm.generateStructured({
       taskName: 'seed-analyzer',
       schema: seedAnalysisOutputSchema,
       systemPrompt: `你是一位资深网文策划+读者心理专家。你的目标是设计一个让读者欲罢不能的故事引擎——核心循环、情感锚点和节奏呼吸缺一不可。
@@ -55,6 +61,12 @@ export class SeedAnalyzerAgent {
 - 情感式（言情/群像）：误解→接近→摩擦→心动→外部阻碍→更深的纠葛…
 - 博弈式（权谋/商战）：布局→试探→对手反击→绝境→翻盘→更大的棋局…
 - 成长式（日常/青春）：挑战→挣扎→小突破→新认知→更大挑战…
+- 收集式（修仙/游戏/宝可梦）：探索新地图→发现资源→收集/掌控→强化→更大世界的门打开…
+- 势力式（商战/政治/国战）：建立据点→扩张→遭遇强敌→应对/联盟→格局跃升…
+- 双线式（灵异/穿越/平行世界）：现实事件→异世界事件→两线交汇→认知重塑→新的分裂…
+- 恐惧式（恐怖/惊悚）：日常平静→微妙异常→恐惧升级→短暂安全→更深层的不安…
+- 竞技式（体育/电竞）：训练瓶颈→发现对手→备战磨合→关键对决→新的赛季/目标…
+${input.seedHints?.coreLoopPatterns?.length ? `- ${input.seedHints.coreLoopPatterns.map((p) => `【题材定制】${p}`).join('\n- ')}` : ''}
 - 核心循环的关键：每次重复都有变化，但读者每次都期待"这次会怎样"。
 - 你要明确定义：
   1) 循环的起点状态（主角面临什么处境）
@@ -77,6 +89,7 @@ export class SeedAnalyzerAgent {
 - 世界观要能支撑 ${input.plannedTotalChapters?.min ?? 500}+ 章——多个地域/势力/力量层级
 - 主线冲突有足够"升级空间"——从小舞台到大舞台
 - 反派/对手有梯度——不能一开始打终极boss
+${input.seedHints?.worldBuildingDirectives ? `- 【题材定制】${input.seedHints.worldBuildingDirectives}` : ''}
 
 === 读者画像（readerPersona） ===
 精确建模目标读者：demographics、dailyFrustrations、coreFantasy、projectionAnchor、emotionalNeeds、triggerScenes
@@ -87,6 +100,7 @@ export class SeedAnalyzerAgent {
 - 如果需要：独特、有限制、可进化，避免老套模式
 - evolutionPath 阶段数匹配总章数（每100-150章约1个进化阶段）
 - hiddenDepth：背后的秘密，后期可成为剧情大转折种子
+${input.seedHints?.goldenFingerGuidance ? `- 【题材定制】${input.seedHints.goldenFingerGuidance}` : ''}
 
 === 主题内核（thematicCore，最重要的灵魂） ===
 - centralQuestion：这本书的核心命题是什么？不是"主角要变强"，而是"力量让人自由还是孤独？"
@@ -128,5 +142,230 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
 14. 如果你评估出来概念偏弱（hookScore < 6 或 overallViability = weak），主动在生成中调整优化`,
       temperature: 0.6,
     });
+    return this.normalizeAndValidate(raw as Record<string, unknown>, input);
+  }
+
+  private normalizeAndValidate(raw: Record<string, unknown>, input: SeedAnalysisInput): SeedAnalysisOutput {
+    const root = this.asRecord(raw);
+    const seedRaw = this.asRecord(root.seed);
+    const outlineRaw = this.asRecord(root.outline);
+
+    const plannedMin = this.asInt(seedRaw.plannedTotalChapters, 'min')
+      ?? input.plannedTotalChapters?.min
+      ?? 500;
+    const plannedMax = this.asInt(seedRaw.plannedTotalChapters, 'max')
+      ?? input.plannedTotalChapters?.max
+      ?? 800;
+    const targetWords = this.asNumber(seedRaw.targetChapterWordCount) ?? input.targetChapterWordCount ?? 3000;
+
+    const protagonistRaw = this.asRecord(seedRaw.protagonistConcept);
+    const gfRaw = this.asRecord(seedRaw.goldenFinger);
+    const ceRaw = this.asRecord(seedRaw.conceptEvaluation);
+    const thematicRaw = this.asRecord(seedRaw.thematicCore);
+    const rpRaw = this.asRecord(seedRaw.readerPersona);
+
+    const normalized: Record<string, unknown> = {
+      seed: {
+        ...seedRaw,
+        title: this.asString(seedRaw.title) || input.titleHint || '未命名作品',
+        genre: this.asString(seedRaw.genre) || input.genre,
+        targetAudience: this.asString(seedRaw.targetAudience) || input.targetAudience,
+        logline: this.asString(seedRaw.logline) || input.mainIdea,
+        protagonistConcept: {
+          name: this.asString(protagonistRaw.name) || '未命名主角',
+          situation: this.asString(protagonistRaw.situation) || input.mainIdea.slice(0, 80),
+          coreDesire: this.asString(protagonistRaw.coreDesire) || input.mainStoryGoal || '在冲突中活下来并找到答案',
+          personality: this.asString(protagonistRaw.personality) || '坚韧且谨慎',
+        },
+        tone: this.asString(seedRaw.tone) || '紧张、克制、具画面感',
+        coreConflictDirection: this.asString(seedRaw.coreConflictDirection) || input.mainStoryGoal || '在不断升级的冲突中逼近真相',
+        redLines: this.normalizeStringArray(seedRaw.redLines, ['禁止流水账', '禁止设定自相矛盾', '禁止角色工具化']),
+        targetChapterWordCount: targetWords,
+        plannedTotalChapters: { min: plannedMin, max: Math.max(plannedMin, plannedMax) },
+        readerPersona: this.normalizeReaderPersona(rpRaw),
+        goldenFinger: this.normalizeGoldenFinger(gfRaw),
+        conceptEvaluation: this.normalizeConceptEvaluation(ceRaw),
+        thematicCore: this.normalizeThematicCore(thematicRaw),
+      },
+      outline: this.normalizeOutline(outlineRaw, plannedMin, plannedMax),
+    };
+
+    return seedAnalysisOutputSchema.parse(normalized);
+  }
+
+  private normalizeOutline(outlineRaw: Record<string, unknown>, plannedMin: number, plannedMax: number): Record<string, unknown> {
+    const pointsRaw = Array.isArray(outlineRaw.points) ? outlineRaw.points : [];
+    const points = pointsRaw.map((p, idx, arr) => {
+      const pr = this.asRecord(p);
+      const description = this.asString(pr.description)
+        || [this.asString(pr.title), this.asString(pr.plotSummary)].filter(Boolean).join('：')
+        || `阶段${idx + 1}推进`;
+      const tentativeChapterRange = this.asString(pr.tentativeChapterRange)
+        || this.asString(pr.chapterRange)
+        || `${Math.max(1, Math.floor(((plannedMin + plannedMax) / 2) * (idx / Math.max(arr.length, 1)))) + 1}-${Math.max(1, Math.floor(((plannedMin + plannedMax) / 2) * ((idx + 1) / Math.max(arr.length, 1))))}`;
+      return {
+        phase: this.normalizePhase(pr.phase, idx, arr.length),
+        description,
+        tentativeChapterRange,
+      };
+    });
+
+    const fallbackPhases: OutlinePhase[] = ['opening', 'development', 'climax', 'resolution'];
+    while (points.length < 4) {
+      points.push({
+        phase: fallbackPhases[points.length],
+        description: `阶段${points.length + 1}推进`,
+        tentativeChapterRange: '待定',
+      });
+    }
+
+    const estimatedTotalChapters = this.asNumber(outlineRaw.estimatedTotalChapters)
+      ?? Math.round((plannedMin + plannedMax) / 2);
+    const normalized: Record<string, unknown> = {
+      points,
+      endingDirection: this.asString(outlineRaw.endingDirection) || '在主角完成核心目标后留下可延展余韵',
+      estimatedTotalChapters,
+    };
+    const estimatedVolumes = this.asNumber(outlineRaw.estimatedVolumes);
+    if (estimatedVolumes) normalized.estimatedVolumes = estimatedVolumes;
+    return normalized;
+  }
+
+  private normalizePhase(raw: unknown, idx: number, total: number): OutlinePhase {
+    if (raw === 'opening' || raw === 'development' || raw === 'climax' || raw === 'resolution') return raw;
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    if (Number.isFinite(n) && n <= 1) return 'opening';
+    if (Number.isFinite(n) && n >= Math.max(2, total)) return 'resolution';
+    if (Number.isFinite(n) && n >= Math.max(2, total - 1)) return 'climax';
+    if (total <= 1) return 'opening';
+    if (idx === 0) return 'opening';
+    if (idx >= total - 1) return 'resolution';
+    if (idx === total - 2) return 'climax';
+    return 'development';
+  }
+
+  private normalizeReaderPersona(raw: Record<string, unknown>): Record<string, unknown> | undefined {
+    if (Object.keys(raw).length === 0) return undefined;
+    return {
+      demographics: this.asString(raw.demographics) || '网文读者',
+      dailyFrustrations: this.normalizeStringArray(raw.dailyFrustrations, ['现实压力大，需要情绪出口']),
+      coreFantasy: this.asString(raw.coreFantasy) || '在高压处境中掌控命运',
+      projectionAnchor: this.asString(raw.projectionAnchor) || '主角在逆境中的主动性',
+      emotionalNeeds: this.normalizeEmotionalNeeds(raw.emotionalNeeds),
+      triggerScenes: this.normalizeStringArray(raw.triggerScenes, ['关键线索被揭示的瞬间']),
+    };
+  }
+
+  private normalizeGoldenFinger(raw: Record<string, unknown>): Record<string, unknown> | undefined {
+    if (Object.keys(raw).length === 0) return undefined;
+    const evolutionPathRaw = Array.isArray(raw.evolutionPath) ? raw.evolutionPath : [];
+    const evolutionPath = evolutionPathRaw.map((item, idx) => {
+      const r = this.asRecord(item);
+      if (typeof item === 'string') {
+        return { stage: `阶段${idx + 1}`, description: item, newCapability: item };
+      }
+      return {
+        stage: this.asString(r.stage) || `阶段${idx + 1}`,
+        unlockedAtChapter: this.asNumber(r.unlockedAtChapter),
+        description: this.asString(r.description) || this.asString(r.detail) || `阶段${idx + 1}能力强化`,
+        newCapability: this.asString(r.newCapability) || this.asString(r.description) || `阶段${idx + 1}新增能力`,
+      };
+    });
+    return {
+      name: this.asString(raw.name) || '核心优势',
+      concept: this.asString(raw.concept) || this.asString(raw.name) || '关键能力',
+      uniqueness: this.asString(raw.uniqueness) || '具备独特代价与边界',
+      currentStage: this.asString(raw.currentStage) || '初始阶段',
+      evolutionPath,
+      limitations: this.normalizeStringArray(raw.limitations, []),
+      hiddenDepth: this.asString(raw.hiddenDepth) || undefined,
+    };
+  }
+
+  private normalizeConceptEvaluation(raw: Record<string, unknown>): Record<string, unknown> | undefined {
+    if (Object.keys(raw).length === 0) return undefined;
+    return {
+      hookScore: this.clampScore(this.asNumber(raw.hookScore), 7),
+      uniquenessScore: this.clampScore(this.asNumber(raw.uniquenessScore), 7),
+      marketFitScore: this.clampScore(this.asNumber(raw.marketFitScore), 7),
+      projectionScore: this.clampScore(this.asNumber(raw.projectionScore), 7),
+      overallViability: this.normalizeViability(raw.overallViability),
+      strengthNotes: this.normalizeStringArray(raw.strengthNotes, ['核心冲突具备持续升级空间']),
+      weaknessNotes: this.normalizeStringArray(raw.weaknessNotes, ['需持续强化角色情感锚点']),
+      suggestions: this.normalizeStringArray(raw.suggestions, ['每卷明确阶段目标并抬升代价']),
+    };
+  }
+
+  private normalizeThematicCore(raw: Record<string, unknown>): Record<string, unknown> | undefined {
+    if (Object.keys(raw).length === 0) return undefined;
+    return {
+      centralQuestion: this.asString(raw.centralQuestion) || '人在代价面前如何选择',
+      thematicProgression: this.normalizeStringArray(raw.thematicProgression, ['代价出现', '选择升级', '自我重构']),
+      recurringMotif: this.asString(raw.recurringMotif) || undefined,
+    };
+  }
+
+  private normalizeViability(v: unknown): 'weak' | 'passable' | 'strong' | 'exceptional' {
+    if (v === 'weak' || v === 'passable' || v === 'strong' || v === 'exceptional') return v;
+    return 'strong';
+  }
+
+  private clampScore(v: number | undefined, fallback: number): number {
+    const n = typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+    return Math.max(0, Math.min(10, n));
+  }
+
+  private normalizeStringArray(value: unknown, fallback: string[]): string[] {
+    if (Array.isArray(value)) {
+      const arr = value.map((v) => this.asString(v)).filter(Boolean);
+      return arr.length ? arr : fallback;
+    }
+    if (typeof value === 'string' && value.trim()) {
+      return value.split(/[，,；;、\n]/).map((s) => s.trim()).filter(Boolean);
+    }
+    return fallback;
+  }
+
+  private normalizeEmotionalNeeds(value: unknown): string[] {
+    const allowed = new Set([
+      'power_fantasy', 'romantic_fulfillment', 'intellectual_superiority', 'justice_served',
+      'found_family', 'escape_mundane', 'underdog_triumph', 'mystery_solving', 'survival_thrill',
+    ]);
+    const raw = this.normalizeStringArray(value, []);
+    const mapped = raw.map((item) => {
+      if (allowed.has(item)) return item;
+      const t = item.toLowerCase();
+      if (t.includes('解谜') || t.includes('推理') || t.includes('谜团')) return 'mystery_solving';
+      if (t.includes('智力') || t.includes('智商') || t.includes('优越')) return 'intellectual_superiority';
+      if (t.includes('正义') || t.includes('复仇') || t.includes('公道')) return 'justice_served';
+      if (t.includes('家') || t.includes('同伴') || t.includes('归属')) return 'found_family';
+      if (t.includes('逆袭') || t.includes('翻盘') || t.includes('成长')) return 'underdog_triumph';
+      if (t.includes('爱情') || t.includes('恋爱') || t.includes('情感')) return 'romantic_fulfillment';
+      if (t.includes('生存') || t.includes('惊险') || t.includes('恐惧')) return 'survival_thrill';
+      if (t.includes('逃离') || t.includes('放松') || t.includes('解压')) return 'escape_mundane';
+      if (t.includes('掌控') || t.includes('变强') || t.includes('力量')) return 'power_fantasy';
+      return '';
+    }).filter(Boolean);
+    const dedup = [...new Set(mapped)];
+    return dedup.length ? dedup : ['mystery_solving'];
+  }
+
+  private asRecord(v: unknown): Record<string, unknown> {
+    return (typeof v === 'object' && v !== null) ? v as Record<string, unknown> : {};
+  }
+
+  private asString(v: unknown): string {
+    return typeof v === 'string' ? v.trim() : '';
+  }
+
+  private asNumber(v: unknown): number | undefined {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  private asInt(v: unknown, key: string): number | undefined {
+    const r = this.asRecord(v);
+    const n = Number(r[key]);
+    return Number.isFinite(n) ? Math.round(n) : undefined;
   }
 }

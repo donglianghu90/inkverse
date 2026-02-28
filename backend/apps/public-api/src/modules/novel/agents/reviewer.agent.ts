@@ -51,9 +51,14 @@ export class ReviewerAgent {
       systemPrompt: (() => {
         const profile = state.bookPromptProfile;
         const cal = profile.reviewerCalibration;
-        const clicheExamples = profile.clichePatterns
-          .filter((c) => c.maxPerChapter <= 1)
-          .slice(0, 5)
+        const clicheHardBan = profile.clichePatterns
+          .filter((c) => (c.maxPerChapter ?? 1) <= 0)
+          .slice(0, 6)
+          .map((c) => `"${c.pattern}"`)
+          .join('、');
+        const clicheLimited = profile.clichePatterns
+          .filter((c) => (c.maxPerChapter ?? 1) === 1)
+          .slice(0, 6)
           .map((c) => `"${c.pattern}"`)
           .join('、');
 
@@ -77,7 +82,9 @@ proseQuality 文笔质量（重点）：
 - 6: 过得去但3+处"讲述而非展示"或AI套话
 - 4以下: AI味浓重
 
-AI味检测——以下套话频繁出现则扣分：${clicheExamples}
+AI味检测：
+- 禁用词（出现即扣分）：${clicheHardBan || '（无）'}
+- 限用词（超过1次扣分）：${clicheLimited || '（无）'}
 深层AI味更致命：角色对自己情绪过于自知、事件发展过于顺滑、所有角色内心独白像论文、结构过于工整对称。
 
 === 题材评分锚点 ===
@@ -89,7 +96,10 @@ AI味检测——以下套话频繁出现则扣分：${clicheExamples}
 ${cal.genreSpecificChecks.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
 === 反虚高铁律 ===
-${playbooks?.['agent:reviewer:anti_inflation'] ?? '- overallScore不超过8.5，除非接近出版水准。\n- 锚定：还可以=6，不错=7，很好=8，优秀=8.5，惊艳=9，完美=10。\n- 不给安慰分。8+必须有具体优秀表现依据。'}
+${playbooks?.['agent:reviewer:anti_inflation'] ?? '- 禁止安慰分：分数必须由正文证据支撑。\n- 锚定：还可以=6，不错=7，很好=8，优秀=8.5，惊艳=9，完美=10。\n- 8+必须给出至少2条可引用的具体优秀表现；9+必须说明为何达到题材标杆。'}
+
+=== Critical级触发条件 ===
+${playbooks?.['agent:reviewer:critical_triggers'] ?? '以下任一情况必须标记为critical：\n- 死亡/退场角色出现在行动线中\n- 同一段内出现3个以上AI套话\n- 整章无冲突/无事件推进（纯水章）\n- 角色行为与已建立性格严重矛盾且无合理铺垫\n- 章末无任何钩子/驱动力\n- 开头三段连续使用反问句/设问句\n- 出现"他意识到自己在XX"式的过度自知内心戏超过2处'}
 
 === 裁决（三档互斥，从上到下匹配第一条即停） ===
 ${playbooks?.['agent:reviewer:verdict_rules'] ?? '- < 6.0 或有 critical → "major_issues"\n- ≥ 8.5 且无 critical 且无 moderate → "good"\n- 其余 → "needs_edit"'}

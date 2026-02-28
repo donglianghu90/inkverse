@@ -18,6 +18,8 @@ import {
   buildFirstChaptersPlaybook,
   CHAPTER_TYPE_TEMPLATES,
   THREAD_AWARENESS_PLAYBOOK,
+  PROSE_CRAFT_PLAYBOOK,
+  CHARACTER_ARC_PLAYBOOK,
   buildCompactContextProse,
   buildKpiTrendHints,
   buildStyleDNA,
@@ -61,6 +63,43 @@ export class CreativeWriterAgent {
     );
   }
 
+  private compactPlaybook(text: string, maxChars: number): string {
+    const normalized = text.replace(/\r\n/g, '\n').trim();
+    if (normalized.length <= maxChars) return normalized;
+    const lines = normalized.split('\n').map((line) => line.trim()).filter(Boolean);
+    const selected = lines.filter((line) => line.startsWith('【')
+      || line.startsWith('===')
+      || line.startsWith('- ')
+      || /^\d+[)）]/.test(line)
+      || line.includes('必须')
+      || line.includes('禁止')
+      || line.includes('规则'));
+    const compact = selected.join('\n');
+    if (compact.length >= Math.min(maxChars, Math.floor(normalized.length * 0.6))) {
+      return `${compact.slice(0, maxChars)}\n...（其余规则同上）`;
+    }
+    return `${normalized.slice(0, maxChars)}\n...（其余规则同上）`;
+  }
+
+  private buildClicheConstraintLines(
+    clichePatterns: Array<{ pattern?: string; maxPerChapter?: number }>,
+    extraHardBans: string[] = [],
+  ): string[] {
+    const hardBanSet = new Set([
+      ...clichePatterns.filter((c) => c.pattern && (c.maxPerChapter ?? 1) <= 0).map((c) => c.pattern as string),
+      ...extraHardBans,
+    ]);
+    const limitedSet = new Set(
+      clichePatterns.filter((c) => c.pattern && (c.maxPerChapter ?? 1) === 1).map((c) => c.pattern as string),
+    );
+    for (const p of hardBanSet) limitedSet.delete(p);
+
+    const lines: string[] = [];
+    if (hardBanSet.size > 0) lines.push(`禁用词（本章0次）：${[...hardBanSet].slice(0, 12).map((p) => `"${p}"`).join('、')}`);
+    if (limitedSet.size > 0) lines.push(`限用词（本章每个最多1次）：${[...limitedSet].slice(0, 12).map((p) => `"${p}"`).join('、')}`);
+    return lines;
+  }
+
   private buildDynamicRules(
     chapterType: string,
     state: StoryState,
@@ -71,7 +110,7 @@ export class CreativeWriterAgent {
     const blocks: string[] = [];
 
     // ── 第一层：铁律 ──
-    blocks.push(`=== 铁律（违反即失败）===\n${playbooks?.['agent:creative-writer:iron_rules'] ?? '1. 禁止出场角色绝对不出现（死亡/退场/休眠）。\n2. 开头承接上章场景、语气和情绪。\n3. 结尾必须有让读者翻下一章的驱动力。\n4. 字数在意图范围内。\n5. 只输出中文小说正文，禁止元叙述/提纲/数据。'}`);
+    blocks.push(`=== 铁律（违反即失败）===\n${playbooks?.['agent:creative-writer:iron_rules'] ?? '1. 禁止出场角色绝对不出现（死亡/退场/休眠）。\n2. 开头承接上章场景、语气和情绪。\n3. 结尾必须有让读者翻下一章的驱动力。\n4. 字数在意图范围内。\n5. 只输出中文小说正文，禁止元叙述/提纲/数据。\n6. 禁止开头三段使用反问句/设问句起手——直接切入场景和动作。\n7. 同一章内禁止重复使用相同情绪描写词（如两次"不由得"、两次"心中一动"）。\n8. 对话中禁止角色复述自己刚做过的事——"我已经……了"这类废话删掉，用行动推进。'}`);
 
     // ── 第二层：本书灵魂（深层文风DNA） ──
     if (state.styleAnchor) {
@@ -101,13 +140,16 @@ export class CreativeWriterAgent {
       blocks.push(`=== 正反例 ===\n${profile.writerGuide.craftExamples.slice(0, 2).map((e) => `坏：${e.bad} → 好：${e.good}`).join('\n')}`);
     }
 
+    // ── 第四层：文笔技法 + 角色弧线（压缩注入，避免提示词膨胀） ──
+    blocks.push(this.compactPlaybook(playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK, 2600));
+    blocks.push(this.compactPlaybook(playbooks?.['CHARACTER_ARC_PLAYBOOK'] ?? CHARACTER_ARC_PLAYBOOK, 1400));
+
     // ── 限制 ──
     const limits: string[] = [];
     if ((state.factions ?? []).length > 0) limits.push('角色行为符合所属势力规矩和等级');
     if ((state.activeCommitments ?? []).length > 0) limits.push('已立承诺影响角色行动选择');
     if (state.goldenFinger && profile.worldProfile.goldenFingerApplicable) limits.push('金手指使用必须有限制和代价');
-    const clicheNames = profile.clichePatterns.filter((c) => c.maxPerChapter <= 1).map((c) => `"${c.pattern}"`).slice(0, 8);
-    if (clicheNames.length > 0) limits.push(`反套话（每个最多1次）：${clicheNames.join('、')}`);
+    limits.push(...this.buildClicheConstraintLines(profile.clichePatterns));
     limits.push('杀死AI味：角色不要对自己情绪过于自知，事件不要过于顺滑，对话允许停顿和词不达意');
     blocks.push(limits.join('\n'));
     blocks.push(playbooks?.['THREAD_AWARENESS_PLAYBOOK'] ?? THREAD_AWARENESS_PLAYBOOK);
@@ -310,6 +352,9 @@ ${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSect
       cliffhanger: '悬崖收尾——最紧张时刻戛然而止',
     };
 
+    const sceneProsePlaybook = this.compactPlaybook(playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK, 1400);
+    const sceneArcPlaybook = this.compactPlaybook(playbooks?.['CHARACTER_ARC_PLAYBOOK'] ?? CHARACTER_ARC_PLAYBOOK, 900);
+
     let systemPrompt = `你是一位才华横溢的${profile.generatedForGenre}网文作者。你正在写第${intent.chapterNumber}章的第${scene.sceneIndex + 1}个场景。
 
 === 铁律 ===
@@ -330,8 +375,14 @@ ${state.styleAnchor ? buildStyleDNA(state.styleAnchor, scene.purpose) : `${profi
 ${playbooks?.['agent:creative-writer:writing_soul'] ?? '你的使命是"创作故事"而非"执行任务"。意图给方向，铁律是安全边界，边界内你拥有充分的创作自由——好的意外比严格执行计划更有价值。'}
 ${playbooks?.['agent:creative-writer:writing_instinct'] ?? '写作直觉：写"他感到XX"时停下改成动作和感官；每句对话至少完成两个任务；紧张短句平静长句长短交替像呼吸'}
 
+=== 文笔技法 ===
+${sceneProsePlaybook}
+
+=== 角色弧线 ===
+${sceneArcPlaybook}
+
 === 反AI味 ===
-${[...profile.clichePatterns.filter((c) => c.maxPerChapter <= 1).slice(0, 6).map((c) => `"${c.pattern}"`), ...(state.styleAnchor?.antiPatterns ?? []).map((a) => `"${a}"`)].join('、')}——每个最多出现1次。
+${this.buildClicheConstraintLines(profile.clichePatterns, state.styleAnchor?.antiPatterns ?? []).join('\n')}
 角色不要对自己情绪过于自知，事件不要过于顺滑，对话允许停顿和词不达意。
 ${scene.characterMoment ? `\n=== 角色深度时刻 ===\n${charMap.get(scene.characterMoment.characterId)?.name ?? scene.characterMoment.characterId}：${scene.characterMoment.hint}` : ''}`;
 

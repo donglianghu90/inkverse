@@ -68,7 +68,11 @@ import { ChapterResyncProcessor } from './chapter-resync.processor';
 import { DetailStoreService } from './detail-store.service';
 import { DetailContextService } from './detail-context.service';
 import { CreateBookSessionService } from './create-book-session.service';
+import { BookCreationSseService } from './book-creation-sse.service';
 import { CreateBookSessionEntity } from './entities/create-book-session.entity';
+import { GenreProfileTemplateEntity } from './entities/genre-profile-template.entity';
+import { GenreProfileTemplateService } from './genre-profile-template.service';
+import { RuleCompilerService } from './rule-compiler.service';
 import { MemoryRetrieverService } from './memory-retriever.service';
 import { TaskRecoveryService } from './task-recovery.service';
 
@@ -89,6 +93,7 @@ import { TaskRecoveryService } from './task-recovery.service';
       BookPromptTemplateEntity,
       WorkflowExecutionEntity,
       CreateBookSessionEntity,
+      GenreProfileTemplateEntity,
     ]),
     BullModule.registerQueue(
       { name: AUTO_SERIALIZATION_QUEUE },
@@ -141,8 +146,11 @@ import { TaskRecoveryService } from './task-recovery.service';
     DetailStoreService,
     DetailContextService,
     CreateBookSessionService,
+    BookCreationSseService,
     MemoryRetrieverService,
     TaskRecoveryService,
+    GenreProfileTemplateService,
+    RuleCompilerService,
   ],
 })
 export class NovelModule {}

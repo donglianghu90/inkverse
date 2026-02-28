@@ -1,6 +1,7 @@
 /** 每本书独立的 Prompt 模板存储 — 代码中的默认值只用于初始化 */
 import { Entity, Column, PrimaryColumn, CreateDateColumn, UpdateDateColumn, OneToOne, JoinColumn } from 'typeorm';
 import { BookEntity } from './book.entity';
+import type { RuleAtom } from '../schemas/rule-engine.schemas';
 
 export interface PromptSection {
   key: string;       // 区块标识 e.g. 'role', 'principles', 'rules'
@@ -14,17 +15,17 @@ export interface AgentPromptConfig {
   sections: PromptSection[];
 }
 
-export interface PromptEditRecord { // 单条编辑历史
-  timestamp: string;       // ISO 时间
-  target: string;          // 编辑目标：playbook name 或 "agent:{agentId}:{sectionKey}"
-  label: string;           // 显示名
-  oldContent: string;      // 修改前内容
+export interface PromptEditRecord {
+  timestamp: string;
+  target: string;          // 编辑目标：ruleAtom id 或 "agent:{agentId}:{sectionKey}"
+  label: string;
+  oldContent: string;
 }
 
 export interface BookPromptTemplates {
-  playbooks: Record<string, string>;                // playbookName -> content
-  agents: Record<string, AgentPromptConfig>;        // agentId -> config
-  editHistory?: PromptEditRecord[];                 // 最近 20 条编辑历史
+  ruleAtoms: RuleAtom[];                            // 结构化规则原子
+  agents: Record<string, AgentPromptConfig>;        // agentId -> config（agent sections 暂保留）
+  editHistory?: PromptEditRecord[];
 }
 
 @Entity('book_prompt_templates')

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Outlet, history, useLocation } from '@umijs/max';
-import { BookOpen, PenTool, Sun, Moon, LogOut, ChevronDown, Plus, Menu, X, Sparkles } from 'lucide-react';
+import { BookOpen, PenTool, Sun, Moon, LogOut, ChevronDown, Plus, Menu, X, Sparkles, Palette } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useDarkMode } from '@/hooks/useDarkMode';
@@ -124,6 +124,18 @@ const NovelLayout: React.FC = () => {
                 <Plus className="h-4 w-4" />
                 创建新书
               </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => history.push('/novel/templates')}
+                className={cn(
+                  'gap-1.5 transition-colors',
+                  location.pathname === '/novel/templates' && 'bg-primary/8 text-primary hover:bg-primary/12 hover:text-primary',
+                )}
+              >
+                <Palette className="h-4 w-4" />
+                题材模板
+              </Button>
 
               <div className="w-px h-5 bg-border mx-1.5" />
 
@@ -188,6 +200,13 @@ const NovelLayout: React.FC = () => {
                         >
                           <Plus className="w-4 h-4 text-muted-foreground" />
                           创建新书
+                        </button>
+                        <button
+                          onClick={() => { setShowMenu(false); history.push('/novel/templates'); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-card-foreground hover:bg-accent rounded-lg transition-colors"
+                        >
+                          <Palette className="w-4 h-4 text-muted-foreground" />
+                          题材模板
                         </button>
                         <button
                           onClick={toggle}
@@ -260,6 +279,16 @@ const NovelLayout: React.FC = () => {
                   <Plus className="h-4 w-4" />
                   创建新书
                 </button>
+                <button
+                  onClick={() => history.push('/novel/templates')}
+                  className={cn(
+                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                    location.pathname === '/novel/templates' ? 'bg-primary/10 text-primary' : 'hover:bg-accent',
+                  )}
+                >
+                  <Palette className="h-4 w-4" />
+                  题材模板
+                </button>
                 <div className="border-t my-2" />
                 <div className="flex items-center gap-3 px-3 py-2.5">
                   <UserAvatar name={user?.username || '?'} size="md" />
@@ -287,7 +316,7 @@ const NovelLayout: React.FC = () => {
           <Outlet />
         </main>
 
-        {(isBookshelf || location.pathname === '/novel/create') && (
+        {(isBookshelf || location.pathname === '/novel/create' || location.pathname === '/novel/templates') && (
           <footer className="border-t py-4 text-center text-xs text-muted-foreground/50">
             InkVerse &copy; {new Date().getFullYear()} &middot; AI 小说创作平台
           </footer>

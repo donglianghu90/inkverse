@@ -36,26 +36,19 @@ import {
   updateBookProfile,
   createBookSession,
   createBookSseUrl,
+  listGenreTemplates,
   type CreateBookParams,
   type BookPromptProfile,
+  type GenreProfileTemplate,
 } from '@/services/novel';
 import { getToken } from '@/services/auth';
 import ProfileEditor from '../ProfileEditor';
 
-const GENRE_PRESETS = [
-  { value: '玄幻', icon: '🌌', desc: '异界修炼、升级打怪' },
-  { value: '科幻', icon: '🚀', desc: '未来科技、星际冒险' },
-  { value: '都市', icon: '🏙️', desc: '现代都市、商战情感' },
-  { value: '悬疑', icon: '🔍', desc: '推理解谜、烧脑剧情' },
-  { value: '武侠', icon: '⚔️', desc: '江湖恩怨、武林纷争' },
-  { value: '历史', icon: '📜', desc: '穿越架空、宫廷权谋' },
-  { value: '仙侠', icon: '🏔️', desc: '修仙问道、飞升渡劫' },
-  { value: '末世', icon: '💀', desc: '废土求生、丧尸危机' },
-  { value: '言情', icon: '💕', desc: '爱情故事、甜蜜虐恋' },
-  { value: '奇幻', icon: '🐉', desc: '魔法世界、史诗冒险' },
-  { value: '游戏', icon: '🎮', desc: '虚拟现实、游戏世界' },
-  { value: '军事', icon: '🎖️', desc: '战争风云、铁血军旅' },
-];
+const GENRE_ICONS: Record<string, string> = {
+  xianxia: '🏔️', romance: '💕', mystery: '🔍', 'sci-fi': '🚀',
+  urban: '🏙️', historical: '📜', game: '🎮', horror: '💀',
+  xuanhuan: '🌌', wuxia: '⚔️', apocalypse: '💀', fantasy: '🐉', military: '🎖️',
+};
 
 const AUDIENCE_PRESETS = [
   '18-25 岁男性网文读者',
@@ -92,10 +85,9 @@ const FORM_STEPS = [
 ];
 
 interface FormState extends CreateBookParams {
-  customGenre: string;
   customAudience: string;
-  useCustomGenre: boolean;
   useCustomAudience: boolean;
+  profileTemplateId?: string;
 }
 
 const CreateBook: React.FC = () => {
@@ -112,6 +104,13 @@ const CreateBook: React.FC = () => {
   const [generatingGoal, setGeneratingGoal] = useState(false);
   const [goalAlternatives, setGoalAlternatives] = useState<string[]>([]);
   const [showSerialAdvanced, setShowSerialAdvanced] = useState(false);
+
+  const [genreTemplates, setGenreTemplates] = useState<GenreProfileTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  useEffect(() => {
+    setTemplatesLoading(true);
+    listGenreTemplates().then(setGenreTemplates).catch(() => {}).finally(() => setTemplatesLoading(false));
+  }, []);
 
   const [createdBookId, setCreatedBookId] = useState<string | null>(null);
   const [generatedProfile, setGeneratedProfile] = useState<BookPromptProfile | null>(null);
@@ -133,9 +132,7 @@ const CreateBook: React.FC = () => {
     autoSerializationMaxRepairRounds: 2,
     autoSerializationMinQualityScore: 7,
     autoSerializationMinOverallScore: 7,
-    customGenre: '',
     customAudience: '',
-    useCustomGenre: false,
     useCustomAudience: false,
   });
 
@@ -143,7 +140,7 @@ const CreateBook: React.FC = () => {
   const sessionRef = useRef<{ key: string; fingerprint: string } | null>(null);
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
-  const effectiveGenre = form.useCustomGenre ? form.customGenre : form.genre;
+  const effectiveGenre = form.genre;
   const effectiveAudience = form.useCustomAudience ? form.customAudience : form.targetAudience;
   const formStepCount = FORM_STEPS.length;
 
@@ -217,6 +214,7 @@ const CreateBook: React.FC = () => {
       targetChapterWordCount: form.targetChapterWordCount,
       plannedMinChapters: form.plannedMinChapters,
       plannedMaxChapters: form.plannedMaxChapters,
+      profileTemplateId: form.profileTemplateId || undefined,
       autoSerializationEnabled: form.autoSerializationEnabled,
       autoSerializationDailyStartTime: form.autoSerializationDailyStartTime,
       autoSerializationRunEveryDays: form.autoSerializationRunEveryDays,
@@ -594,38 +592,36 @@ const CreateBook: React.FC = () => {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <Label>小说类型</Label>
-              <button
-                className="text-xs text-primary hover:underline"
-                onClick={() => setForm({ ...form, useCustomGenre: !form.useCustomGenre, genre: '' })}
-              >
-                {form.useCustomGenre ? '选择预设类型' : '自定义类型'}
+              <button className="text-xs text-primary hover:underline" onClick={() => history.push('/novel/templates')}>
+                添加新题材
               </button>
             </div>
 
-            {form.useCustomGenre ? (
-              <Input
-                placeholder="输入你的小说类型，例如：赛博朋克、克苏鲁、甜宠、系统流..."
-                value={form.customGenre}
-                onChange={(e) => setForm({ ...form, customGenre: e.target.value })}
-              />
-            ) : (
+            {templatesLoading ? (
+              <div className="flex items-center justify-center py-8 text-sm text-muted-foreground"><Loader2 className="w-4 h-4 mr-2 animate-spin" />加载题材模板...</div>
+            ) : genreTemplates.length > 0 ? (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
-                {GENRE_PRESETS.map((g) => (
+                {genreTemplates.map((t) => (
                   <button
-                    key={g.value}
+                    key={t.id}
                     className={cn(
                       'flex flex-col items-center gap-1 rounded-lg border p-2.5 sm:p-3 text-center transition-all hover:border-primary/50 active:scale-[0.97]',
-                      form.genre === g.value
+                      form.profileTemplateId === t.id
                         ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
                         : 'border-border',
                     )}
-                    onClick={() => setForm({ ...form, genre: g.value })}
+                    onClick={() => setForm({ ...form, genre: t.genreKeywords[0] || t.displayName, profileTemplateId: t.id })}
                   >
-                    <span className="text-lg sm:text-xl">{g.icon}</span>
-                    <span className="text-xs sm:text-sm font-medium">{g.value}</span>
-                    <span className="text-[10px] sm:text-[11px] text-muted-foreground leading-tight">{g.desc}</span>
+                    <span className="text-lg sm:text-xl">{GENRE_ICONS[t.genreKey] ?? '📝'}</span>
+                    <span className="text-xs sm:text-sm font-medium">{t.genreKeywords[0] || t.displayName}</span>
+                    <span className="text-[10px] sm:text-[11px] text-muted-foreground leading-tight line-clamp-1">{t.description || t.genreKeywords.slice(1, 4).join('、')}</span>
+                    {!t.isSystem && <span className="text-[9px] text-primary/60">自定义</span>}
                   </button>
                 ))}
+              </div>
+            ) : (
+              <div className="text-center py-6 text-sm text-muted-foreground">
+                <p>暂无题材模板，请先去<button className="text-primary hover:underline mx-1" onClick={() => history.push('/novel/templates')}>题材模板管理</button>添加</p>
               </div>
             )}
           </div>

@@ -59,7 +59,7 @@ export class EditorAgent {
           .slice(0, 8)
           .join('、');
 
-        return `${playbooks?.['agent:editor:role'] ?? `你是一位经验丰富的${profile.generatedForGenre}网文编辑，同时也是一位有品位的读者。`}
+        return `${playbooks?.['agent:editor:role'] ?? `你是一位经验丰富的${profile.generatedForGenre}网文编辑，同时也是一位有品位的读者。你是正文的最后一道防线——任何问题到你这里必须终结。`}
 
 你的任务分两部分：
 
@@ -68,6 +68,15 @@ ${playbooks?.['agent:editor:surgery'] ?? '- 优先修复 critical 和 moderate �
 
 二、主动提升
 ${playbooks?.['agent:editor:active_improve'] ?? '- 找到最平淡的2-3段用更有画面感的方式重写。\n- 检查关键对话是否有潜台词层次。\n- 确保章内有情绪弧线。\n- 把"讲述"改为"展示"。\n- 自然位置可考虑插入金句。'}
+
+三、节奏手术
+${playbooks?.['agent:editor:rhythm_surgery'] ?? '- 扫描全章段落长度分布：连续3段以上相同长度（差距<20字）的段落必须打破节奏。\n- 对话密集段与描写密集段应交替出现，避免连续5段以上纯对话或纯描写。\n- 紧张段落中如果句子平均超过30字，缩短；安静段落中如果句子平均低于15字，放长。'}
+
+四、对话清洗
+${playbooks?.['agent:editor:dialogue_cleanup'] ?? '- 删除所有"他深吸一口气说""她抿了抿唇道"等废话对白标签——直接用动作+对话。\n- 检查是否有角色在对话中复述读者刚读过的内容（"我刚才已经……"），删掉。\n- 确保每组对话中至少有一处潜台词——说的和想的不一样。'}
+
+五、黄金区域强化
+${playbooks?.['agent:editor:golden_zone'] ?? '- 前100字是"生死线"——读者决定是否继续读。必须有动作/悬念/感官冲击，禁止环境描写铺垫开局。\n- 最后200字是"钩子区"——必须在情绪/信息最高点收尾，禁止平淡收束。\n- 如果原文开头/结尾平庸，这是编辑最重要的改写对象。'}
 
 写作技法参考：
 ${playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK}

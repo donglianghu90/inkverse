@@ -44,6 +44,8 @@ import {
 } from './entities/chapter-resync-job.entity';
 import { CHAPTER_RESYNC_QUEUE, ChapterResyncJobPayload } from './chapter-resync.queue';
 import { AUTO_SERIALIZATION_QUEUE, AutoSerializationJobPayload } from './auto-serialization.queue';
+import { CreateBookCoreDto } from './dto/create-book-core.dto';
+import { GenreProfileTemplateService } from './genre-profile-template.service';
 import { CreateBookDto } from './dto/create-book.dto';
 import { GenerateChaptersBatchDto } from './dto/generate-chapters-batch.dto';
 import {
@@ -209,6 +211,7 @@ export class NovelService {
     private readonly detailStore: DetailStoreService,
     private readonly memoryRetriever: MemoryRetrieverService,
     private readonly readerPulse: ReaderPulseAnalyzerAgent,
+    private readonly genreTemplateService: GenreProfileTemplateService,
   ) {}
 
   async getBookProfile(bookId: string): Promise<BookPromptProfile> {
@@ -302,7 +305,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
    * Create a book with minimal upfront planning.
    * 1 LLM call: seed analysis + rough outline.
    */
-  async createBook(dto: CreateBookDto, options?: CreateBookRuntimeOptions): Promise<unknown> {
+  async createBook(dto: CreateBookCoreDto, options?: CreateBookRuntimeOptions): Promise<unknown> {
     let createdBookId = '';
     return this.llmUsageTracker.runWithChapterScope({ bookId: '__creating__', chapterNumber: 0 }, async () => {
       try {
@@ -321,64 +324,74 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         chapterNumber: 0,
         step,
         stepIndex,
-        totalSteps: 4,
+        totalSteps: 3,
         message,
         done,
       });
     };
 
-    // Step 1: Seed analysis
-    this.logger.log(`[createBook] 步骤 1/4: 种子创意分析...`);
-    emitCreate('seed', 0, '种子创意分析');
-    const analysis = await this.seedAnalyzer.analyze({
-      mainIdea: dto.mainIdea,
-      genre: dto.genre,
-      targetAudience: dto.targetAudience,
-      titleHint: dto.titleHint,
-      mainStoryGoal: dto.mainStoryGoal,
-      targetChapterWordCount: dto.targetChapterWordCount ?? 3000,
-      plannedTotalChapters: {
-        min: dto.plannedMinChapters ?? 500,
-        max: dto.plannedMaxChapters ?? 800,
-      },
-    });
+    // 从 DB 加载题材模板（优先指定 ID > 关键词匹配）
+    let tpl: import('./entities/genre-profile-template.entity').GenreProfileTemplateEntity | null = null;
+    if (dto.profileTemplateId) {
+      tpl = await this.genreTemplateService.getById(dto.profileTemplateId);
+    } else {
+      tpl = await this.genreTemplateService.findBestMatch(dto.genre, options?.userId);
+    }
+    const seedHints = tpl?.seedHints ?? undefined;
+    const genreAtoms = tpl?.ruleAtoms?.length ? tpl.ruleAtoms : undefined;
+    const hasTemplateProfile = tpl?.profileJson && Object.keys(tpl.profileJson).length > 0;
+
+    // Step 1: 种子分析（必须 LLM）+ 写作手册（模板有则跳过，无则 LLM 生成）
+    this.logger.log(`[createBook] 步骤 1/3: 种子分析${hasTemplateProfile ? '（模板直供 Profile，跳过 LLM）' : '（并行生成 Profile）'}...`);
+    emitCreate('seed_and_profile', 0, hasTemplateProfile ? '种子分析中（写作手册使用模板）' : '种子分析 + 写作手册生成（并行）');
+    const sharedChapterWordCount = dto.targetChapterWordCount ?? 3000;
+    const sharedPlannedChapters = { min: dto.plannedMinChapters ?? 500, max: dto.plannedMaxChapters ?? 800 };
+
+    let analysis: Awaited<ReturnType<typeof this.seedAnalyzer.analyze>>;
+    let bookPromptProfile: BookPromptProfile;
+    if (hasTemplateProfile) { // 模板提供完整 Profile → 只做种子分析，省掉 promptProfiler.generate()
+      analysis = await this.seedAnalyzer.analyze({
+        mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
+        titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal,
+        targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters, seedHints,
+      });
+      bookPromptProfile = tpl!.profileJson as unknown as BookPromptProfile;
+    } else { // 无模板 → 并行生成种子 + Profile
+      const [a, p] = await Promise.all([
+        this.seedAnalyzer.analyze({
+          mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
+          titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal,
+          targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters, seedHints,
+        }),
+        this.promptProfiler.generate({
+          genre: dto.genre, targetAudience: dto.targetAudience, mainIdea: dto.mainIdea,
+          mainStoryGoal: dto.mainStoryGoal,
+          targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters,
+          referenceProfile: tpl?.profileJson as unknown as BookPromptProfile | undefined,
+        }),
+      ]);
+      analysis = a; bookPromptProfile = p;
+    }
     this.logger.log(
-      `[createBook] 种子分析完成 — ${Date.now() - t0}ms\n` +
+      `[createBook] 种子${hasTemplateProfile ? '' : '+手册'}完成 — ${Date.now() - t0}ms\n` +
       `  书名: ${analysis.seed.title} | 主角: ${analysis.seed.protagonistConcept.name}\n` +
-      `  大纲节点: ${analysis.outline.points.length} | 可行性: ${analysis.seed.conceptEvaluation?.overallViability ?? 'N/A'}`,
+      `  大纲节点: ${analysis.outline.points.length} | 可行性: ${analysis.seed.conceptEvaluation?.overallViability ?? 'N/A'}\n` +
+      `  题材: ${bookPromptProfile.generatedForGenre} | 规则: ${bookPromptProfile.writerGuide?.genreRules?.length ?? 0} 条`,
     );
-    emitCreate('seed', 0, `种子分析完成 — 书名《${analysis.seed.title}》`);
+    emitCreate('seed_and_profile', 0, `种子完成 — 《${analysis.seed.title}》`);
 
-    // Step 2: Prompt profile
-    this.logger.log(`[createBook] 步骤 2/4: 生成写作手册（BookPromptProfile）...`);
-    emitCreate('profile', 1, '生成专属写作手册');
-    const bookPromptProfile = await this.promptProfiler.generate({
-      genre: dto.genre,
-      targetAudience: dto.targetAudience,
-      mainIdea: dto.mainIdea,
-      tone: analysis.seed.tone ?? '热血',
-      mainStoryGoal: dto.mainStoryGoal,
-      targetChapterWordCount: dto.targetChapterWordCount ?? 3000,
-      plannedTotalChapters: {
-        min: dto.plannedMinChapters ?? 500,
-        max: dto.plannedMaxChapters ?? 800,
-      },
-    });
-    const agentSectionsPromise = this.promptProfiler.generateAgentSections(dto.genre, bookPromptProfile).catch((e) => {
-      this.logger.warn(`[createBook] Agent sections 生成失败，将使用默认: ${e instanceof Error ? e.message : String(e)}`);
-      return null;
-    });
-    const _ruleCount = bookPromptProfile.writerGuide?.genreRules?.length ?? 0;
-    this.logger.log(
-      `[createBook] 写作手册生成完成 — ${Date.now() - t0}ms\n` +
-      `  题材: ${bookPromptProfile.generatedForGenre} | 受众: ${bookPromptProfile.generatedForAudience}\n` +
-      `  类型规则: ${_ruleCount} 条 | 爽感类型: ${bookPromptProfile.satisfactionTypes?.length ?? 0} 种`,
-    );
-    emitCreate('profile', 1, `写作手册生成完成 — ${_ruleCount} 条题材规则`);
+    // Agent Sections：模板有缓存则直接用，否则实时生成
+    const cachedSections = tpl ? await this.genreTemplateService.ensureCachedAgentSections(tpl) : null;
+    const agentSectionsPromise = cachedSections
+      ? Promise.resolve(cachedSections)
+      : this.promptProfiler.generateAgentSections(dto.genre, bookPromptProfile, genreAtoms).catch((e) => {
+          this.logger.warn(`[createBook] Agent sections 生成失败，将使用默认: ${e instanceof Error ? e.message : String(e)}`);
+          return null;
+        });
 
-    // Step 3: Persist
-    this.logger.log(`[createBook] 步骤 3/4: 初始化角色与世界...`);
-    emitCreate('init', 2, '初始化角色与世界');
+    // Step 2: Persist
+    this.logger.log(`[createBook] 步骤 2/3: 初始化角色与世界...`);
+    emitCreate('init', 1, '初始化角色与世界');
     const bookEntity = await this.bookStateRepo.createEmpty(options?.userId);
     const bookId = bookEntity.bookId;
     createdBookId = bookId;
@@ -436,9 +449,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       maintenance: INITIAL_MAINTENANCE,
     };
 
-    // 默认先规划首卷（5-10章）再开始逐章创作，避免第1章裸写。
-    state = await this.deepMaintenance.bootstrapInitialArc(state);
-
+    // bootstrapInitialArc 延迟到首章生成时执行（generateChapterUnsafe 已有兜底），减少开书耗时
     await this.persistBookState(state);
     await this.persistArtifact(bookId, 0, 'seed', analysis.seed);
     await this.persistArtifact(bookId, 0, 'rough_outline', analysis.outline);
@@ -447,18 +458,20 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     await this.pipelineService.initDefault(bookId);
     const generatedSections = await agentSectionsPromise;
     if (generatedSections) {
-      await this.promptTplService.initWithGenerated(bookId, generatedSections);
+      await this.promptTplService.initWithGenerated(bookId, generatedSections, genreAtoms);
     } else {
-      await this.promptTplService.initDefault(bookId);
+      await this.promptTplService.initDefault(bookId, genreAtoms);
+      state.agentSectionsStatus = 'pending';
+      await this.persistBookState(state);
     }
 
     this.logger.log(
-      `[createBook] 步骤 4/4: 初始化完成 — ${Date.now() - t0}ms\n` +
+      `[createBook] 步骤 3/3: 初始化完成 — ${Date.now() - t0}ms\n` +
       `  bookId: ${bookId} | 书名: ${analysis.seed.title}\n` +
       `  主角: ${protagonist.name} | 大纲节点: ${analysis.outline.points.length}\n` +
       `  ========== 开书完成 ==========`,
     );
-    emitCreate('done', 3, `开书完成 — 《${analysis.seed.title}》`, true);
+    emitCreate('done', 2, `开书完成 — 《${analysis.seed.title}》`, true);
 
     return {
       bookId,
@@ -1215,6 +1228,22 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         try {
           if (!state.currentArc) {
             state = await this.deepMaintenance.bootstrapInitialArc(state);
+          }
+          if (state.agentSectionsStatus === 'pending') { // 首章前重试 agentSections 生成
+            try {
+              const profile = state.bookPromptProfile;
+              const genre = state.seed.genre ?? '';
+              const baseRuleAtoms = await this.promptTplService.getRuleAtoms(bookId);
+              const sections = await this.promptProfiler.generateAgentSections(genre, profile, baseRuleAtoms);
+              if (sections) {
+                await this.promptTplService.initWithGenerated(bookId, sections, baseRuleAtoms);
+                state.agentSectionsStatus = 'generated';
+                await this.persistBookState(state);
+                this.logger.log(`[ch${chapterNumber}] agentSections 重试成功`);
+              }
+            } catch (e) {
+              this.logger.warn(`[ch${chapterNumber}] agentSections 重试失败，继续使用默认: ${e instanceof Error ? e.message : String(e)}`);
+            }
           }
 
           // Keep a replay snapshot for "state before current chapter".

@@ -33,6 +33,7 @@ function createServiceForArtifactTests() {
     {} as any,
     {} as any,
     {} as any,
+    {} as any,
   );
 
   return { service, chapterRepo, artifactRepo };

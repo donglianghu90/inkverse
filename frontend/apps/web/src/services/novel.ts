@@ -14,6 +14,7 @@ export interface CreateBookParams {
   targetChapterWordCount?: number;
   plannedMinChapters?: number;
   plannedMaxChapters?: number;
+  profileTemplateId?: string;
   autoSerializationEnabled?: boolean;
   autoSerializationDailyStartTime?: string;
   autoSerializationRunEveryDays?: number;
@@ -732,7 +733,7 @@ export interface PromptEditRecord { timestamp: string; target: string; label: st
 
 export interface PromptTemplateView {
   bookId: string;
-  playbooks: Record<string, string>;
+  ruleAtoms: RuleAtom[];
   agents: Record<string, AgentPromptConfig>;
   editHistory: PromptEditRecord[];
   updatedAt: string;
@@ -742,8 +743,8 @@ export async function getPromptTemplates(bookId: string): Promise<PromptTemplate
   return request(`${BASE}/books/${bookId}/prompt-templates`);
 }
 
-export async function updatePlaybook(bookId: string, name: string, content: string): Promise<PromptTemplateView> {
-  return request(`${BASE}/books/${bookId}/prompt-templates/playbooks/${name}`, { method: 'PUT', data: { content } });
+export async function updateRuleAtom(bookId: string, atomId: string, patch: Partial<RuleAtom>): Promise<PromptTemplateView> {
+  return request(`${BASE}/books/${bookId}/prompt-templates/rule-atoms/${atomId}`, { method: 'PUT', data: patch });
 }
 
 export async function updateAgentSection(bookId: string, agentId: string, sectionKey: string, content: string): Promise<PromptTemplateView> {
@@ -797,6 +798,128 @@ export interface FeedbackSubmitResult {
   analysisTriggered: boolean;
   analysis?: unknown;
 }
+
+// ── Genre Profile Templates ───────────────────────────────────────────────
+
+export interface SeedAnalyzerHints {
+  coreLoopPatterns?: string[];
+  goldenFingerGuidance?: string;
+  worldBuildingDirectives?: string;
+}
+
+export interface RuleAtom {
+  id: string;
+  category: string;
+  title: string;
+  content: string;
+  priority: number;
+  targetAgents: string[];
+  outputKey: string;
+  conditions?: Array<{ field: string; op: string; value: string | string[] | number | boolean }>;
+  tags?: string[];
+  isEnabled: boolean;
+  source: 'system' | 'genre' | 'user';
+}
+
+export interface CachedAgentSections {
+  sections: Array<{ agentId: string; key: string; content: string }>;
+  ruleAtoms?: RuleAtom[];
+}
+
+export interface GenreProfileTemplate {
+  id: string;
+  userId: string | null;
+  genreKey: string;
+  displayName: string;
+  description: string;
+  genreKeywords: string[];
+  profileJson: Record<string, unknown>;
+  seedHints: SeedAnalyzerHints | null;
+  ruleAtoms: RuleAtom[];
+  cachedAgentSections: CachedAgentSections | null;
+  isSystem: boolean;
+  parentTemplateId: string | null;
+  systemVersion: number;
+  syncedSystemVersion: number;
+  isUserModified: boolean;
+  hasSystemUpdate?: boolean; // list 接口附加字段
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateGenreTemplateParams {
+  genreKey: string;
+  displayName: string;
+  description?: string;
+  genreKeywords?: string[];
+  profileJson: Record<string, unknown>;
+  seedHints?: SeedAnalyzerHints;
+  ruleAtoms?: RuleAtom[];
+  cachedAgentSections?: CachedAgentSections;
+}
+
+export interface UpdateGenreTemplateParams {
+  displayName?: string;
+  description?: string;
+  genreKeywords?: string[];
+  profileJson?: Record<string, unknown>;
+  seedHints?: SeedAnalyzerHints;
+  ruleAtoms?: RuleAtom[];
+  cachedAgentSections?: CachedAgentSections;
+}
+
+export interface AiGenerateProfileParams {
+  genreName: string;
+  styleDescription?: string;
+  referenceWorks?: string[];
+  targetAudience?: string;
+  baseTemplateId?: string;
+}
+
+export interface AiGenerateProfileResult {
+  profileJson: Record<string, unknown>;
+  seedHints: SeedAnalyzerHints;
+  ruleAtoms: RuleAtom[];
+  cachedAgentSections: CachedAgentSections | null;
+}
+
+export async function listGenreTemplates(): Promise<GenreProfileTemplate[]> {
+  return request(`${BASE}/genre-templates`);
+}
+
+export async function getGenreTemplate(id: string): Promise<GenreProfileTemplate> {
+  return request(`${BASE}/genre-templates/${id}`);
+}
+
+export async function createGenreTemplate(data: CreateGenreTemplateParams): Promise<GenreProfileTemplate> {
+  return request(`${BASE}/genre-templates`, { method: 'POST', data });
+}
+
+export async function updateGenreTemplate(id: string, data: UpdateGenreTemplateParams): Promise<GenreProfileTemplate> {
+  return request(`${BASE}/genre-templates/${id}`, { method: 'PUT', data });
+}
+
+export async function deleteGenreTemplate(id: string): Promise<{ success: boolean }> {
+  return request(`${BASE}/genre-templates/${id}`, { method: 'DELETE' });
+}
+
+export async function cloneGenreTemplate(id: string): Promise<GenreProfileTemplate> {
+  return request(`${BASE}/genre-templates/${id}/clone`, { method: 'POST' });
+}
+
+export async function aiGenerateProfile(data: AiGenerateProfileParams): Promise<AiGenerateProfileResult> {
+  return request(`${BASE}/genre-templates/ai-generate`, { method: 'POST', data });
+}
+
+export async function getGenreTemplateSystemDiff(id: string): Promise<{ userTemplate: GenreProfileTemplate; systemTemplate: GenreProfileTemplate } | null> {
+  return request(`${BASE}/genre-templates/${id}/system-diff`);
+}
+
+export async function syncGenreTemplateFromSystem(id: string): Promise<GenreProfileTemplate> {
+  return request(`${BASE}/genre-templates/${id}/sync-system`, { method: 'POST' });
+}
+
+// ── Reader Feedback ───────────────────────────────────────────────────────
 
 export async function submitChapterFeedback(bookId: string, payload: SubmitFeedbackPayload): Promise<FeedbackSubmitResult> {
   return request(`${BASE}/books/${bookId}/feedback`, { method: 'POST', data: payload });

@@ -1,10 +1,9 @@
-/** 创建小说完整 payload — 核心创意 + 可选连载配置 */
+/** 创建小说时的自动连载初始配置（与核心创意解耦） */
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsBoolean, IsInt, IsNumber, IsOptional, Matches, Max, Min } from 'class-validator';
-import { CreateBookCoreDto } from './create-book-core.dto';
 
-export class CreateBookDto extends CreateBookCoreDto {
+export class AutoSerializationInitDto {
   @ApiPropertyOptional({ description: '创建后是否自动启用连载调度', default: true, example: true })
   @IsOptional() @Type(() => Boolean) @IsBoolean()
   autoSerializationEnabled?: boolean;

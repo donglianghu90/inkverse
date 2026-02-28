@@ -1,3 +1,4 @@
+/** 创建小说会话管理 — 纯 DB 驱动，无内存缓存 */
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
@@ -24,8 +25,6 @@ const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 @Injectable()
 export class CreateBookSessionService {
   private readonly logger = new Logger(CreateBookSessionService.name);
-  private readonly cache = new Map<string, CreateBookSessionRecord>(); // 内存热缓存
-  private readonly idempotencyIndex = new Map<string, string>(); // idempotencyKey → progressChannel
 
   constructor(
     @InjectRepository(CreateBookSessionEntity)
@@ -38,101 +37,60 @@ export class CreateBookSessionService {
   }> {
     const key = idempotencyKey?.trim() || null;
     if (key) {
-      const cached = this.idempotencyIndex.get(key);
-      if (cached) {
-        const existing = this.cache.get(cached);
-        if (existing) {
-          existing.updatedAt = Date.now();
-          this.persistAsync(existing);
-          return { session: existing, reused: true };
+      const existing = await this.repo.findOneBy({ idempotencyKey: key });
+      if (existing) {
+        const record = this.toRecord(existing);
+        if (record.status === 'running') { // 重启恢复：running 进程已死，重置为 queued
+          await this.repo.update({ progressChannel: record.progressChannel }, { status: 'queued' });
+          record.status = 'queued';
+          record.updatedAt = Date.now();
         }
-        this.idempotencyIndex.delete(key);
-      }
-      const dbEntity = await this.repo.findOneBy({ idempotencyKey: key });
-      if (dbEntity) {
-        const record = this.toRecord(dbEntity);
-        if (record.status === 'running') { record.status = 'queued'; record.updatedAt = Date.now(); this.persistAsync(record); }
-        this.cache.set(record.progressChannel, record);
-        this.idempotencyIndex.set(key, record.progressChannel);
         return { session: record, reused: true };
       }
     }
-
     const progressChannel = randomUUID();
-    const session: CreateBookSessionRecord = {
-      progressChannel, dto: Object.assign(new CreateBookDto(), dto),
-      userId: userId ?? null, status: 'queued', idempotencyKey: key,
-      result: null, error: null, createdAt: Date.now(), updatedAt: Date.now(),
-    };
-    this.cache.set(progressChannel, session);
-    if (key) this.idempotencyIndex.set(key, progressChannel);
-    this.persistAsync(session);
-    return { session, reused: false };
+    const entity = this.repo.create({
+      progressChannel, userId: userId ?? null, status: 'queued',
+      idempotencyKey: key, dtoJson: dto as unknown as Record<string, unknown>,
+      resultJson: null, error: null,
+    });
+    await this.repo.save(entity);
+    return { session: this.toRecord(entity), reused: false };
   }
 
-  get(progressChannel: string): CreateBookSessionRecord | null {
-    const cached = this.cache.get(progressChannel);
-    if (cached) return cached;
-    return null; // DB 异步回填由 getAsync 处理
-  }
-
-  async getAsync(progressChannel: string): Promise<CreateBookSessionRecord | null> {
-    const cached = this.cache.get(progressChannel);
-    if (cached) return cached;
+  async get(progressChannel: string): Promise<CreateBookSessionRecord | null> {
     const entity = await this.repo.findOneBy({ progressChannel });
     if (!entity) return null;
     const record = this.toRecord(entity);
-    if (record.status === 'running') { // 重启恢复：running 状态的创建进程已死，重置为 queued 可重试
+    if (record.status === 'running') { // 重启恢复
+      await this.repo.update({ progressChannel }, { status: 'queued' });
       record.status = 'queued';
       record.updatedAt = Date.now();
-      this.persistAsync(record);
     }
-    this.cache.set(progressChannel, record);
-    if (record.idempotencyKey) this.idempotencyIndex.set(record.idempotencyKey, progressChannel);
     return record;
   }
 
-  markRunning(progressChannel: string): CreateBookSessionRecord | null {
-    const session = this.cache.get(progressChannel);
-    if (!session) return null;
-    if (session.status !== 'queued') return session;
-    session.status = 'running';
-    session.updatedAt = Date.now();
-    this.persistAsync(session);
-    return session;
+  async markRunning(progressChannel: string): Promise<CreateBookSessionRecord | null> {
+    const result = await this.repo.createQueryBuilder()
+      .update(CreateBookSessionEntity)
+      .set({ status: 'running' })
+      .where('progress_channel = :progressChannel', { progressChannel })
+      .andWhere('status = :status', { status: 'queued' })
+      .execute();
+    if (result.affected === 0) {
+      const entity = await this.repo.findOneBy({ progressChannel });
+      return entity ? this.toRecord(entity) : null;
+    }
+    const entity = await this.repo.findOneBy({ progressChannel });
+    return entity ? this.toRecord(entity) : null;
   }
 
-  markCompleted(progressChannel: string, result: Record<string, unknown>): void {
-    const session = this.cache.get(progressChannel);
-    if (!session) return;
-    session.status = 'completed';
-    session.result = result;
-    session.error = null;
-    session.updatedAt = Date.now();
-    this.persistAsync(session);
+  async markCompleted(progressChannel: string, result: Record<string, unknown>): Promise<void> {
+    await this.repo.update({ progressChannel }, { status: 'completed', resultJson: result, error: null });
   }
 
-  markFailed(progressChannel: string, message: string): void {
-    const session = this.cache.get(progressChannel);
-    if (!session) return;
-    session.status = 'failed';
-    session.error = message;
-    session.updatedAt = Date.now();
-    this.persistAsync(session);
-  }
-
-  private persistAsync(record: CreateBookSessionRecord): void {
-    this.repo.upsert({
-      progressChannel: record.progressChannel,
-      userId: record.userId,
-      status: record.status,
-      idempotencyKey: record.idempotencyKey,
-      dtoJson: record.dto as unknown as Record<string, unknown>,
-      resultJson: record.result,
-      error: record.error,
-    }, ['progressChannel']).catch((err) =>
-      this.logger.warn(`会话持久化失败 channel=${record.progressChannel}: ${err}`),
-    );
+  async markFailed(progressChannel: string, message: string): Promise<void> {
+    await this.repo.update({ progressChannel }, { status: 'failed', error: message });
   }
 
   private toRecord(entity: CreateBookSessionEntity): CreateBookSessionRecord {
@@ -152,12 +110,6 @@ export class CreateBookSessionService {
   async cleanupExpired(): Promise<number> {
     const cutoff = new Date(Date.now() - SESSION_TTL_MS);
     const { affected } = await this.repo.delete({ updatedAt: LessThan(cutoff) });
-    for (const [ch, rec] of this.cache.entries()) {
-      if (Date.now() - rec.updatedAt > SESSION_TTL_MS) {
-        this.cache.delete(ch);
-        if (rec.idempotencyKey) this.idempotencyIndex.delete(rec.idempotencyKey);
-      }
-    }
     return affected ?? 0;
   }
 }

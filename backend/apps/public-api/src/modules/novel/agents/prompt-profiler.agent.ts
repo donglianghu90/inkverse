@@ -17,21 +17,47 @@ import {
   MYSTERY_REFERENCE_PROFILE,
   formatProfileAsExample,
 } from '../prompting/reference-profiles';
+import {
+  URBAN_REFERENCE_PROFILE, HISTORICAL_REFERENCE_PROFILE,
+  WESTERN_FANTASY_REFERENCE_PROFILE, SCI_FI_REFERENCE_PROFILE,
+  WUXIA_REFERENCE_PROFILE, MILITARY_REFERENCE_PROFILE,
+  HORROR_REFERENCE_PROFILE, SUPERNATURAL_REFERENCE_PROFILE,
+  ADVENTURE_REFERENCE_PROFILE, GAME_REFERENCE_PROFILE,
+  SPORTS_REFERENCE_PROFILE, SUPERPOWER_REFERENCE_PROFILE,
+  EPIC_REFERENCE_PROFILE, FANTASY_ROMANCE_REFERENCE_PROFILE,
+  CHILDREN_REFERENCE_PROFILE,
+} from '../prompting/genre-reference-profiles';
 
-interface ProfileInput {
+export interface ProfileInput {
   genre: string;
   targetAudience: string;
   mainIdea: string;
-  tone: string;
+  tone?: string;
   mainStoryGoal?: string;
   targetChapterWordCount?: number;
   plannedTotalChapters?: { min: number; max: number };
+  referenceProfile?: BookPromptProfile;
 }
 
 const GENRE_KEYWORDS: Array<{ profile: BookPromptProfile; keywords: string[] }> = [
-  { profile: ROMANCE_REFERENCE_PROFILE, keywords: ['言情', '恋爱', '青春', '甜宠', 'romance', '婚恋', '暗恋', '总裁', '豪门'] },
-  { profile: MYSTERY_REFERENCE_PROFILE, keywords: ['悬疑', '推理', '侦探', '刑侦', '犯罪', '谋杀', 'mystery', 'thriller', '惊悚', '探案', '破案', '密室'] },
-  { profile: XIANXIA_REFERENCE_PROFILE, keywords: ['玄幻', '仙侠', '修仙', '奇幻', '魔法', '异世界', '穿越', '重生', '系统', '升级', '战斗', 'fantasy'] },
+  { profile: URBAN_REFERENCE_PROFILE, keywords: ['都市', '现实', '职场', '商战', '白领', '都市生活', '社会', '现代'] },
+  { profile: HISTORICAL_REFERENCE_PROFILE, keywords: ['历史', '朝堂', '权谋', '宫廷', '三国', '架空历史', '古代', '王朝'] },
+  { profile: WUXIA_REFERENCE_PROFILE, keywords: ['武侠', '江湖', '侠客', '门派', '武林', '刀剑', '新武侠'] },
+  { profile: MILITARY_REFERENCE_PROFILE, keywords: ['军事', '战争', '军旅', '谍战', '抗战', '特种兵', '军人'] },
+  { profile: WESTERN_FANTASY_REFERENCE_PROFILE, keywords: ['西幻', '西方奇幻', '魔法', '精灵', '矮人', '龙', '中世纪', 'dnd'] },
+  { profile: SCI_FI_REFERENCE_PROFILE, keywords: ['科幻', '太空', '赛博朋克', '末日', '废土', '机甲', '星际', 'ai', '外星'] },
+  { profile: HORROR_REFERENCE_PROFILE, keywords: ['恐怖', 'horror', '惊悚', '克苏鲁', '哥特', '丧尸'] },
+  { profile: SUPERNATURAL_REFERENCE_PROFILE, keywords: ['灵异', '超自然', '鬼', '通灵', '道士', '驱邪', '风水', '阴阳'] },
+  { profile: ADVENTURE_REFERENCE_PROFILE, keywords: ['冒险', '探险', '盗墓', '寻宝', '考古', '荒野求生', '地下城'] },
+  { profile: GAME_REFERENCE_PROFILE, keywords: ['游戏', '电竞', '网游', '虚拟现实', 'vr', 'mmo', '直播'] },
+  { profile: SPORTS_REFERENCE_PROFILE, keywords: ['体育', '竞技', '篮球', '足球', '拳击', '赛车', '格斗'] },
+  { profile: SUPERPOWER_REFERENCE_PROFILE, keywords: ['超能力', '异能', '觉醒', '变异', '超英', '能力者'] },
+  { profile: EPIC_REFERENCE_PROFILE, keywords: ['史诗', '传奇', '群像', '王朝', '文明', '多线'] },
+  { profile: FANTASY_ROMANCE_REFERENCE_PROFILE, keywords: ['仙恋', '神话爱情', '跨界恋爱', '前世今生', '人妖恋', '仙凡恋'] },
+  { profile: CHILDREN_REFERENCE_PROFILE, keywords: ['儿童', '少儿', '童话', '少年', '成长', '校园冒险'] },
+  { profile: ROMANCE_REFERENCE_PROFILE, keywords: ['言情', '恋爱', '青春', '甜宠', 'romance', '婚恋', '暗恋', '总裁', '豪门', '先婚后爱'] },
+  { profile: MYSTERY_REFERENCE_PROFILE, keywords: ['悬疑', '推理', '侦探', '刑侦', '犯罪', '谋杀', 'mystery', '探案', '破案', '密室'] },
+  { profile: XIANXIA_REFERENCE_PROFILE, keywords: ['玄幻', '仙侠', '修仙', '奇幻', '魔法', '异世界', '穿越', '重生', '系统', '升级', 'fantasy'] },
 ];
 
 @Injectable()
@@ -47,7 +73,7 @@ export class PromptProfilerAgent {
   }
 
   async generate(input: ProfileInput): Promise<BookPromptProfile> {
-    const bestRef = this.selectReference(input.genre);
+    const bestRef = input.referenceProfile ?? this.selectReference(input.genre); // DB 模板优先，硬编码兜底
     const referenceExample = formatProfileAsExample(bestRef);
 
     const raw = await this.llm.generateStructured({
@@ -110,6 +136,7 @@ ${referenceExample}
     · 言情 → characterDepth 权重高；玄幻 → engagement 权重高
   - genreSpecificChecks: 审阅时特别需要检查的项目。
   - scoringAnchors: 在这个题材中，9-10分/5-6分/0-4分分别是什么感觉？
+  - 禁止设置硬性分数上限（例如"不超过8.5"）。反虚高应通过"证据门槛"实现：8+必须有可引用证据，9+必须达到题材标杆说明。
 
 10.【世界观配置 worldProfile】
   - organizationTypes: 这个题材有什么类型的组织？
@@ -143,7 +170,7 @@ ${referenceExample}
 题材类型：${input.genre}
 目标读者：${input.targetAudience}
 核心创意：${input.mainIdea}
-调性：${input.tone}
+调性：${input.tone || '请根据题材与创意自动推断'}
 ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
 规模：每章约 ${input.targetChapterWordCount ?? 3000} 字，计划 ${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800} 章
 
@@ -160,9 +187,9 @@ ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
   }
 
   /** 根据题材 + 已生成的 Profile 定制所有可编辑 agent section + 7 个 playbook。locked section 保持默认。 */
-  async generateAgentSections(genre: string, profile: BookPromptProfile): Promise<{
+  async generateAgentSections(genre: string, profile: BookPromptProfile, baseRuleAtoms?: import('../schemas/rule-engine.schemas').RuleAtom[]): Promise<{
     sections: Array<{ agentId: string; key: string; content: string }>;
-    playbooks: Record<string, string>;
+    ruleAtoms?: import('../schemas/rule-engine.schemas').RuleAtom[];
   }> {
     const sectionEntrySchema = z.object({ agentId: z.string(), key: z.string(), content: z.string() });
     const playbookEntrySchema = z.object({ name: z.string(), content: z.string() });
@@ -181,6 +208,7 @@ ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
       { agentId: 'scene-planner', key: 'principles', label: '核心原则', hint: '场景拆分原则，需匹配题材节奏' },
       { agentId: 'scene-planner', key: 'purpose_guide', label: '目的选择指南', hint: '场景类型指南，不同题材侧重的场景类型不同' },
       { agentId: 'scene-planner', key: 'transition_hint', label: '过渡提示', hint: '场景过渡技法' },
+      { agentId: 'scene-planner', key: 'scene_count_guide', label: '场景数量指南', hint: '按章节类型给出场景数量和字数配比建议' },
       { agentId: 'scene-planner', key: 'sensory_bridge', label: '感官桥接', hint: '感官连续性规则' },
       { agentId: 'creative-writer', key: 'writing_soul', label: '写作灵魂', hint: '创作哲学，需匹配题材的核心追求' },
       { agentId: 'creative-writer', key: 'writing_instinct', label: '写作直觉', hint: '写作时的直觉检查清单，不同题材侧重点不同' },
@@ -190,9 +218,13 @@ ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
       { agentId: 'reviewer', key: 'role', label: '角色定义', hint: '审阅者人设，需匹配题材读者期待' },
       { agentId: 'reviewer', key: 'experience_anchors', label: '体验级评分锚点', hint: '翻页欲/可记忆性/沉浸度的定义，不同题材"好"的体验不同' },
       { agentId: 'reviewer', key: 'anti_inflation', label: '反虚高铁律', hint: '评分锚定标准' },
+      { agentId: 'reviewer', key: 'critical_triggers', label: 'Critical级触发条件', hint: '标记为critical的具体情况列表，不同题材critical门槛不同' },
       { agentId: 'editor', key: 'role', label: '角色定义', hint: '编辑人设' },
       { agentId: 'editor', key: 'surgery', label: '外科手术', hint: '编辑修复策略' },
       { agentId: 'editor', key: 'active_improve', label: '主动提升', hint: '主动提升重点，不同题材提升方向不同' },
+      { agentId: 'editor', key: 'rhythm_surgery', label: '节奏手术', hint: '段落长度/句式节奏调整策略' },
+      { agentId: 'editor', key: 'dialogue_cleanup', label: '对话清洗', hint: '废话标签/复述/潜台词检查策略' },
+      { agentId: 'editor', key: 'golden_zone', label: '黄金区域强化', hint: '开头100字和结尾200字的改写策略' },
       { agentId: 'hook-crafter', key: 'role', label: '角色定义', hint: '钩子工匠人设' },
       { agentId: 'hook-crafter', key: 'basic_techniques', label: '基础钩子技法', hint: '5种基础钩子，需匹配题材特有的钩子类型' },
       { agentId: 'hook-crafter', key: 'advanced_techniques', label: '高阶钩子技法', hint: '5种高阶钩子，需匹配题材' },
@@ -223,6 +255,19 @@ ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
     ];
     const playbookList = PLAYBOOK_SPECS.map((p) => `- ${p.name}（${p.label}，${p.wordRange}字）— ${p.hint}`).join('\n');
 
+    // 若有题材定制 RuleAtom 基础版，按 outputKey 分组拼成参考文本
+    let basePlaybookRef = '';
+    if (baseRuleAtoms?.length) {
+      const grouped = new Map<string, string[]>();
+      for (const atom of baseRuleAtoms) {
+        const list = grouped.get(atom.outputKey) ?? [];
+        list.push(atom.title ? `【${atom.title}】\n${atom.content}` : atom.content);
+        grouped.set(atom.outputKey, list);
+      }
+      const entries = [...grouped.entries()].map(([k, parts]) => `--- ${k} ---\n${parts.join('\n\n')}`).join('\n\n');
+      basePlaybookRef = `\n=== 题材 Playbook 参考基础（在此基础上优化，保留精华，修正不足） ===\n${entries}\n`;
+    }
+
     const result = await this.llm.generateStructured({
       taskName: 'agent-section-generator',
       schema: outputSchema,
@@ -236,7 +281,7 @@ ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
 - 对话：${profile.writerGuide?.dialogueGuide?.slice(0, 150) ?? '未生成'}
 - 核心爽感：${profile.satisfactionTypes.slice(0, 3).map((s) => s.label).join('、')}
 - 核心钩子：${profile.hookTypes.slice(0, 3).map((h) => h.label).join('、')}
-
+${basePlaybookRef}
 === 第一部分：Agent Section（${EDITABLE_SECTIONS.length} 个） ===
 ${sectionList}
 
@@ -249,6 +294,7 @@ ${playbookList}
 3. Agent section 每个控制在 50-300 字。
 4. 每个 Playbook 严格遵守括号中标注的字数范围——不要凑数也不要超标。
 5. PROSE_CRAFT_PLAYBOOK 最重要——9 个技法全部保留，"展示而非讲述"的正反例必须用题材场景，"旁观者烘托"要换成题材最自然的衬托方式，"杀死AI味"黑名单要加题材特有套话。
+6. 若已提供"题材 Playbook 参考基础"，在其基础上优化而非从零重写——保留好的正反例和题材术语。
 
 === 三层分工（严格遵守，禁止重复） ===
 BookPromptProfile（已生成，你能看到摘要）定义的是「写什么」：题材规则、受众画像、爽感类型、钩子类型、章节模板。
@@ -270,7 +316,24 @@ Playbook 定义的是「质量标准」：通用写作技法在该题材下的�
 
     const playbookMap: Record<string, string> = {};
     for (const p of result.playbooks) { if (p.name && p.content?.trim()) playbookMap[p.name] = p.content; }
-    return { sections: result.sections as Array<{ agentId: string; key: string; content: string }>, playbooks: playbookMap };
+    // 将 AI 生成的 playbook 文本转为 RuleAtom[]
+    const { parsePlaybookTextToAtoms } = await import('../prompting/default-rule-atoms');
+    const { CATEGORY_TO_OUTPUT_KEY } = await import('../schemas/rule-engine.schemas');
+    const OUTPUT_KEY_TO_CAT = Object.fromEntries(Object.entries(CATEGORY_TO_OUTPUT_KEY).map(([c, k]) => [k, c]));
+    const AGENT_MAP: Record<string, string[]> = {
+      PROSE_CRAFT_PLAYBOOK: ['creative-writer', 'scene-stitcher', 'reviewer', 'editor'],
+      WRITING_SOUL_PLAYBOOK: ['creative-writer'], CHARACTER_ARC_PLAYBOOK: ['creative-writer', 'reviewer'],
+      EDITOR_DISCIPLINE_PLAYBOOK: ['editor'], REVIEWER_RUBRIC_PLAYBOOK: ['reviewer'],
+      CONTINUITY_BASELINE_PLAYBOOK: ['reviewer', 'editor'],
+      THREAD_AWARENESS_PLAYBOOK: ['creative-writer', 'intent', 'scene-planner'],
+    };
+    const ruleAtoms: import('../schemas/rule-engine.schemas').RuleAtom[] = [];
+    for (const [key, text] of Object.entries(playbookMap)) {
+      const cat = OUTPUT_KEY_TO_CAT[key] as any;
+      if (!cat || !text?.trim()) continue;
+      ruleAtoms.push(...parsePlaybookTextToAtoms(text, cat, key, AGENT_MAP[key] ?? ['creative-writer'], 'genre'));
+    }
+    return { sections: result.sections as Array<{ agentId: string; key: string; content: string }>, ruleAtoms };
   }
 
   private coerceProfile(raw: any, ref: BookPromptProfile): any { // Gemini结构化输出可能将object[]退化为string[]，需强制转型

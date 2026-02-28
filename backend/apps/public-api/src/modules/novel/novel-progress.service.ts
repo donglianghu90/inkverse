@@ -1,3 +1,4 @@
+/** 进度推送服务 — EventEmitter 驱动，支持章节生成进度 + 创建结果事件 */
 import { Injectable } from '@nestjs/common';
 import { EventEmitter } from 'events';
 
@@ -10,12 +11,17 @@ export interface GenerationProgressEvent {
   message: string;
   done: boolean;
   error?: string;
-  nodeId?: string;          // 对应拓扑图节点 ID
-  loopAttempt?: number;     // 质量门控当前轮次
-  score?: number;           // 当前分数
-  durationMs?: number;      // 当前步骤耗时 ms
-  skipped?: boolean;        // 是否被跳过
-  phase?: string;           // 当前阶段 ID (preparation/quality_loop/post_process/recording)
+  nodeId?: string;
+  loopAttempt?: number;
+  score?: number;
+  durationMs?: number;
+  skipped?: boolean;
+  phase?: string;
+}
+
+export interface CreateBookResultEvent { // 创建完成/失败的结果事件
+  result?: Record<string, unknown>;
+  error?: string;
 }
 
 export interface GenerationStatus { generating: boolean; startedAt: number | null; lastStep: string | null; progress: number; }
@@ -54,5 +60,14 @@ export class NovelProgressService {
   subscribe(bookId: string, listener: (event: GenerationProgressEvent) => void): () => void {
     this.emitter.on(`progress:${bookId}`, listener);
     return () => this.emitter.removeListener(`progress:${bookId}`, listener);
+  }
+
+  emitResult(channel: string, event: CreateBookResultEvent): void { // 推送创建结果到 SSE，替代轮询
+    this.emitter.emit(`result:${channel}`, event);
+  }
+
+  subscribeResult(channel: string, listener: (event: CreateBookResultEvent) => void): () => void {
+    this.emitter.on(`result:${channel}`, listener);
+    return () => this.emitter.removeListener(`result:${channel}`, listener);
   }
 }

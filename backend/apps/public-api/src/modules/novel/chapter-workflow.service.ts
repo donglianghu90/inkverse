@@ -29,6 +29,8 @@ import { DeterministicCheckerService } from './validators/deterministic-checker.
 import { NovelProgressService } from './novel-progress.service';
 import { WorkflowExecutionService } from './workflow-execution.service';
 import { BookPromptTemplateService } from './book-prompt-template.service';
+import { RuleCompilerService } from './rule-compiler.service';
+import { CompileContext } from './schemas/rule-engine.schemas';
 import { AgentNodeConfig } from './entities/book-agent-pipeline.entity';
 import {
   ArcDirectorDirective,
@@ -97,6 +99,7 @@ export class ChapterWorkflowService {
     private readonly progressService: NovelProgressService,
     private readonly executionService: WorkflowExecutionService,
     private readonly promptTplService: BookPromptTemplateService,
+    private readonly ruleCompiler: RuleCompilerService,
   ) {}
 
   private emitProgress(
@@ -156,10 +159,25 @@ export class ChapterWorkflowService {
 
     const checkpoint = (step: string) => this.executionService.saveCheckpoint(runId, step);
     const tpl = await this.promptTplService.getTemplates(state.bookId);
-    const playbooks: Record<string, string> = { ...tpl.playbooks }; // 加载本书 playbooks + agent sections
+    // agent sections 字典（保持兼容）
+    const agentSectionDict: Record<string, string> = {};
     for (const [agentId, config] of Object.entries(tpl.agents)) {
-      for (const sec of config.sections) playbooks[`agent:${agentId}:${sec.key}`] = sec.content;
+      for (const sec of config.sections) agentSectionDict[`agent:${agentId}:${sec.key}`] = sec.content;
     }
+    const beatRole = state.currentArc?.chapterBeats?.[chapterNumber - (state.currentArc?.startChapter ?? 1)]?.role;
+    const arcStage = beatRole === 'setup' ? 'entry' : beatRole === 'escalation' ? 'build' : beatRole;
+    // 编译上下文基础信息
+    const baseCtx: Omit<CompileContext, 'agentId'> = {
+      chapterNumber,
+      chapterType: beatRole,
+      arcStage,
+      isFirstThreeChapters: chapterNumber <= 3,
+    };
+    // 动态编译：每个 agent 调用时按上下文编译 ruleAtoms + 合并 agentSections
+    const compileForAgent = (agentId: string, extra?: Partial<CompileContext>): Record<string, string> => ({
+      ...this.ruleCompiler.compile(tpl.ruleAtoms, { agentId, ...baseCtx, ...extra }),
+      ...agentSectionDict,
+    });
 
     try {
     // ── Step 1: Arc Director ──
@@ -168,7 +186,7 @@ export class ChapterWorkflowService {
     this.logger.log(`[Chapter ${chapterNumber}] 步骤 1/8: 卷级导演`);
     this.emitProgress(state.bookId, chapterNumber, 'arc-director', 0, '卷级导演');
     if (isEnabled('arc-director')) {
-      arcDirective = await this.arcDirector.direct(state, getPrompt('arc-director'), playbooks);
+      arcDirective = await this.arcDirector.direct(state, getPrompt('arc-director'), compileForAgent('arc-director'));
       this.logger.log(
         `[Chapter ${chapterNumber}] 卷级指令完成 — ${Date.now() - t0}ms | ` +
         `阶段: ${arcDirective.arcStage} | 使命: ${arcDirective.chapterMission}`,
@@ -184,7 +202,7 @@ export class ChapterWorkflowService {
     t0 = Date.now();
     this.logger.log(`[Chapter ${chapterNumber}] 步骤 2/8: 意图设定`);
     this.emitProgress(state.bookId, chapterNumber, 'intent', 1, '意图设定');
-    const intent = await this.intentAgent.buildIntent(state, arcDirective, getPrompt('intent'), playbooks);
+    const intent = await this.intentAgent.buildIntent(state, arcDirective, getPrompt('intent'), compileForAgent('intent'));
     if (!intent?.goals?.length) throw new Error(`[Chapter ${chapterNumber}] 意图生成失败：LLM 返回结果为空或缺少 goals`);
 
     // 硬性矫正 wordCountRange：确保匹配用户设置的 targetChapterWordCount
@@ -258,7 +276,7 @@ export class ChapterWorkflowService {
         // ── 首轮：场景级写作流水线 ──
         this.logger.log(`[Chapter ${chapterNumber}] 步骤 4/8: 场景规划`);
         this.emitProgress(state.bookId, chapterNumber, 'scene-plan', 3, '场景规划');
-        scenePlan = await this.scenePlanner.plan(state, intent, arcDirective, getPrompt('scene-planner'), playbooks);
+        scenePlan = await this.scenePlanner.plan(state, intent, arcDirective, getPrompt('scene-planner'), compileForAgent('scene-planner'));
 
         // 校验并矫正场景字数分配
         const totalPlanned = scenePlan.scenes.reduce((s, sc) => s + sc.estimatedWords, 0);
@@ -304,7 +322,7 @@ export class ChapterWorkflowService {
           this.emitProgress(state.bookId, chapterNumber, 'scene-write', 3,
             `场景${si + 1}/${scenePlan.scenes.length}(${scene.purpose})`);
           const sd = await this.creativeWriter.writeScene(
-            state, intent, scene, prevText, getPrompt('creative-writer'), extraInjections, playbooks,
+            state, intent, scene, prevText, getPrompt('creative-writer'), extraInjections, compileForAgent('creative-writer', { scenePurpose: scene.purpose }),
           );
           sceneDrafts.push(sd);
           this.logger.log(
@@ -315,7 +333,7 @@ export class ChapterWorkflowService {
         // 场景缝合
         t0 = Date.now();
         this.emitProgress(state.bookId, chapterNumber, 'scene-stitch', 3, '场景缝合');
-        draft = await this.sceneStitcher.stitch(state, intent, scenePlan, sceneDrafts, getPrompt('scene-stitcher'), playbooks);
+        draft = await this.sceneStitcher.stitch(state, intent, scenePlan, sceneDrafts, getPrompt('scene-stitcher'), compileForAgent('scene-stitcher'));
         this.logger.log(
           `[Chapter ${chapterNumber}] 场景缝合完成 — ${Date.now() - t0}ms | 标题: ${draft.title} | 字数: ${draft.content.length}`,
         );
@@ -329,7 +347,7 @@ export class ChapterWorkflowService {
           this.emitProgress(state.bookId, chapterNumber, 'writing', 3, '内容过短，章节级重写');
           draft = await this.creativeWriter.write(
             state, intent, previousChapterEnding,
-            getPrompt('creative-writer'), undefined, continuityInjections, playbooks,
+            getPrompt('creative-writer'), undefined, continuityInjections, compileForAgent('creative-writer'),
           );
           this.logger.log(
             `[Chapter ${chapterNumber}] 章节级重写完成 — 字数: ${draft.content.length}`,
@@ -362,7 +380,7 @@ export class ChapterWorkflowService {
         }
         draft = await this.creativeWriter.write(
           state, intent, previousChapterEnding,
-          getPrompt('creative-writer'), rewriteGuidance, rewriteInjections, playbooks,
+          getPrompt('creative-writer'), rewriteGuidance, rewriteInjections, compileForAgent('creative-writer'),
         );
         this.logger.log(
           `[Chapter ${chapterNumber}] ${stepLabel}完成 — ${Date.now() - t0}ms | 标题: ${draft.title} | 字数: ${draft.content.length}`,
@@ -376,7 +394,7 @@ export class ChapterWorkflowService {
           );
           draft = await this.creativeWriter.write(
             state, intent, previousChapterEnding,
-            getPrompt('creative-writer'), undefined, continuityInjections, playbooks,
+            getPrompt('creative-writer'), undefined, continuityInjections, compileForAgent('creative-writer'),
           );
           this.logger.log(
             `[Chapter ${chapterNumber}] 字数补救重写完成 — 字数: ${draft.content.length}`,
@@ -396,7 +414,7 @@ export class ChapterWorkflowService {
       t0 = Date.now();
       this.emitProgress(state.bookId, chapterNumber, 'review', 4, `审阅第${attempt}轮`);
       const review = isEnabled('reviewer')
-        ? await this.reviewer.review(state, intent, draft, getPrompt('reviewer'), playbooks)
+        ? await this.reviewer.review(state, intent, draft, getPrompt('reviewer'), compileForAgent('reviewer'))
         : this.buildDefaultReview();
       if (!loopDetCheck.pass) { // 将硬规则失败注入review的issues
         for (const c of loopDetCheck.failedChecks) {
@@ -528,7 +546,7 @@ export class ChapterWorkflowService {
         ];
       }
 
-      finalDraft = await this.editor.edit(state, intent, finalDraft, editReview, getPrompt('editor'), playbooks);
+      finalDraft = await this.editor.edit(state, intent, finalDraft, editReview, getPrompt('editor'), compileForAgent('editor'));
       wasEdited = true;
       this.emitProgress(state.bookId, chapterNumber, 'edit', 5, '精修完成');
       this.logger.log(
@@ -545,7 +563,7 @@ export class ChapterWorkflowService {
       this.logger.log(`[Chapter ${chapterNumber}] 步骤 7/8: 钩子优化`);
       this.emitProgress(state.bookId, chapterNumber, 'hook', 6, '钩子优化');
       try {
-        const enhanced = await this.hookCrafter.enhanceHook(state, intent, finalDraft, playbooks);
+        const enhanced = await this.hookCrafter.enhanceHook(state, intent, finalDraft, compileForAgent('hook-crafter'));
         if (enhanced.content !== finalDraft.content) {
           finalDraft = enhanced;
           this.logger.log(`[Chapter ${chapterNumber}] 钩子优化完成 — ${Date.now() - t0}ms`);
@@ -566,7 +584,7 @@ export class ChapterWorkflowService {
       this.logger.log(`[Chapter ${chapterNumber}] 终稿复评（编辑/钩子后）`);
       this.emitProgress(state.bookId, chapterNumber, 'review', 4, '终稿复评');
       const postEditReview = isEnabled('reviewer')
-        ? await this.reviewer.review(state, intent, finalDraft, getPrompt('reviewer'), playbooks)
+        ? await this.reviewer.review(state, intent, finalDraft, getPrompt('reviewer'), compileForAgent('reviewer'))
         : this.buildDefaultReview();
       const postEditScore = this.calculateWeightedScore(postEditReview, state);
       if (postEditScore >= finalWeightedScore) { // 编辑后分数不低于原分才采纳，防止精修反降质

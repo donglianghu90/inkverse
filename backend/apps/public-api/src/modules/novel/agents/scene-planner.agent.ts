@@ -1,4 +1,4 @@
-/** 场景规划师 — 将章节意图拆分为3-5个可独立执行的场景契约。 */
+/** 场景规划师 — 将章节意图拆分为可独立执行的场景契约（数量随章节类型动态调整）。 */
 import { Injectable } from '@nestjs/common';
 import { LlmService } from '../llm/llm.service';
 import {
@@ -48,10 +48,13 @@ export class ScenePlannerAgent {
       schema: chapterScenePlanSchema,
       tags: ['workflow', 'chapter', 'scene-plan'],
       metadata: { bookId: state.bookId, chapterNumber: intent.chapterNumber },
-      systemPrompt: `${playbooks?.['agent:scene-planner:role'] ?? '你是一位擅长场景拆分的网文导演。你的任务是把"章节意图"拆成3-5个独立场景，每个场景有明确的叙事任务。'}
+      systemPrompt: `${playbooks?.['agent:scene-planner:role'] ?? '你是一位擅长场景拆分的网文导演。你的任务是把"章节意图"拆成独立场景，每个场景有明确的叙事任务。'}
 
 === 核心原则 ===
 ${playbooks?.['agent:scene-planner:principles'] ?? '1. 每个场景是一个"微型故事"——有自己的入口情绪、冲突、转折、出口情绪。\n2. 场景之间的情绪变化构成章内弧线——不能平坦，要有起伏。\n3. 第一场景必须承接上章钩子+建立本章张力。最后一场景必须制造下章驱动力。\n4. 视角(POV)切换要有意义——切到另一个角色是为了利用信息差或展示不同立场。'}
+
+=== 场景数量指南 ===
+${playbooks?.['agent:scene-planner:scene_count_guide'] ?? '根据章节类型动态调整场景数量和字数配比：\n- climax（高潮章）：4-5场景，铺垫15%→升温25%→爆发35%→余波15%→钩子10%\n- rising（升温章）：3-4场景，均匀分配，每场景推进一层冲突\n- setup（铺垫章）：3-4场景，信息密度均匀，最后场景必须抛出悬念\n- relief（缓冲章）：2-3场景即可，场景更长更沉浸，侧重角色深度和日常质感\n- general（通用章）：3-4场景，灵活分配'}
 
 === 场景分配策略（字数硬约束）===
 - 全章总字数硬上限 ${totalWords}字，所有场景 estimatedWords 之和必须 ≤ ${totalWords}
@@ -105,7 +108,7 @@ ${(() => {
   return lines.length ? '\n读者反馈参考（不可牺牲叙事完整性迎合）：\n' + lines.join('\n') : '';
 })()}
 
-请拆分为3-5个场景，每个场景的 sceneId 格式为 "s_章号_序号"（如 s_${intent.chapterNumber}_0）。
+请根据章节类型拆分为合理数量的场景（参考场景数量指南），每个场景的 sceneId 格式为 "s_章号_序号"（如 s_${intent.chapterNumber}_0）。
 overallEmotionalArc 要描述读者情绪变化曲线（如"好奇→紧张→震惊→沉默→期待"）。
 hookStrategy 要具体说明末场景如何制造钩子。`,
       temperature: 0.5,
