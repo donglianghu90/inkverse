@@ -29,16 +29,19 @@ export class DeterministicCheckerService {
     }
 
     const charCount = content.replace(/\s+/g, '').length;
-    if (charCount < intent.wordCountRange.min) {
+    const targetWords = state.seed.targetChapterWordCount ?? 3000; // 用户设置的硬性基准
+    const hardMin = Math.round(targetWords * 0.85); // 允许 -15% 误差
+    const hardMax = Math.round(targetWords * 1.35); // 允许 +35% 误差
+    if (charCount < hardMin) {
       failedChecks.push({
         rule: 'word_count_too_short',
-        detail: `${charCount} 字，最低 ${intent.wordCountRange.min}`,
+        detail: `${charCount} 字，硬性下限 ${hardMin}（目标 ${targetWords}）`,
       });
     }
-    if (charCount > intent.wordCountRange.max) {
+    if (charCount > hardMax) {
       failedChecks.push({
         rule: 'word_count_too_long',
-        detail: `${charCount} 字，最高 ${intent.wordCountRange.max}`,
+        detail: `${charCount} 字，硬性上限 ${hardMax}（目标 ${targetWords}）`,
       });
     }
 

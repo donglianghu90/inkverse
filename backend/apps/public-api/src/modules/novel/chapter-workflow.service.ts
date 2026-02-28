@@ -185,6 +185,19 @@ export class ChapterWorkflowService {
     this.logger.log(`[Chapter ${chapterNumber}] 步骤 2/8: 意图设定`);
     this.emitProgress(state.bookId, chapterNumber, 'intent', 1, '意图设定');
     const intent = await this.intentAgent.buildIntent(state, arcDirective, getPrompt('intent'), playbooks);
+    if (!intent?.goals?.length) throw new Error(`[Chapter ${chapterNumber}] 意图生成失败：LLM 返回结果为空或缺少 goals`);
+
+    // 硬性矫正 wordCountRange：确保匹配用户设置的 targetChapterWordCount
+    const targetWords = state.seed.targetChapterWordCount ?? 3000;
+    const expectedMin = Math.round(targetWords * 0.85);
+    const expectedMax = Math.round(targetWords * 1.15);
+    if (intent.wordCountRange.min < expectedMin * 0.5 || intent.wordCountRange.max < expectedMin * 0.5) {
+      this.logger.warn(
+        `[Chapter ${chapterNumber}] wordCountRange 偏离过大 (${intent.wordCountRange.min}-${intent.wordCountRange.max})，矫正为 ${expectedMin}-${expectedMax}`,
+      );
+      intent.wordCountRange = { min: expectedMin, max: expectedMax };
+    }
+
     this.emitProgress(state.bookId, chapterNumber, 'intent', 1, '意图完成');
     this.logger.log(
       `[Chapter ${chapterNumber}] 意图完成 — ${Date.now() - t0}ms | ` +
@@ -246,8 +259,20 @@ export class ChapterWorkflowService {
         this.logger.log(`[Chapter ${chapterNumber}] 步骤 4/8: 场景规划`);
         this.emitProgress(state.bookId, chapterNumber, 'scene-plan', 3, '场景规划');
         scenePlan = await this.scenePlanner.plan(state, intent, arcDirective, getPrompt('scene-planner'), playbooks);
+
+        // 校验并矫正场景字数分配
+        const totalPlanned = scenePlan.scenes.reduce((s, sc) => s + sc.estimatedWords, 0);
+        if (totalPlanned < intent.wordCountRange.min * 0.6) {
+          const ratio = intent.wordCountRange.min / Math.max(1, totalPlanned);
+          this.logger.warn(
+            `[Chapter ${chapterNumber}] 场景字数总和${totalPlanned}过低（目标${intent.wordCountRange.min}），按比例${ratio.toFixed(1)}x矫正`,
+          );
+          for (const sc of scenePlan.scenes) sc.estimatedWords = Math.round(sc.estimatedWords * ratio);
+        }
+
         this.logger.log(
           `[Chapter ${chapterNumber}] 场景规划完成 — ${Date.now() - t0}ms | 场景数: ${scenePlan.scenes.length} | ` +
+          `字数分配: ${scenePlan.scenes.map((s) => s.estimatedWords).join('+')}=${scenePlan.scenes.reduce((a, s) => a + s.estimatedWords, 0)} | ` +
           `弧线: ${scenePlan.overallEmotionalArc}`,
         );
 
@@ -294,11 +319,31 @@ export class ChapterWorkflowService {
         this.logger.log(
           `[Chapter ${chapterNumber}] 场景缝合完成 — ${Date.now() - t0}ms | 标题: ${draft.title} | 字数: ${draft.content.length}`,
         );
+
+        // 字数防护：缝合后内容低于用户目标的50%则降级为章节级写作
+        const stitchHardMin = Math.round((state.seed.targetChapterWordCount ?? 3000) * 0.5);
+        if (draft.content.replace(/\s+/g, '').length < stitchHardMin) {
+          this.logger.warn(
+            `[Chapter ${chapterNumber}] 缝合内容仅${draft.content.length}字（硬性阈值${stitchHardMin}），降级为章节级写作`,
+          );
+          this.emitProgress(state.bookId, chapterNumber, 'writing', 3, '内容过短，章节级重写');
+          draft = await this.creativeWriter.write(
+            state, intent, previousChapterEnding,
+            getPrompt('creative-writer'), undefined, continuityInjections, playbooks,
+          );
+          this.logger.log(
+            `[Chapter ${chapterNumber}] 章节级重写完成 — 字数: ${draft.content.length}`,
+          );
+        }
       } else {
         // ── 重写轮或场景规划未启用：章节级写作 ──
         const stepLabel = isRewrite ? `重写第${attempt}轮` : '创作写作';
         this.logger.log(`[Chapter ${chapterNumber}] 步骤 4/8: ${stepLabel}`);
         this.emitProgress(state.bookId, chapterNumber, 'writing', 3, stepLabel);
+
+        const rewriteInjections = scenePlan && isRewrite
+          ? [...continuityInjections, `本章场景骨架参考：${scenePlan.scenes.map((s, i) => `场景${i + 1}-${s.purpose}(${s.objective})`).join('/')}/情感弧线：${scenePlan.overallEmotionalArc}，重写时保持相同结构`]
+          : continuityInjections;
 
         let rewriteGuidance: RewriteGuidance | undefined;
         if (isRewrite && bestAttempt) {
@@ -317,11 +362,26 @@ export class ChapterWorkflowService {
         }
         draft = await this.creativeWriter.write(
           state, intent, previousChapterEnding,
-          getPrompt('creative-writer'), rewriteGuidance, continuityInjections, playbooks,
+          getPrompt('creative-writer'), rewriteGuidance, rewriteInjections, playbooks,
         );
         this.logger.log(
           `[Chapter ${chapterNumber}] ${stepLabel}完成 — ${Date.now() - t0}ms | 标题: ${draft.title} | 字数: ${draft.content.length}`,
         );
+
+        // 字数防护：内容低于用户目标的50%则不带guidance重试一次
+        const directHardMin = Math.round((state.seed.targetChapterWordCount ?? 3000) * 0.5);
+        if (draft.content.replace(/\s+/g, '').length < directHardMin) {
+          this.logger.warn(
+            `[Chapter ${chapterNumber}] 内容仅${draft.content.length}字（硬性阈值${directHardMin}），无guidance重写`,
+          );
+          draft = await this.creativeWriter.write(
+            state, intent, previousChapterEnding,
+            getPrompt('creative-writer'), undefined, continuityInjections, playbooks,
+          );
+          this.logger.log(
+            `[Chapter ${chapterNumber}] 字数补救重写完成 — 字数: ${draft.content.length}`,
+          );
+        }
       }
 
       // Deterministic check inside quality loop — 硬规则前置，可在重写中修复

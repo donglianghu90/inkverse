@@ -411,7 +411,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       createdAt: now,
       updatedAt: now,
       version: 2,
-      seed: analysis.seed,
+      seed: { ...analysis.seed, ...(dto.mainStoryGoal ? { mainStoryGoal: dto.mainStoryGoal } : {}) },
       roughOutline: analysis.outline,
       bookPromptProfile,
       chapterCursor: 1,
@@ -592,6 +592,50 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       latestKpi: latestKpi
         ? { qualityScore: latestKpi.qualityScore, overallScore: latestKpi.overallScore }
         : null,
+    };
+  }
+
+  async getQualityStats(bookId: string): Promise<Record<string, unknown>> {
+    const state = await this.loadBookState(bookId);
+    const kpi = state.kpiHistory;
+    const total = kpi.length;
+    if (total === 0) return { bookId, totalChapters: 0, message: '暂无生成数据' };
+
+    const avg = (arr: number[]) => arr.length ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 100) / 100 : 0;
+    const rate = (arr: boolean[]) => arr.length ? Math.round((arr.filter(Boolean).length / arr.length) * 1000) / 10 : 0;
+
+    const [executions, reviews] = await Promise.all([
+      this.workflowExecutionRepo.find({ where: { bookId, status: 'completed' }, select: ['chapterNumber', 'summary'] }),
+      this.artifactRepo.find({ where: { bookId, name: 'review' }, select: ['chapterNumber', 'payload'], order: { chapterNumber: 'ASC' } }),
+    ]);
+
+    const avgAttempts = executions.length
+      ? Math.round((executions.reduce((s, e) => s + (e.summary?.totalLoopAttempts ?? 1), 0) / executions.length) * 100) / 100
+      : 1;
+    const polishRate = executions.length
+      ? Math.round((executions.filter((e) => (e.summary?.totalLoopAttempts ?? 1) > 1).length / executions.length) * 1000) / 10
+      : 0;
+
+    const dims = { engagement: [] as number[], pacing: [] as number[], hookStrength: [] as number[], consistency: [] as number[], proseQuality: [] as number[], characterDepth: [] as number[] };
+    for (const r of reviews) {
+      const d = (r.payload as any)?.dimensions;
+      if (!d) continue;
+      for (const key of Object.keys(dims) as (keyof typeof dims)[]) {
+        if (typeof d[key] === 'number') dims[key].push(d[key]);
+      }
+    }
+
+    return {
+      bookId, totalChapters: total,
+      avgOverallScore: avg(kpi.map((k) => k.overallScore)),
+      avgQualityScore: avg(kpi.map((k) => k.qualityScore)),
+      firstPassRate: rate(kpi.map((k) => k.qualityPass)),
+      hardPassRate: rate(kpi.map((k) => k.hardPass)),
+      continuityPassRate: rate(kpi.map((k) => k.continuityPass)),
+      avgRewriteRounds: avgAttempts,
+      polishTriggerRate: polishRate,
+      dimensionAverages: Object.fromEntries(Object.entries(dims).map(([k, v]) => [k, avg(v)])),
+      recentTrend: kpi.slice(-10).map((k, i) => ({ chapter: total - kpi.slice(-10).length + i + 1, overall: k.overallScore, quality: k.qualityScore })),
     };
   }
 

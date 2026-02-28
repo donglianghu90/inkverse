@@ -10,7 +10,7 @@ export function ConditionNode({ data, selected }: NodeProps<ConditionNodeData>) 
   const failed = data.status === 'failed', skipped = data.status === 'skipped';
   return (
     <div className={cn('relative flex items-center justify-center', skipped && 'opacity-40')} style={{ width: 200, height: 112 }}>
-      <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-amber-400/60 !border-2 !border-background !z-10" />
+      <Handle type="target" position={Position.Top} id="top" className="!w-3 !h-3 !bg-amber-400/60 !border-2 !border-background !z-10" />
       <svg className="absolute inset-0 w-full h-full drop-shadow-sm" viewBox="0 0 200 112" fill="none">
         <path
           d="M100 6 L192 56 L100 106 L8 56 Z"
@@ -34,7 +34,9 @@ export function ConditionNode({ data, selected }: NodeProps<ConditionNodeData>) 
       {completed && <div className="absolute right-1 top-1/2 -translate-y-1/2 z-20 h-5 w-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] shadow-sm border-2 border-background">✓</div>}
       {failed && <div className="absolute right-1 top-1/2 -translate-y-1/2 z-20 h-5 w-5 rounded-full bg-red-500 text-white flex items-center justify-center text-[10px] shadow-sm border-2 border-background">✗</div>}
       {skipped && <div className="absolute right-1 top-1/2 -translate-y-1/2 z-20 h-5 w-5 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-[10px] border-2 border-background">⏭</div>}
-      <Handle type="source" position={Position.Bottom} className="!w-3 !h-3 !bg-amber-400/60 !border-2 !border-background !z-10" />
+      <Handle type="source" position={Position.Bottom} id="bottom" className="!w-3 !h-3 !bg-amber-400/60 !border-2 !border-background !z-10" />
+      <Handle type="source" position={Position.Left} id="left" className="!w-2.5 !h-2.5 !bg-emerald-400/60 !border-2 !border-background !z-10" />
+      <Handle type="source" position={Position.Right} id="right" className="!w-2.5 !h-2.5 !bg-muted-foreground/40 !border-2 !border-background !z-10" />
     </div>
   );
 }

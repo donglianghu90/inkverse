@@ -677,7 +677,7 @@ ${JSON.stringify(context, null, 2)}
 ${arcHistory.length > 0 ? JSON.stringify(arcHistory, null, 2) : '无（这是第一卷）'}
 
 当前位置：第 ${chapterNumber} 章已写完，即将开始第 ${chapterNumber + 1} 章。
-
+${state.seed.mainStoryGoal ? `\n全书主线目标：${state.seed.mainStoryGoal}\n本卷的核心张力和剧情推进在宏观上应服务于主线目标——不需要每卷都直接推进，但不能偏离或遗忘。\n` : ''}
 请规划下一卷：
 - arcId: "arc_" + 序号（如 arc_1, arc_2）
 - arcTitle: 本卷标题（有冲突感）

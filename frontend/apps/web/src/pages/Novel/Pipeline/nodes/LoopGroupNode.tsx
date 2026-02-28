@@ -16,7 +16,8 @@ export function LoopEntryNode({ data, selected }: NodeProps<LoopGroupData>) {
       selected && 'ring-2 ring-primary ring-offset-2 shadow-md',
       running && 'ring-2 ring-violet-400 shadow-md',
     )}>
-      <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-violet-400/50 !border-2 !border-background" />
+      <Handle type="target" position={Position.Top} id="top" className="!w-3 !h-3 !bg-violet-400/50 !border-2 !border-background" />
+      <Handle type="target" position={Position.Right} id="right" className="!w-2.5 !h-2.5 !bg-violet-400/50 !border-2 !border-background" />
       <div className="px-4 py-3">
         <div className="flex items-center gap-2.5">
           <div className={cn(
@@ -40,7 +41,7 @@ export function LoopEntryNode({ data, selected }: NodeProps<LoopGroupData>) {
           </div>
         )}
       </div>
-      <Handle type="source" position={Position.Bottom} className="!w-3 !h-3 !bg-violet-400/50 !border-2 !border-background" />
+      <Handle type="source" position={Position.Bottom} id="bottom" className="!w-3 !h-3 !bg-violet-400/50 !border-2 !border-background" />
     </div>
   );
 }

@@ -15,6 +15,8 @@ import {
   Save,
   Clock,
   ChevronDown,
+  AlertTriangle,
+  RotateCcw,
 } from 'lucide-react';
 import worldCreatingImg from '@/assets/illustrations/world-creating.png';
 import creativeInspirationImg from '@/assets/illustrations/creative-inspiration.png';
@@ -101,6 +103,7 @@ const CreateBook: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [genProgress, setGenProgress] = useState(0);
   const [genSteps, setGenSteps] = useState<{ label: string; done: boolean }[]>([]);
+  const [genError, setGenError] = useState<string | null>(null);
 
   const [enhancing, setEnhancing] = useState(false);
   const [highlights, setHighlights] = useState<string[]>([]);
@@ -197,6 +200,7 @@ const CreateBook: React.FC = () => {
     setStep(4);
     setLoading(true);
     setGenProgress(0);
+    setGenError(null);
     setGenSteps([
       { label: '种子创意分析', done: false },
       { label: '生成专属写作手册', done: false },
@@ -286,6 +290,7 @@ const CreateBook: React.FC = () => {
           try {
             const payload = JSON.parse(line.slice(5).trim());
 
+            if (payload._type === 'heartbeat') continue; // 过滤后端心跳消息
             if (payload._type === 'result') {
               gotResult = true;
               clearTimeout(staleTimer);
@@ -331,9 +336,10 @@ const CreateBook: React.FC = () => {
       if (streamError) throw new Error(streamError);
     } catch (error: any) {
       clearTimeout(staleTimer!);
-      message.error(streamError || error?.message || '创建连接中断，请重试');
+      const errMsg = streamError || error?.message || '创建连接中断，请重试';
+      message.error(errMsg);
+      setGenError(errMsg);
       setLoading(false);
-      setStep(3);
     }
   };
 
@@ -827,25 +833,21 @@ const CreateBook: React.FC = () => {
               <span className="text-xs text-muted-foreground shrink-0">自定义范围：</span>
               <Input
                 type="number"
-                min={50}
-                max={2000}
                 className="w-20 h-8 text-sm"
                 value={form.plannedMinChapters}
                 onChange={(e) => {
                   const v = parseInt(e.target.value, 10);
-                  if (!isNaN(v)) setForm({ ...form, plannedMinChapters: Math.min(2000, Math.max(50, v)) });
+                  if (!isNaN(v)) setForm({ ...form, plannedMinChapters: v });
                 }}
               />
               <span className="text-xs text-muted-foreground">—</span>
               <Input
                 type="number"
-                min={100}
-                max={3000}
                 className="w-20 h-8 text-sm"
                 value={form.plannedMaxChapters}
                 onChange={(e) => {
                   const v = parseInt(e.target.value, 10);
-                  if (!isNaN(v)) setForm({ ...form, plannedMaxChapters: Math.min(3000, Math.max(100, v)) });
+                  if (!isNaN(v)) setForm({ ...form, plannedMaxChapters: v });
                 }}
               />
               <span className="text-xs text-muted-foreground">章</span>
@@ -1060,40 +1062,59 @@ const CreateBook: React.FC = () => {
           </div>
 
           <div className="w-full max-w-md space-y-4 px-4">
-            <Progress value={genProgress} className="h-2" />
-            <p className="text-center text-sm text-muted-foreground">
-              {Math.round(genProgress)}%
-            </p>
+            {genError ? (
+              <div className="flex flex-col items-center space-y-4 pt-2">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/40">
+                  <AlertTriangle className="h-6 w-6 text-red-500" />
+                </div>
+                <p className="text-center text-sm text-red-600 dark:text-red-400">{genError}</p>
+                <div className="flex gap-3">
+                  <Button variant="outline" size="sm" onClick={() => { setGenError(null); setStep(3); }}>
+                    <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />返回修改
+                  </Button>
+                  <Button size="sm" onClick={handleSubmit}>
+                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" />重试
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <Progress value={genProgress} className="h-2" />
+                <p className="text-center text-sm text-muted-foreground">
+                  {Math.round(genProgress)}%
+                </p>
 
-            <div className="space-y-3 pt-4">
-              {(() => {
-                const activeIdx = genSteps.findIndex((s) => !s.done);
-                return genSteps.map((gs, i) => {
-                  const isActive = i === activeIdx;
-                  return (
-                    <div key={i} className="flex items-center gap-3">
-                      {gs.done ? (
-                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/50">
-                          <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                <div className="space-y-3 pt-4">
+                  {(() => {
+                    const activeIdx = genSteps.findIndex((s) => !s.done);
+                    return genSteps.map((gs, i) => {
+                      const isActive = i === activeIdx;
+                      return (
+                        <div key={i} className="flex items-center gap-3">
+                          {gs.done ? (
+                            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/50">
+                              <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                            </div>
+                          ) : isActive ? (
+                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                          ) : (
+                            <div className="h-6 w-6 rounded-full border-2 border-muted" />
+                          )}
+                          <span
+                            className={cn(
+                              'text-sm',
+                              gs.done ? 'text-foreground font-medium' : isActive ? 'text-foreground' : 'text-muted-foreground',
+                            )}
+                          >
+                            {gs.label}
+                          </span>
                         </div>
-                      ) : isActive ? (
-                        <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                      ) : (
-                        <div className="h-6 w-6 rounded-full border-2 border-muted" />
-                      )}
-                      <span
-                        className={cn(
-                          'text-sm',
-                          gs.done ? 'text-foreground font-medium' : isActive ? 'text-foreground' : 'text-muted-foreground',
-                        )}
-                      >
-                        {gs.label}
-                      </span>
-                    </div>
-                  );
-                });
-              })()}
-            </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -84,7 +84,8 @@ const TASK_ROUTES: Record<string, TaskRoute> = {
   'consistency-audit':  { provider: 'gemini', tier: 'standard' },
   'pacing-analyzer':    { provider: 'gemini', tier: 'standard' },
   'continuity-guard':   { provider: 'gemini', tier: 'standard' },
-  'prompt-profiler':    { provider: 'gemini', tier: 'standard' },
+  'prompt-profiler':    { provider: 'claude', tier: 'standard' },
+  'agent-section-generator': { provider: 'claude', tier: 'standard' },
   'chapter-contract-manager': { provider: 'gemini', tier: 'standard' },
   'continuity-auditor': { provider: 'gemini', tier: 'standard' },
   'retrospective-learner': { provider: 'gemini', tier: 'standard' },
@@ -305,6 +306,12 @@ export class LlmService {
       `  费率: $${rates.inputRateUsdPer1M}/$${rates.outputRateUsdPer1M} per 1M | 费用: $${cost} (source: ${usage.source})`,
     );
     this.logger.debug(`[${input.taskName}] AI 输出:\n${this.truncate(JSON.stringify(wrapped.parsed, null, 2), 2000)}`);
+
+    if (wrapped.parsed == null) { // withStructuredOutput 解析失败，视为可重试错误
+      const err = new Error(`[${input.taskName}] 结构化输出解析为 null (${provider}/${modelName})，模型返回内容无法匹配 schema`);
+      (err as any).status = 500;
+      throw err;
+    }
 
     this.usageTracker.recordCall({
       taskName: input.taskName, model: modelName, provider, tier,

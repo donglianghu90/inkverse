@@ -29,7 +29,7 @@ export class ChapterMemoryEntity {
   @Column({ name: 'plot_thread_ids', type: 'jsonb', default: '[]' })
   plotThreadIds: string[]; // 推进的伏线ID
 
-  @Column({ name: 'emotional_tone', type: 'varchar', length: 64, default: '' })
+  @Column({ name: 'emotional_tone', type: 'varchar', length: 255, default: '' })
   emotionalTone: string; // 情绪基调
 
   @Column({ name: 'tension_level', type: 'smallint', default: 5 })

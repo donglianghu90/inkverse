@@ -68,6 +68,7 @@ import { ChapterResyncProcessor } from './chapter-resync.processor';
 import { DetailStoreService } from './detail-store.service';
 import { DetailContextService } from './detail-context.service';
 import { CreateBookSessionService } from './create-book-session.service';
+import { CreateBookSessionEntity } from './entities/create-book-session.entity';
 import { MemoryRetrieverService } from './memory-retriever.service';
 import { TaskRecoveryService } from './task-recovery.service';
 
@@ -87,6 +88,7 @@ import { TaskRecoveryService } from './task-recovery.service';
       BookFactionEntity, BookCommitmentEntity,
       BookPromptTemplateEntity,
       WorkflowExecutionEntity,
+      CreateBookSessionEntity,
     ]),
     BullModule.registerQueue(
       { name: AUTO_SERIALIZATION_QUEUE },

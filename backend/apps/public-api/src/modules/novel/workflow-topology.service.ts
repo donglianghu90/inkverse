@@ -86,7 +86,7 @@ export class WorkflowTopologyService {
       condition: `chapter > ${p.longRangeMemoryThreshold}`,
       configParams: [{ key: 'longRangeMemoryThreshold', label: '触发章节阈值', type: 'number', value: p.longRangeMemoryThreshold, min: 1, max: 100, step: 1, description: '超过此章节数后启用长程记忆检索' }],
     });
-    allNodes.push({ id: 'memory-retrieval', label: '远程记忆检索', type: 'agent', icon: '📡', isCore: false, isEnabled: true, phaseId: P1 });
+    allNodes.push({ id: 'memory-retrieval', label: '远程记忆检索', type: 'agent', agentType: 'memory-retrieval', icon: '📡', isCore: false, isEnabled: true, phaseId: P1 });
     edge('arc-director', 'intent');
     edge('intent', 'continuity-guard');
     edge('continuity-guard', 'memory-check');
@@ -98,7 +98,7 @@ export class WorkflowTopologyService {
     const P2 = 'quality_loop';
     const maxAttempts = 1 + p.maxRepairRounds;
     allNodes.push({
-      id: 'loop-entry', label: `质量门控循环`, type: 'loop_entry', isCore: true, isEnabled: true, phaseId: P2,
+      id: 'loop-entry', label: '循环入口', type: 'loop_entry', isCore: true, isEnabled: true, phaseId: P2,
       condition: `最多 ${maxAttempts} 轮`,
       configParams: [{ key: 'maxRepairRounds', label: '最大重写轮数', type: 'number', value: p.maxRepairRounds, min: 0, max: 5, step: 1, description: `总尝试次数 = 1 + 此值（当前 ${maxAttempts} 轮）` }],
     });

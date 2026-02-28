@@ -1,4 +1,5 @@
 import { request } from '@umijs/max';
+import { getToken } from '@/services/auth';
 
 const BASE = '/api/novel';
 
@@ -578,7 +579,8 @@ export async function getGenerationStatus(bookId: string): Promise<GenerationSta
 }
 
 export function getGenerateSSEUrl(bookId: string): string {
-  return `${BASE}/books/${bookId}/chapters/generate-sse`;
+  const token = getToken();
+  return `${BASE}/books/${bookId}/chapters/generate-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 /* ========== Pipeline ========== */

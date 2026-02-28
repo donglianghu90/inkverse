@@ -91,6 +91,7 @@ export const storySeedSchema = z.object({
   }),
   tone: z.string(),
   coreConflictDirection: z.string(),
+  mainStoryGoal: z.string().optional(), // 用户设定的长期主线目标原文
   redLines: z.array(z.string()),
   targetChapterWordCount: z.number().int().min(1).default(3000),
   plannedTotalChapters: z.object({

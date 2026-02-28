@@ -47,14 +47,11 @@ export class JwtAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest();
     const authHeader = request.headers['authorization'];
+    const queryToken = request.query?.token as string | undefined; // SSE/EventSource 不支持自定义 header，降级从 query 取 token
 
-    if (!authHeader) {
-      throw new UnauthorizedException('缺少 Authorization header');
-    }
-
-    const token = authHeader.split(' ')[1];
+    const token = authHeader?.split(' ')[1] || queryToken;
     if (!token) {
-      throw new UnauthorizedException('无效的 token 格式');
+      throw new UnauthorizedException('缺少 Authorization header');
     }
 
     try {
@@ -67,7 +64,7 @@ export class JwtAuthGuard implements CanActivate {
       request.user = payload;
       
       // 从 Redis 获取存储的 token
-      // 统一使用 steel-erp:user:token:${id} 格式
+      // 统一使用 inkverse:user:token:${id} 格式
       const redisKey = `inkverse:user:token:${payload.id}`;
       const storedToken = await this.redis.get(redisKey);
       

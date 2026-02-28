@@ -33,6 +33,7 @@ import {
   getAutoSerialization,
   getBookTokenUsage,
   getGenerationStatus,
+  getGenerateSSEUrl,
   updateChapter,
   type BookInfo,
   type BookTokenUsage,
@@ -119,8 +120,7 @@ const Workbench: React.FC = () => {
   const esRef = useRef<EventSource | null>(null);
 
   const connectSSE = useCallback((bookIdVal: string, baselineChapterCount: number) => {
-    const proxyBase = '/api/novel';
-    const url = `${proxyBase}/books/${bookIdVal}/chapters/generate-sse`;
+    const url = getGenerateSSEUrl(bookIdVal);
     esRef.current?.close();
     const es = new EventSource(url);
     esRef.current = es;

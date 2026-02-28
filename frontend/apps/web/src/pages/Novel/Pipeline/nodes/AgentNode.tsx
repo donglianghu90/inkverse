@@ -16,10 +16,15 @@ const AGENT_META: Record<string, { icon: string; color: string; accent: string }
   editor:                  { icon: '✂️', color: 'border-emerald-400/60 bg-emerald-50/50 dark:bg-emerald-950/30', accent: 'bg-emerald-400' },
   'hook-crafter':          { icon: '🪝', color: 'border-yellow-400/60 bg-yellow-50/50 dark:bg-yellow-950/30', accent: 'bg-yellow-400' },
   recorder:                { icon: '📚', color: 'border-rose-400/60 bg-rose-50/50 dark:bg-rose-950/30', accent: 'bg-rose-400' },
+  'memory-retrieval':      { icon: '📡', color: 'border-blue-400/60 bg-blue-50/50 dark:bg-blue-950/30', accent: 'bg-blue-400' },
+  'text-analyzer':         { icon: '📝', color: 'border-rose-400/60 bg-rose-50/50 dark:bg-rose-950/30', accent: 'bg-rose-400' },
+  'world-extractor':       { icon: '🌍', color: 'border-rose-400/60 bg-rose-50/50 dark:bg-rose-950/30', accent: 'bg-rose-400' },
+  'narrative-extractor':   { icon: '📖', color: 'border-rose-400/60 bg-rose-50/50 dark:bg-rose-950/30', accent: 'bg-rose-400' },
   custom:                  { icon: '⚡', color: 'border-purple-400/60 bg-purple-50/50 dark:bg-purple-950/30', accent: 'bg-purple-400' },
 };
 
 export interface AgentNodeData extends AgentNodeConfig {
+  agentType?: string; // 拓扑层传入的原始 agent 类型，优先用于样式查找
   isSelected?: boolean;
   onDelete?: (id: string) => void;
   onToggle?: (id: string) => void;
@@ -29,8 +34,9 @@ export interface AgentNodeData extends AgentNodeConfig {
 }
 
 export function AgentNode({ data, selected }: NodeProps<AgentNodeData>) {
-  const meta = AGENT_META[data.type] ?? AGENT_META.custom;
-  const isCustom = data.type === 'custom';
+  const agentKey = data.agentType ?? data.type; // agentType 由拓扑层提供，type 可能被 WfNode 的 "agent" 覆盖
+  const meta = AGENT_META[agentKey] ?? AGENT_META.custom;
+  const isCustom = agentKey === 'custom';
   const stepNum = typeof data.position === 'number' ? data.position + 1 : null;
   return (
     <div
@@ -54,6 +60,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeData>) {
         </div>
       )}
       <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-muted-foreground/40 !border-2 !border-background" />
+      <Handle type="target" position={Position.Right} id="right" className="!w-0 !h-0 !opacity-0 !border-0 !min-w-0 !min-h-0" />
       <div className={cn('h-1 rounded-t-[10px]', meta.accent)} />
       <div className="px-4 pb-3 pt-3 pl-5">
         <div className="flex items-start justify-between gap-2 mb-2">

@@ -102,7 +102,7 @@ export class MemoryRetrieverService implements OnModuleInit {
       bookId, chapterNumber, summary,
       keyEvents: [...(lore.openLoops ?? []), ...(lore.stateChanges ?? [])].slice(0, 10),
       characterIds, locationIds, plotThreadIds,
-      emotionalTone: intent.emotionDirection || '',
+      emotionalTone: (intent.emotionDirection || '').slice(0, 250),
       tensionLevel: Math.min(10, Math.max(1, 5 + (state.readerTension?.chaptersSinceLastPayoff ?? 0))),
       keywords, foreshadowingPlanted: planted, foreshadowingResolved: resolved,
     }, ['bookId', 'chapterNumber']);

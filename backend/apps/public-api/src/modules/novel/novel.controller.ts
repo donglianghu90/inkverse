@@ -94,10 +94,10 @@ export class NovelController {
   @Post('books/create-session')
   @ApiOperation({ summary: '创建新书会话', description: '创建或复用开书任务会话，返回 progressChannel（支持幂等键）' })
   @ApiResponse({ status: 201, description: '返回会话信息' })
-  createBookSession(@Body() dto: CreateBookSessionDto, @CurrentUser('id') userId: string): Record<string, unknown> {
+  async createBookSession(@Body() dto: CreateBookSessionDto, @CurrentUser('id') userId: string): Promise<Record<string, unknown>> {
     const { idempotencyKey, ...payload } = dto;
     const createBookDto = Object.assign(new CreateBookDto(), payload);
-    const { session, reused } = this.createBookSessionService.createOrReuse(createBookDto, idempotencyKey, userId);
+    const { session, reused } = await this.createBookSessionService.createOrReuse(createBookDto, idempotencyKey, userId);
     return {
       progressChannel: session.progressChannel,
       reused,
@@ -112,44 +112,54 @@ export class NovelController {
   @Sse('books/create-sse')
   @ApiOperation({ summary: '创建新书（SSE）', description: '通过 progressChannel 订阅创建进度，完成后返回书籍信息' })
   @ApiQuery({ name: 'progressChannel', required: true, description: '创建会话返回的进度通道 ID' })
-  createBookSse(@Query('progressChannel') progressChannelQuery?: string): Observable<MessageEvent> {
+  async createBookSse(@Query('progressChannel') progressChannelQuery?: string): Promise<Observable<MessageEvent>> {
     const progressChannel = progressChannelQuery?.trim();
     if (!progressChannel) throw new BadRequestException('progressChannel is required');
-    const session = this.createBookSessionService.get(progressChannel);
-    if (!session) throw new BadRequestException(`create session not found for progressChannel=${progressChannel}`);
+    const session = this.createBookSessionService.get(progressChannel)
+      ?? await this.createBookSessionService.getAsync(progressChannel);
+    if (!session) throw new BadRequestException(`会话不存在或已过期（progressChannel=${progressChannel}），请重新调用 POST /books/create-session 创建会话`);
 
     const subject = new ReplaySubject<MessageEvent>(20);
     let finished = false;
+    const HEARTBEAT_MS = 15_000; // 每15秒发送心跳，防止代理/浏览器断开空闲连接
+    const heartbeat = setInterval(() => { if (!finished) subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent); }, HEARTBEAT_MS);
     const finish = (unsubscribe: () => void): void => {
       if (finished) return;
       finished = true;
+      clearInterval(heartbeat);
       unsubscribe();
       setTimeout(() => subject.complete(), 80);
     };
 
     if (session.status === 'completed') {
+      this.logger.log(`[createBookSse] 会话已完成，直接返回结果 channel=${progressChannel} result=${JSON.stringify(session.result)}`);
+      clearInterval(heartbeat);
       subject.next({ data: { result: session.result, _type: 'result' } } as MessageEvent);
       subject.complete();
       return subject.asObservable();
     }
     if (session.status === 'failed') {
+      this.logger.warn(`[createBookSse] 会话已失败，直接返回错误 channel=${progressChannel} error=${session.error}`);
+      clearInterval(heartbeat);
       subject.next({ data: { done: true, error: session.error ?? 'create book session failed' } } as MessageEvent);
       subject.complete();
       return subject.asObservable();
     }
 
     const unsubscribe = this.progressService.subscribe(progressChannel, (event) => {
-      this.logger.debug(`[createBookSse] 进度事件 → channel=${progressChannel} step=${event.step} done=${event.done}`);
+      this.logger.log(`[createBookSse] SSE推送进度 → channel=${progressChannel} data=${JSON.stringify(event)}`);
       subject.next({ data: event } as MessageEvent);
       if (event.done || event.error) {
         const flushFinalResult = (attempt: number) => {
           const latest = this.createBookSessionService.get(progressChannel);
           if (latest?.status === 'completed') {
+            this.logger.log(`[createBookSse] SSE推送最终结果 → channel=${progressChannel} result=${JSON.stringify(latest.result)}`);
             subject.next({ data: { result: latest.result, _type: 'result' } } as MessageEvent);
             finish(unsubscribe);
             return;
           }
           if (latest?.status === 'failed') {
+            this.logger.warn(`[createBookSse] SSE推送失败结果 → channel=${progressChannel} error=${latest.error}`);
             subject.next({ data: { done: true, error: latest.error ?? 'create book session failed' } } as MessageEvent);
             finish(unsubscribe);
             return;
@@ -172,11 +182,13 @@ export class NovelController {
         const created = await this.novelService.createBook(session.dto, { progressChannel, userId: session.userId });
         const result = await this.attachInitialAutoSerialization(created, session.dto);
         this.createBookSessionService.markCompleted(progressChannel, result as Record<string, unknown>);
+        this.logger.log(`[createBookSse] SSE推送创建完成 → channel=${progressChannel} result=${JSON.stringify(result)}`);
         subject.next({ data: { result, _type: 'result' } } as MessageEvent);
       } catch (err: any) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.error(`[createBookSse] createBook 异常 channel=${progressChannel}: ${message}`);
         this.createBookSessionService.markFailed(progressChannel, message);
+        this.logger.error(`[createBookSse] SSE推送创建异常 → channel=${progressChannel} error=${message}`);
         subject.next({ data: { done: true, error: message } } as MessageEvent);
       } finally {
         finish(unsubscribe);
@@ -218,6 +230,15 @@ export class NovelController {
     return this.novelService.deleteBook(bookId);
   }
 
+  @Get('books/:bookId/token-usage')
+  @ApiOperation({ summary: '书籍Token用量', description: '返回书籍所有章节的LLM Token用量汇总与明细' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '成功' })
+  async getBookTokenUsage(@Param('bookId') bookId: string, @CurrentUser('id') userId: string): Promise<unknown> {
+    await this.guard(bookId, userId);
+    return this.novelService.getBookTokenUsage(bookId);
+  }
+
   @Get('books/:bookId')
   @ApiOperation({ summary: '查询书籍', description: '返回书籍概览信息' })
   @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
@@ -226,6 +247,15 @@ export class NovelController {
   async getBook(@Param('bookId') bookId: string, @CurrentUser('id') userId: string): Promise<unknown> {
     await this.guard(bookId, userId);
     return this.novelService.getBook(bookId);
+  }
+
+  @Get('books/:bookId/quality-stats')
+  @ApiOperation({ summary: '质量统计', description: '返回书籍的质量分布数据：通过率、维度平均分、重写轮次等' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '成功' })
+  async getQualityStats(@Param('bookId') bookId: string, @CurrentUser('id') userId: string): Promise<unknown> {
+    await this.guard(bookId, userId);
+    return this.novelService.getQualityStats(bookId);
   }
 
   // ── Chapters ──────────────────────────────────────────────────────────────
@@ -277,7 +307,8 @@ export class NovelController {
   @Sse('books/:bookId/chapters/generate-sse')
   @ApiOperation({ summary: '生成章节（SSE）', description: '通过 SSE 流式推送章节生成进度' })
   @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
-  generateChapterSse(@Param('bookId') bookId: string): Observable<MessageEvent> {
+  async generateChapterSse(@Param('bookId') bookId: string, @CurrentUser('id') userId: string): Promise<Observable<MessageEvent>> {
+    await this.guard(bookId, userId);
     const subject = new Subject<MessageEvent>();
     const alreadyRunning = !this.progressService.markGenerating(bookId);
 

@@ -215,7 +215,7 @@ export default function PipelinePage() {
             nodes={nodes} edges={edges}
             onNodesChange={handleNodesChange}
             onNodeClick={handleNodeClick} nodeTypes={NODE_TYPES}
-            fitView fitViewOptions={{ padding: 0.3 }} minZoom={0.25} maxZoom={1.5}
+            fitView fitViewOptions={{ padding: 0.15 }} minZoom={0.15} maxZoom={1.5}
             proOptions={{ hideAttribution: true }}
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="hsl(var(--muted-foreground)/0.15)" />

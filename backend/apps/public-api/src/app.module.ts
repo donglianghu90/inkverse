@@ -19,7 +19,7 @@ import { AuthModule } from "./modules/auth/auth.module";
       configPath: path.join(process.cwd(), "config", "public.properties"),
     }),
     LogModule.register({
-      appName: "steel-erp",
+      appName: "inkverse",
       enableSeparateFiles: true,
       enableAllFile: false, // 不启用all.log，避免重复存储
       logLevels: {

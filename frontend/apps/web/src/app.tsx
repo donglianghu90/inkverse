@@ -26,6 +26,7 @@ export const request: RequestConfig = {
         }
         return;
       }
+      if (error.data?.code) throw error; // 业务错误由调用方处理，跳过通用提示
       if (response?.status) message.error(`请求错误 ${response.status}: ${response.statusText}`);
       else if (!response) message.error('网络异常，请检查网络连接');
       throw error;
@@ -36,6 +37,18 @@ export const request: RequestConfig = {
       const token = getToken();
       if (token) options.headers = { ...options.headers, Authorization: `Bearer ${token}` };
       return { url, options };
+    },
+  ],
+  responseInterceptors: [
+    (response: any) => {
+      const data = response.data;
+      if (data?.code !== undefined && data.code !== 200) { // 业务错误码检查
+        const err: any = new Error(data.message || '请求失败');
+        err.data = data;
+        err.response = response;
+        throw err;
+      }
+      return response;
     },
   ],
 };

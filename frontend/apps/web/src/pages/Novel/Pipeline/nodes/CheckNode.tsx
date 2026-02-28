@@ -17,6 +17,8 @@ export function CheckNode({ data, selected }: NodeProps<CheckNodeData>) {
       skipped && 'opacity-40',
     )}>
       <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-sky-400/50 !border-2 !border-background" />
+      <Handle type="target" position={Position.Left} id="left" className="!w-0 !h-0 !opacity-0 !border-0 !min-w-0 !min-h-0" />
+      <Handle type="target" position={Position.Right} id="right" className="!w-0 !h-0 !opacity-0 !border-0 !min-w-0 !min-h-0" />
       <div className="px-3.5 py-2.5 flex items-center gap-2.5">
         <div className={cn(
           'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors',
