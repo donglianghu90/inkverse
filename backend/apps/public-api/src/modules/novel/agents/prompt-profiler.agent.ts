@@ -37,9 +37,10 @@ export interface ProfileInput {
   targetAudience: string;
   mainIdea: string;
   tone?: string;
-  protagonistFocus?: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'; // 主角聚焦
-  tonePreference?: string; // 调性偏好
-  audienceTags?: string[]; // 受众标签
+  protagonistFocus?: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble';
+  tonePreference?: string;
+  audienceTags?: string[];
+  writingMode?: 'commercial' | 'literary';
   mainStoryGoal?: string;
   targetChapterWordCount?: number;
   plannedTotalChapters?: { min: number; max: number };
@@ -96,7 +97,9 @@ export class PromptProfilerAgent {
       taskName: 'prompt-profiler',
       schema: bookPromptProfileSchema,
       tags: ['setup', 'profile'],
-      systemPrompt: `你是一位资深的网文编辑总监，同时精通各类网文题材的写作规律。
+      systemPrompt: `${input.writingMode === 'literary'
+        ? '你是一位兼具文学素养与编辑经验的创作顾问，精通各类题材的写作规律和文学创新。'
+        : '你是一位资深的网文编辑总监，同时精通各类网文题材的写作规律。'}
 
 你的任务是为一本新书生成一份完整的"写作手册"（BookPromptProfile）。
 这份手册会被 AI 写手、AI 审阅员等角色在整个创作过程中持续使用。
@@ -179,7 +182,16 @@ ${referenceExample}
 
 14.【观众反应写法 audienceReactionGuide】
   - 一段话描述此题材中如何写"关键时刻的周围人反应"来放大读者体验。
-  - 不是所有题材都靠"旁观者阶梯式震惊"：悬疑靠"不同知情者的异常行为"，言情靠"闺蜜/朋友的侧面烘托"。`,
+  - 不是所有题材都靠"旁观者阶梯式震惊"：悬疑靠"不同知情者的异常行为"，言情靠"闺蜜/朋友的侧面烘托"。
+${input.writingMode === 'literary' ? `
+=== 文学探索模式额外指引 ===
+本书采用文学探索模式，生成手册时请注意：
+- satisfactionTypes：除"爽感"外，增加"洞察感""美学体验""情感共鸣""认知颠覆"等文学层面的满足类型。
+- hookTypes：除悬念/冲突类钩子外，增加"安静共鸣""意象余韵""开放问题""认知位移"等文学结尾类型。
+- pacingGuide：允许长时间慢节奏和内省段落，节奏服务于主题深度而非追更欲。
+- reviewerCalibration.dimensionWeights：originality 权重设为 1.5（商业模式为 0），hookStrength 可适当降低。
+- chapterTypeTemplates：除 climax/setup/rising/relief 外，增加 introspective/fragmentary/atmospheric 三种实验章型模板。
+- clichePatterns：增加对"过于工整的结构""套路化的情节转折""AI式的完美结局"等更深层套路的警示。` : ''}`,
 
       userPrompt: `请为以下设定生成完整的 BookPromptProfile：
 

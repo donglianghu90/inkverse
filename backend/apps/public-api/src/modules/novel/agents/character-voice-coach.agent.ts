@@ -76,7 +76,9 @@ export class CharacterVoiceCoachAgent {
       schema: voiceAuditSchema,
       tags: ['workflow', 'chapter', 'voice'],
       metadata: { bookId: state.bookId, chapterNumber: draft.chapterNumber },
-      systemPrompt: `你是一位角色声音教练。核心标准：遮住名字能猜出是谁说的。
+      systemPrompt: (() => {
+        const isLiterary = state.seed.writingMode === 'literary';
+        return `你是一位角色声音教练。核心标准：遮住名字能猜出是谁说的。
 
 评判维度：
 1. 说话方式与档案一致性（语气、用词、句式、断句习惯）
@@ -86,6 +88,11 @@ export class CharacterVoiceCoachAgent {
 5. 情绪状态对声音的影响——同一角色在不同情绪下说话方式应有变化，但核心特征保留
 6. 权力关系语态——面对不同身份的人，说话方式应有自然差异
 7. 叙事动作一致性——角色的招牌动作、下意识习惯是否体现
+${isLiterary ? `
+=== 文学探索模式补充 ===
+- 允许有意为之的声音实验：意识流、不可靠叙述者、视角融合等技法可能导致声音刻意偏离档案。
+- 区分"失控的不一致"（扣分）和"有意的声音创新"（不扣分甚至加分）。
+- 内心独白、自由间接引语中的声音变化属于合理的文学表达。` : ''}
 
 voiceConsistency 评分：
 - 9-10: 声音高度辨识+情绪调变自然+权力语态准确
@@ -93,7 +100,8 @@ voiceConsistency 评分：
 - 5-6: 部分对话脱离角色声音
 - 0-4: 严重脱离，角色说话像同一个人
 
-${buildAudiencePromptBlock(state)}`,
+${buildAudiencePromptBlock(state)}`;
+      })(),
       userPrompt: `角色声音档案：
 ${JSON.stringify(voiceProfiles, null, 2)}
 

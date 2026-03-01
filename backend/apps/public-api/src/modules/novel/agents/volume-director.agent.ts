@@ -91,12 +91,13 @@ export class VolumeDirectorAgent {
     const maxChPerArc = Math.max(minChPerArc + 2, Math.ceil(maxChPerVol / 3));
 
     const sec = await this.loadSec(state.bookId);
+    const isLiterary = state.seed.writingMode === 'literary';
     return this.llm.generateStructured({
       taskName: 'volume-director',
       schema: volumeArcSchema,
       tags: ['workflow', 'volume', 'planning'],
       metadata: { bookId: state.bookId, volumeNumber },
-      systemPrompt: `你是一位${profile.generatedForGenre}网文的宏观架构师，负责规划一个大卷（约${volRange}章，全书预计${totalCh}章）。
+      systemPrompt: `你是一位${profile.generatedForGenre}${isLiterary ? '小说' : '网文'}的宏观架构师，负责规划一个大卷（约${volRange}章，全书预计${totalCh}章）。
 
 === 大卷的作用 ===
 大卷是小说最重要的节奏单元。一个好的大卷像一部独立电影：
@@ -110,6 +111,12 @@ ${sec['agent:volume-director:volume_structure'] ?? '=== 猫腻式 ===\n1. 开卷
 
 === 新鲜感引擎 ===
 ${sec['agent:volume-director:innovation'] ?? '每一卷必须在叙事形式上有创新——读者读了几百章后"新鲜感"比"套路"更重要。\n可选叙事技法：\n- 双线叙事：两条时间线或两个视角交替推进，在高潮交汇\n- 悬疑揭露：卷开头抛出一个谜，每个MiniArc揭示一层真相\n- 倒叙高潮：先展示高潮的震撼结果，再倒叙\n- 群像接力：不同MiniArc由不同配角视角驱动\n- 瓶中剧：限定空间/时间的高压叙事\n- 暗线反转：本卷一条看似无关的暗线在卷末颠覆认知\n- 缓急极端：前半极度日常温馨→后半极度残酷\n- 禁区探索：触及世界观的禁忌领域'}
+${isLiterary ? `
+=== 文学探索模式额外要求 ===
+- 每个MiniArc至少有1章使用实验章型（introspective/fragmentary/atmospheric）——不是每章都要，但必须有。
+- MiniArc的coreTension允许是内在矛盾/哲学困境/关系暗流，不强制外部冲突。
+- chapterBeats中的tensionLevel可以长时间保持低位（如1-3），只要情感深度持续递进。
+- 鼓励在MiniArc之间安排"静默章"——用于角色内省、环境氛围、主题沉思。` : ''}
 ${recentArcTypes ? '\n' + recentArcTypes : ''}
 ${usedClimax ? usedClimax : ''}
 structuralInnovation 字段必须一句话说清本卷的叙事创新。
@@ -150,7 +157,7 @@ ${openThreads || '（暂无）'}
 当前章节：${startChapter}
 请规划第${volumeNumber}卷。volumeId=vol_${volumeNumber}，startChapter=${startChapter}。
 重要：structuralInnovation和narrativeExperiment必须填写有意义的内容。`,
-      temperature: 0.55,
+      temperature: isLiterary ? 0.65 : 0.55,
     });
   }
 

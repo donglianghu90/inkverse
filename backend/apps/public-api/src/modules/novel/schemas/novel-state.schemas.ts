@@ -46,6 +46,10 @@ export const readerPersonaSchema = z.object({
     'underdog_triumph',
     'mystery_solving',
     'survival_thrill',
+    'literary_depth', // 文学探索模式：追求叙事深度与人性洞察
+    'existential_reflection', // 文学探索模式：存在主义思考与哲学追问
+    'aesthetic_sublime', // 文学探索模式：纯粹的美学体验与意象共鸣
+    'moral_ambiguity', // 文学探索模式：道德模糊地带的不安与反思
   ])).min(1),
   triggerScenes: z.array(z.string()).min(1).max(5),
 }).optional();
@@ -87,10 +91,14 @@ export const audienceDirectiveSchema = z.object({
   softPreferences: z.array(z.string()).default([]),
 });
 
+export const writingModeEnum = z.enum(['commercial', 'literary']); // commercial=畅读模式, literary=文学探索模式
+export type WritingMode = z.infer<typeof writingModeEnum>;
+
 export const storySeedSchema = z.object({
   title: z.string(),
   genre: z.string(),
   targetAudience: z.string(),
+  writingMode: writingModeEnum.default('commercial'),
   audienceTags: z.array(z.string()).default([]),
   protagonistFocus: z.enum(['female_lead', 'male_lead', 'dual_lead', 'ensemble']).optional(),
   tonePreference: z.string().optional(),
@@ -193,6 +201,7 @@ export const bookPromptProfileSchema = z.object({
       consistency: z.number().min(0.5).max(2.0).default(1.0),
       proseQuality: z.number().min(0.5).max(2.0).default(1.0),
       characterDepth: z.number().min(0.5).max(2.0).default(1.0),
+      originality: z.number().min(0).max(2.0).default(0), // 文学探索模式下启用，commercial 模式下为 0 不参与计算
     }),
     genreSpecificChecks: z.array(z.string()).min(2),
     scoringAnchors: z.object({
@@ -307,6 +316,7 @@ export const chapterReviewSchema = z.object({
     consistency: z.number().min(0).max(10),
     proseQuality: z.number().min(0).max(10),
     characterDepth: z.number().min(0).max(10),
+    originality: z.number().min(0).max(10).default(5), // 情节/表达的新鲜度与独创性
   }),
   issuesFound: z.array(z.object({
     category: z.enum([

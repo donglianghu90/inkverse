@@ -25,6 +25,8 @@ import {
   buildStyleDNA,
   buildCharacterVoiceMatrix,
   buildWritingLessonsHint,
+  buildWritingSoulPlaybook,
+  getChapterTypeTemplates,
   UNIFIED_AGENT_MAX_CHARACTERS,
 } from '../prompting/novel-playbook';
 import { buildAudiencePromptBlock } from '../prompting/audience-directive';
@@ -41,18 +43,21 @@ export class CreativeWriterAgent {
   private resolveChapterType(
     intent: ChapterIntent,
     state: StoryState,
-  ): { type: 'setup' | 'rising' | 'climax' | 'relief' | 'general'; temperature: number } {
+  ): { type: string; temperature: number } {
+    const isLiterary = state.seed.writingMode === 'literary';
+    const tempBoost = isLiterary ? 0.05 : 0; // literary 模式整体温度上浮
     const beat = this.findCurrentBeat(intent, state);
     if (beat) {
-      const typeMap: Record<string, 'setup' | 'rising' | 'climax' | 'relief'> = {
+      const typeMap: Record<string, string> = {
         setup: 'setup', escalation: 'rising', twist: 'climax',
         climax: 'climax', aftermath: 'relief', transition: 'relief',
+        introspective: 'introspective', fragmentary: 'fragmentary', atmospheric: 'atmospheric',
       };
       const type = typeMap[beat.role] ?? 'general';
-      const temperature = Math.min(0.95, 0.75 + beat.tensionLevel * 0.02); // tensionLevel 1→0.77, 5→0.85, 10→0.95
+      const temperature = Math.min(0.98, 0.75 + beat.tensionLevel * 0.02 + tempBoost);
       return { type, temperature };
     }
-    return { type: 'general', temperature: 0.85 };
+    return { type: 'general', temperature: Math.min(0.95, 0.85 + tempBoost) };
   }
 
   private findCurrentBeat(
@@ -109,10 +114,14 @@ export class CreativeWriterAgent {
     playbooks?: Record<string, string>,
   ): string {
     const profile = state.bookPromptProfile;
+    const isLiterary = state.seed.writingMode === 'literary';
     const blocks: string[] = [];
 
     // ── 第一层：铁律 ──
-    blocks.push(`=== 铁律（违反即失败）===\n${playbooks?.['agent:creative-writer:iron_rules'] ?? '1. 禁止出场角色绝对不出现（死亡/退场/休眠）。\n2. 淡出角色遵守其maxSceneRole限制：mention_only=仅可被他人提及或回忆，brief_appearance=短暂露面不超过2句对白，supporting=可出场但不可主导剧情。\n3. 开头承接上章场景、语气和情绪。\n4. 结尾必须有让读者翻下一章的驱动力。\n5. 字数在意图范围内。\n6. 只输出中文小说正文，禁止元叙述/提纲/数据。\n7. 禁止开头三段使用反问句/设问句起手——直接切入场景和动作。\n8. 同一章内禁止重复使用相同情绪描写词（如两次"不由得"、两次"心中一动"）。\n9. 对话中禁止角色复述自己刚做过的事——"我已经……了"这类废话删掉，用行动推进。'}`);
+    const defaultIronRules = isLiterary
+      ? '1. 禁止出场角色绝对不出现（死亡/退场/休眠）。\n2. 淡出角色遵守其maxSceneRole限制。\n3. 开头承接上章场景、语气和情绪。\n4. 结尾可以是驱动力、也可以是沉思、意象或安静的余韵——不强制悬念。\n5. 字数在意图范围内。\n6. 只输出中文小说正文，禁止元叙述/提纲/数据。\n7. 同一章内禁止重复使用相同情绪描写词。\n8. 你是追求文学深度的作家——允许慢节奏、内省、留白、非线性叙事。\n9. 如果角色带你走向了意料之外的方向，跟着走——计划是参考不是合同。'
+      : '1. 禁止出场角色绝对不出现（死亡/退场/休眠）。\n2. 淡出角色遵守其maxSceneRole限制：mention_only=仅可被他人提及或回忆，brief_appearance=短暂露面不超过2句对白，supporting=可出场但不可主导剧情。\n3. 开头承接上章场景、语气和情绪。\n4. 结尾必须有让读者翻下一章的驱动力。\n5. 字数在意图范围内。\n6. 只输出中文小说正文，禁止元叙述/提纲/数据。\n7. 禁止开头三段使用反问句/设问句起手——直接切入场景和动作。\n8. 同一章内禁止重复使用相同情绪描写词（如两次"不由得"、两次"心中一动"）。\n9. 对话中禁止角色复述自己刚做过的事——"我已经……了"这类废话删掉，用行动推进。';
+    blocks.push(`=== 铁律（违反即失败）===\n${playbooks?.['agent:creative-writer:iron_rules'] ?? defaultIronRules}`);
 
     // ── 第二层：本书灵魂（深层文风DNA） ──
     if (state.styleAnchor) {
@@ -123,7 +132,9 @@ export class CreativeWriterAgent {
       blocks.push(soul.join('\n'));
     }
     const soul: string[] = [profile.writerGuide.coreIdentity];
-    soul.push(playbooks?.['agent:creative-writer:writing_soul'] ?? '你的使命是"创作故事"而非"执行任务"。意图给方向，铁律是安全边界，边界内你拥有充分的创作自由——好的意外比严格执行计划更有价值。');
+    soul.push(playbooks?.['agent:creative-writer:writing_soul'] ?? (isLiterary
+      ? '你的使命是"创作有深度的文学作品"。意图是灵感来源，铁律是底线，其余皆可探索——主题深度和情感真实性高于一切商业节奏。不是每段都需要推进情节——有时候描写本身就是内容。'
+      : '你的使命是"创作故事"而非"执行任务"。意图给方向，铁律是安全边界，边界内你拥有充分的创作自由——好的意外比严格执行计划更有价值。'));
     soul.push(`题材核心：${profile.writerGuide.genreRules.slice(0, 3).join('；')}`);
     soul.push(`节奏：${profile.writerGuide.pacingGuide}`);
     soul.push(`对话：${profile.writerGuide.dialogueGuide}，调性：${profile.writerGuide.toneGuide}`);
@@ -131,8 +142,9 @@ export class CreativeWriterAgent {
     blocks.push(soul.join('\n'));
 
     // ── 第三层：本章技法（优先 Profile 动态字段，fallback 硬编码通用模板） ──
+    const allTypeTemplates = getChapterTypeTemplates(state.seed.writingMode);
     const dynamicTemplate = profile.chapterTypeTemplates?.[chapterType];
-    const template = dynamicTemplate || CHAPTER_TYPE_TEMPLATES[chapterType];
+    const template = dynamicTemplate || allTypeTemplates[chapterType];
     if (template) blocks.push(template);
     if (intent.chapterNumber <= 3) {
       const dynamicFirst = profile.firstChaptersStrategy;

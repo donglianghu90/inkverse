@@ -235,6 +235,25 @@ export class NovelService {
     };
   }
 
+  private applyLiteraryWeights(profile: BookPromptProfile): BookPromptProfile {
+    const cal = profile.reviewerCalibration;
+    if (!cal?.dimensionWeights) return profile;
+    const w = cal.dimensionWeights;
+    return {
+      ...profile,
+      reviewerCalibration: {
+        ...cal,
+        dimensionWeights: {
+          ...w,
+          hookStrength: Math.max(0.5, (w.hookStrength ?? 1.0) * 0.6),
+          proseQuality: Math.min(2.0, (w.proseQuality ?? 1.0) * 1.3),
+          characterDepth: Math.min(2.0, (w.characterDepth ?? 1.0) * 1.3),
+          originality: 1.5,
+        },
+      },
+    };
+  }
+
   private mergeNamingConvention(
     templateDefaults?: import('./entities/genre-profile-template.entity').SeedAnalyzerHints['namingDefaults'],
     analyzed?: NamingConvention,
@@ -431,12 +450,14 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
 
     let analysis: Awaited<ReturnType<typeof this.seedAnalyzer.analyze>>;
     let bookPromptProfile: BookPromptProfile;
+    const writingMode = dto.writingMode ?? 'commercial';
     if (hasTemplateProfile) { // 模板提供完整 Profile → 只做种子分析，省掉 promptProfiler.generate()
       analysis = await this.seedAnalyzer.analyze({
         mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
         protagonistFocus: dto.protagonistFocus, tonePreference: dto.tonePreference, audienceTags: dto.audienceTags,
         titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal,
         targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters, seedHints,
+        writingMode,
       });
       bookPromptProfile = tpl!.profileJson as unknown as BookPromptProfile;
     } else { // 无模板 → 并行生成种子 + Profile（profile 失败时降级为空壳）
@@ -445,11 +466,12 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
         protagonistFocus: dto.protagonistFocus, tonePreference: dto.tonePreference, audienceTags: dto.audienceTags,
         titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal,
         targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters, seedHints,
+        writingMode,
       });
       const profilePromise = this.promptProfiler.generate({
         genre: dto.genre, targetAudience: dto.targetAudience, mainIdea: dto.mainIdea,
         protagonistFocus: dto.protagonistFocus, tonePreference: dto.tonePreference, audienceTags: dto.audienceTags,
-        mainStoryGoal: dto.mainStoryGoal,
+        mainStoryGoal: dto.mainStoryGoal, writingMode,
         targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters,
         referenceProfile: tpl?.profileJson as unknown as BookPromptProfile | undefined,
       }).catch((e) => {
@@ -460,7 +482,7 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
       analysis = a;
       if (p) { bookPromptProfile = p; } else {
         bookPromptProfile = await this.promptProfiler.generate({
-          genre: dto.genre, targetAudience: dto.targetAudience, mainIdea: dto.mainIdea,
+          genre: dto.genre, targetAudience: dto.targetAudience, mainIdea: dto.mainIdea, writingMode,
           targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters,
         });
       }
@@ -471,6 +493,7 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
       bookStrategy = await this.bookStrategyAgent.generateInitial({
         seed: {
           ...analysis.seed,
+          writingMode,
           audienceTags: dto.audienceTags ?? [],
           protagonistFocus: dto.protagonistFocus,
           tonePreference: dto.tonePreference,
@@ -546,13 +569,14 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
       version: 2,
       seed: {
         ...analysis.seed,
+        writingMode,
         audienceTags: dto.audienceTags ?? [],
         protagonistFocus: dto.protagonistFocus,
         tonePreference: dto.tonePreference,
         ...(dto.mainStoryGoal ? { mainStoryGoal: dto.mainStoryGoal } : {}),
       },
       roughOutline: analysis.outline,
-      bookPromptProfile,
+      bookPromptProfile: writingMode === 'literary' ? this.applyLiteraryWeights(bookPromptProfile) : bookPromptProfile,
       audienceDirective,
       bookStrategy,
       chapterCursor: 1,

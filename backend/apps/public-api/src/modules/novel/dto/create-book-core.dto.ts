@@ -47,6 +47,10 @@ export class CreateBookCoreDto {
   @IsInt() @Min(100) @Max(3000) @IsOptional()
   plannedMaxChapters?: number;
 
+  @ApiPropertyOptional({ description: '写作风格模式：commercial=畅读模式（默认），literary=文学探索模式', enum: ['commercial', 'literary'], default: 'commercial' })
+  @IsString() @IsIn(['commercial', 'literary']) @IsOptional()
+  writingMode?: 'commercial' | 'literary';
+
   @ApiPropertyOptional({ description: '指定题材模板 ID（系统或用户自定义），不传则按 genre 自动匹配' })
   @IsUUID() @IsOptional()
   profileTemplateId?: string;

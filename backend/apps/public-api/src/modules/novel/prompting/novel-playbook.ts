@@ -12,6 +12,7 @@ import {
   MiniArcChapterBeat,
   StyleAnchor,
   WritingLesson,
+  WritingMode,
 } from '../schemas/novel-state.schemas';
 
 // ---------------------------------------------------------------------------
@@ -172,6 +173,22 @@ export const EDITOR_DISCIPLINE_PLAYBOOK = `编辑纪律：
 7) 确保章内有情绪弧线——从A情绪到B情绪，而非情绪平坦。
 8) 如果正文中有"告诉"而非"展示"的段落，改为展示。`;
 
+const LITERARY_EDITOR_DISCIPLINE = `编辑纪律：
+1) 优先修复审阅指出的具体问题。
+2) 保留已验证的事实与因果链。
+3) 不得削弱已有情感张力或主题呼应，除非有更强的叙事理由。
+4) 不得改动章号与章名，除非明确要求。
+
+主动提升职责（在修复问题之余）：
+5) 找到最平淡的2-3段，用更有文学质感、画面感更丰富的方式重新表达。
+6) 检查关键对话是否有"潜台词"层次——角色说的话是否太直白？
+7) 确保章内有情绪弧线——从A情绪到B情绪，而非情绪平坦。
+8) 如果正文中有"告诉"而非"展示"的段落，改为展示。`;
+
+export function buildEditorDisciplinePlaybook(mode?: 'commercial' | 'literary'): string {
+  return mode === 'literary' ? LITERARY_EDITOR_DISCIPLINE : EDITOR_DISCIPLINE_PLAYBOOK;
+}
+
 export const CHARACTER_ARC_PLAYBOOK = `角色弧线意识：
 
 矛盾内核（最重要）：
@@ -238,6 +255,70 @@ export const CHAPTER_TYPE_TEMPLATES: Record<string, string> = {
 - 暗示下一场风暴：让读者在轻松中隐隐感到不安（一个被忽略的细节、一句双关的话）。
 - 节奏慢但信息密度不低——用细节丰富世界观，用小事展示角色性格。`,
 };
+
+// ---------------------------------------------------------------------------
+// Literary exploration mode — playbook variants (文学探索模式变体)
+// ---------------------------------------------------------------------------
+
+export const LITERARY_SOUL_PLAYBOOK = `文学探索写作准则：
+1) 所有正文必须使用简体中文。禁止输出任何元叙述。
+2) 情感真实性优先于读者即时满足——允许不舒适的沉默、无解的困境、模糊的情绪。
+3) 视角可以实验：不可靠叙述者、旁观者视角、多声部、意识流——选择最能服务主题内核的声音。
+4) 角色的行为从人物性格与处境的深层矛盾中涌出，允许非理性、自相矛盾、词不达意。
+5) 不完美是力量：角色可以做出错误选择且不被"纠正"；情节可以不圆满；结尾可以开放。
+6) 主题高于情节：每个场景、对话、描写都应在某个层面回应核心命题——哪怕只是一个意象。
+7) 探索优先于执行：如果写作过程中角色带你走向了意料之外的方向，跟着走。计划是参考不是合同。`;
+
+export const LITERARY_CHAPTER_TYPE_TEMPLATES: Record<string, string> = {
+  introspective: `=== 内省章写作模板 ===
+以角色的内在世界为核心。外部事件是背景音，内心世界才是主旋律。
+
+- 核心任务：展示角色面对核心矛盾时的内心撕裂，不是"想通了"，而是"更困惑了"。
+- 时间可以非线性：回忆、联想、幻觉与当下交织。
+- 感官放大内心状态：焦虑时注意到所有噪音，平静时世界变得模糊。
+- 可以整章只有一个外部事件（甚至没有），通过角色的感知折射出多层意义。
+- 节奏允许极慢——一个动作可以写一整段，如果那个动作承载了角色此刻全部的重量。
+- 结尾不需要"转折"或"钩子"——一个新的自我认知（哪怕是错误的）就是这章的价值。`,
+
+  fragmentary: `=== 碎片叙事章写作模板 ===
+打破线性时间。读者通过拼凑碎片来构建理解——这本身就是阅读体验。
+
+- 结构：多个时间/空间/视角的碎片交替呈现，每个碎片 200-500 字。
+- 碎片间的关联可以是：主题呼应、意象重复、情绪对位、因果倒置。
+- 不需要在本章内解释所有碎片的关系——留给读者一些"拼图"的乐趣。
+- 至少有一条暗线贯穿碎片：同一个物件在不同时空出现、同一句话被不同人说出。
+- 节奏忽快忽慢：紧张的碎片用短句，回忆的碎片用长句和感官细节。
+- 结尾的碎片应该让前面所有碎片的意义发生微妙的位移。`,
+
+  atmospheric: `=== 氛围章写作模板 ===
+以环境、感官、氛围为主体。情节隐于细节之中，像水墨画的留白。
+
+- 核心任务：创造一种"可触摸"的氛围——读者应该"闻到""感受到"这个场景。
+- 至少调动四种感官，且每种感官都与情绪状态对应。
+- 角色的动作极少但极精确——一个小动作暗示一整片内心。
+- 环境本身是角色：天气的变化、光影的移动、声音的层次——它们在讲述自己的故事。
+- 对话极少，每句都像石头扔进静水——涟漪比石头重要。
+- 节奏极慢但信息密度高——每个意象都在为后续章节埋下感知的种子。
+- 结尾用一个感官细节（气味、声音、温度变化）暗示即将到来的变化。`,
+};
+
+/** 根据 writingMode 返回对应的写作灵魂 playbook */
+export function buildWritingSoulPlaybook(mode: WritingMode = 'commercial'): string {
+  return mode === 'literary' ? LITERARY_SOUL_PLAYBOOK : WRITING_SOUL_PLAYBOOK;
+}
+
+/** 根据 writingMode 返回多巴胺策略指引 */
+export function buildDopamineDirective(mode: WritingMode = 'commercial'): string {
+  if (mode === 'literary') {
+    return '多巴胺调度仅供参考——情感真实性与主题深度优先于爽感间隔。允许长时间低谷、压抑、迷茫，只要情感递进是真实的。不要为了"该给爽点了"而破坏叙事节奏。';
+  }
+  return '';
+}
+
+/** 获取全量章型模板（literary 模式合并实验章型） */
+export function getChapterTypeTemplates(mode: WritingMode = 'commercial'): Record<string, string> {
+  return mode === 'literary' ? { ...CHAPTER_TYPE_TEMPLATES, ...LITERARY_CHAPTER_TYPE_TEMPLATES } : CHAPTER_TYPE_TEMPLATES;
+}
 
 // ---------------------------------------------------------------------------
 // Context builders for V2 state

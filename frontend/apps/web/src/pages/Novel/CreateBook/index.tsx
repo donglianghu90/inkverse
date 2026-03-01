@@ -139,6 +139,7 @@ const CreateBook: React.FC = () => {
     protagonistFocus: 'male_lead',
     tonePreference: '',
     audienceTags: [],
+    writingMode: 'commercial',
     mainStoryGoal: '',
     titleHint: '',
     targetChapterWordCount: 3000,
@@ -732,6 +733,34 @@ const CreateBook: React.FC = () => {
           </div>
 
           <div className="space-y-3">
+            <Label>写作模式</Label>
+            <div className="grid grid-cols-2 gap-3">
+              {([
+                { value: 'commercial' as const, label: '畅读模式', desc: '商业节奏优先，追求翻页欲和读者满足感', icon: '📖' },
+                { value: 'literary' as const, label: '文学探索', desc: '主题深度优先，允许实验叙事和非传统结构', icon: '🎭' },
+              ]).map((opt) => (
+                <button
+                  type="button"
+                  key={opt.value}
+                  className={cn(
+                    'flex flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-all hover:border-primary/50 active:scale-[0.97]',
+                    form.writingMode === opt.value
+                      ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
+                      : 'border-border',
+                  )}
+                  onClick={() => setForm({ ...form, writingMode: opt.value })}
+                >
+                  <span className="text-sm font-medium">{opt.icon} {opt.label}</span>
+                  <span className="text-[10px] sm:text-[11px] text-muted-foreground leading-tight">{opt.desc}</span>
+                </button>
+              ))}
+            </div>
+            {form.writingMode === 'literary' && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">文学探索模式下会启用更高温度、实验章型、originality 评分维度，适合追求文学深度的创作。</p>
+            )}
+          </div>
+
+          <div className="space-y-3">
             <Label htmlFor="tonePreference">调性偏好（可选）</Label>
             <Input
               id="tonePreference"
@@ -1106,6 +1135,7 @@ const CreateBook: React.FC = () => {
                   { label: '类型', value: effectiveGenre || '—' },
                   { label: '受众', value: effectiveAudience || '—' },
                   { label: '叙事', value: PROTAGONIST_FOCUS_PRESETS.find((x) => x.value === form.protagonistFocus)?.label || '—' },
+                  { label: '模式', value: form.writingMode === 'literary' ? '文学探索' : '畅读模式' },
                   { label: '调性', value: form.tonePreference || '—' },
                   { label: '标签', value: form.audienceTags?.length ? form.audienceTags.join('、') : '—' },
                   { label: '目标', value: form.mainStoryGoal || '—', clamp: true },

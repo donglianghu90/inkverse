@@ -35,6 +35,7 @@ export class SceneStitcherAgent {
     playbooks?: Record<string, string>,
   ): Promise<ChapterDraft> {
     const profile = state.bookPromptProfile;
+    const isLiterary = state.seed.writingMode === 'literary';
     const sorted = [...sceneDrafts].sort((a, b) => a.sceneIndex - b.sceneIndex);
     const rawConcat = sorted.map((d, i) => `【场景${i + 1}】\n${d.content}`).join('\n\n');
     const storyContext = buildCompactContextProse(state, {
@@ -57,14 +58,20 @@ export class SceneStitcherAgent {
         chapterNumber: intent.chapterNumber,
         sceneCount: sceneDrafts.length,
       },
-      systemPrompt: `${playbooks?.['agent:scene-stitcher:role'] ?? `你是一位精通节奏和过渡的${profile.generatedForGenre}网文缝合大师。你收到了由不同场景组成的章节素材，需要缝合为一个浑然一体的完整章节——读者不应感觉到"这里有拼接痕迹"。`}
+      systemPrompt: `${playbooks?.['agent:scene-stitcher:role'] ?? (isLiterary
+        ? `你是一位精通节奏和过渡的${profile.generatedForGenre}小说缝合大师。你收到了由不同场景组成的章节素材，需要缝合为一个浑然一体的完整章节，同时保持文学质感和叙事实验性。`
+        : `你是一位精通节奏和过渡的${profile.generatedForGenre}网文缝合大师。你收到了由不同场景组成的章节素材，需要缝合为一个浑然一体的完整章节——读者不应感觉到"这里有拼接痕迹"。`)}
 
 === 核心使命（优先级从高到低）===
-${playbooks?.['agent:scene-stitcher:core_mission'] ?? `1. 首段黄金钩子：第一段（≤100字）必须让读者无法放下。承接上章悬念，用异常/反问/感官冲击开场。\n2. 尾段悬崖收尾：最后一段必须在最紧张/最意外的时刻戛然而止。\n3. 逐缝过渡：用感官桥接、时间推移或因果链。\n4. 节奏对比：过渡段体现节奏转换。\n5. 情绪弧线验证。\n6. 冗余去重。\n7. 感官连续性。`}
+${playbooks?.['agent:scene-stitcher:core_mission'] ?? (isLiterary
+  ? `1. 首段质感开篇：第一段建立本章基调——可以是感官、氛围、内心独白或安静的动作，必须有"文学质感"。\n2. 尾段余韵收束：最后一段可以是悬念、安静意象、未说完的话、一个回味的细节，不强制在最高点收尾。\n3. 逐缝过渡：用感官桥接、时间推移或因果链。\n4. 节奏对比：过渡段体现节奏转换。\n5. 情绪弧线验证。\n6. 冗余去重。\n7. 感官连续性。`
+  : `1. 首段黄金钩子：第一段（≤100字）必须让读者无法放下。承接上章悬念，用异常/反问/感官冲击开场。\n2. 尾段悬崖收尾：最后一段必须在最紧张/最意外的时刻戛然而止。\n3. 逐缝过渡：用感官桥接、时间推移或因果链。\n4. 节奏对比：过渡段体现节奏转换。\n5. 情绪弧线验证。\n6. 冗余去重。\n7. 感官连续性。`)}
 整章情绪曲线目标：${scenePlan.overallEmotionalArc}
 
 === 纪律 ===
-${playbooks?.['agent:scene-stitcher:discipline'] ?? '- 保留每个场景的核心内容和精彩段落。\n- 过渡段2-4句，作用是"桥梁"。\n- 可以微调措辞让全章统一，但不改变事件和角色行为。\n- 章节标题要有冲突感和吸引力。\n- 只输出完整中文章节正文。'}
+${playbooks?.['agent:scene-stitcher:discipline'] ?? (isLiterary
+  ? '- 保留每个场景的核心内容和精彩段落。\n- 过渡段2-4句，作用是"桥梁"。\n- 可以微调措辞让全章统一，但不改变事件和角色行为。\n- 章节标题要有意境或暗示性，不必有冲突感。\n- 只输出完整中文章节正文。'
+  : '- 保留每个场景的核心内容和精彩段落。\n- 过渡段2-4句，作用是"桥梁"。\n- 可以微调措辞让全章统一，但不改变事件和角色行为。\n- 章节标题要有冲突感和吸引力。\n- 只输出完整中文章节正文。')}
 - 字数目标：${intent.wordCountRange.min}-${intent.wordCountRange.max}字。
 
 ${buildAudiencePromptBlock(state)}
@@ -90,8 +97,10 @@ ${storyContext}
 ${rawConcat}
 
 请输出缝合后的完整章节（chapterNumber=${intent.chapterNumber}）。
-重点关注：① 首段钩子 ② 尾段悬崖 ③ 每个接缝的自然过渡 ④ 节奏对比 ⑤ 冗余去重。`,
-      temperature: 0.52,
+重点关注：${isLiterary
+  ? '① 首段质感 ② 尾段余韵 ③ 每个接缝的自然过渡 ④ 节奏对比 ⑤ 冗余去重。'
+  : '① 首段钩子 ② 尾段悬崖 ③ 每个接缝的自然过渡 ④ 节奏对比 ⑤ 冗余去重。'}`,
+      temperature: isLiterary ? 0.58 : 0.52,
     });
     result.chapterNumber = intent.chapterNumber;
     return result;

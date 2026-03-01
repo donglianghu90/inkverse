@@ -14,6 +14,7 @@ import {
   buildCharacterArcContext,
   buildKpiTrendHints,
   buildWritingLessonsHint,
+  buildDopamineDirective,
   UNIFIED_AGENT_MAX_CHARACTERS,
 } from '../prompting/novel-playbook';
 import { buildAudiencePromptBlock } from '../prompting/audience-directive';
@@ -37,6 +38,7 @@ export class IntentAgent {
     });
 
     const isEarly = chapterNumber <= 3;
+    const isLiterary = state.seed.writingMode === 'literary';
     const kpiHints = buildKpiTrendHints(state);
     const characterArcAnalysis = buildCharacterArcContext(state);
     const plotThreadLedger = state.plotThreadLedger ?? [];
@@ -91,13 +93,19 @@ export class IntentAgent {
       schema: chapterIntentSchema,
       tags: ['workflow', 'chapter', 'intent'],
       metadata: { bookId: state.bookId, chapterNumber },
-      systemPrompt: `${playbooks?.['agent:intent:role'] ?? '你是一位经验丰富的网文策划师。为下一章设定灵魂方向——不是施工图纸，而是灵感指引。'}
+      systemPrompt: `${playbooks?.['agent:intent:role'] ?? (isLiterary
+        ? '你是一位兼具文学素养与叙事直觉的创作顾问。为下一章设定灵魂方向——不是施工图纸，而是创作灵感与主题探索的指引。'
+        : '你是一位经验丰富的网文策划师。为下一章设定灵魂方向——不是施工图纸，而是灵感指引。')}
 
-=== 你只需要回答三个问题 ===
-${playbooks?.['agent:intent:core_questions'] ?? '1. 这一章的核心冲突/张力是什么？（没有冲突感的目标不合格）\n2. 读者读完应该是什么感受？（描述情绪变化曲线，如"从不安到震惊再到热血沸腾"）\n3. 这一章在整个故事中的使命是什么？（推进什么？铺垫什么？回收什么？）'}
+=== 你需要回答${isLiterary ? '四' : '三'}个问题 ===
+${playbooks?.['agent:intent:core_questions'] ?? (isLiterary
+  ? '1. 这一章的核心张力是什么？（可以是外部冲突，也可以是内在矛盾、情感暗流、认知困境——不强制显性冲突）\n2. 读者读完应该是什么感受？（描述情绪变化曲线，允许"从平静到更深的平静"这样的微妙变化）\n3. 这一章在整个故事中的使命是什么？（推进什么？铺垫什么？深化什么主题？）\n4. 这一章在文学层面有什么独特的表达？（叙事视角、时间结构、意象系统、语言实验？）'
+  : '1. 这一章的核心冲突/张力是什么？（没有冲突感的目标不合格）\n2. 读者读完应该是什么感受？（描述情绪变化曲线，如"从不安到震惊再到热血沸腾"）\n3. 这一章在整个故事中的使命是什么？（推进什么？铺垫什么？回收什么？）')}
 
 === 原则 ===
-${playbooks?.['agent:intent:principles'] ?? '- goals 2-3个，每个必须有冲突感。"被迫做选择"比"了解信息"好100倍。\n- 给方向不给细节——Writer需要创作空间，不要规定具体场景和对话。\n- 尽量避免连续多章相同主情绪走向——读者需要情绪变化，但如果叙事弧确实需要持续某种情绪基调（如危机高潮连续章），可以在情绪强度或侧重点上做出区分。\n- 预期管理：先让读者期待A，再给B（更好或更糟），比直接给A更有力量。'}
+${playbooks?.['agent:intent:principles'] ?? (isLiterary
+  ? '- goals 2-3个，允许探索型目标（内省、氛围构建、关系微妙变化），不强制每个 goal 有显性冲突。\n- 给方向不给细节——Writer需要极大的创作空间。\n- 允许连续 2-3 章维持同一情绪基调（如压抑、迷茫），只要情感深度持续递进。\n- 主题深化优先于情节推进：如果本章能在某个维度深化核心命题，即使情节进展不大也有价值。'
+  : '- goals 2-3个，每个必须有冲突感。"被迫做选择"比"了解信息"好100倍。\n- 给方向不给细节——Writer需要创作空间，不要规定具体场景和对话。\n- 尽量避免连续多章相同主情绪走向——读者需要情绪变化，但如果叙事弧确实需要持续某种情绪基调（如危机高潮连续章），可以在情绪强度或侧重点上做出区分。\n- 预期管理：先让读者期待A，再给B（更好或更糟），比直接给A更有力量。')}
 
 === 悬念规则 ===
 ${playbooks?.['agent:intent:suspense_rules'] ?? '- 长期未推进的悬念容易被读者遗忘——overdue悬念应优先推进或至少提及。payoff间隔太长时安排一个小揭晓维持兴趣。\n- 悬念存量不宜太多（读者记不住）也不能太少（失去追更动力），根据当前故事复杂度动态平衡。\n- explosive级信息差是大杀器——揭晓前需要足够铺垫和读者期待积累，不要轻易消耗。'}
@@ -112,7 +120,8 @@ ${playbooks?.['agent:intent:character_availability'] ?? '- 死亡/退场角色�
 ${buildAudiencePromptBlock(state)}
 ${playbooks?.['__bookStrategy'] ?? ''}
 ${playbooks?.['__policySlice'] ?? ''}
-${state.seed.thematicCore ? `\n=== 主题内核 ===\n核心命题：${state.seed.thematicCore.centralQuestion}\n本章的目标/冲突应该能从某个角度触及这个命题——不需要回答，只需要让读者感受到。` : ''}
+${state.seed.thematicCore ? `\n=== 主题内核${isLiterary ? '（文学探索模式下为最高优先级）' : ''} ===\n核心命题：${state.seed.thematicCore.centralQuestion}\n${isLiterary ? '本章需在某个角度深化核心命题——可以通过角色选择、意象重复、对话潜台词、甚至沉默来回应。' : '本章的目标/冲突应该能从某个角度触及这个命题——不需要回答，只需要让读者感受到。'}` : ''}
+${buildDopamineDirective(state.seed.writingMode)}
 ${arcDirective ? `\n=== 卷级导演指令（必须满足）===\n- 阶段：${arcDirective.arcStage}，使命：${arcDirective.chapterMission}\n- 必须命中：${arcDirective.mustHit.join('；') || '无'}，应规避：${arcDirective.shouldAvoid.join('；') || '无'}\n- 节奏：${arcDirective.pacingDirective || '无'}，钩子：${arcDirective.hookDirective || '无'}，风险：${arcDirective.riskBudget}${arcDirective.characterGuidance?.length ? `\n=== 本卷角色成长目标（作为 characterArcGuidance 的制定依据）===\n${arcDirective.characterGuidance.map((g) => `- ${g.characterName}：${g.volumeStartState} → ${g.volumeEndState}${g.keyMoments.length ? '，关键时刻：' + g.keyMoments.slice(0, 2).join('；') : ''}`).join('\n')}` : ''}` : ''}
 ${isEarly ? '\n' + buildFirstChaptersPlaybook(state.bookPromptProfile?.worldProfile?.goldenFingerApplicable) : ''}${kpiHints.length > 0 ? '\n动态提示：\n' + kpiHints.join('\n') : ''}
 ${buildWritingLessonsHint(state.writingLessons ?? [], ['pacing', 'hook', 'structure', 'emotion'])}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
@@ -191,7 +200,7 @@ ${(() => {
 emotionDirection要描述情绪变化曲线（如"从A到B再到C"），不要只写一个形容词。
 wordCountRange范围：${Math.round((state.seed.targetChapterWordCount ?? 3000) * 0.85)}-${Math.round((state.seed.targetChapterWordCount ?? 3000) * 1.15)}字。
 请为本章核心出场角色提取 characterVoiceAnchors（标志性台词/口癖），作为后续生成的强锚点。`,
-      temperature: 0.5,
+      temperature: isLiterary ? 0.7 : 0.5,
     });
     const policyMax = state.bookStrategy?.threadPolicy?.maxNewThreadsPerChapter;
     if (typeof policyMax === 'number') {

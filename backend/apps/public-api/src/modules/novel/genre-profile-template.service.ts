@@ -447,6 +447,16 @@ function getDefaultNamingDefaultsForGenre(genreLike: string): NonNullable<SeedAn
       taboos: ['娱乐化昵称堆叠', '脱离军事语境的中二称号'],
     };
   }
+  if (/(悬疑推理|mystery|悬疑|推理|侦探|犯罪)/.test(g)) {
+    return {
+      personNameStyle: '现代常用姓名，简洁清晰便于推理线索追踪',
+      locationNameStyle: '现实城市/街区/建筑命名，强调空间定位与封闭感',
+      abilityNameStyle: '线索/推理工具/作案手法命名需逻辑自洽',
+      factionNameStyle: '警署/律所/犯罪组织命名需层级清晰',
+      examples: { personNames: ['陆铮', '宋枝', '周谨'], locationNames: ['临港分局', '白鹤公寓'] },
+      taboos: ['超自然化命名', '脱离现实的花哨称号'],
+    };
+  }
   if (/(无限流|infinite-flow|规则怪谈|恐怖|灵异|悬疑惊悚|suspense-thriller|horror|supernatural)/.test(g)) {
     return {
       personNameStyle: '优先短名/代号，便于高压副本中快速识别与记忆',
@@ -527,7 +537,7 @@ function getDefaultNamingDefaultsForGenre(genreLike: string): NonNullable<SeedAn
       taboos: ['黑暗化命名', '难读难记生僻字'],
     };
   }
-  if (/(古代言情|ancient-romance|古代|宫斗|宅斗)/.test(g)) {
+  if (/(古代言情|ancient-romance|古言|宫斗|宅斗)/.test(g)) {
     return {
       personNameStyle: '古风中文名，可结合名/字/号体系，避免现代口语化命名',
       locationNameStyle: '府邸/州郡/宫苑命名，符合古代礼制与地理语感',
@@ -537,7 +547,7 @@ function getDefaultNamingDefaultsForGenre(genreLike: string): NonNullable<SeedAn
       taboos: ['现代口头禅命名', '英文缩写'],
     };
   }
-  if (/(幻想言情|fantasy-romance|仙侠恋|神魔恋)/.test(g)) {
+  if (/(幻想言情|fantasy-romance|幻言|穿越恋爱|仙侠恋|神魔恋)/.test(g)) {
     return {
       personNameStyle: '古风与幻想混合命名，保留诗性与宿命感',
       locationNameStyle: '仙域/神域/秘境命名，强调唯美与层级',
@@ -547,7 +557,17 @@ function getDefaultNamingDefaultsForGenre(genreLike: string): NonNullable<SeedAn
       taboos: ['硬科技感命名', '破坏仙侠语感的现代词'],
     };
   }
-  if (/(现代言情|urban-romance|言情|都市|romance)/.test(g)) {
+  if (/(都市现实|都市|urban(?!-romance)|神豪|职场|年代文|重生都市)/.test(g)) {
+    return {
+      personNameStyle: '现代常用中文名，简洁大气，符合都市精英/逆袭者气质',
+      locationNameStyle: '现代城市地标/商圈/公司命名，突出社会阶层与财富感',
+      abilityNameStyle: '商业/社交/信息能力命名应贴合现代语境',
+      factionNameStyle: '公司/家族/圈层组织命名需体现阶级关系',
+      examples: { personNames: ['顾辰', '林北', '秦墨'], locationNames: ['华庭国际', '滨江CBD'] },
+      taboos: ['玄幻式命名', '脱离都市语境的中二表达'],
+    };
+  }
+  if (/(现代言情|urban-romance|现言|言情|romance)/.test(g)) {
     return {
       personNameStyle: '现代常见中文名，简洁顺口，避免古风生僻字',
       locationNameStyle: '现代城市/街区/地标命名，贴近现实语境',
@@ -557,7 +577,7 @@ function getDefaultNamingDefaultsForGenre(genreLike: string): NonNullable<SeedAn
       taboos: ['古风生僻字堆叠', '中二式称号'],
     };
   }
-  if (/(历史|权谋|古代|historical)/.test(g)) {
+  if (/(历史|权谋|historical|架空|种田|争霸)/.test(g)) {
     return {
       personNameStyle: '古代语感中文名，可结合名/字/号体系',
       locationNameStyle: '州郡城池/关隘风格命名，符合古代政区语感',
@@ -902,7 +922,7 @@ const RAW_SYSTEM_SEEDS: SystemSeed[] = [
       goldenFingerGuidance: '无限流金手指多为先知优势（知道剧情）或特殊天赋（如百倍奖励）。',
       worldBuildingDirectives: '需要设计风格各异的副本世界和严密的积分兑换/强化体系。',
     },
-    ruleAtoms: playbookDictToAtoms(MYSTERY_PLAYBOOKS),
+    ruleAtoms: playbookDictToAtoms(HORROR_PLAYBOOKS),
   },
   {
     genreKey: 'light-novel', displayName: '轻小说', description: '二次元、搞笑吐槽、反套路、日常修罗场',
@@ -913,7 +933,7 @@ const RAW_SYSTEM_SEEDS: SystemSeed[] = [
       goldenFingerGuidance: '轻小说金手指往往带有搞笑属性（如"绝对选项"、"只会平A"）。',
       worldBuildingDirectives: '世界观可以夸张离谱，重点是角色属性的碰撞和轻松幽默的氛围。',
     },
-    ruleAtoms: playbookDictToAtoms(FANTASY_ROMANCE_PLAYBOOKS),
+    ruleAtoms: playbookDictToAtoms(URBAN_PLAYBOOKS),
   },
   {
     genreKey: 'post-apocalyptic', displayName: '末世危机', description: '丧尸末日、天灾求生、废土重建、囤物资',
@@ -924,7 +944,7 @@ const RAW_SYSTEM_SEEDS: SystemSeed[] = [
       goldenFingerGuidance: '末世金手指多为无限空间、合成系统、避难所升级系统。',
       worldBuildingDirectives: '需要营造物资极度匮乏、秩序崩坏、人性险恶的压抑氛围。',
     },
-    ruleAtoms: playbookDictToAtoms(MYSTERY_PLAYBOOKS),
+    ruleAtoms: playbookDictToAtoms(HORROR_PLAYBOOKS),
   },
   {
     genreKey: 'suspense-thriller', displayName: '悬疑惊悚', description: '心理惊悚、连环杀手、不可靠叙事、密室逃脱',
@@ -1206,6 +1226,13 @@ export class GenreProfileTemplateService implements OnModuleInit {
       const exists = await this.repo.findOneBy({ userId: IsNull() as any, genreKey: seed.genreKey });
       if (exists) {
         let needSave = false;
+        if (exists.displayName !== seed.displayName || exists.description !== seed.description || !isSameJson(exists.genreKeywords, seed.genreKeywords)) {
+          exists.displayName = seed.displayName;
+          exists.description = seed.description;
+          exists.genreKeywords = seed.genreKeywords;
+          needSave = true;
+          this.logger.log(`[seed] 系统模板已同步 displayName/description/genreKeywords: ${seed.displayName}`);
+        }
         if (seed.ruleAtoms?.length && !isSameJson(exists.ruleAtoms ?? [], seed.ruleAtoms)) {
           exists.ruleAtoms = seed.ruleAtoms;
           needSave = true;

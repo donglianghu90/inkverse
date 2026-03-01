@@ -49,7 +49,7 @@ export class ArcDirectorAgent {
   ): Promise<ArcDirectorDirective> {
     const chapterNumber = state.chapterCursor;
     const arc = state.currentArc;
-    if (!arc) return this.buildOffArcDirective(chapterNumber);
+    if (!arc) return this.buildOffArcDirective(chapterNumber, state.seed.writingMode === 'literary');
 
     const context = buildCompactContext(state, {
       maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
@@ -111,6 +111,7 @@ export class ArcDirectorAgent {
       keyMoments: g.keyMoments ?? [],
     }));
 
+    const isLiterary = state.seed.writingMode === 'literary';
     const directive = await this.llm.generateStructured({
       taskName: 'arc-director',
       schema: arcDirectorDirectiveSchema,
@@ -120,13 +121,17 @@ export class ArcDirectorAgent {
         chapterNumber,
         arcId: arc.arcId,
       },
-      systemPrompt: `${playbooks?.['agent:arc-director:role'] ?? '你是网文项目的卷级导演（Arc Director）。\n你的职责：把"卷合同"转成"本章执行指令"，确保章节不会偏离卷级目标。'}
+      systemPrompt: `${playbooks?.['agent:arc-director:role'] ?? (isLiterary
+        ? '你是小说项目的卷级导演（Arc Director）。\n你的职责：把"卷合同"转成"本章创作方向"，在主题一致性的框架下给予作者充分的创作自由。'
+        : '你是网文项目的卷级导演（Arc Director）。\n你的职责：把"卷合同"转成"本章执行指令"，确保章节不会偏离卷级目标。')}
 ${techniqueHint}
 输出要求：
 ${playbooks?.['agent:arc-director:output_rules'] ?? '- chapterNumber 必须是当前章号。\n- arcId 必须等于当前卷 arcId。\n- arcStage 只能从当前节拍和卷进度推导，禁止随意跳阶段。\n- chapterMission 必须是一个可执行动作句，避免空话。参考当前节拍的technique（叙事技法）来制定具体策略。\n- mustHit: 1-4 条，本章必须达成。\n- shouldAvoid: 1-4 条，本章应规避，尤其是破坏卷节奏的行为。\n- payoffThreadIds: 只能从卷合同 mustPayoffThreadIds 中选择，最多 3 条。\n- antagonistPressure: 描述反派/对手在本章的压力表现（可为心理、资源、行动）。\n- hookDirective: 指明本章结尾如何衔接下一章（对应当前 arcStage）。\n- pacingDirective: 指明节奏目标（快/中/慢 + 张力变化）。\n- riskBudget: entry/aftermath/transition 以 low/medium 为主；build/twist 以 medium 为主；climax 允许 high'}
 
 纪律：
-${playbooks?.['agent:arc-director:discipline'] ?? '- 不重复卷合同原文，要转为"本章执行指令"。\n- 若当前章超出卷区间，使用 transition 或 off_arc 思路收束，不得硬拉高潮。\n- 指令必须服务读者体验：明确冲突、明确推进、明确钩子。'}
+${playbooks?.['agent:arc-director:discipline'] ?? (isLiterary
+  ? '- 不重复卷合同原文，要转为"本章创作方向"。\n- 若当前章超出卷区间，使用 transition 或 off_arc 思路收束。\n- 指令必须服务主题深度：可以是冲突推进，也可以是内在探索、氛围构建、关系深化。不强制每章都有显性冲突或悬念钩子。'
+  : '- 不重复卷合同原文，要转为"本章执行指令"。\n- 若当前章超出卷区间，使用 transition 或 off_arc 思路收束，不得硬拉高潮。\n- 指令必须服务读者体验：明确冲突、明确推进、明确钩子。')}
 
 ${buildAudiencePromptBlock(state)}
 ${playbooks?.['__bookStrategy'] ?? ''}
@@ -176,9 +181,11 @@ ${JSON.stringify(context, null, 2)}`,
       const guard = '本章禁止引入新主支线，仅推进/回收现有伏线';
       if (!next.shouldAvoid.some((s) => s.includes('引入新') || s.includes('新支线'))) next.shouldAvoid.push(guard);
     }
+    const isLit = state.seed.writingMode === 'literary';
     const endingDirective = strategy.hookCadencePolicy?.chapterEndingDirective?.trim();
     if (endingDirective && !next.hookDirective.includes(endingDirective)) {
-      next.hookDirective = `${next.hookDirective || '结尾制造可追更入口'}；${endingDirective}`;
+      const fallback = isLit ? '结尾留有余韵或思考空间' : '结尾制造可追更入口';
+      next.hookDirective = `${next.hookDirective || fallback}；${endingDirective}`;
     }
     return next;
   }
@@ -267,17 +274,17 @@ ${JSON.stringify(context, null, 2)}`,
     return { start, end };
   }
 
-  private buildOffArcDirective(chapterNumber: number): ArcDirectorDirective {
+  private buildOffArcDirective(chapterNumber: number, isLiterary = false): ArcDirectorDirective {
     return {
       chapterNumber,
       arcStage: 'off_arc',
-      chapterMission: '推进主线并制造下一卷入口，不做无铺垫的硬高潮',
-      mustHit: ['保证主线冲突有可感知推进'],
+      chapterMission: isLiterary ? '推进主线或深化主题，为下一卷铺垫情感/认知基础' : '推进主线并制造下一卷入口，不做无铺垫的硬高潮',
+      mustHit: [isLiterary ? '保证主题或人物有可感知深化' : '保证主线冲突有可感知推进'],
       shouldAvoid: ['不要临时引入无法回收的大体量支线'],
       payoffThreadIds: [],
-      antagonistPressure: '维持背景压力，但不进行终局级摊牌',
-      hookDirective: '结尾给出下一段冲突入口或关键疑问',
-      pacingDirective: '采用中速节奏，完成一次明确推进',
+      antagonistPressure: isLiterary ? '维持叙事张力，不必是外部对抗' : '维持背景压力，但不进行终局级摊牌',
+      hookDirective: isLiterary ? '结尾留有余韵或引发思考' : '结尾给出下一段冲突入口或关键疑问',
+      pacingDirective: isLiterary ? '采用适合当前情感状态的节奏' : '采用中速节奏，完成一次明确推进',
       riskBudget: 'medium',
     };
   }

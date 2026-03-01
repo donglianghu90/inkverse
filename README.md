@@ -1,6 +1,58 @@
 # inkverse
 
-inkverse 是一个基于大语言模型（LLM）的小说生成开源项目， 支持从故事构思到章节生成的完整创作流程。
+inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**小说**和**短剧**两种创作模式——从故事构思到成品的完整生成流程。
+
+## 短剧引擎（Drama Module）
+
+独立于小说模块的短剧生成引擎，从创意到逐镜头 Shot JSON 的完整链路。
+
+### 创建流程（5步）
+`SeedAnalyzer` → `SeriesDirector`（全剧大纲+分集概要+付费卡点） → `VisualAssetDesigner`（角色锁脸+配音+场景+风格指南） → `DramaProfiler`（编剧手册） → `DramaStrategy`（付费/悬念/角色预算策略）
+
+### 逐集生成 Pipeline（13步）
+`ArcDirector`（段落规划） → `EpisodeDirector`（集级意图） → `ContinuityGuard`（连续性预检） → `Scriptwriter`（剧本） → `DialogueCoach`（台词润色） → `StoryboardDirector`（分镜Shot+T2V visualPrompt） → `AudioDirector`（BGM/SFX/环境音/TTS标注） → `DeterministicChecker`（硬规则校验） → `ScriptReviewer`（质量审核） → `ScriptEditor`（精修循环，最多2轮） → `PacingAnalyzer`（节奏分析） → `HookCrafter`（集末悬念+下集预告） → `EpisodeRecorder`（知识记录+闪回标注）
+
+### 数据模型
+- `DramaState`：顶层聚合，包含 seed/outline/characters/locations/visualStyle/strategy/promptProfile/secretLedger/flashbackBank 等
+- `Shot`：最小粒度，每个 Shot 包含 camera（角度/运动/构图/景深）、characters（动作/表情/位置）、dialogue（TTS emotion/volume/pace）、audio（bgm/sfx/ambience）、visualPrompt（英文 T2V 提示词）、subtitle、duration、transition
+- `EpisodeLoreRecord`：知识记录，含 characterStateDeltas/plotAdvances/newSecrets/flashbackCandidates
+
+### 题材模板系统
+- 10 个系统预置短剧题材模板：霸总/甜宠/战神/穿越/宫斗/复仇/重生/悬疑/都市/古装
+- 每个模板包含：`seedHints`（爽点预设/冲突模式/付费策略/视觉风格/台词风格）、`audienceTags`、`protagonistFocusTags`、`toneTags`、`platformTags`
+- 用户可自定义题材模板（CRUD + 克隆），系统模板自动同步
+- `DramaGenreTemplateEntity` 持久化于 `drama_genre_templates` 表，字段设计参考小说模板但更轻量
+
+### SSE 实时进度
+- **创建阶段**：`GET /api/drama/:dramaId/create-sse` — 订阅 5 步创建流程进度（种子分析→大纲→视觉设计→编剧手册+策略→完成）
+- **逐集生成**：`GET /api/drama/:dramaId/episodes/generate-sse?count=N` — 触发生成并推送 13 步 Pipeline 进度，完成后返回结果
+- **纯监听**：`GET /api/drama/:dramaId/episodes/progress-sse` — 只监听不触发，用于多端观察
+- `DramaProgressService`：EventEmitter 驱动，支持 `create`/`episode` 两种 phase，15 秒心跳保活
+- 前端 CreateDrama 页面在第 5 步展示实时进度条和步骤状态
+- 前端 DramaWorkbench 生成时展示进度条和当前步骤
+
+### API 端点
+- `POST /api/drama` — 创建短剧（触发5步创建流程）
+- `GET /api/drama` — 列表
+- `GET /api/drama/:dramaId` — 详情（含完整 DramaState）
+- `POST /api/drama/:dramaId/episodes/generate?count=N` — 生成N集
+- `GET /api/drama/:dramaId/episodes` — 分集列表
+- `GET /api/drama/:dramaId/episodes/:episodeNumber` — 集详情（含 script/storyboard/review/loreRecord）
+- `GET /api/drama/:dramaId/visual-assets` — 视觉资产
+- `GET /api/drama/:dramaId/create-sse` — 创建进度 SSE
+- `GET /api/drama/:dramaId/episodes/generate-sse?count=N` — 生成进度 SSE
+- `GET /api/drama/:dramaId/episodes/progress-sse` — 纯监听进度 SSE
+- `GET /api/drama/genre-templates/list` — 题材模板列表
+- `GET /api/drama/genre-templates/:id` — 题材模板详情
+- `POST /api/drama/genre-templates` — 创建自定义题材模板
+- `PUT /api/drama/genre-templates/:id` — 更新题材模板
+- `DELETE /api/drama/genre-templates/:id` — 删除题材模板
+- `POST /api/drama/genre-templates/:id/clone` — 克隆题材模板
+
+### 前端页面
+- 书架页 Tab 切换（小说/短剧）
+- 创建短剧页（`/novel/create-drama`）：4步向导（创意→题材模板选择&平台→主线&剧名→规模配置）+ SSE 实时进度
+- 短剧工作台（`/novel/drama/:dramaId`）：基本信息+SSE实时进度+分集列表+集详情弹窗（剧本场景/分镜概览/质量审核）
 
 ## 写作与生成优化
 
@@ -11,9 +63,26 @@ inkverse 是一个基于大语言模型（LLM）的小说生成开源项目， �
 - **并发场景生成 (Parallel Scene Generation)**：在章节工作流中，识别并并发生成平行视角（Parallel POV）的场景，大幅提升单章生成速度。
 - **命名哲学与阶段激活 (Naming Philosophy & Stage Activation)**：开书阶段按题材生成 `namingConvention` 与主角 `nameGrowthArc`；每章仅注入轻量命名风格约束，主角名字的象征重量仅在卷级 `entry/climax` 阶段低频激活，避免过度提示影响写作自然度。
 
+## 写作模式（writingMode）
+
+创建书籍时可选择写作模式，控制全链路生成策略：
+
+- **`commercial`（畅读模式，默认）**：商业节奏优先，追求翻页欲与读者满足感。核心循环采用成熟网文套路，多巴胺调度严格执行，质量门控以 engagement/hookStrength 为重。
+- **`literary`（文学探索模式）**：主题深度与独创性优先，允许实验性叙事（内省章、碎片叙事、氛围章）。具体影响：
+  - **SeedAnalyzer**：temperature 0.6→0.75，核心循环允许自创，emotionalNeeds 扩展 4 类文学情感需求，概念评估默认分降至 5（消除虚高）
+  - **IntentAgent**：temperature 0.5→0.7，允许探索型目标（内省/氛围），多巴胺调度降级为"仅供参考"
+  - **CreativeWriter**：温度整体上浮 +0.05，铁律放松结尾强制钩子，新增 introspective/fragmentary/atmospheric 章型
+  - **HookCrafter**：新增安静共鸣、开放问题、意象消融等文学结尾技法，重复窗口从 3→1
+  - **Reviewer**：新增 `originality` 评分维度（权重 1.5），hookStrength 权重降低 40%，proseQuality/characterDepth 权重提高 30%
+  - **ChapterWorkflow**：质量门控阈值降低 1 分，编辑精修阈值降低 0.5 分
+  - **VolumeDirector**：要求每卷 MiniArc 至少 1 章使用实验章型
+  - **ScenePlanner**：新增 introspection/atmospheric/thematic 场景 purpose
+
+前端：CreateBook 页面「叙事聚焦」下方新增模式选择器卡片。后端：`CreateBookCoreDto.writingMode` 传递至 `storySeed.writingMode`，全链路通过 `state.seed.writingMode` 读取。
+
 ## 新建书受众策略（v2）
 
-- 仅对新建书生效：创建参数可选传 `protagonistFocus`、`tonePreference`、`audienceTags`，用于模板多维匹配。
+- 仅对新建书生效：创建参数可选传 `protagonistFocus`、`tonePreference`、`audienceTags`、`writingMode`，用于模板多维匹配。
 - 模板匹配采用加权策略：`genre + audience + protagonistFocus + tone`，并对历史/悬疑/军事题材启用更高题材保护权重。
 - 冷启动默认权重由 `backend/config/public.properties` 配置：
   - `novel.audienceStrategy.weight.genre`

@@ -8,8 +8,15 @@ export default {
       target: 'http://localhost:8099',
       changeOrigin: true,
       pathRewrite: { '^/api/novel': '/api/inkverse/novel' },
-      timeout: 900_000,      // SSE/LLM长连接需要足够超时
-      proxyTimeout: 900_000, // 代理端也需要
+      timeout: 900_000,
+      proxyTimeout: 900_000,
+    },
+    '/api/drama': {
+      target: 'http://localhost:8099',
+      changeOrigin: true,
+      pathRewrite: { '^/api/drama': '/api/inkverse/drama' },
+      timeout: 900_000,
+      proxyTimeout: 900_000,
     },
     '/api/auth': {
       target: 'http://localhost:8099',

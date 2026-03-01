@@ -127,15 +127,17 @@ export class ChapterWorkflowService {
   private calculateWeightedScore(review: ChapterReview, state: StoryState): number {
     const weights = state.bookPromptProfile.reviewerCalibration.dimensionWeights;
     const d = review.dimensions;
+    const origW = weights.originality ?? 0;
     const totalWeight = weights.engagement + weights.pacing + weights.hookStrength +
-      weights.consistency + weights.proseQuality + weights.characterDepth;
+      weights.consistency + weights.proseQuality + weights.characterDepth + origW;
     const weightedSum =
       d.engagement * weights.engagement +
       d.pacing * weights.pacing +
       d.hookStrength * weights.hookStrength +
       d.consistency * weights.consistency +
       d.proseQuality * weights.proseQuality +
-      d.characterDepth * weights.characterDepth;
+      d.characterDepth * weights.characterDepth +
+      (d.originality ?? 5) * origW;
     return Math.round((weightedSum / totalWeight) * 100) / 100;
   }
 
@@ -149,7 +151,8 @@ export class ChapterWorkflowService {
       pipelineNodes?.find((n) => n.id === id)?.additionalSystemPrompt || undefined;
     const isEnabled = (id: string) =>
       pipelineNodes ? (pipelineNodes.find((n) => n.id === id)?.isEnabled ?? true) : true;
-    const qualityPassScore = runtimeOptions?.qualityPassScore ?? DEFAULT_QUALITY_PASS_SCORE;
+    const isLiterary = state.seed.writingMode === 'literary';
+    const qualityPassScore = runtimeOptions?.qualityPassScore ?? (isLiterary ? Math.max(DEFAULT_QUALITY_PASS_SCORE - 1, 7) : DEFAULT_QUALITY_PASS_SCORE);
     const maxRepairRounds = Math.max(
       0,
       Math.floor(runtimeOptions?.maxRepairRounds ?? DEFAULT_MAX_REPAIR_ROUNDS),
@@ -729,13 +732,14 @@ export class ChapterWorkflowService {
     let finalWeightedScore = finalAttempt.weightedScore;
     let wasEdited = false;
     const wasRewritten = attempts.length > 1;
+    const effectivePolishThreshold = isLiterary ? Math.max(EDITOR_POLISH_THRESHOLD - 0.5, 6) : EDITOR_POLISH_THRESHOLD;
     const needsPolish =
-      finalAttempt.weightedScore < EDITOR_POLISH_THRESHOLD ||
+      finalAttempt.weightedScore < effectivePolishThreshold ||
       !prePolishDeterministicCheck.pass ||
       finalAttempt.review.issuesFound.some((i) => i.severity === 'critical');
     if (needsPolish && isEnabled('editor')) {
       t0 = Date.now();
-      this.logger.log(`[Chapter ${chapterNumber}] 步骤 6/8: 编辑精修（加权分 ${finalAttempt.weightedScore} < ${EDITOR_POLISH_THRESHOLD}）`);
+      this.logger.log(`[Chapter ${chapterNumber}] 步骤 6/8: 编辑精修（加权分 ${finalAttempt.weightedScore} < ${effectivePolishThreshold}）`);
       this.emitProgress(state.bookId, chapterNumber, 'edit', 5, '编辑精修');
       const editReview = { ...finalReview };
       if (prePolishDeterministicCheck.failedChecks.length > 0) {
@@ -938,7 +942,7 @@ export class ChapterWorkflowService {
       strengths: [],
       dimensions: {
         engagement: 8.5, pacing: 8.5, hookStrength: 8.5,
-        consistency: 8.5, proseQuality: 8.5, characterDepth: 8.5,
+        consistency: 8.5, proseQuality: 8.5, characterDepth: 8.5, originality: 5,
       },
     };
   }

@@ -12,6 +12,7 @@ export interface CreateBookParams {
   protagonistFocus?: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble';
   tonePreference?: string;
   audienceTags?: string[];
+  writingMode?: 'commercial' | 'literary';
   mainStoryGoal: string;
   titleHint?: string;
   targetChapterWordCount?: number;

@@ -42,7 +42,7 @@ export class ReviewerAgent {
     const arcGuidance = intent.characterArcGuidance;
     const mustHints = arcGuidance.arcHints.filter((h) => h.priority === 'must');
 
-    return this.llm.generateStructured({
+    const result = await this.llm.generateStructured({
       taskName: 'chapter-reviewer',
       schema: chapterReviewSchema,
       tags: ['workflow', 'chapter', 'review'],
@@ -52,6 +52,7 @@ export class ReviewerAgent {
       },
       systemPrompt: (() => {
         const profile = state.bookPromptProfile;
+        const isLiterary = state.seed.writingMode === 'literary';
         const cal = profile.reviewerCalibration;
         const clicheHardBan = profile.clichePatterns
           .filter((c) => (c.maxPerChapter ?? 1) <= 0)
@@ -64,16 +65,19 @@ export class ReviewerAgent {
           .map((c) => `"${c.pattern}"`)
           .join('、');
 
-        return `${playbooks?.['agent:reviewer:role'] ?? `你是一位严格但公正的${profile.generatedForGenre}网文第一读者。核心问题只有一个：作为付费读者，我想不想看下一章？`}
+        return `${playbooks?.['agent:reviewer:role'] ?? (isLiterary
+          ? `你是一位兼具文学素养与严格标准的${profile.generatedForGenre}小说评审。核心问题：这一章在文学层面有没有让人记住的独特表达？它是否在某个维度深化了核心命题？`
+          : `你是一位严格但公正的${profile.generatedForGenre}网文第一读者。核心问题只有一个：作为付费读者，我想不想看下一章？`)}
 （目标读者：${profile.generatedForAudience}）
 
 === 评价维度（0-10分，加权计算） ===
 - engagement（吸引力×${cal.dimensionWeights.engagement}）
 - pacing（节奏×${cal.dimensionWeights.pacing}）
-- hookStrength（钩子×${cal.dimensionWeights.hookStrength}）
+- hookStrength（${isLiterary ? '结尾余韵' : '钩子'}×${cal.dimensionWeights.hookStrength}）
 - consistency（一致性×${cal.dimensionWeights.consistency}）
 - proseQuality（文笔×${cal.dimensionWeights.proseQuality}）
 - characterDepth（角色深度×${cal.dimensionWeights.characterDepth}）
+- originality（独创性×${cal.dimensionWeights.originality ?? 0}）${isLiterary ? '——评估情节/表达/视角的新鲜度。是否有读者没见过的写法或角度？是否避开了所有常见套路？' : ''}
 
 === 体验级评分锚点（用感受校准分数） ===
 ${playbooks?.['agent:reviewer:experience_anchors'] ?? `翻页欲：9-10读完立刻想看下一章；7-8一口气读完不走神；5-6中途想看手机；4以下跳着读。\n可记忆性：有金句/名场面加分；读完脑子一片空白扣分。\n沉浸度：第一段入戏 vs 始终有被安排的感觉。`}
@@ -99,9 +103,12 @@ ${cal.genreSpecificChecks.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
 === 反虚高铁律 ===
 ${playbooks?.['agent:reviewer:anti_inflation'] ?? '- 禁止安慰分：分数必须由正文证据支撑。\n- 锚定：还可以=6，不错=7，很好=8，优秀=8.5，惊艳=9，完美=10。\n- 8+必须给出至少2条可引用的具体优秀表现；9+必须说明为何达到题材标杆。'}
+${isLiterary ? '- originality 锚定：照搬任何常见套路=4；有一处新意=6；多处新意且服务主题=8；整章叙事方式/视角/意象系统有开创性=9+。' : ''}
 
 === Critical级触发条件 ===
-${playbooks?.['agent:reviewer:critical_triggers'] ?? '以下任一情况必须标记为critical：\n- 死亡/退场角色出现在行动线中\n- 同一段内出现3个以上AI套话\n- 整章无冲突/无事件推进（纯水章）\n- 角色行为与已建立性格严重矛盾且无合理铺垫\n- 章末无任何钩子/驱动力\n- 开头三段连续使用反问句/设问句\n- 出现"他意识到自己在XX"式的过度自知内心戏超过2处'}
+${playbooks?.['agent:reviewer:critical_triggers'] ?? (isLiterary
+  ? '以下任一情况必须标记为critical：\n- 死亡/退场角色出现在行动线中\n- 同一段内出现3个以上AI套话\n- 角色行为与已建立性格严重矛盾且无合理铺垫\n- 出现"他意识到自己在XX"式的过度自知内心戏超过2处\n- 整章无任何独特的表达/视角/意象（文学探索模式下此条为critical）\n- 情节走向完全可预测，零意外零新意'
+  : '以下任一情况必须标记为critical：\n- 死亡/退场角色出现在行动线中\n- 同一段内出现3个以上AI套话\n- 整章无冲突/无事件推进（纯水章）\n- 角色行为与已建立性格严重矛盾且无合理铺垫\n- 章末无任何钩子/驱动力\n- 开头三段连续使用反问句/设问句\n- 出现"他意识到自己在XX"式的过度自知内心戏超过2处')}
 
 === 裁决（三档互斥，从上到下匹配第一条即停） ===
 ${playbooks?.['agent:reviewer:verdict_rules'] ?? '- < 6.0 或有 critical → "major_issues"\n- ≥ 8.5 且无 critical 且无 moderate → "good"\n- 其余 → "needs_edit"'}

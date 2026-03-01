@@ -13,16 +13,18 @@ import {
   StorySeed,
   RoughOutline,
   NamingConvention,
+  WritingMode,
 } from '../schemas/novel-state.schemas';
-import { WRITING_SOUL_PLAYBOOK } from '../prompting/novel-playbook';
+import { buildWritingSoulPlaybook } from '../prompting/novel-playbook';
 
 export interface SeedAnalysisInput {
   mainIdea: string;
   genre: string;
   targetAudience: string;
-  protagonistFocus?: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'; // 主角叙事聚焦
-  tonePreference?: string; // 调性偏好
-  audienceTags?: string[]; // 受众标签
+  protagonistFocus?: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble';
+  tonePreference?: string;
+  audienceTags?: string[];
+  writingMode?: WritingMode;
   titleHint?: string;
   mainStoryGoal?: string;
   targetChapterWordCount?: number;
@@ -62,30 +64,36 @@ export class SeedAnalyzerAgent {
   constructor(private readonly llm: LlmService) {}
 
   async analyze(input: SeedAnalysisInput): Promise<SeedAnalysisOutput> {
+    const isLiterary = input.writingMode === 'literary';
     const raw = await this.llm.generateStructured({
       taskName: 'seed-analyzer',
       schema: seedAnalysisOutputSchema,
-      systemPrompt: `你是一位资深网文策划+读者心理专家。你的目标是设计一个让读者欲罢不能的故事引擎——核心循环、情感锚点和节奏呼吸缺一不可。
+      systemPrompt: `${isLiterary ? '你是一位兼具文学素养与商业直觉的故事架构师。你的目标是设计一个有深度、有独创性的故事——主题内核、人物深度和叙事创新是核心。' : '你是一位资深网文策划+读者心理专家。你的目标是设计一个让读者欲罢不能的故事引擎——核心循环、情感锚点和节奏呼吸缺一不可。'}
 
 === 核心原则 ===
-- 长篇网文（${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800}章，每章约${input.targetChapterWordCount ?? 3000}字，总约${Math.round(((input.plannedTotalChapters?.min ?? 500) + (input.plannedTotalChapters?.max ?? 800)) / 2 * (input.targetChapterWordCount ?? 3000) / 10000)}万字）
+- 长篇${isLiterary ? '小说' : '网文'}（${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800}章，每章约${input.targetChapterWordCount ?? 3000}字，总约${Math.round(((input.plannedTotalChapters?.min ?? 500) + (input.plannedTotalChapters?.max ?? 800)) / 2 * (input.targetChapterWordCount ?? 3000) / 10000)}万字）
 - 故事种子是"方向"不是"规范"，后续可偏离
 - 粗大纲阶段数和每阶段章数必须匹配总章数规模（如50章→3-5阶段每阶段10-17章，200章→5-8阶段每阶段25-40章，600章→8-15阶段每阶段40-100章）
 - 所有输出简体中文
+${isLiterary ? '- 【文学探索模式】独创性和主题深度优先于商业节奏。允许非传统结构、慢节奏、实验性叙事。' : ''}
 
-=== 核心循环设计（最重要——决定书能不能追下去） ===
-每本成功的长篇网文都有一个让读者上瘾的"核心循环"。你必须根据题材设计它。
-常见核心循环模式（根据题材选择最合适的，也可混合）：
-- 逆袭式（热血/爽文）：被小看→积蓄→关键爆发→震惊众人→更大的舞台→再被小看…
-- 解谜式（悬疑/探险）：发现异常→追查→更大谜团→碎片答案→世界观扩大…
-- 情感式（言情/群像）：误解→接近→摩擦→心动→外部阻碍→更深的纠葛…
-- 博弈式（权谋/商战）：布局→试探→对手反击→绝境→翻盘→更大的棋局…
-- 成长式（日常/青春）：挑战→挣扎→小突破→新认知→更大挑战…
-- 收集式（修仙/游戏/宝可梦）：探索新地图→发现资源→收集/掌控→强化→更大世界的门打开…
-- 势力式（商战/政治/国战）：建立据点→扩张→遭遇强敌→应对/联盟→格局跃升…
-- 双线式（灵异/穿越/平行世界）：现实事件→异世界事件→两线交汇→认知重塑→新的分裂…
-- 恐惧式（恐怖/惊悚）：日常平静→微妙异常→恐惧升级→短暂安全→更深层的不安…
-- 竞技式（体育/电竞）：训练瓶颈→发现对手→备战磨合→关键对决→新的赛季/目标…
+=== 核心循环设计（${isLiterary ? '叙事引擎——可传统可实验' : '最重要——决定书能不能追下去'}） ===
+${isLiterary ? `核心循环不必是传统的"升级→爆发"模式。以下仅为参考，鼓励混合、变形或自创：
+- 可以是人物内在矛盾的螺旋式深化（每次面对同一困境，选择和代价都不同）
+- 可以是主题的多面探索（每个阶段从不同角度回答核心命题）
+- 可以是关系网络的裂变与重组
+- 也可以使用传统循环模式，但必须有独特的变形` : '每本成功的长篇网文都有一个让读者上瘾的"核心循环"。你必须根据题材设计它。'}
+${isLiterary ? '' : '常见核心循环模式（根据题材选择最合适的，也可混合）：'}
+${isLiterary ? '' : '- 逆袭式（热血/爽文）：被小看→积蓄→关键爆发→震惊众人→更大的舞台→再被小看…'}
+${isLiterary ? '' : '- 解谜式（悬疑/探险）：发现异常→追查→更大谜团→碎片答案→世界观扩大…'}
+${isLiterary ? '' : '- 情感式（言情/群像）：误解→接近→摩擦→心动→外部阻碍→更深的纠葛…'}
+${isLiterary ? '' : '- 博弈式（权谋/商战）：布局→试探→对手反击→绝境→翻盘→更大的棋局…'}
+${isLiterary ? '' : '- 成长式（日常/青春）：挑战→挣扎→小突破→新认知→更大挑战…'}
+${isLiterary ? '' : '- 收集式（修仙/游戏/宝可梦）：探索新地图→发现资源→收集/掌控→强化→更大世界的门打开…'}
+${isLiterary ? '' : '- 势力式（商战/政治/国战）：建立据点→扩张→遭遇强敌→应对/联盟→格局跃升…'}
+${isLiterary ? '' : '- 双线式（灵异/穿越/平行世界）：现实事件→异世界事件→两线交汇→认知重塑→新的分裂…'}
+${isLiterary ? '' : '- 恐惧式（恐怖/惊悚）：日常平静→微妙异常→恐惧升级→短暂安全→更深层的不安…'}
+${isLiterary ? '' : '- 竞技式（体育/电竞）：训练瓶颈→发现对手→备战磨合→关键对决→新的赛季/目标…'}
 ${input.seedHints?.coreLoopPatterns?.length ? `- ${input.seedHints.coreLoopPatterns.map((p) => `【题材定制】${p}`).join('\n- ')}` : ''}
 - 核心循环的关键：每次重复都有变化，但读者每次都期待"这次会怎样"。
 - 你要明确定义：
@@ -195,8 +203,9 @@ hookScore、uniquenessScore、marketFitScore、projectionScore（0-10）
 overallViability：weak/passable/strong/exceptional
 - 新增 addictionScore：读者读到第10章时有多难放下？（0-10）
 - 如果 overallViability = weak 或 hookScore < 6，主动调整
+${isLiterary ? '- 【文学探索模式】uniquenessScore 低于 7 视为不合格——文学探索的核心是独创性。projectionScore 可适当放宽。' : ''}
 
-${WRITING_SOUL_PLAYBOOK}`,
+${buildWritingSoulPlaybook(input.writingMode)}`,
       userPrompt: `请分析这个创意并生成故事种子与粗大纲：
 
 核心创意：${input.mainIdea}
@@ -228,7 +237,7 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
 16. seed.protagonistConcept.nameRationale：一句话说明命名出发点（为什么叫这个名字，与题材/主题/性格/命运的关联）
 17. seed.protagonistConcept.nameGrowthArc：阶段数与 outline.points 数量相同，每阶段 interpretation + selfPerception 必须有情感转变，按题材选择合适的成长载体（玄幻=震慑感变化，言情=称呼亲密度，历史=官职称谓，悬疑=身份认知）
 18. namingConvention：输出完整的命名规范，包含 personNameStyle/locationNameStyle/abilityNameStyle（如有）/factionNameStyle（如有）/taboos/examples（至少3个人名示例和2个地名示例）`,
-      temperature: 0.6,
+      temperature: isLiterary ? 0.75 : 0.6,
     });
     return this.normalizeAndValidate(raw as Record<string, unknown>, input);
   }
@@ -275,7 +284,7 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
         plannedTotalChapters: { min: plannedMin, max: Math.max(plannedMin, plannedMax) },
         readerPersona: this.normalizeReaderPersona(rpRaw),
         goldenFinger: this.normalizeGoldenFinger(gfRaw),
-        conceptEvaluation: this.normalizeConceptEvaluation(ceRaw),
+        conceptEvaluation: this.normalizeConceptEvaluation(ceRaw, input.writingMode === 'literary'),
         thematicCore: this.normalizeThematicCore(thematicRaw),
       },
       outline: this.normalizeOutline(outlineRaw, plannedMin, plannedMax),
@@ -374,14 +383,15 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
     };
   }
 
-  private normalizeConceptEvaluation(raw: Record<string, unknown>): Record<string, unknown> | undefined {
+  private normalizeConceptEvaluation(raw: Record<string, unknown>, isLiterary = false): Record<string, unknown> | undefined {
     if (Object.keys(raw).length === 0) return undefined;
+    const fallback = isLiterary ? 5 : 7; // literary 模式诚实评分，commercial 保持原有宽松默认
     return {
-      hookScore: this.clampScore(this.asNumber(raw.hookScore), 7),
-      uniquenessScore: this.clampScore(this.asNumber(raw.uniquenessScore), 7),
-      marketFitScore: this.clampScore(this.asNumber(raw.marketFitScore), 7),
-      projectionScore: this.clampScore(this.asNumber(raw.projectionScore), 7),
-      overallViability: this.normalizeViability(raw.overallViability),
+      hookScore: this.clampScore(this.asNumber(raw.hookScore), fallback),
+      uniquenessScore: this.clampScore(this.asNumber(raw.uniquenessScore), fallback),
+      marketFitScore: this.clampScore(this.asNumber(raw.marketFitScore), fallback),
+      projectionScore: this.clampScore(this.asNumber(raw.projectionScore), fallback),
+      overallViability: this.normalizeViability(raw.overallViability, isLiterary),
       strengthNotes: this.normalizeStringArray(raw.strengthNotes, ['核心冲突具备持续升级空间']),
       weaknessNotes: this.normalizeStringArray(raw.weaknessNotes, ['需持续强化角色情感锚点']),
       suggestions: this.normalizeStringArray(raw.suggestions, ['每卷明确阶段目标并抬升代价']),
@@ -397,9 +407,9 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
     };
   }
 
-  private normalizeViability(v: unknown): 'weak' | 'passable' | 'strong' | 'exceptional' {
+  private normalizeViability(v: unknown, isLiterary = false): 'weak' | 'passable' | 'strong' | 'exceptional' {
     if (v === 'weak' || v === 'passable' || v === 'strong' || v === 'exceptional') return v;
-    return 'strong';
+    return isLiterary ? 'passable' : 'strong'; // literary 保守默认，commercial 保持原有乐观默认
   }
 
   private clampScore(v: number | undefined, fallback: number): number {
@@ -422,6 +432,7 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
     const allowed = new Set([
       'power_fantasy', 'romantic_fulfillment', 'intellectual_superiority', 'justice_served',
       'found_family', 'escape_mundane', 'underdog_triumph', 'mystery_solving', 'survival_thrill',
+      'literary_depth', 'existential_reflection', 'aesthetic_sublime', 'moral_ambiguity',
     ]);
     const raw = this.normalizeStringArray(value, []);
     const mapped = raw.map((item) => {
@@ -436,6 +447,10 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
       if (t.includes('生存') || t.includes('惊险') || t.includes('恐惧')) return 'survival_thrill';
       if (t.includes('逃离') || t.includes('放松') || t.includes('解压')) return 'escape_mundane';
       if (t.includes('掌控') || t.includes('变强') || t.includes('力量')) return 'power_fantasy';
+      if (t.includes('文学') || t.includes('深度') || t.includes('人性') || t.includes('洞察')) return 'literary_depth';
+      if (t.includes('存在') || t.includes('哲学') || t.includes('意义') || t.includes('虚无')) return 'existential_reflection';
+      if (t.includes('美学') || t.includes('意象') || t.includes('诗意') || t.includes('崇高')) return 'aesthetic_sublime';
+      if (t.includes('道德') || t.includes('灰色') || t.includes('模糊') || t.includes('矛盾')) return 'moral_ambiguity';
       return '';
     }).filter(Boolean);
     const dedup = [...new Set(mapped)];
@@ -515,6 +530,13 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
         examples: { personNames: ['周烈', '“灰狼”沈拓', '顾砚'], locationNames: ['北境三号防线', '青岚前进基地'] },
       };
     }
+    if (/(悬疑推理|mystery|悬疑|推理|侦探|犯罪)/.test(g)) {
+      return {
+        personNameStyle: '现代常用姓名，简洁清晰便于推理线索追踪',
+        locationNameStyle: '现实城市/街区/建筑命名，强调空间定位与封闭感',
+        examples: { personNames: ['陆铮', '宋枝', '周谨'], locationNames: ['临港分局', '白鹤公寓'] },
+      };
+    }
     if (/(无限流|infinite-flow|规则怪谈|恐怖|灵异|悬疑惊悚|suspense-thriller|horror|supernatural)/.test(g)) {
       return {
         personNameStyle: '优先短名/代号，便于高压副本中快速识别与记忆',
@@ -571,28 +593,35 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
         examples: { personNames: ['小满', '豆豆', '安安'], locationNames: ['彩虹镇', '风铃森林'] },
       };
     }
-    if (/(古代言情|ancient-romance|古代|宫斗|宅斗)/.test(g)) {
+    if (/(古代言情|ancient-romance|古言|宫斗|宅斗)/.test(g)) {
       return {
         personNameStyle: '古风中文名，可结合名/字/号体系，避免现代口语化命名',
         locationNameStyle: '府邸/州郡/宫苑命名，符合古代礼制与地理语感',
         examples: { personNames: ['沈清辞', '裴砚之', '谢明昭'], locationNames: ['长乐宫', '临安侯府'] },
       };
     }
-    if (/(幻想言情|fantasy-romance|仙侠恋|神魔恋)/.test(g)) {
+    if (/(幻想言情|fantasy-romance|幻言|穿越恋爱|仙侠恋|神魔恋)/.test(g)) {
       return {
         personNameStyle: '古风与幻想混合命名，保留诗性与宿命感',
         locationNameStyle: '仙域/神域/秘境命名，强调唯美与层级',
         examples: { personNames: ['姬扶月', '谢无咎', '云照晚'], locationNames: ['太初天阙', '忘川镜海'] },
       };
     }
-    if (/(现代言情|urban-romance|言情|都市|romance)/.test(g)) {
+    if (/(都市现实|都市|urban(?!-romance)|神豪|职场|年代文|重生都市)/.test(g)) {
+      return {
+        personNameStyle: '现代常用中文名，简洁大气，符合都市精英/逆袭者气质',
+        locationNameStyle: '现代城市地标/商圈/公司命名，突出社会阶层与财富感',
+        examples: { personNames: ['顾辰', '林北', '秦墨'], locationNames: ['华庭国际', '滨江CBD'] },
+      };
+    }
+    if (/(现代言情|urban-romance|现言|言情|romance)/.test(g)) {
       return {
         personNameStyle: '现代常见中文名，简洁顺口，避免古风生僻字',
         locationNameStyle: '现代城市/街区/地标命名，贴近现实语境',
         examples: { personNames: ['程予安', '陆知夏', '周言'], locationNames: ['滨江公寓', '临江路'] },
       };
     }
-    if (/(历史|权谋|古代)/.test(g)) {
+    if (/(历史|权谋|historical|架空|种田|争霸)/.test(g)) {
       return {
         personNameStyle: '古代语感中文名，可结合名/字/号体系',
         locationNameStyle: '州郡城池/关隘风格命名，符合古代政区语感',

@@ -44,52 +44,54 @@ interface ProviderConfig {
 export interface TaskRoute { provider: LlmProvider; tier: ModelTier; }
 
 /**
- * 任务→模型路由表（三Provider最优分配）
- * Gemini Creative: 读者直面的文学创作（写作/编辑/缝合/声音DNA）
- * Gemini Standard: 深度推理的规划/审核/分析 + 中等复杂度分析
- * OpenAI GPT-5: 初稿写作+多样性审阅
- * Gemini Flash: 结构化提取/轻量检查（成本最低）
+ * 任务→模型路由表（Gemini + OpenAI 双引擎，Claude仅haiku可用作fallback）
+ * Gemini Creative: 终稿文学创作（gemini-3.1-pro，中文写作品质高，$2/$12性价比最优）
+ * OpenAI Creative: 初稿写作+场景构建（gpt-5.2，多样性好，$3/$15）
+ * OpenAI Standard: 多视角审阅/质量把关（gpt-5.1，$2/$10比Gemini更便宜）
+ * Gemini Standard: 规划/架构/结构化分析（Schema遵从最好，大上下文窗口）
+ * Gemini Flash: 结构化提取/轻量检查（速度最快）
+ * Claude(haiku): 仅作fallback，代理opus/sonnet均不可用(E015)
  */
 const TASK_ROUTES: Record<string, TaskRoute> = {
-  // ═══ Gemini Creative — 文学创作（读者直面内容） ═══
+  // ═══ Gemini Creative — 终稿文学创作（读者直面内容，中文品质最优） ═══
   'creative-writer':    { provider: 'gemini', tier: 'creative' },
-  'scene-writer':       { provider: 'gemini', tier: 'creative' },
-  'scene-stitcher':     { provider: 'gemini', tier: 'creative' },
-  'chapter-editor':     { provider: 'gemini', tier: 'creative' },
   'hook-crafter':       { provider: 'gemini', tier: 'creative' },
-  'patch-rewriter':     { provider: 'gemini', tier: 'creative' },
+  'chapter-editor':     { provider: 'gemini', tier: 'creative' },
   'character-voice-coach': { provider: 'gemini', tier: 'creative' },
-  // ═══ OpenAI GPT-5 — 初稿写作+多样性审阅 ═══
-  'draft-writer':       { provider: 'gemini', tier: 'creative' },
-  'reader-jury':        { provider: 'gemini', tier: 'standard' },
-  // ═══ Gemini Standard — 规划/审核/深度分析 ═══
+  // ═══ OpenAI Creative — 初稿写作+场景构建（多样性、不同风格） ═══
+  'scene-writer':       { provider: 'openai', tier: 'creative' },
+  'draft-writer':       { provider: 'openai', tier: 'creative' },
+  'scene-stitcher':     { provider: 'openai', tier: 'creative' },
+  'patch-rewriter':     { provider: 'openai', tier: 'creative' },
+  // ═══ OpenAI Standard — 多视角审阅+质量把关（$2/$10，避免写手自审同质化） ═══
+  'reader-jury':        { provider: 'openai', tier: 'standard' },
+  'chapter-reviewer':   { provider: 'openai', tier: 'standard' },
+  'editor-in-chief':    { provider: 'openai', tier: 'standard' },
+  'consistency-audit':  { provider: 'openai', tier: 'standard' },
+  'retrospective-learner': { provider: 'openai', tier: 'standard' },
+  // ═══ Gemini Standard — 规划/架构/结构化分析 ═══
   'arc-director':       { provider: 'gemini', tier: 'standard' },
   'chapter-intent':     { provider: 'gemini', tier: 'standard' },
   'scene-planner':      { provider: 'gemini', tier: 'standard' },
-  'chapter-reviewer':   { provider: 'gemini', tier: 'standard' },
   'bible-crystallization': { provider: 'gemini', tier: 'standard' },
   'outline-revision':   { provider: 'gemini', tier: 'standard' },
   'volume-director':    { provider: 'gemini', tier: 'standard' },
   'volume-foreshadowing': { provider: 'gemini', tier: 'standard' },
-  'editor-in-chief':    { provider: 'gemini', tier: 'standard' },
   'ip-bible-architect': { provider: 'gemini', tier: 'standard' },
   'cast-bootstrap':     { provider: 'gemini', tier: 'standard' },
   'arc-architect':      { provider: 'gemini', tier: 'standard' },
   'arc-planning':       { provider: 'gemini', tier: 'standard' },
   'scene-designer':     { provider: 'gemini', tier: 'standard' },
   'style-director':     { provider: 'gemini', tier: 'standard' },
-  // ═══ Gemini Standard — 中等复杂度分析 ═══
   'seed-analyzer':      { provider: 'gemini', tier: 'standard' },
   'reader-pulse-analyzer': { provider: 'gemini', tier: 'standard' },
-  'consistency-audit':  { provider: 'gemini', tier: 'standard' },
   'pacing-analyzer':    { provider: 'gemini', tier: 'standard' },
   'continuity-guard':   { provider: 'gemini', tier: 'standard' },
   'prompt-profiler':    { provider: 'gemini', tier: 'standard' },
   'agent-section-generator': { provider: 'gemini', tier: 'standard' },
   'chapter-contract-manager': { provider: 'gemini', tier: 'standard' },
   'continuity-auditor': { provider: 'gemini', tier: 'standard' },
-  'retrospective-learner': { provider: 'gemini', tier: 'standard' },
-  // ═══ Gemini Flash — 轻量提取（成本最低、速度最快） ═══
+  // ═══ Gemini Flash — 轻量提取（速度最快） ═══
   'text-analyzer':      { provider: 'gemini', tier: 'lightweight' },
   'narrative-extractor': { provider: 'gemini', tier: 'lightweight' },
   'world-extractor':    { provider: 'gemini', tier: 'lightweight' },
@@ -102,6 +104,24 @@ const TASK_ROUTES: Record<string, TaskRoute> = {
   'plot-economy-planner': { provider: 'gemini', tier: 'lightweight' },
   'lore-recorder':      { provider: 'gemini', tier: 'lightweight' },
   'character-canon-arbiter': { provider: 'gemini', tier: 'lightweight' },
+  // ═══ Drama — 短剧引擎 ═══
+  'drama-scriptwriter':       { provider: 'gemini', tier: 'creative' },
+  'drama-dialogue-coach':     { provider: 'gemini', tier: 'creative' },
+  'drama-script-editor':      { provider: 'gemini', tier: 'creative' },
+  'drama-hook-crafter':       { provider: 'gemini', tier: 'creative' },
+  'drama-storyboard-director': { provider: 'openai', tier: 'creative' },
+  'drama-script-reviewer':    { provider: 'openai', tier: 'standard' },
+  'drama-series-director':    { provider: 'gemini', tier: 'standard' },
+  'drama-seed-analyzer':      { provider: 'gemini', tier: 'standard' },
+  'drama-visual-asset-designer': { provider: 'gemini', tier: 'standard' },
+  'drama-profiler':           { provider: 'gemini', tier: 'standard' },
+  'drama-strategy':           { provider: 'gemini', tier: 'standard' },
+  'drama-arc-director':       { provider: 'gemini', tier: 'standard' },
+  'drama-episode-director':   { provider: 'gemini', tier: 'standard' },
+  'drama-audio-director':     { provider: 'gemini', tier: 'standard' },
+  'drama-continuity-guard':   { provider: 'gemini', tier: 'lightweight' },
+  'drama-pacing-analyzer':    { provider: 'gemini', tier: 'lightweight' },
+  'drama-episode-recorder':   { provider: 'gemini', tier: 'lightweight' },
 };
 
 interface LlmCachedConfig {
