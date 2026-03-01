@@ -391,7 +391,7 @@ export const volumeArcMiniArcSlotSchema = z.object({
   arcType: z.string(), // dungeon/journey/war/mystery/etc
   estimatedChapters: z.number().int().min(1),
   objective: z.string(), // 这个MiniArc要达成什么
-  prerequisitePlotThreads: z.array(z.string()).default([]),
+  prerequisitePlotThreads: z.preprocess(v => v ?? [], z.array(z.string())),
 });
 
 export const volumeArcCharacterGoalSchema = z.object({
@@ -710,7 +710,7 @@ export const foreshadowingDepositSchema = z.object({
     characterLabel: z.string(),
     hintGuidance: z.string(),
     formalIntroChapter: z.number().int().min(1),
-  }).optional(),
+  }).nullish(),
 });
 
 export const foreshadowingBankSchema = z.object({

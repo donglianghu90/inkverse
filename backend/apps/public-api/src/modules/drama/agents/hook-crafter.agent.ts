@@ -8,10 +8,10 @@ import { z } from 'zod';
 import { shotSchema, Shot, DramaState, EpisodeStoryboard } from '../schemas/drama-state.schemas';
 
 const hookOutputSchema = z.object({
-  cliffhangerSummary: z.string(), // 本集悬念文字描述
-  hookType: z.string(), // 悬念类型标签
-  previewShots: z.array(shotSchema).max(3), // 下集预告Shot（0-3个）
-  hookStrengthSelfScore: z.number().min(0).max(10), // 自评悬念强度
+  cliffhangerSummary: z.string().default(''),
+  hookType: z.string().default('cliffhanger'),
+  previewShots: z.array(shotSchema).max(3).default([]),
+  hookStrengthSelfScore: z.number().min(0).max(10).default(5),
 });
 
 export type HookCrafterOutput = z.infer<typeof hookOutputSchema>;

@@ -40,95 +40,78 @@ export class DramaService {
 
   async createDrama(dto: CreateDramaDto, opts: CreateDramaOptions = {}): Promise<{ dramaId: string }> {
     this.logger.log(`创建短剧 — 题材: ${dto.genre} | 创意: ${dto.mainIdea.slice(0, 50)}...`);
-    const pid = opts.progressDramaId ?? `tmp_${Date.now()}`;
-    const emitCreate = (stepIndex: number, message: string, done = false) =>
-      this.progressService.emit({ dramaId: pid, phase: 'create', step: `create_${stepIndex}`, stepIndex, totalSteps: 5, message, done });
-
-    emitCreate(0, '种子分析...');
-    const { seed } = await this.seedAnalyzer.analyze({
-      mainIdea: dto.mainIdea,
-      genre: dto.genre,
-      targetAudience: dto.targetAudience,
-      protagonistFocus: dto.protagonistFocus,
-      tonePreference: dto.tonePreference,
-      audienceTags: dto.audienceTags,
-      titleHint: dto.titleHint,
-      mainStoryGoal: dto.mainStoryGoal,
-      targetEpisodeDurationSec: dto.targetEpisodeDurationSec,
-      plannedTotalEpisodes: dto.plannedMinEpisodes || dto.plannedMaxEpisodes
-        ? { min: dto.plannedMinEpisodes ?? 60, max: dto.plannedMaxEpisodes ?? 100 }
-        : undefined,
-    });
-    emitCreate(0, '种子分析完成', true);
-
-    emitCreate(1, '总导演规划全剧大纲...');
-    const outline = await this.seriesDirector.plan(seed);
-    emitCreate(1, '全剧大纲完成', true);
-
-    emitCreate(2, '视觉资产设计...');
-    const { characters, locations, visualStyle } = await this.visualDesigner.design(seed, outline);
-    emitCreate(2, '视觉资产设计完成', true);
-
-    emitCreate(3, '编剧手册 + 策略...');
-    const [promptProfile, strategy] = await Promise.all([
-      this.profiler.generate(seed, visualStyle),
-      this.strategist.generate(seed, outline),
-    ]);
-    emitCreate(3, '编剧手册完成', true);
-
-    // 组装 DramaState
-    const now = new Date().toISOString();
-    const state: Partial<DramaState> = {
-      dramaId: '',
-      createdAt: now,
-      updatedAt: now,
-      version: 1,
-      seed,
-      audienceDirective: {
-        audienceTags: dto.audienceTags ?? [],
-        protagonistFocus: dto.protagonistFocus ?? 'female_lead',
-        tonePreference: dto.tonePreference ?? '',
-        platformTarget: dto.platformTarget ?? 'generic',
-        aspectRatio: dto.aspectRatio ?? '9:16',
-        hardConstraints: [],
-        softPreferences: [],
-      },
-      promptProfile,
-      strategy,
-      visualStyle,
-      characters,
-      locations,
-      seriesOutline: outline,
-      arcSegments: [],
-      episodeCursor: 1,
-      episodeSummaries: [],
-      lastCliffhanger: '',
-      recentHookTypes: [],
-      secretLedger: [],
-      flashbackBank: [],
-      kpiHistory: [],
-      dopamineSchedule: { history: [], episodesSinceMinor: 0, episodesSinceMajor: 0 },
-    };
-
-    // 持久化
     const entity = this.dramaRepo.create({
       userId: opts.userId ?? 'anonymous',
-      title: seed.title,
-      genre: seed.genre,
-      state: state as Record<string, unknown>,
+      title: dto.titleHint || `${dto.genre}短剧`,
+      genre: dto.genre,
+      state: { _status: 'creating' } as Record<string, unknown>,
       episodesGenerated: 0,
     });
     const saved = await this.dramaRepo.save(entity);
-    (state as any).dramaId = saved.id;
-    saved.state = state as Record<string, unknown>;
-    await this.dramaRepo.save(saved);
-
-    // 持久化视觉资产到独立表（方便后续按 dramaId 查询）
-    await this.persistVisualAssets(saved.id, characters, locations, visualStyle);
-
-    emitCreate(4, '短剧创建完成', true);
-    this.logger.log(`短剧创建完成 — dramaId: ${saved.id} | 标题: ${seed.title} | ${outline.totalPlannedEpisodes}集`);
+    this.runCreationPipeline(saved.id, dto, opts).catch(err =>
+      this.logger.error(`创建流水线失败 dramaId=${saved.id}: ${err.message}`),
+    );
     return { dramaId: saved.id };
+  }
+
+  async runCreationPipeline(dramaId: string, dto: CreateDramaDto, opts: CreateDramaOptions = {}): Promise<void> {
+    const emitCreate = (stepIndex: number, msg: string, done = false) =>
+      this.progressService.emit({ dramaId, phase: 'create', step: `create_${stepIndex}`, stepIndex, totalSteps: 5, message: msg, done });
+
+    try {
+      emitCreate(0, '种子分析...');
+      const { seed } = await this.seedAnalyzer.analyze({
+        mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
+        protagonistFocus: dto.protagonistFocus, tonePreference: dto.tonePreference,
+        audienceTags: dto.audienceTags, titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal,
+        targetEpisodeDurationSec: dto.targetEpisodeDurationSec,
+        plannedTotalEpisodes: dto.plannedMinEpisodes || dto.plannedMaxEpisodes
+          ? { min: dto.plannedMinEpisodes ?? 60, max: dto.plannedMaxEpisodes ?? 100 } : undefined,
+      });
+      emitCreate(0, '种子分析完成', true);
+
+      emitCreate(1, '总导演规划全剧大纲...');
+      const outline = await this.seriesDirector.plan(seed);
+      emitCreate(1, '全剧大纲完成', true);
+
+      emitCreate(2, '视觉资产设计...');
+      const { characters, locations, visualStyle } = await this.visualDesigner.design(seed, outline);
+      emitCreate(2, '视觉资产设计完成', true);
+
+      emitCreate(3, '编剧手册 + 策略...');
+      const [promptProfile, strategy] = await Promise.all([
+        this.profiler.generate(seed, visualStyle),
+        this.strategist.generate(seed, outline),
+      ]);
+      emitCreate(3, '编剧手册完成', true);
+
+      const now = new Date().toISOString();
+      const state: Partial<DramaState> = {
+        dramaId, createdAt: now, updatedAt: now, version: 1, seed,
+        audienceDirective: {
+          audienceTags: dto.audienceTags ?? [], protagonistFocus: dto.protagonistFocus ?? 'female_lead',
+          tonePreference: dto.tonePreference ?? '', platformTarget: dto.platformTarget ?? 'generic',
+          aspectRatio: dto.aspectRatio ?? '9:16', hardConstraints: [], softPreferences: [],
+        },
+        promptProfile, strategy, visualStyle, characters, locations, seriesOutline: outline,
+        arcSegments: [], episodeCursor: 1, episodeSummaries: [], lastCliffhanger: '',
+        recentHookTypes: [], secretLedger: [], flashbackBank: [], kpiHistory: [],
+        dopamineSchedule: { history: [], episodesSinceMinor: 0, episodesSinceMajor: 0 },
+      };
+
+      const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
+      drama.title = seed.title;
+      drama.genre = seed.genre;
+      drama.state = state as Record<string, unknown>;
+      await this.dramaRepo.save(drama);
+      await this.persistVisualAssets(dramaId, characters, locations, visualStyle);
+
+      emitCreate(4, '短剧创建完成', true);
+      this.logger.log(`短剧创建完成 — dramaId: ${dramaId} | 标题: ${seed.title} | ${outline.totalPlannedEpisodes}集`);
+    } catch (err: any) {
+      this.progressService.emit({ dramaId, phase: 'create', step: 'error', stepIndex: -1, totalSteps: 5, message: err.message ?? '创建失败', done: true, error: err.message });
+      throw err;
+    }
   }
 
   private async persistVisualAssets(

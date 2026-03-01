@@ -14,7 +14,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import {
-  createDrama, getCreateDramaSseUrl, listDramaGenreTemplates,
+  createDrama, getDrama, getCreateDramaSseUrl, listDramaGenreTemplates,
   type CreateDramaParams, type DramaGenreTemplate,
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
@@ -140,10 +140,24 @@ const CreateDrama: React.FC = () => {
       });
 
       if (!response.ok || !response.body) {
-        setGenSteps(prev => prev.map(s => ({ ...s, done: true })));
-        setGenProgress(100);
-        message.success('短剧创建成功');
-        setTimeout(() => history.push(`/novel/drama/${dramaId}`), 600);
+        const poll = async () => {
+          for (let i = 0; i < 120; i++) {
+            await new Promise(r => setTimeout(r, 3000));
+            try {
+              const d = await getDrama(dramaId) as any;
+              if (d?.state?.seed) {
+                setGenSteps(prev => prev.map(s => ({ ...s, done: true })));
+                setGenProgress(100);
+                message.success('短剧创建成功');
+                setTimeout(() => history.push(`/novel/drama/${dramaId}`), 600);
+                return;
+              }
+            } catch { /* retry */ }
+          }
+          setGenError('创建超时');
+          setLoading(false);
+        };
+        poll();
         return;
       }
 
@@ -163,6 +177,7 @@ const CreateDrama: React.FC = () => {
           try {
             const payload = JSON.parse(line.slice(5).trim());
             if (payload._type === 'heartbeat') continue;
+            if (payload.error) { setGenError(payload.message ?? '创建失败'); setLoading(false); return; }
 
             const idx = payload.stepIndex ?? -1;
             const progress = payload.totalSteps > 0 ? Math.round(((idx + (payload.done ? 1 : 0.5)) / payload.totalSteps) * 100) : 0;

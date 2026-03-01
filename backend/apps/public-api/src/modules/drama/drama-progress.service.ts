@@ -38,13 +38,12 @@ export class DramaProgressService {
   }
 
   emit(event: DramaProgressEvent): void {
-    const key = event.episodeNumber ? `${event.dramaId}:ep${event.episodeNumber}` : `create:${event.dramaId}`;
-    const a = this.active.get(key);
+    const genKey = `${event.dramaId}:generate`;
+    const a = this.active.get(genKey);
     if (a) {
       a.lastStep = event.message ?? event.step;
       if (event.totalSteps > 0) a.progress = Math.round(((event.stepIndex + (event.done ? 1 : 0.5)) / event.totalSteps) * 100);
     }
-    if (event.done || event.error) this.active.delete(key);
     this.emitter.emit(`progress:${event.dramaId}`, event);
   }
 

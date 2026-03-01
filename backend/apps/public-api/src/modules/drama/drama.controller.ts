@@ -15,6 +15,38 @@ export class DramaController {
     private readonly genreTemplateService: DramaGenreTemplateService,
   ) {}
 
+  /* ─── 题材模板（静态路由优先于 :dramaId 参数路由） ─── */
+
+  @Get('genre-templates/list')
+  async listGenreTemplates(@Req() req: any) {
+    return this.genreTemplateService.list(req.user?.userId);
+  }
+
+  @Get('genre-templates/:id')
+  async getGenreTemplate(@Param('id') id: string) {
+    return this.genreTemplateService.getById(id);
+  }
+
+  @Post('genre-templates')
+  async createGenreTemplate(@Body() dto: CreateDramaGenreTemplateDto, @Req() req: any) {
+    return this.genreTemplateService.create(req.user?.userId ?? 'anonymous', dto);
+  }
+
+  @Put('genre-templates/:id')
+  async updateGenreTemplate(@Param('id') id: string, @Body() dto: UpdateDramaGenreTemplateDto, @Req() req: any) {
+    return this.genreTemplateService.update(id, req.user?.userId ?? 'anonymous', dto);
+  }
+
+  @Delete('genre-templates/:id')
+  async deleteGenreTemplate(@Param('id') id: string, @Req() req: any) {
+    return this.genreTemplateService.remove(id, req.user?.userId ?? 'anonymous');
+  }
+
+  @Post('genre-templates/:id/clone')
+  async cloneGenreTemplate(@Param('id') id: string, @Req() req: any) {
+    return this.genreTemplateService.clone(id, req.user?.userId ?? 'anonymous');
+  }
+
   /* ─── CRUD ─── */
 
   @Post()
@@ -60,7 +92,7 @@ export class DramaController {
     const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
     const unsub = this.progressService.subscribe(dramaId, (event) => {
       subject.next({ data: event } as MessageEvent);
-      if (event.done && event.step === 'create_4') { clearInterval(heartbeat); setTimeout(() => subject.complete(), 100); }
+      if (event.done && (event.step === 'create_4' || event.error)) { clearInterval(heartbeat); setTimeout(() => subject.complete(), 200); }
     });
     return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
   }
@@ -97,7 +129,7 @@ export class DramaController {
         this.progressService.clearGenerating(key);
         clearInterval(heartbeat);
         unsub();
-        setTimeout(() => subject.complete(), 100);
+        setTimeout(() => subject.complete(), 200);
       }
     }, 0);
 
@@ -112,37 +144,5 @@ export class DramaController {
       subject.next({ data: event } as MessageEvent);
     });
     return subject.asObservable().pipe(finalize(() => unsub()));
-  }
-
-  /* ─── 题材模板 ─── */
-
-  @Get('genre-templates/list')
-  async listGenreTemplates(@Req() req: any) {
-    return this.genreTemplateService.list(req.user?.userId);
-  }
-
-  @Get('genre-templates/:id')
-  async getGenreTemplate(@Param('id') id: string) {
-    return this.genreTemplateService.getById(id);
-  }
-
-  @Post('genre-templates')
-  async createGenreTemplate(@Body() dto: CreateDramaGenreTemplateDto, @Req() req: any) {
-    return this.genreTemplateService.create(req.user?.userId ?? 'anonymous', dto);
-  }
-
-  @Put('genre-templates/:id')
-  async updateGenreTemplate(@Param('id') id: string, @Body() dto: UpdateDramaGenreTemplateDto, @Req() req: any) {
-    return this.genreTemplateService.update(id, req.user?.userId ?? 'anonymous', dto);
-  }
-
-  @Delete('genre-templates/:id')
-  async deleteGenreTemplate(@Param('id') id: string, @Req() req: any) {
-    return this.genreTemplateService.remove(id, req.user?.userId ?? 'anonymous');
-  }
-
-  @Post('genre-templates/:id/clone')
-  async cloneGenreTemplate(@Param('id') id: string, @Req() req: any) {
-    return this.genreTemplateService.clone(id, req.user?.userId ?? 'anonymous');
   }
 }

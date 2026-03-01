@@ -4,7 +4,7 @@ import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { RunnableConfig } from '@langchain/core/runnables';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { ChatAnthropic } from '@langchain/anthropic';
-import { ChatOpenAI } from '@langchain/openai';
+import { ChatOpenAI, ChatOpenAIResponses } from '@langchain/openai';
 import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import { z, ZodTypeAny } from 'zod';
 import { LlmUsageTrackerService } from './llm-usage-tracker.service';
@@ -372,9 +372,8 @@ export class LlmService {
       });
     }
     if (provider === 'openai') {
-      return new ChatOpenAI({
+      return new ChatOpenAIResponses({
         apiKey: cfg.apiKey, model, temperature, maxRetries: 0, timeout: LlmService.LLM_TIMEOUT_MS,
-        useResponsesApi: true, streamUsage: false,
         configuration: {
           baseURL: cfg.baseUrl,
           ...(proxyHeaders ? { defaultHeaders: proxyHeaders } : {}),

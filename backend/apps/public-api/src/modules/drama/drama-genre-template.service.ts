@@ -1,7 +1,7 @@
 /** 短剧题材模板 Service — 系统预置 + 用户自定义 CRUD + 启动时种子同步 */
 import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import { DramaGenreTemplateEntity, DramaSeedHints } from './entities/drama-genre-template.entity';
 import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
 
@@ -96,7 +96,7 @@ export class DramaGenreTemplateService implements OnModuleInit {
 
   private async seedSystemTemplates(): Promise<void> {
     for (const tpl of SYSTEM_TEMPLATES) {
-      const existing = await this.repo.findOne({ where: { userId: undefined as any, genreKey: tpl.genreKey, isSystem: true } });
+      const existing = await this.repo.findOne({ where: { userId: IsNull(), genreKey: tpl.genreKey, isSystem: true } });
       if (existing) {
         existing.displayName = tpl.displayName;
         existing.description = tpl.description;
@@ -123,7 +123,7 @@ export class DramaGenreTemplateService implements OnModuleInit {
 
   async list(userId?: string): Promise<DramaGenreTemplateEntity[]> {
     if (userId) await this.syncSystemTemplates(userId);
-    const where = userId ? [{ userId }, { isSystem: true, userId: undefined as any }] : [{ isSystem: true }];
+    const where = userId ? [{ userId }, { isSystem: true, userId: IsNull() as any }] : [{ isSystem: true }];
     return this.repo.find({ where: where as any, order: { displayName: 'ASC' } });
   }
 
