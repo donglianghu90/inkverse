@@ -1,6 +1,6 @@
 /** 创建小说的核心创意输入（不含连载调度配置） */
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 
 export class CreateBookCoreDto {
   @ApiProperty({ description: '小说核心创意/高层设定', example: '一个少年在末世废墟中发现了通往平行世界的钥匙' })
@@ -14,6 +14,18 @@ export class CreateBookCoreDto {
   @ApiProperty({ description: '目标读者群体，用于语气和节奏策略', example: '18-30 岁男性网文读者' })
   @IsString() @IsNotEmpty()
   targetAudience!: string;
+
+  @ApiPropertyOptional({ description: '主角聚焦（影响模板匹配和写作策略）', enum: ['female_lead', 'male_lead', 'dual_lead', 'ensemble'], example: 'female_lead' })
+  @IsString() @IsIn(['female_lead', 'male_lead', 'dual_lead', 'ensemble']) @IsOptional()
+  protagonistFocus?: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble';
+
+  @ApiPropertyOptional({ description: '调性偏好标签（用于模板匹配）', example: '细腻慢热' })
+  @IsString() @IsOptional()
+  tonePreference?: string;
+
+  @ApiPropertyOptional({ description: '额外受众标签（用于模板匹配）', example: ['female', '20-35', 'romance-reader'] })
+  @IsArray() @IsString({ each: true }) @IsOptional()
+  audienceTags?: string[];
 
   @ApiProperty({ description: '长期主线目标，用于卷级规划对齐', example: '主角突破封印，统一三界' })
   @IsString() @IsNotEmpty()

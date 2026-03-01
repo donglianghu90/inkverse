@@ -1,19 +1,21 @@
 /** 记忆检索器 — pgvector 语义向量 + 结构化过滤的三层金字塔记忆召回（章→弧→卷）。 */
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { toSql } from 'pgvector';
 import { ChapterMemoryEntity } from './entities/chapter-memory.entity';
 import { ArcSummaryEntity, VolumeSummaryEntity } from './entities/summary-pyramid.entity';
 import { ChapterIntent, MiniArc, StoryState, VolumeArc } from './schemas/novel-state.schemas';
 import { ChapterDraft, LoreRecord } from './schemas/novel.schemas';
 import { EmbeddingService } from './llm/embedding.service';
+import { CONTEXT_WINDOW_SUMMARIES } from './prompting/novel-playbook';
 
 const W_VEC = 0.6;
 const W_STRUCT = 0.4;
 
 export interface MemoryQuery {
   characterIds?: string[];
+  characterImportanceMap?: Record<string, string>;
   locationIds?: string[];
   plotThreadIds?: string[];
   keywords?: string[];
@@ -28,6 +30,7 @@ export interface RankedMemory {
   keyEvents: string[];
   relevanceScore: number;
   matchReasons: string[];
+  characterStates?: Record<string, { level: string; mood: string; status: string; location: string }>;
 }
 
 export interface PyramidLayer { level: 'volume' | 'arc' | 'chapter'; id: string; summary: string; chapterRange: string; score: number }
@@ -70,7 +73,8 @@ export class MemoryRetrieverService implements OnModuleInit {
           this.logger.warn(`${tbl}.embedding 维度不匹配(${colCheck[0].atttypmod}→${dim})，已重建`);
         }
         await qr.query(`DO $$ BEGIN ALTER TABLE ${tbl} ADD COLUMN embedding vector(${dim}); EXCEPTION WHEN duplicate_column THEN NULL; END $$`);
-        await qr.query(`CREATE INDEX IF NOT EXISTS idx_${tbl}_emb ON ${tbl} USING hnsw (embedding vector_cosine_ops)`);
+        if (dim <= 2000) await qr.query(`CREATE INDEX IF NOT EXISTS idx_${tbl}_emb ON ${tbl} USING hnsw (embedding vector_cosine_ops)`);
+        else this.logger.warn(`${tbl}.embedding dim=${dim} 超过 hnsw 上限 2000，已跳过索引创建并使用无索引向量检索`);
       }
       this.vectorReady = true;
       this.logger.log(`pgvector 三层金字塔初始化完成 (dim=${dim})`);
@@ -98,6 +102,19 @@ export class MemoryRetrieverService implements OnModuleInit {
     const keywords = this.extractKeywords(draft, lore, intent);
     const summary = lore.summary || draft.title;
 
+    const charMap = new Map(state.characters.map((c) => [c.id, c]));
+    const characterStates = Object.fromEntries(
+      characterIds.map((id) => {
+        const c = charMap.get(id);
+        return [id, {
+          level: String(c?.status?.level ?? ''),
+          mood: (c?.psychology?.currentMood ?? '').slice(0, 50),
+          status: c?.status?.lifecycleStatus ?? 'active',
+          location: c?.status?.locationId ?? '',
+        }];
+      }),
+    );
+
     await this.memoryRepo.upsert({
       bookId, chapterNumber, summary,
       keyEvents: [...(lore.openLoops ?? []), ...(lore.stateChanges ?? [])].slice(0, 10),
@@ -105,6 +122,7 @@ export class MemoryRetrieverService implements OnModuleInit {
       emotionalTone: (intent.emotionDirection || '').slice(0, 250),
       tensionLevel: Math.min(10, Math.max(1, 5 + (state.readerTension?.chaptersSinceLastPayoff ?? 0))),
       keywords, foreshadowingPlanted: planted, foreshadowingResolved: resolved,
+      characterStates,
     }, ['bookId', 'chapterNumber']);
 
     if (this.vectorReady && this.embeddingService.available) {
@@ -163,23 +181,51 @@ export class MemoryRetrieverService implements OnModuleInit {
     const maxResults = query.maxResults ?? 8;
     const excludeRecent = query.excludeRecentN ?? 6;
     const useVector = this.vectorReady && this.embeddingService.available && !!query.semanticQuery;
+    const shortlistLimit = Math.min(1000, Math.max(120, maxResults * 30));
+
+    const latestRaw = await this.memoryRepo
+      .createQueryBuilder('m')
+      .select('MAX(m.chapterNumber)', 'max')
+      .where('m.bookId = :bookId', { bookId })
+      .getRawOne<{ max: string | null }>();
+    const latestCh = Number(latestRaw?.max ?? 0);
+    if (latestCh <= 0) return [];
+    const upperBound = latestCh - excludeRecent;
+    if (upperBound <= 0) return [];
 
     const vectorScores = new Map<number, number>();
+    const vectorChapterNums: number[] = [];
     if (useVector) {
       const vec = await this.embeddingService.embed(query.semanticQuery!);
       if (vec) {
         const rows: { chapter_number: number; distance: number }[] = await this.dataSource.query(
-          `SELECT chapter_number, embedding <=> $1::vector AS distance FROM chapter_memories WHERE book_id = $2 AND embedding IS NOT NULL ORDER BY distance ASC LIMIT $3`,
-          [toSql(vec), bookId, maxResults * 3],
+          `SELECT chapter_number, embedding <=> $1::vector AS distance
+             FROM chapter_memories
+            WHERE book_id = $2 AND chapter_number <= $3 AND embedding IS NOT NULL
+            ORDER BY distance ASC LIMIT $4`,
+          [toSql(vec), bookId, upperBound, maxResults * 8],
         );
-        rows.forEach((r) => vectorScores.set(r.chapter_number, Math.max(0, 1 - r.distance)));
+        rows.forEach((r) => {
+          vectorScores.set(r.chapter_number, Math.max(0, 1 - r.distance));
+          vectorChapterNums.push(r.chapter_number);
+        });
       }
     }
 
-    const allMemories = await this.memoryRepo.find({ where: { bookId }, order: { chapterNumber: 'ASC' } });
-    if (allMemories.length === 0) return [];
-    const latestCh = Math.max(...allMemories.map((m) => m.chapterNumber));
-    const candidates = allMemories.filter((m) => m.chapterNumber <= latestCh - excludeRecent);
+    // SQL 前置过滤：只取最近候选窗口，避免全表扫描。
+    const recentCandidates = await this.memoryRepo
+      .createQueryBuilder('m')
+      .where('m.bookId = :bookId', { bookId })
+      .andWhere('m.chapterNumber <= :upperBound', { upperBound })
+      .orderBy('m.chapterNumber', 'DESC')
+      .take(shortlistLimit)
+      .getMany();
+    const recentMap = new Map(recentCandidates.map((m) => [m.chapterNumber, m]));
+    const missingVectorChapters = [...new Set(vectorChapterNums)].filter((ch) => !recentMap.has(ch));
+    const vectorCandidates = missingVectorChapters.length > 0
+      ? await this.memoryRepo.find({ where: { bookId, chapterNumber: In(missingVectorChapters) } })
+      : [];
+    const candidates = [...recentCandidates, ...vectorCandidates];
     if (candidates.length === 0) return [];
 
     const scored = candidates.map((mem) => {
@@ -193,6 +239,7 @@ export class MemoryRetrieverService implements OnModuleInit {
     return scored.filter((s) => s.score > 0).sort((a, b) => b.score - a.score).slice(0, maxResults).map((s) => ({
       chapterNumber: s.mem.chapterNumber, summary: s.mem.summary,
       keyEvents: s.mem.keyEvents, relevanceScore: Math.round(s.score * 100) / 100, matchReasons: s.reasons,
+      characterStates: s.mem.characterStates,
     }));
   }
 
@@ -227,18 +274,24 @@ export class MemoryRetrieverService implements OnModuleInit {
     }
 
     // ── 章节级记忆（微观） ──
+    const charImpMap: Record<string, string> = {};
+    for (const c of state.characters) if (c.status.narrativeImportance) charImpMap[c.id] = c.status.narrativeImportance;
     const memories = await this.retrieve(bookId, {
       characterIds: intent.characterAvailability?.activeCharacterIds,
+      characterImportanceMap: charImpMap,
       plotThreadIds: activeThreadIds,
       keywords: intent.goals?.slice(0, 3),
       semanticQuery,
-      excludeRecentN: state.chapterSummaries?.length ?? 6,
+      excludeRecentN: CONTEXT_WINDOW_SUMMARIES,
       maxResults: 6,
     });
     for (const m of memories) {
       pyramidLayers.push({ level: 'chapter', id: `ch${m.chapterNumber}`, summary: m.summary, chapterRange: `${m.chapterNumber}`, score: m.relevanceScore });
       const ev = m.keyEvents.length > 0 ? ` | 事件：${m.keyEvents.slice(0, 2).join('；')}` : '';
-      lines.push(`[第${m.chapterNumber}章] ${m.summary}${ev}（${m.matchReasons.join('+')}）`);
+      const charStateStr = m.characterStates && Object.keys(m.characterStates).length > 0
+        ? ' | 角色状态：' + Object.entries(m.characterStates).slice(0, 3).map(([id, s]) => `${id}[${s.status}${s.level ? '/' + s.level : ''}${s.mood ? '/' + s.mood : ''}]`).join('，')
+        : '';
+      lines.push(`[第${m.chapterNumber}章] ${m.summary}${ev}${charStateStr}（${m.matchReasons.join('+')}）`);
     }
 
     if (lines.length === 0) return { memories: [], pyramidLayers: [], contextText: '' };
@@ -308,7 +361,11 @@ export class MemoryRetrieverService implements OnModuleInit {
     const reasons: string[] = [];
     if (q.characterIds?.length) {
       const ol = q.characterIds.filter((id) => mem.characterIds.includes(id));
-      if (ol.length) { score += 0.4 * (ol.length / q.characterIds.length); reasons.push(`角色[${ol.join(',')}]`); }
+      if (ol.length) {
+        const IMP_W: Record<string, number> = { core: 1.5, major: 1.2, minor: 1.0, cameo: 0.6 };
+        const wSum = ol.reduce((s, id) => s + (IMP_W[q.characterImportanceMap?.[id] ?? ''] ?? 1.0), 0);
+        score += 0.4 * (wSum / q.characterIds.length); reasons.push(`角色[${ol.join(',')}]`);
+      }
     }
     if (q.locationIds?.length) {
       const ol = q.locationIds.filter((id) => mem.locationIds.includes(id));

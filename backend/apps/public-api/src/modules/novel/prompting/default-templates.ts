@@ -34,9 +34,10 @@ export function buildDefaultRulePack(genreAtoms?: RuleAtom[]): BookPromptTemplat
         s('purpose_guide', '目的选择指南', 'hook_opening: 仅第一场景。承接上章+建立悬念。\nconflict/action: 推进主线冲突。\nrevelation: 揭露新信息/真相。\nemotional: 角色内心戏/关系深化。\ndialogue_driven: 对话推进+角色塑造。\ntransition: 时空转换/暗线推进。\nclimax: 本章高潮。\ncliffhanger: 仅最后场景。'),
         s('transition_hint', '过渡提示', '好的过渡：用环境描写做视角切换、因果链、时间推移自然嵌入行动。\n坏的过渡：硬切，读者感觉被强行拖走。'),
         s('sensory_bridge', '感官桥接', '每个场景结束时描述感官状态：timeOfDay, weather, ambientSound, dominantSense。确保场景过渡时感官连续。'),
+        s('focus_moment_hint', '角色聚焦时刻提示', '在关键动作或对话里暴露该角色当下真实立场与代价感'),
       ]),
       'creative-writer': agentCfg('creative-writer', [
-        s('iron_rules', '铁律', '1. 禁止出场角色绝对不出现（死亡/退场/休眠）。\n2. 开头承接上章场景、语气和情绪。\n3. 结尾必须有让读者翻下一章的驱动力。\n4. 字数在意图范围内。\n5. 只输出中文小说正文，禁止元叙述/提纲/数据。\n6. 禁止开头三段使用反问句/设问句起手——直接切入场景和动作。\n7. 同一章内禁止重复使用相同情绪描写词（如两次"不由得"、两次"心中一动"）。\n8. 对话中禁止角色复述自己刚做过的事——"我已经……了"这类废话删掉，用行动推进。', true),
+        s('iron_rules', '铁律', '1. 禁止出场角色绝对不出现（死亡/退场/休眠）。\n2. 淡出角色遵守其maxSceneRole限制：mention_only=仅可被他人提及或回忆，brief_appearance=短暂露面不超过2句对白，supporting=可出场但不可主导剧情。\n3. 开头承接上章场景、语气和情绪。\n4. 结尾必须有让读者翻下一章的驱动力。\n5. 字数在意图范围内。\n6. 只输出中文小说正文，禁止元叙述/提纲/数据。\n7. 禁止开头三段使用反问句/设问句起手——直接切入场景和动作。\n8. 同一章内禁止重复使用相同情绪描写词（如两次"不由得"、两次"心中一动"）。\n9. 对话中禁止角色复述自己刚做过的事——"我已经……了"这类废话删掉，用行动推进。', true),
         s('writing_soul', '写作灵魂', '你的使命是"创作故事"而非"执行任务"。意图给方向，铁律是安全边界，边界内你拥有充分的创作自由——好的意外比严格执行计划更有价值。'),
         s('writing_instinct', '写作直觉', '写"他感到XX"时停下改成动作和感官；每句对话至少完成两个任务；紧张短句平静长句长短交替像呼吸。'),
       ]),

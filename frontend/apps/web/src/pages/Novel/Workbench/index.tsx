@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { history, useParams } from '@umijs/max';
+import { history, useLocation, useParams } from '@umijs/max';
 import { message } from 'antd';
 import {
   ArrowLeft,
@@ -92,6 +92,7 @@ function extractContentFromEl(root: HTMLElement): string {
 
 const Workbench: React.FC = () => {
   const { bookId } = useParams<{ bookId: string }>();
+  const location = useLocation();
   const [book, setBook] = useState<BookInfo | null>(null);
   const [chapters, setChapters] = useState<ChapterItem[]>([]);
   const [selectedChapter, setSelectedChapter] = useState<ChapterItem | null>(null);
@@ -118,10 +119,20 @@ const Workbench: React.FC = () => {
   const [tokenUsage, setTokenUsage] = useState<BookTokenUsage | null>(null);
   const articleRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
+  const workbenchPath = bookId ? `/novel/book/${bookId}` : '';
+
+  const disconnectSSE = useCallback((clearState = false) => {
+    esRef.current?.close();
+    esRef.current = null;
+    if (!clearState) return;
+    setGenerating(false);
+    setGenProgress(0);
+    setGenStep('');
+  }, []);
 
   const connectSSE = useCallback((bookIdVal: string, baselineChapterCount: number) => {
     const url = getGenerateSSEUrl(bookIdVal);
-    esRef.current?.close();
+    disconnectSSE();
     const es = new EventSource(url);
     esRef.current = es;
 
@@ -161,9 +172,7 @@ const Workbench: React.FC = () => {
         await new Promise((r) => setTimeout(r, 2000));
       }
       if (!confirmed) message.error('生成连接中断，未确认到新章节，请稍后刷新重试');
-      setGenerating(false);
-      setGenProgress(0);
-      setGenStep('');
+      disconnectSSE(true);
     };
 
     const touchStale = () => {
@@ -184,22 +193,18 @@ const Workbench: React.FC = () => {
         if (data.done) {
           settled = true;
           clearTimeout(staleTimer);
-          es.close();
+          disconnectSSE();
           (async () => {
             await syncLatestData(data.chapterNumber);
-            setGenerating(false);
-            setGenProgress(0);
-            setGenStep('');
+            disconnectSSE(true);
           })();
         }
         if (data.error) {
           settled = true;
           clearTimeout(staleTimer);
-          es.close();
+          disconnectSSE();
           message.error(data.error || '生成失败，请重试');
-          setGenerating(false);
-          setGenProgress(0);
-          setGenStep('');
+          disconnectSSE(true);
         }
       } catch {}
     };
@@ -208,10 +213,27 @@ const Workbench: React.FC = () => {
       if (settled) return;
       settled = true;
       clearTimeout(staleTimer);
-      es.close();
+      disconnectSSE();
       recover();
     };
-  }, []);
+  }, [disconnectSSE]);
+
+  const syncGenerationStatus = useCallback(async () => {
+    if (!bookId) return;
+    try {
+      const genStatus = await getGenerationStatus(bookId).catch(() => ({ generating: false, startedAt: null, lastStep: null, progress: 0 }));
+      if (!genStatus.generating) {
+        disconnectSSE(true);
+        return;
+      }
+      setGenerating(true);
+      setGenProgress(genStatus.progress);
+      setGenStep(genStatus.lastStep ?? '');
+      if (!esRef.current) connectSSE(bookId, book?.chaptersGenerated ?? chapters.length);
+    } catch {
+      disconnectSSE(true);
+    }
+  }, [bookId, book?.chaptersGenerated, chapters.length, connectSSE, disconnectSSE]);
 
   const fetchData = useCallback(async () => {
     if (!bookId) return;
@@ -265,7 +287,16 @@ const Workbench: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
-  useEffect(() => () => { esRef.current?.close(); }, []);
+  useEffect(() => () => { disconnectSSE(); }, [disconnectSSE]);
+
+  useEffect(() => {
+    if (!workbenchPath) return;
+    if (location.pathname !== workbenchPath) {
+      disconnectSSE(true);
+      return;
+    }
+    syncGenerationStatus();
+  }, [location.pathname, workbenchPath, disconnectSSE, syncGenerationStatus]);
 
   const handleGenerate = useCallback(async () => {
     if (!bookId || generating) return;
@@ -661,10 +692,13 @@ const Workbench: React.FC = () => {
                       const cu = tokenUsage?.chapters?.find((c: any) => c.chapterNumber === selectedChapter.chapterNumber);
                       if (!cu) return null;
                       const fmt = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
+                      const modelTip = (cu.byModel?.length ?? 0) > 0
+                        ? '\n\n模型明细:\n' + cu.byModel!.map((m: any) => `  ${m.model} (${m.provider}/${m.tier}): ${m.calls}次 · 入${m.promptTokens.toLocaleString()} 出${m.completionTokens.toLocaleString()} · $${m.estimatedCostUsd.toFixed(4)}`).join('\n')
+                        : '';
                       return (
                         <>
                           <span className="text-xs text-muted-foreground">·</span>
-                          <span className="text-[11px] tabular-nums text-muted-foreground" title={`输入 ${cu.promptTokens.toLocaleString()} / 输出 ${cu.completionTokens.toLocaleString()} tokens · ${cu.totalCalls} 次调用 · $${cu.estimatedCostUsd.toFixed(4)}`}>
+                          <span className="text-[11px] tabular-nums text-muted-foreground" title={`输入 ${cu.promptTokens.toLocaleString()} / 输出 ${cu.completionTokens.toLocaleString()} tokens · ${cu.totalCalls} 次调用 · $${cu.estimatedCostUsd.toFixed(4)}${modelTip}`}>
                             <span className="text-blue-500">入{fmt(cu.promptTokens)}</span>
                             <span className="opacity-40"> / </span>
                             <span className="text-violet-500">出{fmt(cu.completionTokens)}</span>

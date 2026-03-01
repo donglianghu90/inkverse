@@ -81,9 +81,30 @@ export class BookStateRepository {
       await em.delete(BookRelationEntity, { bookId });
       if (state.relationGraph?.length)
         await em.insert(BookRelationEntity, state.relationGraph.map((r) => ({ bookId, relationId: r.id, data: r as any })));
-      await em.delete(BookChapterSummaryEntity, { bookId });
-      if (state.chapterSummaries.length)
-        await em.insert(BookChapterSummaryEntity, state.chapterSummaries.map((s) => ({ bookId, chapterNumber: s.chapterNumber, summary: s.summary })));
+      const latest = await em
+        .createQueryBuilder(BookChapterSummaryEntity, 's')
+        .select('MAX(s.chapterNumber)', 'max')
+        .where('s.bookId = :bookId', { bookId })
+        .getRawOne<{ max: string | null }>();
+      const maxStored = Number(latest?.max ?? 0);
+      // 回滚/删章场景：清理 cursor 之后的脏摘要，避免“未来章节”污染上下文。
+      if (maxStored > state.chapterCursor) {
+        await em
+          .createQueryBuilder()
+          .delete()
+          .from(BookChapterSummaryEntity)
+          .where('book_id = :bookId', { bookId })
+          .andWhere('chapter_number > :cursor', { cursor: state.chapterCursor })
+          .execute();
+      }
+      if (state.chapterSummaries.length) {
+        // 增量 upsert：默认只刷最近窗口，避免每章全量重写所有摘要。
+        const floor = Math.max(1, maxStored - 1); // 覆盖最近1章，兼容修订
+        const incremental = state.chapterSummaries
+          .filter((s) => s.chapterNumber >= floor && s.chapterNumber <= state.chapterCursor)
+          .map((s) => ({ bookId, chapterNumber: s.chapterNumber, summary: s.summary }));
+        if (incremental.length) await em.upsert(BookChapterSummaryEntity, incremental, ['bookId', 'chapterNumber']);
+      }
       await em.delete(BookFactionEntity, { bookId });
       if (state.factions?.length)
         await em.insert(BookFactionEntity, state.factions.map((f) => ({ bookId, factionId: f.id, data: f as any })));

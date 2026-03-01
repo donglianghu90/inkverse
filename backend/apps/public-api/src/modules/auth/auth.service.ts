@@ -2,6 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { RedisService } from '@liaoliaots/nestjs-redis';
 import Redis from 'ioredis';
+import { createHash } from 'crypto';
 import { ConfigService } from '@packages/modules';
 import { AdminUserService } from '../admin-user/admin-user.service';
 import { LoginDto, ChangePasswordDto } from './dto/login.dto';
@@ -95,9 +96,18 @@ export class AuthService {
   /**
    * 登出
    */
-  async logout(adminId: string): Promise<void> {
-    const redisKey = `inkverse:user:token:${adminId}`;
-    await this.redis.del(redisKey);
+  async logout(adminId: string, token?: string): Promise<void> {
+    const userTokenSetKey = this.buildUserTokenSetKey(adminId);
+    if (token) {
+      const tokenKey = this.buildTokenKey(adminId, token);
+      await this.redis.multi().del(tokenKey).srem(userTokenSetKey, tokenKey).exec();
+      return;
+    }
+    const tokenKeys = await this.redis.smembers(userTokenSetKey);
+    if (tokenKeys.length > 0) {
+      await this.redis.del(...tokenKeys);
+    }
+    await this.redis.del(userTokenSetKey);
   }
 
   /**
@@ -140,11 +150,26 @@ export class AuthService {
    */
   private async generateToken(payload: AdminJwtPayload): Promise<string> {
     const accessToken = this.jwtService.sign(payload);
-    const redisKey = `inkverse:user:token:${payload.id}`;
     const expiresIn = this.configService.get('jwt.expiresIn') || '1d';
     const expiresInSeconds = this.convertTimeToSeconds(expiresIn);
-    await this.redis.setex(redisKey, expiresInSeconds, accessToken);
+    const tokenKey = this.buildTokenKey(payload.id, accessToken);
+    const userTokenSetKey = this.buildUserTokenSetKey(payload.id);
+    await this.redis
+      .multi()
+      .setex(tokenKey, expiresInSeconds, '1')
+      .sadd(userTokenSetKey, tokenKey)
+      .expire(userTokenSetKey, expiresInSeconds)
+      .exec();
     return accessToken;
+  }
+
+  private buildUserTokenSetKey(adminId: string): string {
+    return `inkverse:user:tokens:${adminId}`;
+  }
+
+  private buildTokenKey(adminId: string, token: string): string {
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    return `inkverse:user:token:${adminId}:${tokenHash}`;
   }
 
   /**

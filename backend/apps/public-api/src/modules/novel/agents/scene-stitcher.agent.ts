@@ -9,7 +9,14 @@ import {
   StoryState,
 } from '../schemas/novel-state.schemas';
 import { ChapterDraft, chapterDraftSchema } from '../schemas/novel.schemas';
-import { PROSE_CRAFT_PLAYBOOK, buildStyleDNA, buildWritingLessonsHint, buildCompactContextProse } from '../prompting/novel-playbook';
+import {
+  PROSE_CRAFT_PLAYBOOK,
+  buildStyleDNA,
+  buildWritingLessonsHint,
+  buildCompactContextProse,
+  UNIFIED_AGENT_MAX_CHARACTERS,
+} from '../prompting/novel-playbook';
+import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 
 const PACE_CN: Record<string, string> = {
   slow_burn: '慢热', steady: '稳健', accelerating: '加速', breakneck: '极速', stillness: '静谧',
@@ -28,15 +35,20 @@ export class SceneStitcherAgent {
     playbooks?: Record<string, string>,
   ): Promise<ChapterDraft> {
     const profile = state.bookPromptProfile;
-    const sorted = sceneDrafts.sort((a, b) => a.sceneIndex - b.sceneIndex);
+    const sorted = [...sceneDrafts].sort((a, b) => a.sceneIndex - b.sceneIndex);
     const rawConcat = sorted.map((d, i) => `【场景${i + 1}】\n${d.content}`).join('\n\n');
-    const storyContext = buildCompactContextProse(state, { maxCharacters: 6, maxChapterSummaries: 3, maxOpenThreads: 5, maxTimelineEvents: 5 });
+    const storyContext = buildCompactContextProse(state, {
+      maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
+      maxChapterSummaries: 4,
+      maxOpenThreads: 6,
+      maxTimelineEvents: 6,
+    });
 
     const seamAnalysis = this.analyzeSeams(scenePlan.scenes, sorted);
     const redundancies = this.detectRedundancies(sorted);
     const rhythmContrast = this.buildRhythmContrastGuide(scenePlan.scenes);
 
-    return this.llm.generateStructured({
+    const result = await this.llm.generateStructured({
       taskName: 'scene-stitcher',
       schema: chapterDraftSchema,
       tags: ['workflow', 'chapter', 'stitch'],
@@ -54,6 +66,10 @@ ${playbooks?.['agent:scene-stitcher:core_mission'] ?? `1. 首段黄金钩子：�
 === 纪律 ===
 ${playbooks?.['agent:scene-stitcher:discipline'] ?? '- 保留每个场景的核心内容和精彩段落。\n- 过渡段2-4句，作用是"桥梁"。\n- 可以微调措辞让全章统一，但不改变事件和角色行为。\n- 章节标题要有冲突感和吸引力。\n- 只输出完整中文章节正文。'}
 - 字数目标：${intent.wordCountRange.min}-${intent.wordCountRange.max}字。
+
+${buildAudiencePromptBlock(state)}
+${playbooks?.['__bookStrategy'] ?? ''}
+${playbooks?.['__policySlice'] ?? ''}
 
 ${playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK}
 ${state.styleAnchor ? '\n' + buildStyleDNA(state.styleAnchor) : ''}
@@ -77,6 +93,8 @@ ${rawConcat}
 重点关注：① 首段钩子 ② 尾段悬崖 ③ 每个接缝的自然过渡 ④ 节奏对比 ⑤ 冗余去重。`,
       temperature: 0.52,
     });
+    result.chapterNumber = intent.chapterNumber;
+    return result;
   }
 
   /** 分析每个场景接缝，生成具体过渡策略。 */
@@ -96,6 +114,9 @@ ${rawConcat}
       const sensory = from.sensoryEndState;
 
       const hints: string[] = [];
+      if (to.isParallel) {
+        hints.push(`⚠ 并行时间线：场景${i + 1}和场景${i + 2}同时发生于不同地点/视角，使用"与此同时""另一边"或环境切换做过渡，不要暗示时间先后`);
+      }
       if (povChange) hints.push(`视角切换(${from.povCharacterId}→${to.povCharacterId})：用环境做桥，如"远处另一个人也看到了…"`);
       if (locChange) hints.push(`地点转移：用时间推移或感官切换过渡，不要硬切`);
       if (paceShift) hints.push(`节奏从${PACE_CN[from.paceDirective] ?? from.paceDirective}→${PACE_CN[to.paceDirective] ?? to.paceDirective}：过渡段体现节奏变化`);
@@ -103,6 +124,7 @@ ${rawConcat}
       if (sensory?.ambientSound) hints.push(`环境音延续：${sensory.ambientSound}`);
       if (sensory?.dominantSense) hints.push(`感官延续：${sensory.dominantSense}`);
       if (sensory?.weather) hints.push(`天气/光线：${sensory.weather}${sensory.timeOfDay ? '，' + sensory.timeOfDay : ''}`);
+      if (to.subtext) hints.push(`下一场景潜台词层：${to.subtext}（过渡时注意不要破坏潜台词留白）`);
       if (hints.length === 0) hints.push(`自然衔接：${from.transitionHint}`);
 
       lines.push(`[缝${i + 1}] 场景${i + 1}(${from.purpose})→场景${i + 2}(${to.purpose})：\n  ${hints.join('\n  ')}${fromEnd ? `\n  前场景结尾：「${fromEnd.slice(-100)}」` : ''}`);

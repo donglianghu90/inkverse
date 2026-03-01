@@ -6,11 +6,34 @@ export interface SeedAnalyzerHints {
   coreLoopPatterns?: string[];
   goldenFingerGuidance?: string;
   worldBuildingDirectives?: string;
+  namingDefaults?: {
+    personNameStyle?: string;
+    locationNameStyle?: string;
+    abilityNameStyle?: string;
+    factionNameStyle?: string;
+    itemNameStyle?: string;
+    examples?: {
+      personNames?: string[];
+      locationNames?: string[];
+      abilityNames?: string[];
+      factionNames?: string[];
+    };
+    taboos?: string[];
+  };
 }
 
 export interface CachedAgentSections {
   sections: Array<{ agentId: string; key: string; content: string }>;
   ruleAtoms?: RuleAtom[];
+}
+
+export interface AudienceDirectiveMeta {
+  audienceTags: string[];
+  protagonistFocusTags: Array<'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'>;
+  toneTags: string[];
+  relationshipDensity: 'low' | 'medium' | 'high';
+  hardConstraints: string[];
+  softPreferences: string[];
 }
 
 @Entity('genre_profile_templates')
@@ -46,6 +69,24 @@ export class GenreProfileTemplateEntity {
 
   @Column({ name: 'cached_agent_sections', type: 'jsonb', nullable: true })
   cachedAgentSections: CachedAgentSections | null; // 预生成的 agent 指令缓存，创建小说时直接使用
+
+  @Column({ name: 'audience_tags', type: 'jsonb', default: '[]' })
+  audienceTags: string[];
+
+  @Column({ name: 'protagonist_focus_tags', type: 'jsonb', default: '[]' })
+  protagonistFocusTags: Array<'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'>;
+
+  @Column({ name: 'tone_tags', type: 'jsonb', default: '[]' })
+  toneTags: string[];
+
+  @Column({ name: 'relationship_density', type: 'varchar', length: 16, default: 'medium' })
+  relationshipDensity: 'low' | 'medium' | 'high';
+
+  @Column({ name: 'hard_constraints', type: 'jsonb', default: '[]' })
+  hardConstraints: string[];
+
+  @Column({ name: 'soft_preferences', type: 'jsonb', default: '[]' })
+  softPreferences: string[];
 
   @Column({ name: 'is_system', type: 'boolean', default: false })
   isSystem: boolean;

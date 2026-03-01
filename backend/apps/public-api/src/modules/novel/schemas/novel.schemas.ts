@@ -10,6 +10,7 @@ import { z } from 'zod';
 // Character lifecycle state for long-running serialization consistency.
 export const characterLifecycleStatusSchema = z.enum([
   'active',
+  'fading',
   'dormant',
   'dead',
   'exited',
@@ -31,6 +32,9 @@ export const characterStateSchema = z.object({
   plannedReturnChapter: z.number().int().min(1).nullable().optional(),
   narrativeImportance: narrativeImportanceSchema.optional(),
   dormantReference: z.boolean().optional(),
+  fadingStartChapter: z.number().int().min(1).optional(),
+  fadingDuration: z.number().int().min(1).max(30).optional(),
+  maxSceneRole: z.enum(['mention_only', 'brief_appearance', 'supporting']).optional(),
 });
 
 // Character voice profile — how this character SOUNDS in dialogue.

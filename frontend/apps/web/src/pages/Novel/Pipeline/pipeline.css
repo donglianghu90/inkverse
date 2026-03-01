@@ -1,0 +1,21 @@
+.edge-main-flow .react-flow__edge-path {
+  stroke-linecap: round;
+  animation: edge-main-flow-pulse 3.8s ease-in-out infinite;
+}
+
+@keyframes edge-main-flow-pulse {
+  0%, 100% {
+    stroke-opacity: 0.88;
+    filter: drop-shadow(0 0 0 rgba(59, 130, 246, 0.0));
+  }
+  50% {
+    stroke-opacity: 1;
+    filter: drop-shadow(0 0 2px rgba(59, 130, 246, 0.28));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .edge-main-flow .react-flow__edge-path {
+    animation: none;
+  }
+}

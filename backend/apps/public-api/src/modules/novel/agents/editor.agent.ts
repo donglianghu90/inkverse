@@ -17,7 +17,9 @@ import {
   CONTINUITY_BASELINE_PLAYBOOK,
   PROSE_CRAFT_PLAYBOOK,
   buildCompactContext,
+  UNIFIED_AGENT_MAX_CHARACTERS,
 } from '../prompting/novel-playbook';
+import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 
 @Injectable()
 export class EditorAgent {
@@ -32,7 +34,7 @@ export class EditorAgent {
     playbooks?: Record<string, string>,
   ): Promise<ChapterDraft> {
     const context = buildCompactContext(state, {
-      maxCharacters: 8,
+      maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
       maxChapterSummaries: 5,
       maxOpenThreads: 8,
     });
@@ -41,7 +43,7 @@ export class EditorAgent {
       .map((issue, i) => `${i + 1}. [${issue.severity}/${issue.category}] ${issue.description}\n   建议修改：${issue.suggestedFix}`)
       .join('\n');
 
-    return this.llm.generateStructured({
+    const edited = await this.llm.generateStructured({
       taskName: 'chapter-editor',
       schema: chapterDraftSchema,
       tags: ['workflow', 'chapter', 'edit'],
@@ -67,7 +69,7 @@ export class EditorAgent {
 ${playbooks?.['agent:editor:surgery'] ?? '- 优先修复 critical 和 moderate 级别问题。\n- 保留原文的好部分（strengths）。\n- 不要为了修改而修改。'}
 
 二、主动提升
-${playbooks?.['agent:editor:active_improve'] ?? '- 找到最平淡的2-3段用更有画面感的方式重写。\n- 检查关键对话是否有潜台词层次。\n- 确保章内有情绪弧线。\n- 把"讲述"改为"展示"。\n- 自然位置可考虑插入金句。'}
+${playbooks?.['agent:editor:active_improve'] ?? '- 找到最平淡的2-3段用更有画面感的方式重写。\n- 检查关键对话是否有潜台词层次。\n- 确保章内有情绪弧线。\n- 把"讲述"改为"展示"。\n- 自然位置可考虑插入金句。\n- 重点润色场景切换时的视角转移和情绪延续，消除拼接感，确保过渡如丝般顺滑。'}
 
 三、节奏手术
 ${playbooks?.['agent:editor:rhythm_surgery'] ?? '- 扫描全章段落长度分布：连续3段以上相同长度（差距<20字）的段落必须打破节奏。\n- 对话密集段与描写密集段应交替出现，避免连续5段以上纯对话或纯描写。\n- 紧张段落中如果句子平均超过30字，缩短；安静段落中如果句子平均低于15字，放长。'}
@@ -86,6 +88,10 @@ ${playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK}
 === 题材专属规则 ===
 ${profile.writerGuide.genreRules.slice(0, 4).map((r, i) => `${i + 1}. ${r}`).join('\n')}
 ${profile.writerGuide.craftExamples.length > 0 ? `\n=== 正反例参考 ===\n${profile.writerGuide.craftExamples.slice(0, 2).map((e) => `坏：${e.bad}\n好：${e.good}\n规则：${e.rule}`).join('\n\n')}` : ''}
+
+${buildAudiencePromptBlock(state)}
+${playbooks?.['__bookStrategy'] ?? ''}
+${playbooks?.['__policySlice'] ?? ''}
 
 ${playbooks?.['EDITOR_DISCIPLINE_PLAYBOOK'] ?? EDITOR_DISCIPLINE_PLAYBOOK}
 ${playbooks?.['CONTINUITY_BASELINE_PLAYBOOK'] ?? CONTINUITY_BASELINE_PLAYBOOK}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
@@ -118,5 +124,7 @@ ${draft.content}
 - 优先修复 critical 和 moderate 级别问题。`,
       temperature: 0.55,
     });
+    edited.chapterNumber = draft.chapterNumber;
+    return edited;
   }
 }

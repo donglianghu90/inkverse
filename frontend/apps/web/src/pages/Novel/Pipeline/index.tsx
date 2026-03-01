@@ -1,8 +1,9 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { history, useParams } from '@umijs/max';
-import ReactFlow, { Node, Edge, Controls, Background, BackgroundVariant, type NodeChange, applyNodeChanges } from 'reactflow';
+import ReactFlow, { Node, Edge, Controls, Background, BackgroundVariant, SmoothStepEdge, type NodeChange, type EdgeProps, applyNodeChanges } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { ArrowLeft, Loader2, AlertCircle, Clock, Save, Rocket, Info, RefreshCw, ShieldCheck, GitFork, GitMerge, Play, Square, History, BookOpen } from 'lucide-react';
+import './pipeline.css';
+import { ArrowLeft, Loader2, AlertCircle, Clock, Save, Rocket, Info, Play, Square, History, BookOpen, Radio } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -15,6 +16,7 @@ import { CheckNode } from './nodes/CheckNode';
 import { LoopEntryNode, LoopExitNode } from './nodes/LoopGroupNode';
 import { ParallelForkNode, ParallelJoinNode } from './nodes/ParallelNode';
 import { PhaseHeader } from './nodes/PhaseHeader';
+import { PhaseLane } from './nodes/PhaseLane';
 import { NodeEditPanel } from './panels/NodeEditPanel';
 import { ConditionEditPanel } from './panels/ConditionEditPanel';
 import { ExecutionPanel } from './panels/ExecutionPanel';
@@ -26,8 +28,10 @@ import { useExecutionReplay } from './hooks/useExecutionReplay';
 const NODE_TYPES = {
   agentNode: AgentNode, conditionNode: ConditionNode, checkNode: CheckNode,
   loopEntry: LoopEntryNode, loopExit: LoopExitNode,
-  parallelFork: ParallelForkNode, parallelJoin: ParallelJoinNode, phaseHeader: PhaseHeader,
+  parallelFork: ParallelForkNode, parallelJoin: ParallelJoinNode, phaseHeader: PhaseHeader, phaseLane: PhaseLane,
 };
+const RetryEdge = (props: EdgeProps) => <SmoothStepEdge {...props} pathOptions={{ offset: 400, borderRadius: 8 }} />;
+const EDGE_TYPES = { retryEdge: RetryEdge };
 
 export default function PipelinePage() {
   const { bookId } = useParams<{ bookId: string }>();
@@ -188,6 +192,10 @@ export default function PipelinePage() {
             <Button variant="destructive" size="sm" className="gap-1.5" onClick={progress.stopListening}>
               <Square className="h-3.5 w-3.5" />停止监听
             </Button>
+          ) : progress.isIdle ? (
+            <Button variant="outline" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => progress.resetStates()}>
+              <Radio className="h-3.5 w-3.5" />当前无生成任务
+            </Button>
           ) : (
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { progress.resetStates(); progress.startListening(); }}>
               <Play className="h-3.5 w-3.5" />实时监听
@@ -214,7 +222,7 @@ export default function PipelinePage() {
           <ReactFlow
             nodes={nodes} edges={edges}
             onNodesChange={handleNodesChange}
-            onNodeClick={handleNodeClick} nodeTypes={NODE_TYPES}
+            onNodeClick={handleNodeClick} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES}
             fitView fitViewOptions={{ padding: 0.15 }} minZoom={0.15} maxZoom={1.5}
             proOptions={{ hideAttribution: true }}
           >
@@ -233,23 +241,25 @@ export default function PipelinePage() {
                 <span>条件判断</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="h-4 w-4 rounded-md bg-sky-100 dark:bg-sky-900/40 flex items-center justify-center"><ShieldCheck className="h-2.5 w-2.5 text-sky-500" /></div>
+                <svg className="h-4 w-5 shrink-0" viewBox="0 0 20 16" fill="none"><path d="M4 1 L16 1 L19 8 L16 15 L4 15 L1 8Z" className="fill-sky-50 dark:fill-sky-950/40 stroke-sky-400" strokeWidth="1.5" strokeLinejoin="round" /></svg>
                 <span>确定性检查</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="h-4 w-4 rounded-md bg-violet-100 dark:bg-violet-900/40 flex items-center justify-center"><RefreshCw className="h-2.5 w-2.5 text-violet-500" /></div>
-                <span>质量门控循环</span>
+                <div className="h-4 w-7 rounded-full border border-violet-400/40 bg-violet-50/60 dark:bg-violet-950/20" />
+                <span>循环节点</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="h-4 w-4 rounded-md bg-teal-100 dark:bg-teal-900/40 flex items-center justify-center"><GitFork className="h-2.5 w-2.5 text-teal-500" /></div>
-                <span>并行分支</span>
-                <div className="h-4 w-4 rounded-md bg-teal-100 dark:bg-teal-900/40 flex items-center justify-center"><GitMerge className="h-2.5 w-2.5 text-teal-500" /></div>
-                <span>汇合</span>
+                <div className="w-10 h-3 rounded-sm border border-teal-400/40 bg-gradient-to-r from-transparent via-teal-400/35 to-transparent" />
+                <span>并行同步条</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="h-px w-4 bg-emerald-500" /><span>通过</span>
                 <div className="h-px w-4 border-t border-dashed border-muted-foreground/40" /><span>跳过</span>
                 <div className="h-px w-4 bg-violet-500" /><span>重写</span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px]">
+                <span className="px-1 rounded border border-border/50 bg-background/70">条件左=否</span>
+                <span className="px-1 rounded border border-emerald-400/40 bg-background/70 text-emerald-600/90">条件右=是</span>
               </div>
               {!selectedNodeId && <p className="text-muted-foreground/60 pt-0.5 text-[10px]">点击节点查看详情和编辑</p>}
             </div>

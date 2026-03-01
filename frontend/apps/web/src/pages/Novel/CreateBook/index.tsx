@@ -45,17 +45,33 @@ import { getToken } from '@/services/auth';
 import ProfileEditor from '../ProfileEditor';
 
 const GENRE_ICONS: Record<string, string> = {
-  xianxia: '🏔️', romance: '💕', mystery: '🔍', 'sci-fi': '🚀',
-  urban: '🏙️', historical: '📜', game: '🎮', horror: '💀',
-  xuanhuan: '🌌', wuxia: '⚔️', apocalypse: '💀', fantasy: '🐉', military: '🎖️',
+  xianxia: '🏔️', mystery: '🔍', 'sci-fi': '🚀',
+  urban: '🏙️', historical: '📜', horror: '💀',
+  xuanhuan: '🌌', wuxia: '⚔️', military: '🎖️',
+  'western-fantasy': '🧙‍♂️', 'infinite-flow': '🌀', 'light-novel': '🌸',
+  'post-apocalyptic': '☢️', 'suspense-thriller': '🔪', 'supernatural': '👻',
+  'adventure': '🗺️', 'esports': '🖱️', 'vrmmo': '🥽', 'sports': '⚽',
+  'superpower': '⚡', 'epic': '👑', 'urban-romance': '💄',
+  'ancient-romance': '🏮', 'fantasy-romance': '✨', 'children': '🧸',
 };
 
-const AUDIENCE_PRESETS = [
-  '18-25 岁男性网文读者',
-  '18-25 岁女性网文读者',
-  '25-35 岁男性读者',
-  '25-35 岁女性读者',
-  '全年龄向',
+const AUDIENCE_PRESETS: Array<{ label: string; tags: string[] }> = [
+  { label: '18-25 岁男性网文读者', tags: ['男性向', '18-25岁', '网文读者'] },
+  { label: '18-25 岁女性网文读者', tags: ['女性向', '18-25岁', '网文读者'] },
+  { label: '25-35 岁男性读者',     tags: ['男性向', '25-35岁'] },
+  { label: '25-35 岁女性读者',     tags: ['女性向', '25-35岁'] },
+  { label: '全年龄向',             tags: ['男女通吃'] },
+];
+
+const PROTAGONIST_FOCUS_PRESETS: Array<{
+  value: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble';
+  label: string;
+  desc: string;
+}> = [
+  { value: 'female_lead', label: '女主向', desc: '女主视角优先' },
+  { value: 'male_lead', label: '男主向', desc: '男主视角优先' },
+  { value: 'dual_lead', label: '双主角', desc: '双线并进' },
+  { value: 'ensemble', label: '群像', desc: '多角色叙事' },
 ];
 
 const WORD_COUNT_PRESETS = [
@@ -79,7 +95,7 @@ const SERIALIZATION_PRESETS = [
 
 const FORM_STEPS = [
   { title: '核心创意', icon: Sparkles, desc: '描述你的故事灵感' },
-  { title: '类型与受众', icon: Users, desc: '选择类型和目标读者' },
+  { title: '类型与受众', icon: Users, desc: '选择类型、受众与叙事偏好' },
   { title: '主线目标', icon: Target, desc: '定义目标和书名' },
   { title: '规模配置', icon: Settings2, desc: '字数和章节设置' },
 ];
@@ -120,6 +136,9 @@ const CreateBook: React.FC = () => {
     mainIdea: '',
     genre: '',
     targetAudience: '',
+    protagonistFocus: 'male_lead',
+    tonePreference: '',
+    audienceTags: [],
     mainStoryGoal: '',
     titleHint: '',
     targetChapterWordCount: 3000,
@@ -209,6 +228,9 @@ const CreateBook: React.FC = () => {
       mainIdea: form.mainIdea,
       genre: effectiveGenre,
       targetAudience: effectiveAudience,
+      protagonistFocus: form.protagonistFocus,
+      tonePreference: form.tonePreference || undefined,
+      audienceTags: form.audienceTags?.length ? form.audienceTags : undefined,
       mainStoryGoal: form.mainStoryGoal,
       titleHint: form.titleHint || undefined,
       targetChapterWordCount: form.targetChapterWordCount,
@@ -397,6 +419,7 @@ const CreateBook: React.FC = () => {
                 return (
                   <React.Fragment key={s.title}>
                     <button
+                      type="button"
                       className={cn(
                         'flex items-center gap-2.5 transition-all shrink-0',
                         i < step && 'cursor-pointer group',
@@ -592,7 +615,7 @@ const CreateBook: React.FC = () => {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <Label>小说类型</Label>
-              <button className="text-xs text-primary hover:underline" onClick={() => history.push('/novel/templates')}>
+              <button type="button" className="text-xs text-primary hover:underline" onClick={() => history.push('/novel/templates')}>
                 添加新题材
               </button>
             </div>
@@ -603,6 +626,7 @@ const CreateBook: React.FC = () => {
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
                 {genreTemplates.map((t) => (
                   <button
+                    type="button"
                     key={t.id}
                     className={cn(
                       'flex flex-col items-center gap-1 rounded-lg border p-2.5 sm:p-3 text-center transition-all hover:border-primary/50 active:scale-[0.97]',
@@ -621,7 +645,7 @@ const CreateBook: React.FC = () => {
               </div>
             ) : (
               <div className="text-center py-6 text-sm text-muted-foreground">
-                <p>暂无题材模板，请先去<button className="text-primary hover:underline mx-1" onClick={() => history.push('/novel/templates')}>题材模板管理</button>添加</p>
+                <p>暂无题材模板，请先去<button type="button" className="text-primary hover:underline mx-1" onClick={() => history.push('/novel/templates')}>题材模板管理</button>添加</p>
               </div>
             )}
           </div>
@@ -630,36 +654,92 @@ const CreateBook: React.FC = () => {
             <div className="flex items-center justify-between">
               <Label>目标读者</Label>
               <button
+                type="button"
                 className="text-xs text-primary hover:underline"
-                onClick={() => setForm({ ...form, useCustomAudience: !form.useCustomAudience, targetAudience: '' })}
+                onClick={() => setForm({ ...form, useCustomAudience: !form.useCustomAudience, targetAudience: '', audienceTags: [] })}
               >
                 {form.useCustomAudience ? '选择预设读者' : '自定义读者'}
               </button>
             </div>
 
             {form.useCustomAudience ? (
-              <Input
-                placeholder="描述你的目标读者群体，例如：30-40 岁职场女性、二次元爱好者..."
-                value={form.customAudience}
-                onChange={(e) => setForm({ ...form, customAudience: e.target.value })}
-              />
+              <div className="space-y-2">
+                <Input
+                  placeholder="描述你的目标读者群体，例如：30-40 岁职场女性、二次元爱好者..."
+                  value={form.customAudience}
+                  onChange={(e) => setForm({ ...form, customAudience: e.target.value })}
+                />
+                <div className="space-y-1.5">
+                  <p className="text-xs text-muted-foreground">受众标签（逗号分隔，用于精准匹配题材模板）</p>
+                  <Input
+                    placeholder="例如：女性向、18-35岁、言情读者"
+                    value={(form.audienceTags ?? []).join(', ')}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        audienceTags: e.target.value.split(/[,，、]/).map((s) => s.trim()).filter(Boolean),
+                      })
+                    }
+                  />
+                </div>
+              </div>
             ) : (
-              <div className="flex flex-wrap gap-2">
-                {AUDIENCE_PRESETS.map((a) => (
-                  <Badge
-                    key={a}
-                    variant={form.targetAudience === a ? 'default' : 'outline'}
-                    className={cn(
-                      'cursor-pointer px-3 py-1.5 text-xs sm:text-sm transition-all active:scale-[0.97]',
-                      form.targetAudience === a && 'ring-2 ring-primary/20',
-                    )}
-                    onClick={() => setForm({ ...form, targetAudience: a })}
-                  >
-                    {a}
-                  </Badge>
-                ))}
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  {AUDIENCE_PRESETS.map((a) => (
+                    <Badge
+                      key={a.label}
+                      variant={form.targetAudience === a.label ? 'default' : 'outline'}
+                      className={cn(
+                        'cursor-pointer px-3 py-1.5 text-xs sm:text-sm transition-all active:scale-[0.97]',
+                        form.targetAudience === a.label && 'ring-2 ring-primary/20',
+                      )}
+                      onClick={() => setForm({ ...form, targetAudience: a.label, audienceTags: a.tags })}
+                    >
+                      {a.label}
+                    </Badge>
+                  ))}
+                </div>
+                {(form.audienceTags?.length ?? 0) > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    自动标签：{form.audienceTags?.join('、')}
+                  </p>
+                )}
               </div>
             )}
+          </div>
+
+          <div className="space-y-3">
+            <Label>叙事聚焦</Label>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {PROTAGONIST_FOCUS_PRESETS.map((opt) => (
+                <button
+                  type="button"
+                  key={opt.value}
+                  className={cn(
+                    'flex flex-col items-center gap-1 rounded-lg border p-2.5 sm:p-3 text-center transition-all hover:border-primary/50 active:scale-[0.97]',
+                    form.protagonistFocus === opt.value
+                      ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
+                      : 'border-border',
+                  )}
+                  onClick={() => setForm({ ...form, protagonistFocus: opt.value })}
+                >
+                  <span className="text-xs sm:text-sm font-medium">{opt.label}</span>
+                  <span className="text-[10px] sm:text-[11px] text-muted-foreground leading-tight">{opt.desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <Label htmlFor="tonePreference">调性偏好（可选）</Label>
+            <Input
+              id="tonePreference"
+              placeholder="例如：细腻慢热、热血高燃、冷峻克制"
+              value={form.tonePreference ?? ''}
+              onChange={(e) => setForm({ ...form, tonePreference: e.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">将用于模板匹配与写作风格约束。</p>
           </div>
 
           <Card className="border-primary/10 bg-gradient-to-br from-primary/3 to-transparent overflow-hidden">
@@ -729,6 +809,7 @@ const CreateBook: React.FC = () => {
                 <div className="space-y-1.5">
                   {goalAlternatives.map((alt, i) => (
                     <button
+                      type="button"
                       key={i}
                       className="w-full text-left rounded-lg border border-border bg-background/70 px-3 py-2.5 text-sm text-muted-foreground transition-all hover:border-primary/50 hover:bg-primary/5 hover:text-foreground active:scale-[0.99]"
                       onClick={() => {
@@ -771,6 +852,7 @@ const CreateBook: React.FC = () => {
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {WORD_COUNT_PRESETS.map((w) => (
                 <button
+                  type="button"
                   key={w.value}
                   className={cn(
                     'flex flex-col items-center gap-1 rounded-lg border p-2.5 sm:p-3 text-center transition-all hover:border-primary/50 active:scale-[0.97]',
@@ -810,6 +892,7 @@ const CreateBook: React.FC = () => {
                 const estWords = `${((s.min * (form.targetChapterWordCount ?? 3000)) / 10000).toFixed(0)}-${((s.max * (form.targetChapterWordCount ?? 3000)) / 10000).toFixed(0)} 万字`;
                 return (
                   <button
+                    type="button"
                     key={s.label}
                     className={cn(
                       'flex flex-col items-start gap-1 rounded-lg border p-3 sm:p-4 text-left transition-all hover:border-primary/50 active:scale-[0.98]',
@@ -1022,6 +1105,9 @@ const CreateBook: React.FC = () => {
                   { label: '创意', value: form.mainIdea || '—', clamp: true },
                   { label: '类型', value: effectiveGenre || '—' },
                   { label: '受众', value: effectiveAudience || '—' },
+                  { label: '叙事', value: PROTAGONIST_FOCUS_PRESETS.find((x) => x.value === form.protagonistFocus)?.label || '—' },
+                  { label: '调性', value: form.tonePreference || '—' },
+                  { label: '标签', value: form.audienceTags?.length ? form.audienceTags.join('、') : '—' },
                   { label: '目标', value: form.mainStoryGoal || '—', clamp: true },
                   {
                     label: '规模',

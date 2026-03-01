@@ -109,7 +109,23 @@ export class LoreApplicationService {
       }
     }
 
-    // Step 2: Build a bridge state with new entities for delta application.
+    const maxNewPerArc = state.bookStrategy?.characterBudget?.maxNewPerArc ?? 3;
+    const arcStart = state.currentArc?.startChapter ?? 1;
+    const newInArc = characters.filter((c) => (c.status.firstSeenChapter ?? 0) >= arcStart && c.role !== 'protagonist').length;
+    if (newInArc > maxNewPerArc) {
+      const excessIds = new Set(
+        characters.filter((c) => (c.status.firstSeenChapter ?? 0) === chapterNumber && c.role !== 'protagonist')
+          .sort((a, b) => { const r: Record<string, number> = { villain: 3, supporting: 2, npc: 1 }; return (r[a.role] ?? 0) - (r[b.role] ?? 0); })
+          .slice(0, newInArc - maxNewPerArc)
+          .map((c) => c.id),
+      );
+      for (let i = 0; i < characters.length; i++) {
+        if (excessIds.has(characters[i].id)) {
+          characters[i] = { ...characters[i], status: { ...characters[i].status, narrativeImportance: 'cameo' as const, lifecycleStatus: 'dormant' as const } };
+        }
+      }
+    }
+
     const bridgeState = {
       ...(state as any),
       characters,
@@ -706,10 +722,30 @@ export class LoreApplicationService {
       while (recentHookTypes.length > 10) recentHookTypes.shift();
     }
 
-    // Merge back into state.
+    const exitPlans = new Map(
+      (state.currentVolume?.exitCharacterPlan ?? []).filter((p) => p.exitType === 'fading' && p.exitChapterEstimate <= chapterNumber).map((p) => [p.characterId, p]),
+    );
+    const appearedIds = new Set(intent.characterAvailability?.activeCharacterIds ?? []);
+    const touchedCharacters = finalCharacters.map((c) => {
+      let status = c.status;
+      if (appearedIds.has(c.id) && (status.lastSeenChapter ?? 0) < chapterNumber) {
+        status = { ...status, lastSeenChapter: chapterNumber };
+      }
+      if (status.lifecycleStatus === 'fading' && status.fadingStartChapter && status.fadingDuration) {
+        if (chapterNumber >= status.fadingStartChapter + status.fadingDuration) {
+          status = { ...status, lifecycleStatus: 'dormant', fadingStartChapter: undefined, fadingDuration: undefined, maxSceneRole: undefined };
+        }
+      }
+      const ep = exitPlans.get(c.id);
+      if (ep && status.lifecycleStatus === 'active') {
+        status = { ...status, lifecycleStatus: 'fading', fadingStartChapter: chapterNumber, fadingDuration: 5, maxSceneRole: 'brief_appearance' };
+      }
+      return status === c.status ? c : { ...c, status };
+    });
+
     return {
       ...state,
-      characters: finalCharacters,
+      characters: touchedCharacters,
       locations: finalLocations,
       items: finalItems,
       factions,
@@ -957,6 +993,11 @@ export class LoreApplicationService {
           ? delta.locationId
           : current.status.locationId;
 
+      const fadingFields = nextLifecycleStatus === 'fading' && current.status.lifecycleStatus !== 'fading'
+        ? { fadingStartChapter: chapterNumber, fadingDuration: 5, maxSceneRole: 'brief_appearance' as const }
+        : nextLifecycleStatus !== 'fading'
+          ? { fadingStartChapter: undefined, fadingDuration: undefined, maxSceneRole: undefined }
+          : {};
       characterMap.set(delta.characterId, {
         ...current,
         aliases: this.normalizeCharacterAliases(current.aliases ?? []),
@@ -971,6 +1012,7 @@ export class LoreApplicationService {
           plannedReturnChapter: plannedReturnChapter ?? null,
           narrativeImportance: delta.narrativeImportance ?? current.status.narrativeImportance,
           dormantReference: delta.dormantReference ?? current.status.dormantReference,
+          ...fadingFields,
         },
       });
     }

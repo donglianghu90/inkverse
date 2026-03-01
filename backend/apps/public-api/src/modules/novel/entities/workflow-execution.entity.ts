@@ -48,8 +48,17 @@ export class WorkflowExecutionEntity {
   @Column({ name: 'status', type: 'varchar', length: 20, default: 'running' })
   status: ExecutionStatus;
 
+  @Column({ name: 'owner_instance_id', type: 'varchar', length: 120, nullable: true })
+  ownerInstanceId: string | null; // 当前持有执行权的实例ID（多实例防误抢）
+
+  @Column({ name: 'heartbeat_at', type: 'timestamptz', nullable: true })
+  heartbeatAt: Date | null; // 执行心跳时间（用于判定 running 是否失活）
+
   @Column({ name: 'last_checkpoint', type: 'varchar', length: 50, nullable: true })
   lastCheckpoint: string | null; // 最后完成的工作流步骤名称
+
+  @Column({ name: 'step_outputs', type: 'jsonb', default: '{}' })
+  stepOutputs: Record<string, unknown>; // 各步骤中间产物缓存，用于断点续传
 
   @Column({ name: 'failure_reason', type: 'text', nullable: true })
   failureReason: string | null; // 失败/中断原因

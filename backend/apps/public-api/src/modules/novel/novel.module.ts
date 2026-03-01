@@ -46,6 +46,7 @@ import { PromptProfilerAgent } from './agents/prompt-profiler.agent';
 import { ScenePlannerAgent } from './agents/scene-planner.agent';
 import { SceneStitcherAgent } from './agents/scene-stitcher.agent';
 import { VolumeDirectorAgent } from './agents/volume-director.agent';
+import { BookStrategyAgent } from './agents/book-strategy.agent';
 
 // New quality agents
 import { ContinuityGuardAgent } from './agents/continuity-guard.agent';
@@ -119,6 +120,7 @@ import { TaskRecoveryService } from './task-recovery.service';
     ScenePlannerAgent,
     SceneStitcherAgent,
     VolumeDirectorAgent,
+    BookStrategyAgent,
 
     // New quality agents
     ContinuityGuardAgent,

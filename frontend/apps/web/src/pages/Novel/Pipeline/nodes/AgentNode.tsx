@@ -2,6 +2,8 @@ import { Handle, Position, NodeProps } from 'reactflow';
 import { Lock, Trash2, ToggleLeft, ToggleRight, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { AgentNodeConfig } from '@/services/novel';
+import { NODE_TEXT } from '../node-text-tokens';
+import { NODE_SIZE } from '../node-shape-tokens';
 
 const AGENT_META: Record<string, { icon: string; color: string; accent: string }> = {
   'arc-director':          { icon: '🎬', color: 'border-cyan-400/60 bg-cyan-50/50 dark:bg-cyan-950/30', accent: 'bg-cyan-400' },
@@ -25,6 +27,12 @@ const AGENT_META: Record<string, { icon: string; color: string; accent: string }
 
 export interface AgentNodeData extends AgentNodeConfig {
   agentType?: string; // 拓扑层传入的原始 agent 类型，优先用于样式查找
+  showTopHandle?: boolean;
+  showLeftHandle?: boolean;
+  showRightHandle?: boolean;
+  showBottomSourceHandle?: boolean;
+  showLeftSourceHandle?: boolean;
+  showRightSourceHandle?: boolean;
   isSelected?: boolean;
   onDelete?: (id: string) => void;
   onToggle?: (id: string) => void;
@@ -38,6 +46,8 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeData>) {
   const meta = AGENT_META[agentKey] ?? AGENT_META.custom;
   const isCustom = agentKey === 'custom';
   const stepNum = typeof data.position === 'number' ? data.position + 1 : null;
+  const sideHidden = '!w-0 !h-0 !opacity-0 !border-0 !min-w-0 !min-h-0';
+  const sideVisible = '!w-2.5 !h-2.5 !bg-muted-foreground/40 !border-2 !border-background';
   return (
     <div
       className={cn(
@@ -50,6 +60,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeData>) {
         data.status === 'failed' && 'ring-2 ring-red-400',
         data.status === 'skipped' && 'opacity-40',
       )}
+      style={{ minHeight: NODE_SIZE.agentNode.h }}
     >
       {stepNum != null && (
         <div className={cn(
@@ -59,19 +70,20 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeData>) {
           {stepNum}
         </div>
       )}
-      <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-muted-foreground/40 !border-2 !border-background" />
-      <Handle type="target" position={Position.Right} id="right" className="!w-0 !h-0 !opacity-0 !border-0 !min-w-0 !min-h-0" />
+      {data.showTopHandle && <Handle type="target" position={Position.Top} id="top" className="!w-3 !h-3 !bg-muted-foreground/40 !border-2 !border-background" />}
+      <Handle type="target" position={Position.Left} id="left" className={cn(data.showLeftHandle ? sideVisible : sideHidden)} />
+      <Handle type="target" position={Position.Right} id="right" className={cn(data.showRightHandle ? sideVisible : sideHidden)} />
       <div className={cn('h-1 rounded-t-[10px]', meta.accent)} />
-      <div className="px-4 pb-3 pt-3 pl-5">
+      <div className="p-4">
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="flex items-center gap-2">
             <span className="text-xl leading-none">{meta.icon}</span>
             <div>
-              <div className="font-semibold text-sm text-foreground leading-tight">{data.label}</div>
+              <div className={NODE_TEXT.title}>{data.label}</div>
               {isCustom && (
-                <div className="flex items-center gap-1 mt-0.5">
+                <div className="flex items-center gap-1 mt-1">
                   <Zap className="h-3 w-3 text-purple-500" />
-                  <span className="text-xs text-purple-500 font-medium">自定义</span>
+                  <span className={cn(NODE_TEXT.accentMeta, 'text-purple-500')}>自定义</span>
                 </div>
               )}
             </div>
@@ -90,20 +102,22 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeData>) {
             )}
           </div>
         </div>
-        <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{data.description}</p>
-        <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+        <p className={cn(NODE_TEXT.body, 'line-clamp-2 min-h-[2.5rem]')}>{data.description}</p>
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
           <div className={cn('h-1.5 w-1.5 rounded-full', data.isEnabled ? 'bg-emerald-500' : 'bg-muted-foreground/40')} />
-          <span className="text-xs text-muted-foreground">{data.isEnabled ? '已启用' : '已禁用'}</span>
-          {data.additionalSystemPrompt && (<><span className="text-muted-foreground/40 text-xs">·</span><span className="text-xs text-primary/70">有补充指令</span></>)}
+          <span className={NODE_TEXT.meta}>{data.isEnabled ? '已启用' : '已禁用'}</span>
+          {data.additionalSystemPrompt && (<><span className={cn(NODE_TEXT.meta, 'text-muted-foreground/40')}>·</span><span className={cn(NODE_TEXT.meta, 'text-primary/70')}>有补充指令</span></>)}
           {data.status === 'completed' && data.durationMs != null && (
-            <><span className="text-muted-foreground/40 text-xs">·</span><span className="text-xs text-emerald-600">{data.durationMs > 1000 ? `${(data.durationMs / 1000).toFixed(1)}s` : `${data.durationMs}ms`}</span></>
+            <><span className={cn(NODE_TEXT.meta, 'text-muted-foreground/40')}>·</span><span className={cn(NODE_TEXT.meta, 'text-emerald-600')}>{data.durationMs > 1000 ? `${(data.durationMs / 1000).toFixed(1)}s` : `${data.durationMs}ms`}</span></>
           )}
           {data.status === 'skipped' && data.statusMessage && (
-            <><span className="text-muted-foreground/40 text-xs">·</span><span className="text-xs text-muted-foreground">{data.statusMessage}</span></>
+            <><span className={cn(NODE_TEXT.meta, 'text-muted-foreground/40')}>·</span><span className={NODE_TEXT.meta}>{data.statusMessage}</span></>
           )}
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} className="!w-3 !h-3 !bg-muted-foreground/40 !border-2 !border-background" />
+      {data.showBottomSourceHandle && <Handle type="source" position={Position.Bottom} id="bottom" className="!w-3 !h-3 !bg-muted-foreground/40 !border-2 !border-background" />}
+      {data.showLeftSourceHandle && <Handle type="source" position={Position.Left} id="source-left" className={sideVisible} />}
+      {data.showRightSourceHandle && <Handle type="source" position={Position.Right} id="source-right" className={sideVisible} />}
     </div>
   );
 }

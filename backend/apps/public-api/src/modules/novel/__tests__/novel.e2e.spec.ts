@@ -4,12 +4,14 @@
  */
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { DataSource } from 'typeorm';
 import request = require('supertest');
 import { AppModule } from '../../../app.module';
 
 describe('Novel API (e2e)', () => {
   let app: INestApplication;
   let httpApp: any;
+  let dataSource: DataSource;
 
   beforeAll(async () => {
     // Keep e2e deterministic while still exercising PostgreSQL persistence path.
@@ -26,6 +28,7 @@ describe('Novel API (e2e)', () => {
 
     app = moduleRef.createNestApplication();
     await app.init();
+    dataSource = app.get(DataSource);
     // Use underlying Express app directly so supertest does not bind a real port.
     httpApp = app.getHttpAdapter().getInstance();
   });
@@ -53,7 +56,7 @@ describe('Novel API (e2e)', () => {
 
     const chapterRes = await request(httpApp)
       .post(`/novel/books/${bookId}/chapters`)
-      .send({ maxRepairRounds: 1, strictQuality: false })
+      .send({ maxRepairRounds: 1 })
       .expect(201);
 
     expect(chapterRes.body.bookId).toBe(bookId);
@@ -65,8 +68,6 @@ describe('Novel API (e2e)', () => {
       .send({
         chapterCount: 2,
         maxRepairRounds: 1,
-        stopWhenLowQuality: false,
-        strictQuality: false,
       })
       .expect(201);
 
@@ -118,10 +119,8 @@ describe('Novel API (e2e)', () => {
         dailyStartTime: '23:59',
         chaptersPerRun: 1,
         maxRepairRounds: 1,
-        strictQuality: false,
-        stopWhenLowQuality: false,
-        minQualityScore: 6,
-        minOverallScore: 6,
+        minQualityScore: 7,
+        minOverallScore: 7,
       })
       .expect(200);
 
@@ -152,5 +151,51 @@ describe('Novel API (e2e)', () => {
 
     expect(autoDisableRes.body.bookId).toBe(bookId);
     expect(autoDisableRes.body.enabled).toBe(false);
+  });
+
+  it('should heal lagging chapterCursor when chapters already exist', async () => {
+    const createRes = await request(httpApp)
+      .post('/novel/books')
+      .send({
+        mainIdea: '主角靠经营茶馆逆袭',
+        genre: '都市',
+        targetAudience: '都市网文读者',
+        mainStoryGoal: '建立商业帝国',
+        titleHint: '茶馆风云',
+      })
+      .expect(201);
+    const bookId: string = createRes.body.bookId;
+
+    const firstChapterRes = await request(httpApp)
+      .post(`/novel/books/${bookId}/chapters`)
+      .send({ maxRepairRounds: 1 })
+      .expect(201);
+    expect(firstChapterRes.body.chapterNumber).toBe(1);
+
+    await dataSource.query(
+      `UPDATE books
+       SET state_json = jsonb_set(state_json, '{chapterCursor}', '1'::jsonb, true)
+       WHERE book_id = $1`,
+      [bookId],
+    );
+
+    const beforeHealRes = await request(httpApp)
+      .get(`/novel/books/${bookId}`)
+      .expect(200);
+    expect(beforeHealRes.body.chaptersGenerated).toBe(1);
+
+    const secondChapterRes = await request(httpApp)
+      .post(`/novel/books/${bookId}/chapters`)
+      .send({ maxRepairRounds: 1 })
+      .expect(201);
+    expect(secondChapterRes.body.chapterNumber).toBe(2);
+    expect(secondChapterRes.body.nextChapterCursor).toBe(3);
+
+    const listRes = await request(httpApp)
+      .get(`/novel/books/${bookId}/chapters?limit=10`)
+      .expect(200);
+    const chapterNumbers = listRes.body.chapters.map((ch: { chapterNumber: number }) => ch.chapterNumber);
+    expect(chapterNumbers).toContain(1);
+    expect(chapterNumbers).toContain(2);
   });
 });

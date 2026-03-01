@@ -122,7 +122,8 @@ export class TextAnalyzerAgent {
 - 只记录正文中明确描写的，不要推测
 - 新角色必须有实际动作或对白，路人不注册
 - 摘要禁止赞美性语言
-- id 格式：角色 char_xxx、地点 loc_xxx、道具 item_xxx${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
+- id 格式：角色 char_xxx、地点 loc_xxx、道具 item_xxx
+- 新角色注册需克制：本弧已引入${(() => { const arcStart = state.currentArc?.startChapter ?? 1; return state.characters.filter((c) => (c.status.firstSeenChapter ?? 0) >= arcStart && c.role !== 'protagonist').length; })()}个新角色，预算${state.bookStrategy?.characterBudget?.maxNewPerArc ?? 3}个${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
       userPrompt: `已有角色姓名：${JSON.stringify(existingCharNames)}
 已有地点编号：${JSON.stringify(existingLocIds)}
 已有道具编号：${JSON.stringify(existingItemIds)}

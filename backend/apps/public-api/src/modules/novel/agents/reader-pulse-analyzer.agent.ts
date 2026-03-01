@@ -7,6 +7,7 @@ import {
   StoryState,
   readerFeedbackAnalysisSchema,
 } from '../schemas/novel-state.schemas';
+import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 
 @Injectable()
 export class ReaderPulseAnalyzerAgent {
@@ -48,6 +49,8 @@ ${editorial ? JSON.stringify(editorial) : '（未设定）'}
    - 和editorialPlan的positioning/narrativePromise/qualityBar对比
    - 冲突项verdict=reject或conditional（不能是adopt）
    - 补充信息（editorialPlan未覆盖的领域）可以adopt
+
+${buildAudiencePromptBlock(state)}
    
 3. 数据验证：
    - 有平台指标（完读率、留存率）佐证的信号confidence+0.2

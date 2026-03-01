@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../llm/llm.service';
 import { StoryState, ChapterIntent } from '../schemas/novel-state.schemas';
 import { ChapterDraft } from '../schemas/novel.schemas';
+import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 import { z } from 'zod';
 
 const voiceAuditSchema = z.object({
@@ -90,7 +91,9 @@ voiceConsistency 评分：
 - 9-10: 声音高度辨识+情绪调变自然+权力语态准确
 - 7-8: 基本一致，情绪调变偶有缺失
 - 5-6: 部分对话脱离角色声音
-- 0-4: 严重脱离，角色说话像同一个人`,
+- 0-4: 严重脱离，角色说话像同一个人
+
+${buildAudiencePromptBlock(state)}`,
       userPrompt: `角色声音档案：
 ${JSON.stringify(voiceProfiles, null, 2)}
 

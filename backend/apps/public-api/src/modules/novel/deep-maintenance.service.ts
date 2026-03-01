@@ -21,6 +21,7 @@ import { Repository } from 'typeorm';
 import { LlmService } from './llm/llm.service';
 import { BookPromptTemplateService } from './book-prompt-template.service';
 import { VolumeDirectorAgent } from './agents/volume-director.agent';
+import { BookStrategyAgent } from './agents/book-strategy.agent';
 import { RetrospectiveLearnerAgent } from './agents/retrospective-learner.agent';
 import { MemoryRetrieverService } from './memory-retriever.service';
 import { ChapterEntity } from './entities/chapter.entity';
@@ -66,6 +67,7 @@ export class DeepMaintenanceService {
     private readonly llm: LlmService,
     private readonly promptTplService: BookPromptTemplateService,
     private readonly volumeDirector: VolumeDirectorAgent,
+    private readonly bookStrategyAgent: BookStrategyAgent,
     private readonly retrospectiveLearner: RetrospectiveLearnerAgent,
     private readonly memoryRetriever: MemoryRetrieverService,
     @InjectRepository(ChapterEntity)
@@ -263,9 +265,25 @@ export class DeepMaintenanceService {
         `MiniArc槽位: ${newVolume.miniArcSlots.length} | 伏笔种子: ${deposits.length} | 创新: ${newVolume.structuralInnovation || '无'}`,
       );
       const bank = state.foreshadowingBank ?? { deposits: [], totalPlanted: 0, totalResolved: 0 };
+      const refreshedPolicies = await this.bookStrategyAgent.refreshVolumePolicies({
+        ...state,
+        currentVolume: { ...newVolume, status: 'active' as const },
+      }).catch((e) => {
+        this.logger.warn(`[Volume] 卷级策略刷新失败，保留原策略: ${e instanceof Error ? e.message : String(e)}`);
+        return null;
+      });
       return {
         ...state,
         currentVolume: { ...newVolume, status: 'active' as const },
+        ...(refreshedPolicies
+          ? {
+              bookStrategy: {
+                ...(state.bookStrategy ?? {}),
+                ...refreshedPolicies,
+                lastRefreshedAtChapter: state.chapterCursor,
+              } as StoryState['bookStrategy'],
+            }
+          : {}),
         foreshadowingBank: {
           ...bank,
           deposits: [...bank.deposits, ...deposits],

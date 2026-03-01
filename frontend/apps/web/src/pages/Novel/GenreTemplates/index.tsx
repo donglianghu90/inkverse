@@ -17,18 +17,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import {
   listGenreTemplates, getGenreTemplate, updateGenreTemplate, deleteGenreTemplate,
-  cloneGenreTemplate, aiGenerateProfile, syncGenreTemplateFromSystem,
+  cloneGenreTemplate, aiGenerateProfile, syncGenreTemplateFromSystem, createGenreTemplate,
   type GenreProfileTemplate, type AiGenerateProfileParams, type RuleAtom,
 } from '@/services/novel';
 
 const GENRE_COLORS: Record<string, string> = {
   xianxia: 'from-violet-500 to-indigo-600',
-  romance: 'from-pink-400 to-rose-500',
   mystery: 'from-slate-500 to-zinc-700',
   'sci-fi': 'from-cyan-500 to-blue-600',
   urban: 'from-orange-400 to-rose-500',
   historical: 'from-yellow-600 to-amber-800',
-  game: 'from-green-500 to-emerald-600',
   horror: 'from-gray-600 to-red-900',
   supernatural: 'from-indigo-400 to-purple-800',
   'western-fantasy': 'from-purple-500 to-fuchsia-600',
@@ -40,6 +38,15 @@ const GENRE_COLORS: Record<string, string> = {
   epic: 'from-rose-600 to-amber-700',
   'fantasy-romance': 'from-fuchsia-400 to-pink-600',
   children: 'from-sky-400 to-indigo-400',
+  xuanhuan: 'from-blue-600 to-indigo-800',
+  'infinite-flow': 'from-fuchsia-500 to-purple-700',
+  'light-novel': 'from-pink-300 to-rose-400',
+  'post-apocalyptic': 'from-stone-600 to-zinc-800',
+  'suspense-thriller': 'from-zinc-700 to-neutral-900',
+  esports: 'from-blue-400 to-indigo-500',
+  vrmmo: 'from-emerald-400 to-teal-600',
+  'urban-romance': 'from-rose-400 to-pink-600',
+  'ancient-romance': 'from-red-400 to-rose-600',
 };
 
 const PLAYBOOK_META: Record<string, { label: string; desc: string; agents: string[] }> = {
@@ -74,7 +81,20 @@ const mkProfile = (): Record<string, any> => ({
   worldProfile: { organizationTypes: [] as string[], powerSystemApplicable: false, goldenFingerApplicable: false, commitmentTypes: [] as string[], characterRelationEmphasis: '' },
   styleReferenceTexts: [] as string[], chapterTypeTemplates: {} as Record<string, string>, firstChaptersStrategy: '', audienceReactionGuide: '',
 });
-const mkSeeds = () => ({ coreLoopPatterns: [] as string[], goldenFingerGuidance: '', worldBuildingDirectives: '' });
+const mkSeeds = () => ({
+  coreLoopPatterns: [] as string[],
+  goldenFingerGuidance: '',
+  worldBuildingDirectives: '',
+  namingDefaults: {
+    personNameStyle: '',
+    locationNameStyle: '',
+    abilityNameStyle: '',
+    factionNameStyle: '',
+    itemNameStyle: '',
+    examples: { personNames: [] as string[], locationNames: [] as string[], abilityNames: [] as string[], factionNames: [] as string[] },
+    taboos: [] as string[],
+  },
+});
 
 const deepMerge = (a: any, b: any): any => {
   if (!b || typeof b !== 'object' || Array.isArray(b)) return b ?? a;
@@ -209,9 +229,19 @@ const AiGenerateDialog: React.FC<{
     if (!form.genreName.trim()) { message.warning('请输入题材名称'); return; }
     setLoading(true);
     try {
-      await aiGenerateProfile({
+      const generated = await aiGenerateProfile({
         ...form,
         referenceWorks: worksInput.trim() ? worksInput.split(/[,，、]/).map((s) => s.trim()).filter(Boolean) : undefined,
+      });
+      await createGenreTemplate({
+        genreKey: form.genreName.toLowerCase().replace(/\s+/g, '-'),
+        displayName: form.genreName,
+        description: form.styleDescription || `AI 生成的 ${form.genreName} 题材模板`,
+        genreKeywords: [form.genreName],
+        profileJson: generated.profileJson,
+        seedHints: generated.seedHints,
+        ruleAtoms: generated.ruleAtoms,
+        cachedAgentSections: generated.cachedAgentSections ?? undefined,
       });
       message.success('AI 生成完成，请在列表中查看');
       onGenerated();
@@ -279,6 +309,9 @@ const TemplateEditPanel: React.FC<{
   const [editingAtomId, setEditingAtomId] = useState<string | null>(null);
   const [agentSections, setAgentSections] = useState<Array<{ agentId: string; key: string; content: string }>>([]);
   const [syncing, setSyncing] = useState(false);
+  const [audienceMeta, setAudienceMeta] = useState<import('@/services/novel').AudienceMeta>({
+    audienceTags: [], protagonistFocusTags: [], toneTags: [], relationshipDensity: 'medium', hardConstraints: [], softPreferences: []
+  });
 
   const up = (k: string, v: any) => setPd(p => ({ ...p, [k]: v }));
   const upW = (k: string, v: any) => setPd(p => ({ ...p, writerGuide: { ...p.writerGuide, [k]: v } }));
@@ -299,6 +332,14 @@ const TemplateEditPanel: React.FC<{
       setSh(deepMerge(mkSeeds(), data.seedHints));
       setRuleAtoms(data.ruleAtoms ?? []);
       setAgentSections(data.cachedAgentSections?.sections ?? []);
+      setAudienceMeta({
+        audienceTags: data.audienceTags ?? [],
+        protagonistFocusTags: data.protagonistFocusTags ?? [],
+        toneTags: data.toneTags ?? [],
+        relationshipDensity: data.relationshipDensity ?? 'medium',
+        hardConstraints: data.hardConstraints ?? [],
+        softPreferences: data.softPreferences ?? [],
+      });
     }).catch(() => message.error('加载模板详情失败')).finally(() => setLoading(false));
   }, [tplId]);
 
@@ -311,6 +352,7 @@ const TemplateEditPanel: React.FC<{
         genreKeywords: keywords.split(/[,，、\s]+/).filter(Boolean),
         profileJson: pd, seedHints: sh, ruleAtoms,
         cachedAgentSections: agentSections.length ? { sections: agentSections, ruleAtoms } : undefined,
+        audienceMeta,
       });
       message.success('保存成功');
       onSaved(saved.id !== tplId ? saved.id : undefined);
@@ -330,6 +372,14 @@ const TemplateEditPanel: React.FC<{
       setSh(deepMerge(mkSeeds(), synced.seedHints));
       setRuleAtoms(synced.ruleAtoms ?? []);
       setAgentSections(synced.cachedAgentSections?.sections ?? []);
+      setAudienceMeta({
+        audienceTags: synced.audienceTags ?? [],
+        protagonistFocusTags: synced.protagonistFocusTags ?? [],
+        toneTags: synced.toneTags ?? [],
+        relationshipDensity: synced.relationshipDensity ?? 'medium',
+        hardConstraints: synced.hardConstraints ?? [],
+        softPreferences: synced.softPreferences ?? [],
+      });
       message.success('已同步为系统最新版本');
     } catch (err: any) {
       message.error(err?.data?.message || '同步失败');
@@ -364,8 +414,9 @@ const TemplateEditPanel: React.FC<{
       </div>
 
       <Tabs defaultValue="basic" className="w-full">
-        <TabsList className="w-full grid grid-cols-5">
+        <TabsList className="w-full grid grid-cols-6">
           <TabsTrigger value="basic">基本信息</TabsTrigger>
+          <TabsTrigger value="audience">受众策略</TabsTrigger>
           <TabsTrigger value="profile">写作档案</TabsTrigger>
           <TabsTrigger value="seedhints">创意引导</TabsTrigger>
           <TabsTrigger value="playbooks">写作规则</TabsTrigger>
@@ -376,6 +427,64 @@ const TemplateEditPanel: React.FC<{
           <div><Label>显示名称</Label><Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} /></div>
           <div><Label>描述</Label><Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></div>
           <div><Label>关键词（顿号/逗号分隔）</Label><Input value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="玄幻、仙侠、修仙" /></div>
+        </TabsContent>
+
+        <TabsContent value="audience" className="space-y-4 pt-4">
+          <FormSection title="受众与叙事聚焦">
+            <FL t="受众标签" impact="模板匹配、受众策略约束" />
+            <StrList value={audienceMeta.audienceTags ?? []} onChange={(v) => setAudienceMeta(p => ({ ...p, audienceTags: v }))} ph="如: 女性向、18-35岁、言情读者" />
+            
+            <FL t="主角聚焦标签" impact="模板匹配、Agent 叙事视角" />
+            <div className="flex flex-wrap gap-2 mt-1 mb-2">
+              {['female_lead', 'male_lead', 'dual_lead', 'ensemble'].map(tag => {
+                const labels: Record<string, string> = { female_lead: '女主视角', male_lead: '男主视角', dual_lead: '双主角', ensemble: '群像' };
+                const selected = audienceMeta.protagonistFocusTags?.includes(tag as any);
+                return (
+                  <Badge 
+                    key={tag} 
+                    variant={selected ? 'default' : 'outline'} 
+                    className="cursor-pointer"
+                    onClick={() => {
+                      const tags = audienceMeta.protagonistFocusTags ?? [];
+                      setAudienceMeta(p => ({ ...p, protagonistFocusTags: selected ? tags.filter(t => t !== tag) : [...tags, tag as any] }));
+                    }}
+                  >
+                    {labels[tag]}
+                  </Badge>
+                );
+              })}
+            </div>
+            
+            <FL t="调性标签" impact="模板匹配、文风约束" />
+            <StrList value={audienceMeta.toneTags ?? []} onChange={(v) => setAudienceMeta(p => ({ ...p, toneTags: v }))} ph="如: 细腻慢热、轻松幽默、杀伐果断" />
+          </FormSection>
+          
+          <FormSection title="关系与规则偏好">
+            <FL t="关系密度" impact="人物互动频率、情感线比重" />
+            <div className="flex gap-4 mt-1 mb-2">
+              {['low', 'medium', 'high'].map(level => {
+                const labels: Record<string, string> = { low: '低 (剧情主导)', medium: '中 (剧情与关系平衡)', high: '高 (关系主导/言情)' };
+                return (
+                  <label key={level} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input 
+                      type="radio" 
+                      name="relationshipDensity" 
+                      value={level} 
+                      checked={audienceMeta.relationshipDensity === level}
+                      onChange={(e) => setAudienceMeta(p => ({ ...p, relationshipDensity: e.target.value as any }))}
+                    />
+                    {labels[level]}
+                  </label>
+                );
+              })}
+            </div>
+
+            <FL t="硬性约束 (Hard Constraints)" impact="Agent 绝对不能违反的底线" />
+            <StrList value={audienceMeta.hardConstraints ?? []} onChange={(v) => setAudienceMeta(p => ({ ...p, hardConstraints: v }))} ph="如: 禁止出现后宫情节" />
+
+            <FL t="软性偏好 (Soft Preferences)" impact="Agent 优先考虑的写作倾向" />
+            <StrList value={audienceMeta.softPreferences ?? []} onChange={(v) => setAudienceMeta(p => ({ ...p, softPreferences: v }))} ph="如: 倾向于描写细腻的心理活动" />
+          </FormSection>
         </TabsContent>
 
         <TabsContent value="profile" className="pt-4 space-y-3">
@@ -493,6 +602,82 @@ const TemplateEditPanel: React.FC<{
           <Textarea className="text-xs" rows={3} value={sh.goldenFingerGuidance ?? ''} onChange={(e) => setSh(p => ({ ...p, goldenFingerGuidance: e.target.value }))} placeholder="描述这个题材的金手指/特殊能力设计要点..." />
           <FL t="世界观构建方向" impact="种子分析" />
           <Textarea className="text-xs" rows={3} value={sh.worldBuildingDirectives ?? ''} onChange={(e) => setSh(p => ({ ...p, worldBuildingDirectives: e.target.value }))} placeholder="描述这个题材的世界观构建方向和要点..." />
+
+          <div className="border-t pt-4 space-y-3">
+            <FL t="命名默认规则（系统模板优先）" impact="创建时优先写入并持久化" />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <Label className="text-[10px] text-muted-foreground">人名风格</Label>
+                <Textarea className="text-xs mt-1" rows={2} value={sh.namingDefaults?.personNameStyle ?? ''} onChange={(e) => setSh((p: any) => ({ ...p, namingDefaults: { ...(p.namingDefaults ?? {}), personNameStyle: e.target.value } }))} />
+              </div>
+              <div>
+                <Label className="text-[10px] text-muted-foreground">地名风格</Label>
+                <Textarea className="text-xs mt-1" rows={2} value={sh.namingDefaults?.locationNameStyle ?? ''} onChange={(e) => setSh((p: any) => ({ ...p, namingDefaults: { ...(p.namingDefaults ?? {}), locationNameStyle: e.target.value } }))} />
+              </div>
+              <div>
+                <Label className="text-[10px] text-muted-foreground">能力名风格（可选）</Label>
+                <Textarea className="text-xs mt-1" rows={2} value={sh.namingDefaults?.abilityNameStyle ?? ''} onChange={(e) => setSh((p: any) => ({ ...p, namingDefaults: { ...(p.namingDefaults ?? {}), abilityNameStyle: e.target.value } }))} />
+              </div>
+              <div>
+                <Label className="text-[10px] text-muted-foreground">势力名风格（可选）</Label>
+                <Textarea className="text-xs mt-1" rows={2} value={sh.namingDefaults?.factionNameStyle ?? ''} onChange={(e) => setSh((p: any) => ({ ...p, namingDefaults: { ...(p.namingDefaults ?? {}), factionNameStyle: e.target.value } }))} />
+              </div>
+              <div>
+                <Label className="text-[10px] text-muted-foreground">道具名风格（可选）</Label>
+                <Textarea className="text-xs mt-1" rows={2} value={sh.namingDefaults?.itemNameStyle ?? ''} onChange={(e) => setSh((p: any) => ({ ...p, namingDefaults: { ...(p.namingDefaults ?? {}), itemNameStyle: e.target.value } }))} />
+              </div>
+            </div>
+            <div>
+              <Label className="text-[10px] text-muted-foreground">示例人名</Label>
+              <div className="mt-1">
+                <StrList
+                  value={sh.namingDefaults?.examples?.personNames ?? []}
+                  onChange={(v) => setSh((p: any) => ({ ...p, namingDefaults: { ...(p.namingDefaults ?? {}), examples: { ...(p.namingDefaults?.examples ?? {}), personNames: v } } }))}
+                  ph="如：凌霜、顾长歌..."
+                />
+              </div>
+            </div>
+            <div>
+              <Label className="text-[10px] text-muted-foreground">示例地名</Label>
+              <div className="mt-1">
+                <StrList
+                  value={sh.namingDefaults?.examples?.locationNames ?? []}
+                  onChange={(v) => setSh((p: any) => ({ ...p, namingDefaults: { ...(p.namingDefaults ?? {}), examples: { ...(p.namingDefaults?.examples ?? {}), locationNames: v } } }))}
+                  ph="如：落霞谷、北陵城..."
+                />
+              </div>
+            </div>
+            <div>
+              <Label className="text-[10px] text-muted-foreground">示例能力名</Label>
+              <div className="mt-1">
+                <StrList
+                  value={sh.namingDefaults?.examples?.abilityNames ?? []}
+                  onChange={(v) => setSh((p: any) => ({ ...p, namingDefaults: { ...(p.namingDefaults ?? {}), examples: { ...(p.namingDefaults?.examples ?? {}), abilityNames: v } } }))}
+                  ph="如：碧落剑诀、天火焚空..."
+                />
+              </div>
+            </div>
+            <div>
+              <Label className="text-[10px] text-muted-foreground">示例势力名</Label>
+              <div className="mt-1">
+                <StrList
+                  value={sh.namingDefaults?.examples?.factionNames ?? []}
+                  onChange={(v) => setSh((p: any) => ({ ...p, namingDefaults: { ...(p.namingDefaults ?? {}), examples: { ...(p.namingDefaults?.examples ?? {}), factionNames: v } } }))}
+                  ph="如：天机阁、苍穹宗..."
+                />
+              </div>
+            </div>
+            <div>
+              <Label className="text-[10px] text-muted-foreground">命名禁忌</Label>
+              <div className="mt-1">
+                <StrList
+                  value={sh.namingDefaults?.taboos ?? []}
+                  onChange={(v) => setSh((p: any) => ({ ...p, namingDefaults: { ...(p.namingDefaults ?? {}), taboos: v } }))}
+                  ph="如：英文名、现代网络梗..."
+                />
+              </div>
+            </div>
+          </div>
         </TabsContent>
 
         <TabsContent value="playbooks" className="pt-4 space-y-4">

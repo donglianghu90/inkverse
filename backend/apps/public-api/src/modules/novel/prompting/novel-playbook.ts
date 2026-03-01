@@ -15,6 +15,16 @@ import {
 } from '../schemas/novel-state.schemas';
 
 // ---------------------------------------------------------------------------
+// 上下文窗口常量（各 Agent 和记忆检索模块共享，修改此处同步生效）
+// ---------------------------------------------------------------------------
+/** buildCompactContext 默认章节摘要窗口大小，同时用于 excludeRecentN 和记忆激活阈值 */
+export const CONTEXT_WINDOW_SUMMARIES = 6;
+/** 向量记忆从第 N+1 章起激活（等于窗口大小，确保窗口外才向量补偿） */
+export const MEMORY_ACTIVATION_CHAPTER = CONTEXT_WINDOW_SUMMARIES;
+/** 核心章节生成 Agent 统一角色窗口上限，避免各 Agent 口径不一致。 */
+export const UNIFIED_AGENT_MAX_CHARACTERS = 12;
+
+// ---------------------------------------------------------------------------
 // Core playbooks — shared across agents
 // ---------------------------------------------------------------------------
 
@@ -304,6 +314,7 @@ const ROLE_LABEL: Record<string, string> = {
 
 const LIFECYCLE_LABEL: Record<string, string> = {
   active: '活跃',
+  fading: '淡出',
   dormant: '休眠',
   dead: '死亡',
   exited: '退场',
@@ -370,14 +381,20 @@ export function buildCompactContext(
     })
     .map((c) => c.id);
 
-  const visibleCharacters = [...state.characters]
+  const IMP_RANK: Record<string, number> = { core: 40, major: 30, minor: 20, cameo: 10 };
+  const eligibleCharacters = [...state.characters]
     .filter((c) => !blockedCharacterIds.includes(c.id))
     .sort((a, b) => {
-      const aLead = a.role === 'protagonist' ? 10 : 0;
-      const bLead = b.role === 'protagonist' ? 10 : 0;
-      return bLead - aLead || (b.status.lastSeenChapter ?? 0) - (a.status.lastSeenChapter ?? 0);
-    })
-    .slice(0, limits.maxCharacters);
+      const aRank = (a.role === 'protagonist' ? 50 : 0) + (IMP_RANK[a.status.narrativeImportance ?? ''] ?? 15);
+      const bRank = (b.role === 'protagonist' ? 50 : 0) + (IMP_RANK[b.status.narrativeImportance ?? ''] ?? 15);
+      return bRank - aRank || (b.status.lastSeenChapter ?? 0) - (a.status.lastSeenChapter ?? 0);
+    });
+  if (eligibleCharacters.length > limits.maxCharacters) {
+    const truncated = eligibleCharacters.slice(limits.maxCharacters).map((c) => c.name);
+    // eslint-disable-next-line no-console
+    console.warn(`[buildCompactContext] ch${chapterNumber} 角色截断：maxCharacters=${limits.maxCharacters}，丢弃${truncated.length}个：${truncated.join('、')}`);
+  }
+  const visibleCharacters = eligibleCharacters.slice(0, limits.maxCharacters);
 
   const estTotal = state.roughOutline.estimatedTotalChapters ?? 600;
   const result: Record<string, unknown> = {
@@ -406,6 +423,14 @@ export function buildCompactContext(
       .map((e) => `[第${e.chapterNumber}章] ${e.summary}`),
   };
 
+  const threadsByChar = new Map<string, string[]>();
+  for (const t of openThreads) {
+    for (const cid of t.relatedCharacterIds ?? []) {
+      if (!threadsByChar.has(cid)) threadsByChar.set(cid, []);
+      threadsByChar.get(cid)!.push(t.label);
+    }
+  }
+
   result['角色表'] = visibleCharacters.map((c) => {
     const p = c.profile;
     const entry: Record<string, unknown> = {
@@ -433,6 +458,8 @@ export function buildCompactContext(
       if (p.coreContradiction) entry['核心矛盾'] = p.coreContradiction;
       if (p.backstory) entry['已知背景'] = p.backstory;
     }
+    const relThreads = threadsByChar.get(c.id);
+    if (relThreads?.length) entry['关联伏线'] = relThreads;
     return entry;
   });
 
@@ -471,7 +498,13 @@ export function buildCompactContext(
   }
 
   if (state.locations.length > 0) {
-    result['地点表'] = state.locations.slice(0, 12).map((l) => {
+    const activeLocIds = new Set(visibleCharacters.map((c) => c.status.locationId).filter(Boolean));
+    const sortedLocations = [...state.locations].sort((a, b) => {
+      const aActive = activeLocIds.has(a.id) ? 1 : 0;
+      const bActive = activeLocIds.has(b.id) ? 1 : 0;
+      return bActive - aActive;
+    });
+    result['地点表'] = sortedLocations.slice(0, 12).map((l) => {
       const entry: Record<string, unknown> = {
         编号: l.id,
         名称: l.name,
@@ -490,7 +523,13 @@ export function buildCompactContext(
   }
 
   if (state.items.length > 0) {
-    result['道具表'] = state.items.slice(0, 10).map((item) => {
+    const activeOwnerIds = new Set(visibleCharacters.map((c) => c.id));
+    const sortedItems = [...state.items].sort((a, b) => {
+      const aRelevant = activeOwnerIds.has(a.ownerId ?? '') ? 1 : 0;
+      const bRelevant = activeOwnerIds.has(b.ownerId ?? '') ? 1 : 0;
+      return bRelevant - aRelevant;
+    });
+    result['道具表'] = sortedItems.slice(0, 10).map((item) => {
       const entry: Record<string, unknown> = {
         编号: item.id,
         名称: item.name,
@@ -658,6 +697,22 @@ export function buildCompactContext(
     result['禁止重复使用的近期表达'] = recentPhrases.slice(-20);
   }
 
+  if (state.namingConvention) {
+    const nc = state.namingConvention;
+    const entry: Record<string, unknown> = {};
+    if (nc.personNameStyle) entry['人名风格'] = nc.personNameStyle;
+    if (nc.locationNameStyle) entry['地名风格'] = nc.locationNameStyle;
+    if (nc.abilityNameStyle) entry['能力名风格'] = nc.abilityNameStyle;
+    if (nc.factionNameStyle) entry['势力名风格'] = nc.factionNameStyle;
+    if (nc.itemNameStyle) entry['道具名风格'] = nc.itemNameStyle;
+    if (nc.examples?.personNames?.length) entry['参考人名'] = nc.examples.personNames;
+    if (nc.examples?.locationNames?.length) entry['参考地名'] = nc.examples.locationNames;
+    if (nc.examples?.abilityNames?.length) entry['参考能力名'] = nc.examples.abilityNames;
+    if (nc.examples?.factionNames?.length) entry['参考势力名'] = nc.examples.factionNames;
+    if (nc.taboos?.length) entry['命名禁忌'] = nc.taboos;
+    if (Object.keys(entry).length) result['命名规范'] = entry;
+  }
+
   return result;
 }
 
@@ -725,14 +780,20 @@ export function buildCompactContextProse(
     })
     .map((c) => c.name);
 
-  const visibleCharacters = [...state.characters]
+  const IMP_RANK_P: Record<string, number> = { core: 40, major: 30, minor: 20, cameo: 10 };
+  const eligibleCharactersProse = [...state.characters]
     .filter((c) => !blockedIds.has(c.name))
     .sort((a, b) => {
-      const aLead = a.role === 'protagonist' ? 10 : 0;
-      const bLead = b.role === 'protagonist' ? 10 : 0;
-      return bLead - aLead || (b.status.lastSeenChapter ?? 0) - (a.status.lastSeenChapter ?? 0);
-    })
-    .slice(0, limits.maxCharacters);
+      const aRank = (a.role === 'protagonist' ? 50 : 0) + (IMP_RANK_P[a.status.narrativeImportance ?? ''] ?? 15);
+      const bRank = (b.role === 'protagonist' ? 50 : 0) + (IMP_RANK_P[b.status.narrativeImportance ?? ''] ?? 15);
+      return bRank - aRank || (b.status.lastSeenChapter ?? 0) - (a.status.lastSeenChapter ?? 0);
+    });
+  if (eligibleCharactersProse.length > limits.maxCharacters) {
+    const truncated = eligibleCharactersProse.slice(limits.maxCharacters).map((c) => c.name);
+    // eslint-disable-next-line no-console
+    console.warn(`[buildCompactContextProse] ch${chapterNumber} 角色截断：maxCharacters=${limits.maxCharacters}，丢弃${truncated.length}个：${truncated.join('、')}`);
+  }
+  const visibleCharacters = eligibleCharactersProse.slice(0, limits.maxCharacters);
 
   lines.push(`\n=== 角色表（${visibleCharacters.length}人） ===`);
   visibleCharacters.forEach((c) => {
@@ -806,6 +867,21 @@ export function buildCompactContextProse(
       const ownerChar = state.characters.find((c) => c.id === item.ownerId);
       lines.push(`• ${item.name}（持有者:${ownerChar?.name ?? item.ownerId}）— ${item.effect}`);
     });
+  }
+
+  if (state.namingConvention) {
+    const nc = state.namingConvention;
+    lines.push(`\n=== 命名规范（创造新角色/地点名时必须遵守） ===`);
+    if (nc.personNameStyle) lines.push(`人名：${nc.personNameStyle}`);
+    if (nc.locationNameStyle) lines.push(`地名：${nc.locationNameStyle}`);
+    if (nc.abilityNameStyle) lines.push(`能力名：${nc.abilityNameStyle}`);
+    if (nc.factionNameStyle) lines.push(`势力名：${nc.factionNameStyle}`);
+    if (nc.itemNameStyle) lines.push(`道具名：${nc.itemNameStyle}`);
+    if (nc.examples?.personNames?.length) lines.push(`参考人名：${nc.examples.personNames.join('、')}`);
+    if (nc.examples?.locationNames?.length) lines.push(`参考地名：${nc.examples.locationNames.join('、')}`);
+    if (nc.examples?.abilityNames?.length) lines.push(`参考能力名：${nc.examples.abilityNames.join('、')}`);
+    if (nc.examples?.factionNames?.length) lines.push(`参考势力名：${nc.examples.factionNames.join('、')}`);
+    if (nc.taboos?.length) lines.push(`禁忌：${nc.taboos.join('、')}`);
   }
 
   if (state.storyClock) {
@@ -1056,6 +1132,12 @@ export function buildIntentContext(intent: ChapterIntent): Record<string, unknow
       })),
       情绪逻辑备注: intent.characterArcGuidance.emotionalLogicNotes,
     },
+    ...(intent.characterVoiceAnchors?.length ? {
+      角色声音锚点: intent.characterVoiceAnchors.map((a) => ({
+        角色ID: a.characterId,
+        标志性台词: a.signatureQuote,
+      })),
+    } : {}),
   };
 }
 
@@ -1122,11 +1204,13 @@ export function buildCharacterArcContext(state: StoryState): Record<string, unkn
 }
 
 /** 为场景级写作构建深度角色声音矩阵 — 情绪调变 + 权力语态 + 叙事动作。 */
+const MAX_VOICE_MATRIX_CHARS = 8;
 export function buildCharacterVoiceMatrix(state: StoryState, presentCharacterIds: string[]): string {
   const charMap = new Map(state.characters.map((c) => [c.id, c]));
   const lines: string[] = [];
+  const truncatedIds = presentCharacterIds.slice(0, MAX_VOICE_MATRIX_CHARS);
 
-  for (const id of presentCharacterIds) {
+  for (const id of truncatedIds) {
     const c = charMap.get(id);
     if (!c?.voice) continue;
     const v = c.voice;

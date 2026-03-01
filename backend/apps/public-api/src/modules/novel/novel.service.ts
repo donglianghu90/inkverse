@@ -21,6 +21,7 @@ import { WorkflowExecutionEntity } from './entities/workflow-execution.entity';
 import { randomUUID } from 'crypto';
 import { LlmService } from './llm/llm.service';
 import { LlmUsageTrackerService } from './llm/llm-usage-tracker.service';
+import { LlmTraceLoggerService } from './llm/llm-trace-logger.service';
 import { SeedAnalyzerAgent } from './agents/seed-analyzer.agent';
 import { PromptProfilerAgent } from './agents/prompt-profiler.agent';
 import { RecorderAgent } from './agents/recorder.agent';
@@ -34,6 +35,7 @@ import { NovelProgressService } from './novel-progress.service';
 import { DetailStoreService } from './detail-store.service';
 import { MemoryRetrieverService } from './memory-retriever.service';
 import { ReaderPulseAnalyzerAgent } from './agents/reader-pulse-analyzer.agent';
+import { BookStrategyAgent } from './agents/book-strategy.agent';
 import { BookEntity } from './entities/book.entity';
 import { ChapterEntity } from './entities/chapter.entity';
 import { ArtifactEntity } from './entities/artifact.entity';
@@ -59,6 +61,9 @@ import {
   ReaderFeedback,
   ReaderFeedbackAnalysis,
   FeedbackState,
+  AudienceDirective,
+  NamingConvention,
+  audienceDirectiveSchema,
 } from './schemas/novel-state.schemas';
 import {
   ChapterDraft,
@@ -211,8 +216,49 @@ export class NovelService {
     private readonly detailStore: DetailStoreService,
     private readonly memoryRetriever: MemoryRetrieverService,
     private readonly readerPulse: ReaderPulseAnalyzerAgent,
+    private readonly bookStrategyAgent: BookStrategyAgent,
     private readonly genreTemplateService: GenreProfileTemplateService,
+    private readonly traceLogger: LlmTraceLoggerService,
   ) {}
+
+  private buildAudienceDirective(
+    dto: CreateBookCoreDto,
+    tpl: import('./entities/genre-profile-template.entity').GenreProfileTemplateEntity | null,
+  ): AudienceDirective {
+    return {
+      audienceTags: dto.audienceTags?.length ? dto.audienceTags : (tpl?.audienceTags ?? []),
+      protagonistFocus: (dto.protagonistFocus ?? tpl?.protagonistFocusTags?.[0] ?? 'male_lead') as AudienceDirective['protagonistFocus'],
+      tonePreference: dto.tonePreference ?? tpl?.toneTags?.[0] ?? '',
+      relationshipDensity: tpl?.relationshipDensity ?? 'medium',
+      hardConstraints: tpl?.hardConstraints ?? [],
+      softPreferences: tpl?.softPreferences ?? [],
+    };
+  }
+
+  private mergeNamingConvention(
+    templateDefaults?: import('./entities/genre-profile-template.entity').SeedAnalyzerHints['namingDefaults'],
+    analyzed?: NamingConvention,
+  ): NamingConvention | undefined {
+    const t = templateDefaults ?? {};
+    const a = analyzed ?? {};
+    const personNameStyle = t.personNameStyle ?? a.personNameStyle;
+    const locationNameStyle = t.locationNameStyle ?? a.locationNameStyle;
+    if (!personNameStyle || !locationNameStyle) return analyzed;
+    return {
+      personNameStyle,
+      locationNameStyle,
+      abilityNameStyle: t.abilityNameStyle ?? a.abilityNameStyle,
+      factionNameStyle: t.factionNameStyle ?? a.factionNameStyle,
+      itemNameStyle: t.itemNameStyle ?? a.itemNameStyle,
+      examples: {
+        personNames: (t.examples?.personNames?.length ? t.examples.personNames : (a.examples?.personNames ?? [])),
+        locationNames: (t.examples?.locationNames?.length ? t.examples.locationNames : (a.examples?.locationNames ?? [])),
+        abilityNames: (t.examples?.abilityNames?.length ? t.examples.abilityNames : (a.examples?.abilityNames ?? [])),
+        factionNames: (t.examples?.factionNames?.length ? t.examples.factionNames : (a.examples?.factionNames ?? [])),
+      },
+      taboos: t.taboos?.length ? t.taboos : (a.taboos ?? []),
+    };
+  }
 
   async getBookProfile(bookId: string): Promise<BookPromptProfile> {
     const state = await this.loadBookState(bookId);
@@ -229,6 +275,21 @@ export class NovelService {
     return parsed;
   }
 
+  async getAudienceDirective(bookId: string): Promise<AudienceDirective | null> {
+    const state = await this.loadBookState(bookId);
+    return state.audienceDirective ?? null;
+  }
+
+  async updateAudienceDirective(bookId: string, directiveData: Record<string, unknown>): Promise<AudienceDirective> {
+    const state = await this.loadBookState(bookId);
+    const parsed = audienceDirectiveSchema.parse(directiveData);
+    state.audienceDirective = parsed;
+    state.updatedAt = new Date().toISOString();
+    await this.persistBookState(state);
+    this.logger.log(`[updateAudienceDirective] bookId=${bookId} 受众策略已更新`);
+    return parsed;
+  }
+
   /**
    * Enhance a raw idea into a richer, more compelling concept.
    */
@@ -242,24 +303,27 @@ export class NovelService {
       taskName: 'idea-enhancer',
       schema: enhanceSchema,
       tags: ['setup', 'idea'],
-      systemPrompt: `你是一位资深的网文策划编辑，擅长把粗糙的创意打磨成令人兴奋的故事概念。
+      systemPrompt: `你是一位兼具创意天赋和市场嗅觉的网文策划编辑，擅长把粗糙的灵感打磨成让读者一眼心动的故事概念。
 
-你的任务是对用户的原始创意进行"美化"——不是改变方向，而是让它更有吸引力、更具体、更有画面感。
+核心任务：对用户的原始创意进行"美化"——保留内核，提升表达，让它读起来像一段让人想追更的故事简介。
 
 美化原则：
-1. 保留用户原始创意的核心方向和关键元素，不要偏离。
-2. 补充具体的世界观细节——让设定更独特、更有辨识度。
-3. 增加冲突和张力——好的创意必须有"让人想知道接下来怎样"的悬念。
-4. 增加主角的独特性——给主角一个有趣的困境或特质。
-5. 语言要生动有画面感，但不要过于冗长（控制在 100-200 字之间）。
-6. 不要加入过于俗套的元素（"天才废柴""退婚"等除非原创意中有）。
+1. 忠于原意：保留用户创意的核心方向、关键设定和情感基调，绝不偏离或替换。
+2. 世界观锐化：补充1-2个有辨识度的设定细节，让这个故事世界"只此一家"。
+3. 冲突前置：在描述中自然埋入核心矛盾或悬念，让人产生"接下来会怎样"的好奇。
+4. 主角立体化：赋予主角一个有趣的困境、反差或抉择，而非扁平的标签。
+5. 文案质感：语言风格对标优质网文的封面简介——有画面感、有代入感、有节奏感，控制在150-300字。
+6. 拒绝俗套：避免已被过度消费的网文套路（无脑打脸、退婚逆袭、赘婿翻身、系统开局等），除非原创意本身包含。
+7. 适度原则：如果原始创意已足够精彩具体，润色即可，不要为了美化而过度改造。
 
-同时列出 2-5 个"亮点"——你在原始创意基础上增强或补充的关键元素，每个亮点一句话概括。`,
+输出说明：
+- enhanced：美化后的故事概念，像封面简介一样有吸引力。
+- highlights：2-5个核心卖点，每个一句话，概括这个创意最能吸引读者的地方（不是你做了什么改动，而是这个故事本身的亮点）。`,
       userPrompt: `原始创意：
 ${rawIdea}
-${genre ? `\n参考题材方向：${genre}` : ''}
+${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整美化侧重。` : ''}
 
-请输出美化后的创意（enhanced）和亮点列表（highlights）。`,
+请输出美化后的创意和核心卖点。`,
       temperature: 0.75,
     });
   }
@@ -307,9 +371,12 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
    */
   async createBook(dto: CreateBookCoreDto, options?: CreateBookRuntimeOptions): Promise<unknown> {
     let createdBookId = '';
+    const logCreate = (step: string, status: 'ok' | 'error', meta?: Record<string, unknown>, error?: string) =>
+      this.traceLogger.logWorkflowEvent({ bookId: createdBookId || '__creating__', chapterNumber: 0, step: `createBook:${step}`, status, error, meta });
     return this.llmUsageTracker.runWithChapterScope({ bookId: '__creating__', chapterNumber: 0 }, async () => {
+      const t0 = Date.now();
       try {
-    const t0 = Date.now();
+    logCreate('start', 'ok', { genre: dto.genre, mainIdea: dto.mainIdea?.slice(0, 100) });
     this.logger.log(
       `[createBook] ========== 极轻量开书 ==========\n` +
       `  mainIdea: ${dto.mainIdea}\n` +
@@ -330,16 +397,31 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       });
     };
 
-    // 从 DB 加载题材模板（优先指定 ID > 关键词匹配）
+    // 从 DB 加载题材模板（优先指定 ID > 多维匹配）
     let tpl: import('./entities/genre-profile-template.entity').GenreProfileTemplateEntity | null = null;
+    let templateScore = 0;
+    let templateScoreDetail: Record<string, number> | undefined;
     if (dto.profileTemplateId) {
       tpl = await this.genreTemplateService.getById(dto.profileTemplateId);
+      templateScore = 1;
     } else {
-      tpl = await this.genreTemplateService.findBestMatch(dto.genre, options?.userId);
+      const matched = await this.genreTemplateService.findBestMatchWithScore({
+        genre: dto.genre,
+        targetAudience: dto.targetAudience,
+        protagonistFocus: dto.protagonistFocus,
+        tonePreference: dto.tonePreference,
+        audienceTags: dto.audienceTags,
+      }, options?.userId);
+      tpl = matched.template;
+      templateScore = matched.score;
+      templateScoreDetail = matched.detail;
     }
     const seedHints = tpl?.seedHints ?? undefined;
+    const templateNamingDefaults = seedHints?.namingDefaults;
     const genreAtoms = tpl?.ruleAtoms?.length ? tpl.ruleAtoms : undefined;
     const hasTemplateProfile = tpl?.profileJson && Object.keys(tpl.profileJson).length > 0;
+    const audienceDirective = this.buildAudienceDirective(dto, tpl);
+    this.logger.log(`[createBook] 模板匹配: ${tpl?.displayName ?? '无'} | score=${templateScore}${templateScoreDetail ? ` detail=${JSON.stringify(templateScoreDetail)}` : ''}`);
 
     // Step 1: 种子分析（必须 LLM）+ 写作手册（模板有则跳过，无则 LLM 生成）
     this.logger.log(`[createBook] 步骤 1/3: 种子分析${hasTemplateProfile ? '（模板直供 Profile，跳过 LLM）' : '（并行生成 Profile）'}...`);
@@ -352,26 +434,64 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     if (hasTemplateProfile) { // 模板提供完整 Profile → 只做种子分析，省掉 promptProfiler.generate()
       analysis = await this.seedAnalyzer.analyze({
         mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
+        protagonistFocus: dto.protagonistFocus, tonePreference: dto.tonePreference, audienceTags: dto.audienceTags,
         titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal,
         targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters, seedHints,
       });
       bookPromptProfile = tpl!.profileJson as unknown as BookPromptProfile;
-    } else { // 无模板 → 并行生成种子 + Profile
-      const [a, p] = await Promise.all([
-        this.seedAnalyzer.analyze({
-          mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
-          titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal,
-          targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters, seedHints,
-        }),
-        this.promptProfiler.generate({
+    } else { // 无模板 → 并行生成种子 + Profile（profile 失败时降级为空壳）
+      const seedPromise = this.seedAnalyzer.analyze({
+        mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
+        protagonistFocus: dto.protagonistFocus, tonePreference: dto.tonePreference, audienceTags: dto.audienceTags,
+        titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal,
+        targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters, seedHints,
+      });
+      const profilePromise = this.promptProfiler.generate({
+        genre: dto.genre, targetAudience: dto.targetAudience, mainIdea: dto.mainIdea,
+        protagonistFocus: dto.protagonistFocus, tonePreference: dto.tonePreference, audienceTags: dto.audienceTags,
+        mainStoryGoal: dto.mainStoryGoal,
+        targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters,
+        referenceProfile: tpl?.profileJson as unknown as BookPromptProfile | undefined,
+      }).catch((e) => {
+        this.logger.warn(`[createBook] Profile 生成失败，将在首章时补充: ${e instanceof Error ? e.message : String(e)}`);
+        return null;
+      });
+      const [a, p] = await Promise.all([seedPromise, profilePromise]);
+      analysis = a;
+      if (p) { bookPromptProfile = p; } else {
+        bookPromptProfile = await this.promptProfiler.generate({
           genre: dto.genre, targetAudience: dto.targetAudience, mainIdea: dto.mainIdea,
-          mainStoryGoal: dto.mainStoryGoal,
           targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters,
-          referenceProfile: tpl?.profileJson as unknown as BookPromptProfile | undefined,
-        }),
-      ]);
-      analysis = a; bookPromptProfile = p;
+        });
+      }
     }
+    const mergedNamingConvention = this.mergeNamingConvention(templateNamingDefaults, analysis.namingConvention);
+    let bookStrategy: import('./schemas/novel-state.schemas').BookStrategy | undefined;
+    try {
+      bookStrategy = await this.bookStrategyAgent.generateInitial({
+        seed: {
+          ...analysis.seed,
+          audienceTags: dto.audienceTags ?? [],
+          protagonistFocus: dto.protagonistFocus,
+          tonePreference: dto.tonePreference,
+          ...(dto.mainStoryGoal ? { mainStoryGoal: dto.mainStoryGoal } : {}),
+        },
+        outline: analysis.outline,
+        audienceDirective,
+        profile: bookPromptProfile,
+      });
+    } catch (e) {
+      this.logger.warn(`[createBook] BookStrategy 生成失败，首章时补充: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    logCreate('seedAnalysis', 'ok', {
+      title: analysis.seed.title,
+      protagonist: analysis.seed.protagonistConcept.name,
+      outlinePoints: analysis.outline.points.length,
+      durationMs: Date.now() - t0,
+      templateId: tpl?.id ?? null,
+      templateScore,
+      templateScoreDetail,
+    });
     this.logger.log(
       `[createBook] 种子${hasTemplateProfile ? '' : '+手册'}完成 — ${Date.now() - t0}ms\n` +
       `  书名: ${analysis.seed.title} | 主角: ${analysis.seed.protagonistConcept.name}\n` +
@@ -424,9 +544,17 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       createdAt: now,
       updatedAt: now,
       version: 2,
-      seed: { ...analysis.seed, ...(dto.mainStoryGoal ? { mainStoryGoal: dto.mainStoryGoal } : {}) },
+      seed: {
+        ...analysis.seed,
+        audienceTags: dto.audienceTags ?? [],
+        protagonistFocus: dto.protagonistFocus,
+        tonePreference: dto.tonePreference,
+        ...(dto.mainStoryGoal ? { mainStoryGoal: dto.mainStoryGoal } : {}),
+      },
       roughOutline: analysis.outline,
       bookPromptProfile,
+      audienceDirective,
+      bookStrategy,
       chapterCursor: 1,
       characters: [protagonist],
       locations: [{
@@ -447,24 +575,28 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       kpiHistory: [],
       completedArcAcceptanceReports: [],
       maintenance: INITIAL_MAINTENANCE,
+      ...(mergedNamingConvention ? { namingConvention: mergedNamingConvention } : {}),
     };
 
-    // bootstrapInitialArc 延迟到首章生成时执行（generateChapterUnsafe 已有兜底），减少开书耗时
     await this.persistBookState(state);
     await this.persistArtifact(bookId, 0, 'seed', analysis.seed);
     await this.persistArtifact(bookId, 0, 'rough_outline', analysis.outline);
     await this.persistArtifact(bookId, 0, 'initial_state', state);
     await this.persistArtifact(bookId, 0, 'state_snapshot', state);
     await this.pipelineService.initDefault(bookId);
+    logCreate('statePersisted', 'ok', { bookId });
     const generatedSections = await agentSectionsPromise;
     if (generatedSections) {
       await this.promptTplService.initWithGenerated(bookId, generatedSections, genreAtoms);
+      logCreate('agentSections', 'ok', { source: 'generated' });
     } else {
       await this.promptTplService.initDefault(bookId, genreAtoms);
       state.agentSectionsStatus = 'pending';
       await this.persistBookState(state);
+      logCreate('agentSections', 'ok', { source: 'default-fallback' });
     }
 
+    logCreate('done', 'ok', { bookId, title: analysis.seed.title, durationMs: Date.now() - t0 });
     this.logger.log(
       `[createBook] 步骤 3/3: 初始化完成 — ${Date.now() - t0}ms\n` +
       `  bookId: ${bookId} | 书名: ${analysis.seed.title}\n` +
@@ -483,6 +615,13 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       currentArcAcceptance: state.currentArcAcceptance ?? null,
       completedArcAcceptanceReports: state.completedArcAcceptanceReports ?? [],
     };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logCreate('failed', 'error', { durationMs: Date.now() - t0 }, msg);
+        if (createdBookId) {
+          this.logger.warn(`[createBook] 创建失败，孤儿记录 bookId=${createdBookId} 待清理`);
+        }
+        throw e;
       } finally {
         const usage = this.llmUsageTracker.consumeCurrentSummary();
         if (usage && createdBookId) {
@@ -499,17 +638,20 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
 
   async listBooks(userId?: string): Promise<unknown> {
     const books = await this.bookStateRepo.findAllLightweight(50, userId);
+    const chapterCountMap = await this.loadChapterCountMap(books.map((b) => b.bookId));
     return {
       count: books.length,
       books: books.map((b) => {
         const s = b.stateJson as any; // 核心态JSONB（不含已拆出的子表数组）
         const kpi = s.kpiHistory ?? [];
         const latestKpi = kpi[kpi.length - 1] ?? null;
+        const generatedByCursor = Math.max(0, (s.chapterCursor ?? 1) - 1);
+        const generatedByTable = chapterCountMap.get(b.bookId) ?? 0;
         return {
           bookId: b.bookId,
           title: s.seed?.title ?? '',
           genre: s.seed?.genre ?? '',
-          chaptersGenerated: (s.chapterCursor ?? 1) - 1,
+          chaptersGenerated: Math.max(generatedByCursor, generatedByTable),
           latestKpi: latestKpi
             ? { qualityScore: latestKpi.qualityScore, overallScore: latestKpi.overallScore }
             : null,
@@ -578,7 +720,7 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
           modelAgg.set(k, cur);
         }
       }
-      return { chapterNumber: a.chapterNumber, promptTokens: pt, completionTokens: ct, totalTokens: tt, estimatedCostUsd: Number(cost.toFixed(6)), totalCalls: calls, byProvider: p.byProvider ?? [] };
+      return { chapterNumber: a.chapterNumber, promptTokens: pt, completionTokens: ct, totalTokens: tt, estimatedCostUsd: Number(cost.toFixed(6)), totalCalls: calls, byProvider: p.byProvider ?? [], byModel: p.byModel ?? [] };
     });
 
     const byProvider = [...providerAgg.entries()].map(([provider, b]) => ({ provider, ...b, estimatedCostUsd: Number(b.estimatedCostUsd.toFixed(6)) })).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
@@ -590,12 +732,13 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
   async getBook(bookId: string): Promise<unknown> {
     const state = await this.loadBookState(bookId);
     const latestKpi = state.kpiHistory[state.kpiHistory.length - 1] ?? null;
+    const chapterCount = await this.chapterRepo.count({ where: { bookId } });
     return {
       bookId: state.bookId,
       title: state.seed.title,
       genre: state.seed.genre ?? '',
       chapterCursor: state.chapterCursor,
-      chaptersGenerated: state.chapterCursor - 1,
+      chaptersGenerated: Math.max(Math.max(0, state.chapterCursor - 1), chapterCount),
       hasBible: !!state.bible,
       openPlotThreads: state.openPlotThreads,
       currentArc: state.currentArc ?? null,
@@ -638,6 +781,10 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       }
     }
 
+    const qm = state.qualityMetricsHistory ?? [];
+    const qmRecent = qm.slice(-10);
+    const avgQm = (fn: (m: typeof qm[0]) => number) => qm.length ? Math.round((qm.reduce((s, m) => s + fn(m), 0) / qm.length) * 1000) / 1000 : 0;
+
     return {
       bookId, totalChapters: total,
       avgOverallScore: avg(kpi.map((k) => k.overallScore)),
@@ -649,6 +796,21 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       polishTriggerRate: polishRate,
       dimensionAverages: Object.fromEntries(Object.entries(dims).map(([k, v]) => [k, avg(v)])),
       recentTrend: kpi.slice(-10).map((k, i) => ({ chapter: total - kpi.slice(-10).length + i + 1, overall: k.overallScore, quality: k.qualityScore })),
+      qualityMetrics: {
+        avgHookRepeatRate: avgQm((m) => m.hookRepeatRate),
+        avgArcHitRate: avgQm((m) => m.characterArcHitRate),
+        avgCoreAbsenceRate: avgQm((m) => m.coreAbsenceRate),
+        avgCameoOveruseRate: avgQm((m) => m.cameoOveruseRate),
+        totalGenreMismatch: qm.reduce((s, m) => s + (m.genreMismatchFlags?.length ?? 0), 0),
+        recentTrend: qmRecent.map((m) => ({
+          ch: m.chapterNumber,
+          hookRepeat: m.hookRepeatRate,
+          arcHit: m.characterArcHitRate,
+          coreAbsence: m.coreAbsenceRate,
+          present: m.presentCharacterCount,
+          fading: m.fadingCount,
+        })),
+      },
     };
   }
 
@@ -1211,6 +1373,41 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     };
   }
 
+  private async loadChapterCountMap(bookIds: string[]): Promise<Map<string, number>> {
+    if (bookIds.length === 0) return new Map<string, number>();
+    const rows = await this.chapterRepo
+      .createQueryBuilder('chapter')
+      .select('chapter.bookId', 'bookId')
+      .addSelect('COUNT(*)', 'count')
+      .where('chapter.bookId IN (:...bookIds)', { bookIds })
+      .groupBy('chapter.bookId')
+      .getRawMany<{ bookId: string; count: string }>();
+    const result = new Map<string, number>();
+    for (const row of rows) result.set(row.bookId, Number(row.count) || 0);
+    return result;
+  }
+
+  private async loadLatestChapterNumber(bookId: string): Promise<number> {
+    const row = await this.chapterRepo
+      .createQueryBuilder('chapter')
+      .select('MAX(chapter.chapterNumber)', 'maxChapter')
+      .where('chapter.bookId = :bookId', { bookId })
+      .getRawOne<{ maxChapter: string | null }>();
+    return Number(row?.maxChapter ?? 0) || 0;
+  }
+
+  private async healChapterCursorIfBehind(bookId: string, state: StoryState): Promise<StoryState> {
+    const latestChapterNumber = await this.loadLatestChapterNumber(bookId);
+    if (latestChapterNumber < state.chapterCursor) return state;
+    const fixedCursor = latestChapterNumber + 1;
+    const healed = { ...state, chapterCursor: fixedCursor, updatedAt: new Date().toISOString() };
+    await this.persistBookState(healed);
+    this.logger.warn(
+      `[cursor-heal] 检测到游标落后，已自动修复 bookId=${bookId} cursor=${state.chapterCursor} -> ${fixedCursor} latestChapter=${latestChapterNumber}`,
+    );
+    return healed;
+  }
+
   // -------------------------------------------------------------------------
   // Internal
   // -------------------------------------------------------------------------
@@ -1219,7 +1416,8 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     bookId: string,
     runtimeOptions?: GenerateChapterRuntimeOptions,
   ): Promise<ChapterWorkflowResult> {
-    let state = await this.loadBookState(bookId);
+    let state = await this.runPreStep(bookId, 0, 'loadBookState', () => this.loadBookState(bookId), true);
+    state = await this.healChapterCursorIfBehind(bookId, state);
     const chapterNumber = state.chapterCursor;
 
     return this.llmUsageTracker.runWithChapterScope(
@@ -1227,9 +1425,20 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
       async () => {
         try {
           if (!state.currentArc) {
-            state = await this.deepMaintenance.bootstrapInitialArc(state);
+            state = await this.runPreStep(bookId, chapterNumber, 'bootstrapInitialArc',
+              () => this.deepMaintenance.bootstrapInitialArc(state), true);
+            await this.persistBookState(state); // arc 创建后立即落盘，避免后续失败导致 arc 反复重建
           }
-          if (state.agentSectionsStatus === 'pending') { // 首章前重试 agentSections 生成
+          if (!state.bookStrategy) {
+            state.bookStrategy = await this.bookStrategyAgent.generateInitial({
+              seed: state.seed,
+              outline: state.roughOutline,
+              audienceDirective: state.audienceDirective,
+              profile: state.bookPromptProfile,
+            });
+            await this.persistBookState(state);
+          }
+          if (state.agentSectionsStatus === 'pending') {
             try {
               const profile = state.bookPromptProfile;
               const genre = state.seed.genre ?? '';
@@ -1242,19 +1451,16 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
                 this.logger.log(`[ch${chapterNumber}] agentSections 重试成功`);
               }
             } catch (e) {
-              this.logger.warn(`[ch${chapterNumber}] agentSections 重试失败，继续使用默认: ${e instanceof Error ? e.message : String(e)}`);
+              this.logPreStepWarn(bookId, chapterNumber, 'agentSectionsRetry', e);
             }
           }
 
-          // Keep a replay snapshot for "state before current chapter".
-          await this.persistArtifact(
-            bookId,
-            Math.max(0, chapterNumber - 1),
-            'state_snapshot',
-            state,
-          );
-          const previousChapterEnding = await this.getPreviousChapterEnding(bookId, chapterNumber);
-          const pipelineNodes = await this.pipelineService.getPublishedNodes(bookId);
+          await this.persistArtifact(bookId, Math.max(0, chapterNumber - 1), 'state_snapshot', state)
+            .catch(e => this.logPreStepWarn(bookId, chapterNumber, 'persistStateSnapshot', e));
+          const previousChapterEnding = await this.getPreviousChapterEnding(bookId, chapterNumber)
+            .catch(e => { this.logPreStepWarn(bookId, chapterNumber, 'getPreviousChapterEnding', e); return undefined; });
+          const pipelineNodes = await this.runPreStep(bookId, chapterNumber, 'getPublishedNodes',
+            () => this.pipelineService.getPublishedNodes(bookId), true);
           const result = await this.chapterWorkflow.run(
             state,
             previousChapterEnding,
@@ -1272,6 +1478,11 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
             },
             ['bookId', 'chapterNumber'],
           );
+
+          // 章节文本一旦落库，立即推进游标并持久化，避免后续步骤失败导致游标滞后。
+          state.chapterCursor = Math.max(state.chapterCursor, result.finalDraft.chapterNumber + 1);
+          state.updatedAt = new Date().toISOString();
+          await this.persistBookState(state);
 
           // Persist artifacts.
           const chapterArtifacts: Array<{ name: string; data: unknown }> = [
@@ -1324,7 +1535,6 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
           };
 
           // Roll forward state.
-          state.chapterCursor += 1;
           state.updatedAt = new Date().toISOString();
           state.kpiHistory.push(generationKpiSchema.parse({
             hardPass: result.deterministicCheck.pass,
@@ -1334,19 +1544,32 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
             qualityScore: result.review.dimensions.proseQuality,
             overallScore: result.overallScore,
           }));
+          if (result.qualityMetrics) {
+            const qm = result.qualityMetrics as {
+              chapterNumber: number; hookRepeatRate: number; characterArcHitRate: number;
+              genreMismatchFlags: string[]; coreAbsenceRate: number; cameoOveruseRate: number;
+              fadingCount: number; presentCharacterCount: number; newCharactersInArc: number;
+            };
+            if (!state.qualityMetricsHistory) state.qualityMetricsHistory = [];
+            state.qualityMetricsHistory.push(qm);
+          }
 
           // Apply retroactive foreshadowing seeds to past chapters.
-          state = await this.applyPendingForeshadowing(state);
+          try {
+            state = await this.applyPendingForeshadowing(state, chapterNumber);
+          } catch (e) { this.logPreStepWarn(bookId, chapterNumber, 'applyPendingForeshadowing', e); }
 
           // Compact and check maintenance trigger.
           state = this.compactState(state);
-          const trigger = this.deepMaintenance.evaluateTrigger(state);
-          if (trigger.shouldTrigger) {
-            state = await this.deepMaintenance.execute(state, trigger);
-            await this.persistArtifact(bookId, chapterNumber, 'maintenance_trigger', trigger);
-          }
+          try {
+            const trigger = this.deepMaintenance.evaluateTrigger(state);
+            if (trigger.shouldTrigger) {
+              state = await this.deepMaintenance.execute(state, trigger);
+              await this.persistArtifact(bookId, chapterNumber, 'maintenance_trigger', trigger);
+            }
+          } catch (e) { this.logPreStepWarn(bookId, chapterNumber, 'deepMaintenance', e); }
 
-          await this.persistBookState(state);
+          await this.persistBookState(state); // 保存最终 state（含伏笔/维护更新）
           await this.persistArtifact(bookId, chapterNumber, 'state_snapshot', state);
           return result;
         } finally {
@@ -2205,7 +2428,8 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
     return {
       ...state,
       kpiHistory: state.kpiHistory.slice(-NovelService.MAX_KPI),
-      chapterSummaries: state.chapterSummaries.slice(-NovelService.MAX_SUMMARIES),
+      qualityMetricsHistory: (state.qualityMetricsHistory ?? []).slice(-NovelService.MAX_KPI),
+      // buildCompactContext 的 maxChapterSummaries 控制注入量，不需要在此截断
       timelineEvents: (state.timelineEvents ?? []).slice(-NovelService.MAX_TIMELINE),
       characterFactLedger: (state.characterFactLedger ?? [])
         .filter((f) => f.status !== 'deprecated')
@@ -2237,14 +2461,14 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
    * Apply pending foreshadowing seeds by injecting text into past chapters.
    * Only processes seeds targeting chapters that have already been written.
    */
-  private async applyPendingForeshadowing(state: StoryState): Promise<StoryState> {
+  private async applyPendingForeshadowing(state: StoryState, justGeneratedChapter: number): Promise<StoryState> {
     const seeds = (state.pendingForeshadowingSeeds ?? []).filter((s) => !s.applied);
     if (seeds.length === 0) return state;
 
     const applied: string[] = [];
 
     for (const seed of seeds) {
-      if (seed.targetChapterNumber >= state.chapterCursor) continue;
+      if (seed.targetChapterNumber >= justGeneratedChapter) continue; // 排除当前章及未来章，仅修改真正的过去章节
 
       try {
         const chapter = await this.chapterRepo.findOneBy({
@@ -2269,6 +2493,10 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
         );
 
         applied.push(seed.id);
+        this.traceLogger.logWorkflowEvent({
+          bookId: state.bookId, chapterNumber: seed.targetChapterNumber, step: 'foreshadowingInject',
+          status: 'ok', meta: { triggeredBy: seed.triggeredByChapter, reason: seed.reason, insertAfter: seed.insertAfterParagraph },
+        });
         this.logger.log(
           `[Foreshadowing] 已注入伏笔到第${seed.targetChapterNumber}章 ` +
           `(由第${seed.triggeredByChapter}章触发): ${seed.reason}`,
@@ -2328,17 +2556,34 @@ ${genre ? `\n参考题材方向：${genre}` : ''}
   /**
    * Fetch the last ~500 chars of the previous chapter for seamless continuation.
    */
+  private async runPreStep<T>(bid: string, ch: number, step: string, fn: () => Promise<T>, retry = false): Promise<T> {
+    let err: Error;
+    for (let i = 0; i <= (retry ? 1 : 0); i++) {
+      try { return await fn(); } catch (e) {
+        err = e as Error;
+        if (i === 0 && retry) { this.logger.warn(`[ch${ch}] ${step} 首次失败，1s后重试: ${err.message}`); await new Promise(r => setTimeout(r, 1000)); }
+      }
+    }
+    this.traceLogger.logWorkflowEvent({ bookId: bid, chapterNumber: ch, step, status: 'error', error: err!.message });
+    this.logger.error(`[ch${ch}] 前置步骤 ${step} 最终失败: ${err!.message}`);
+    throw err!;
+  }
+
+  private logPreStepWarn(bid: string, ch: number, step: string, e: unknown): void {
+    const msg = e instanceof Error ? e.message : String(e);
+    this.traceLogger.logWorkflowEvent({ bookId: bid, chapterNumber: ch, step, status: 'error', error: msg });
+    this.logger.warn(`[ch${ch}] ${step} 失败(非关键，跳过): ${msg}`);
+  }
+
   private async getPreviousChapterEnding(bookId: string, currentChapter: number): Promise<string | undefined> {
     if (currentChapter <= 1) return undefined;
-    const prev = await this.chapterRepo.findOneBy({
-      bookId,
-      chapterNumber: currentChapter - 1,
-    });
+    const prev = await this.chapterRepo.findOneBy({ bookId, chapterNumber: currentChapter - 1 });
     if (!prev?.content) return undefined;
     const content = prev.content;
-    const tail = content.slice(-1500); // 1500字上下文确保场景/情绪完整衔接
-    const firstNewline = tail.indexOf('\n');
-    return firstNewline > 0 ? tail.slice(firstNewline + 1) : tail;
+    const tail = content.slice(-1800); // 取 1800 字保留足够缓冲
+    // 从末尾向前找最近的段落边界（换行），确保从完整段落开头开始，不切断句子
+    const lastNewline = tail.lastIndexOf('\n', tail.length - 200); // 保留至少 200 字结尾
+    return lastNewline > 0 ? tail.slice(lastNewline + 1) : tail;
   }
 
   // -------------------------------------------------------------------------

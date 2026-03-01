@@ -6,7 +6,8 @@ import { AutoSerializationJobEntity } from './entities/auto-serialization-job.en
 import { ChapterResyncJobEntity } from './entities/chapter-resync-job.entity';
 import { WorkflowExecutionService } from './workflow-execution.service';
 
-const STALE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2小时未完成视为中断（原6小时过长）
+const STALE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 自动连载/回灌任务：2小时未完成视为中断
+const EXECUTION_STARTUP_STALE_TIMEOUT_MS = 5 * 60 * 1000; // 章节工作流：启动时5分钟未完成即判定为残留running
 
 @Injectable()
 export class TaskRecoveryService implements OnModuleInit, OnModuleDestroy {
@@ -30,6 +31,7 @@ export class TaskRecoveryService implements OnModuleInit, OnModuleDestroy {
     } else {
       this.logger.log('无需恢复，所有任务状态正常');
     }
+    await this.logResumableWorkflows();
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -65,9 +67,10 @@ export class TaskRecoveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async recoverStaleWorkflowExecutions(): Promise<number> { // 标记中断的工作流执行
-    const staleRuns = await this.executionService.findStaleRuns(STALE_TIMEOUT_MS);
-    if (staleRuns.length === 0) return 0;
-    return this.executionService.markInterrupted(staleRuns.map((r) => r.id), '服务重启，工作流执行中断');
+    return this.executionService.markStaleRunsInterrupted(
+      EXECUTION_STARTUP_STALE_TIMEOUT_MS,
+      '服务重启，工作流执行中断',
+    );
   }
 
   private async markAutoJobsInterrupted(): Promise<number> { // 优雅关闭时标记自动连载
@@ -84,9 +87,19 @@ export class TaskRecoveryService implements OnModuleInit, OnModuleDestroy {
     return result.affected ?? 0;
   }
 
-  private async markExecutionsInterrupted(): Promise<number> { // 优雅关闭时标记工作流执行
-    const staleRuns = await this.executionService.findStaleRuns(0);
-    if (staleRuns.length === 0) return 0;
-    return this.executionService.markInterrupted(staleRuns.map((r) => r.id), '服务优雅关闭');
+  private async markExecutionsInterrupted(): Promise<number> { // 优雅关闭时仅标记本实例的工作流执行
+    return this.executionService.markStaleRunsInterrupted(0, '服务优雅关闭', true);
+  }
+
+  private async logResumableWorkflows(): Promise<void> {
+    const resumable = await this.executionService.listResumableRuns(20);
+    if (resumable.length > 0) {
+      this.logger.log(
+        `可断点续传的工作流: ${resumable.length}个\n` +
+        resumable.map((r) =>
+          `  status=${r.status} owner=${r.ownerInstanceId ?? '-'} hb=${r.heartbeatAt?.toISOString() ?? '-'} bookId=${r.bookId} ch${r.chapterNumber} 已缓存=[${Object.keys(r.stepOutputs).join(',')}] checkpoint=${r.lastCheckpoint}`,
+        ).join('\n'),
+      );
+    }
   }
 }

@@ -1,5 +1,5 @@
 /** 场景规划师 — 将章节意图拆分为可独立执行的场景契约（数量随章节类型动态调整）。 */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../llm/llm.service';
 import {
   ChapterIntent,
@@ -8,10 +8,19 @@ import {
   ArcDirectorDirective,
   chapterScenePlanSchema,
 } from '../schemas/novel-state.schemas';
-import { THREAD_AWARENESS_PLAYBOOK, buildCompactContextProse, buildKpiTrendHints } from '../prompting/novel-playbook';
+import {
+  THREAD_AWARENESS_PLAYBOOK,
+  buildCompactContextProse,
+  buildKpiTrendHints,
+  UNIFIED_AGENT_MAX_CHARACTERS,
+} from '../prompting/novel-playbook';
+import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 
 @Injectable()
 export class ScenePlannerAgent {
+  private readonly logger = new Logger(ScenePlannerAgent.name);
+  private static readonly DEFAULT_FOCUS_MOMENT_HINT = '在关键动作或对话里暴露该角色当下真实立场与代价感';
+
   constructor(private readonly llm: LlmService) {}
 
   async plan(
@@ -22,7 +31,7 @@ export class ScenePlannerAgent {
     playbooks?: Record<string, string>,
   ): Promise<ChapterScenePlan> {
     const proseContext = buildCompactContextProse(state, {
-      maxCharacters: 10,
+      maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
       maxChapterSummaries: 4,
       maxOpenThreads: 8,
       maxTimelineEvents: 10,
@@ -43,7 +52,7 @@ export class ScenePlannerAgent {
       .map((g) => `[${g.type}] ${g.secret}（${g.knownBy.join(',')}知道，${g.unknownTo.join(',')}不知道）`)
       .join('\n');
 
-    return this.llm.generateStructured({
+    const plan = await this.llm.generateStructured({
       taskName: 'scene-planner',
       schema: chapterScenePlanSchema,
       tags: ['workflow', 'chapter', 'scene-plan'],
@@ -76,7 +85,15 @@ ${playbooks?.['agent:scene-planner:sensory_bridge'] ?? '每个场景结束时描
 === 伏线分配 ===
 每个场景可以顺带处理1-2条伏线（touch/advance/payoff/seed），总量不超过意图中的maxNewThreads限制。
 
+=== 场景细节要求 ===
+- subtext (潜台词)：角色表面在做什么，内心真正在想什么，或者话语背后的真实意图。制造张力。
+- sensoryAnchors (感官锚定)：提供1-3个具体的感官细节（如"生锈的铁腥味"、"刺骨的寒风"），逼迫Writer进行具体描写，消除AI味。
+- isParallel (并发生成)：如果本场景与上一场景是两条平行的故事线（如双线叙事、不同地点的同时发生），设为 true，系统将并发生成它们以提升速度。否则设为 false。
+
 ${profile.writerGuide.genreRules.slice(0, 3).map((r, i) => `${i + 1}. ${r}`).join('\n')}
+${buildAudiencePromptBlock(state)}
+${playbooks?.['__bookStrategy'] ?? ''}
+${playbooks?.['__policySlice'] ?? ''}
 ${playbooks?.['THREAD_AWARENESS_PLAYBOOK'] ?? THREAD_AWARENESS_PLAYBOOK}
 ${kpiHints.length > 0 ? '\n动态提示：\n' + kpiHints.join('\n') : ''}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
       userPrompt: `故事上下文：
@@ -113,5 +130,101 @@ overallEmotionalArc 要描述读者情绪变化曲线（如"好奇→紧张→�
 hookStrategy 要具体说明末场景如何制造钩子。`,
       temperature: 0.5,
     });
+    return this.enforceHardConstraints(state, intent, plan, playbooks);
+  }
+
+  private enforceHardConstraints(
+    state: StoryState,
+    intent: ChapterIntent,
+    plan: ChapterScenePlan,
+    playbooks?: Record<string, string>,
+  ): ChapterScenePlan {
+    const focusMomentHint = playbooks?.['agent:scene-planner:focus_moment_hint'] ?? ScenePlannerAgent.DEFAULT_FOCUS_MOMENT_HINT;
+    const activeIds = new Set(intent.characterAvailability.activeCharacterIds ?? []);
+    const blockedIds = new Set(intent.characterAvailability.blockedCharacterIds ?? []);
+    const strategyMax = state.bookStrategy?.threadPolicy?.maxNewThreadsPerChapter;
+    const maxSeeds = Math.max(
+      0,
+      Math.min(intent.threadGuidance.maxNewThreads, typeof strategyMax === 'number' ? strategyMax : intent.threadGuidance.maxNewThreads),
+    );
+    const preferredActions = new Set(state.bookStrategy?.threadPolicy?.preferredActions ?? []);
+    const coreFocus = (state.bookStrategy?.characterFocusPolicy?.coreCharacterIds ?? []).filter((id) => activeIds.has(id));
+    const supportFocus = (state.bookStrategy?.characterFocusPolicy?.supportCharacterIds ?? []).filter((id) => activeIds.has(id));
+    const focusCandidates = [...coreFocus, ...supportFocus, ...Array.from(activeIds)];
+
+    const mentionOnlyIds = new Set(
+      state.characters.filter((c) => c.status.lifecycleStatus === 'fading' && c.status.maxSceneRole === 'mention_only').map((c) => c.id),
+    );
+    let seedCount = 0;
+    const scenes = plan.scenes.map((scene) => {
+      const present = scene.presentCharacterIds.filter((id) => activeIds.has(id) && !blockedIds.has(id) && !mentionOnlyIds.has(id));
+      let pov = scene.povCharacterId;
+      if (!activeIds.has(pov) || blockedIds.has(pov)) pov = present[0] ?? intent.characterAvailability.activeCharacterIds[0] ?? scene.povCharacterId;
+      const normalizedPresent = present.length > 0 ? present : [pov];
+      const threadActions = scene.threadActions
+        .filter((t) => {
+          if (t.action !== 'seed') return true;
+          if (seedCount >= maxSeeds) return false;
+          seedCount += 1;
+          return true;
+        })
+        .map((t) => (preferredActions.size > 0 && !preferredActions.has(t.action) && t.action !== 'seed'
+          ? { ...t, action: 'touch' as const }
+          : t));
+      const characterMoment = scene.characterMoment
+        ? (activeIds.has(scene.characterMoment.characterId) && !blockedIds.has(scene.characterMoment.characterId)
+            ? scene.characterMoment
+            : { ...scene.characterMoment, characterId: pov })
+        : undefined;
+      return { ...scene, povCharacterId: pov, presentCharacterIds: normalizedPresent, threadActions, characterMoment };
+    });
+
+    const minMoments = Math.max(0, Math.min(3, state.bookStrategy?.characterFocusPolicy?.minCharacterMomentPerChapter ?? 0));
+    let currentMoments = scenes.filter((s) => !!s.characterMoment).length;
+    if (minMoments > currentMoments && focusCandidates.length > 0) {
+      for (const scene of scenes) {
+        if (currentMoments >= minMoments) break;
+        if (scene.characterMoment) continue;
+        const characterId = focusCandidates[currentMoments % focusCandidates.length];
+        scene.characterMoment = {
+          characterId,
+          type: 'inner_test',
+          hint: focusMomentHint,
+        };
+        currentMoments += 1;
+      }
+      this.logger.log(
+        `[Chapter ${intent.chapterNumber}] scene-plan 角色聚焦补齐：${currentMoments}/${minMoments}`,
+      );
+    }
+    if (seedCount > maxSeeds) {
+      this.logger.warn(`[Chapter ${intent.chapterNumber}] scene-plan seed 超限，已钳制为 ${maxSeeds}`);
+    }
+    const maxPresent = state.bookStrategy?.characterBudget?.maxPresentPerChapter ?? 6;
+    const allPresentIds = new Set(scenes.flatMap((s) => s.presentCharacterIds));
+    if (allPresentIds.size > maxPresent) {
+      const IMP_RANK: Record<string, number> = { core: 40, major: 30, minor: 20, cameo: 10 };
+      const povSet = new Set(scenes.map((s) => s.povCharacterId));
+      const ranked = [...allPresentIds].sort((a, b) => {
+        const ap = povSet.has(a) ? 100 : 0;
+        const bp = povSet.has(b) ? 100 : 0;
+        const ai = IMP_RANK[state.characters.find((c) => c.id === a)?.status.narrativeImportance ?? ''] ?? 15;
+        const bi = IMP_RANK[state.characters.find((c) => c.id === b)?.status.narrativeImportance ?? ''] ?? 15;
+        return (bp + bi) - (ap + ai);
+      });
+      const keepSet = new Set(ranked.slice(0, maxPresent));
+      for (const sc of scenes) {
+        sc.presentCharacterIds = sc.presentCharacterIds.filter((id) => keepSet.has(id) || id === sc.povCharacterId);
+      }
+      this.logger.warn(`[Chapter ${intent.chapterNumber}] scene-plan 角色${allPresentIds.size}→${maxPresent}，裁剪${ranked.slice(maxPresent).join(',')}`);
+    }
+    const totalEstimated = scenes.reduce((s, sc) => s + sc.estimatedWords, 0);
+    const hardMax = intent.wordCountRange.max * 1.2;
+    if (totalEstimated > hardMax) {
+      const ratio = intent.wordCountRange.max / Math.max(1, totalEstimated);
+      this.logger.warn(`[Chapter ${intent.chapterNumber}] scene-plan 总字数${totalEstimated}超上限${hardMax}，按比例${ratio.toFixed(2)}x缩减`);
+      for (const sc of scenes) sc.estimatedWords = Math.round(sc.estimatedWords * ratio);
+    }
+    return { ...plan, scenes };
   }
 }

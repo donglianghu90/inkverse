@@ -18,7 +18,9 @@ import {
   PROSE_CRAFT_PLAYBOOK,
   buildChapterRhythmPlaybook,
   buildCompactContext,
+  UNIFIED_AGENT_MAX_CHARACTERS,
 } from '../prompting/novel-playbook';
+import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 
 @Injectable()
 export class ReviewerAgent {
@@ -32,7 +34,7 @@ export class ReviewerAgent {
     playbooks?: Record<string, string>,
   ): Promise<ChapterReview> {
     const context = buildCompactContext(state, {
-      maxCharacters: 8,
+      maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
       maxChapterSummaries: 4,
       maxOpenThreads: 8,
     });
@@ -107,6 +109,9 @@ ${playbooks?.['agent:reviewer:verdict_rules'] ?? '- < 6.0 或有 critical → "m
 ${playbooks?.['CONTINUITY_BASELINE_PLAYBOOK'] ?? CONTINUITY_BASELINE_PLAYBOOK}
 ${playbooks?.['CHARACTER_ARC_PLAYBOOK'] ?? CHARACTER_ARC_PLAYBOOK}
 ${playbooks?.['PROSE_CRAFT_PLAYBOOK'] ?? PROSE_CRAFT_PLAYBOOK}
+${buildAudiencePromptBlock(state)}
+${playbooks?.['__bookStrategy'] ?? ''}
+${playbooks?.['__policySlice'] ?? ''}
 ${buildChapterRhythmPlaybook(state.seed.targetChapterWordCount ?? 3000)}
 ${state.bookPromptProfile?.writerGuide ? `\n=== 主题检查 ===\n${state.seed.thematicCore ? `核心命题：${state.seed.thematicCore.centralQuestion}\n本章是否在某个层面触及了核心命题？不需要每章直接讨论，但读者应该能隐约感受到。完全脱离主题的纯过渡章——engagement扣分。` : '（无主题内核，跳过）'}` : ''}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
       })(),
@@ -166,5 +171,11 @@ ${(() => {
 })()}`,
       temperature: 0.4,
     });
+    const hasCritical = result.issuesFound.some((i) => i.severity === 'critical');
+    const hasModerate = result.issuesFound.some((i) => i.severity === 'moderate');
+    if (result.overallScore < 6 || hasCritical) result.overallVerdict = 'major_issues';
+    else if (result.overallScore >= 8.5 && !hasCritical && !hasModerate) result.overallVerdict = 'good';
+    else result.overallVerdict = 'needs_edit';
+    return result;
   }
 }

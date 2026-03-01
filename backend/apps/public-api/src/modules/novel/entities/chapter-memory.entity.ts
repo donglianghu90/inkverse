@@ -44,6 +44,10 @@ export class ChapterMemoryEntity {
   @Column({ name: 'foreshadowing_resolved', type: 'jsonb', default: '[]' })
   foreshadowingResolved: string[]; // 本章回收的伏笔描述
 
+  /** 本章活跃角色的关键状态快照，供向量召回时还原"当时角色状态" */
+  @Column({ name: 'character_states', type: 'jsonb', default: '{}' })
+  characterStates: Record<string, { level: string; mood: string; status: string; location: string }>;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

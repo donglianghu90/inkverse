@@ -21,7 +21,7 @@ import {
   ApiResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { Observable, Subject } from 'rxjs';
+import { Observable, Subject, finalize } from 'rxjs';
 import { CurrentUser } from '@packages/common/decorators';
 import { AutoSerializationService } from './auto-serialization.service';
 import { ConfigureAutoSerializationDto } from './dto/configure-auto-serialization.dto';
@@ -40,6 +40,7 @@ import { CreateBookSessionService } from './create-book-session.service';
 import { BookCreationSseService } from './book-creation-sse.service';
 import { GenreProfileTemplateService } from './genre-profile-template.service';
 import { CreateGenreProfileTemplateDto, UpdateGenreProfileTemplateDto, AiGenerateProfileDto } from './dto/genre-profile-template.dto';
+import { EnhanceIdeaDto, GenerateStoryGoalDto } from './dto/idea.dto';
 
 @ApiTags('Novel - 小说生成')
 @ApiBearerAuth('Authorization')
@@ -75,7 +76,7 @@ export class NovelController {
   @Post('idea/enhance')
   @ApiOperation({ summary: '美化创意', description: '用 AI 将粗略的创意打磨为更具吸引力的故事概念' })
   @ApiResponse({ status: 200, description: '返回美化后的创意和亮点' })
-  async enhanceIdea(@Body() body: { idea: string; genre?: string }): Promise<unknown> {
+  async enhanceIdea(@Body() body: EnhanceIdeaDto): Promise<unknown> {
     return this.novelService.enhanceIdea(body.idea, body.genre);
   }
 
@@ -83,7 +84,7 @@ export class NovelController {
   @ApiOperation({ summary: '生成主线目标', description: '根据核心创意、题材和读者群体 AI 生成主线目标' })
   @ApiResponse({ status: 200, description: '返回推荐目标和备选方案' })
   async generateStoryGoal(
-    @Body() body: { mainIdea: string; genre: string; targetAudience: string },
+    @Body() body: GenerateStoryGoalDto,
   ): Promise<unknown> {
     return this.novelService.generateStoryGoal(body);
   }
@@ -141,6 +142,28 @@ export class NovelController {
   ): Promise<unknown> {
     await this.guard(bookId, userId);
     return this.novelService.updateBookProfile(bookId, body);
+  }
+
+  @Get('books/:bookId/audience')
+  @ApiOperation({ summary: '获取受众策略', description: '返回书籍专属的受众策略（AudienceDirective）' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '成功' })
+  async getAudienceDirective(@Param('bookId') bookId: string, @CurrentUser('id') userId: string): Promise<unknown> {
+    await this.guard(bookId, userId);
+    return this.novelService.getAudienceDirective(bookId);
+  }
+
+  @Put('books/:bookId/audience')
+  @ApiOperation({ summary: '更新受众策略', description: '用户修改后保存受众策略' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiResponse({ status: 200, description: '更新成功' })
+  async updateAudienceDirective(
+    @Param('bookId') bookId: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser('id') userId: string,
+  ): Promise<unknown> {
+    await this.guard(bookId, userId);
+    return this.novelService.updateAudienceDirective(bookId, body);
   }
 
   @Delete('books/:bookId')
@@ -228,7 +251,7 @@ export class NovelController {
   }
 
   @Sse('books/:bookId/chapters/generate-sse')
-  @ApiOperation({ summary: '生成章节（SSE）', description: '通过 SSE 流式推送章节生成进度' })
+  @ApiOperation({ summary: '生成章节（SSE）', description: '触发生成并通过 SSE 流式推送章节生成进度' })
   @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
   async generateChapterSse(@Param('bookId') bookId: string, @CurrentUser('id') userId: string): Promise<Observable<MessageEvent>> {
     await this.guard(bookId, userId);
@@ -259,6 +282,25 @@ export class NovelController {
     }, 0);
 
     return subject.asObservable();
+  }
+
+  @Sse('books/:bookId/chapters/progress-sse')
+  @ApiOperation({ summary: '监听生成进度（SSE）', description: '纯监听模式，不触发生成，用于编排页面实时观察工作流进度' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  async progressSse(@Param('bookId') bookId: string, @CurrentUser('id') userId: string): Promise<Observable<MessageEvent>> {
+    await this.guard(bookId, userId);
+    const subject = new Subject<MessageEvent>();
+    const status = this.progressService.isGenerating(bookId);
+    if (!status.generating) {
+      subject.next({ data: { idle: true, message: '当前没有正在进行的生成任务' } } as MessageEvent);
+    } else {
+      subject.next({ data: { reconnected: true, message: '已连接到正在进行的生成任务', ...status } } as MessageEvent);
+    }
+    const unsubscribe = this.progressService.subscribe(bookId, (event) => {
+      subject.next({ data: event } as MessageEvent);
+      if (event.done || event.error) setTimeout(() => subject.complete(), 100);
+    });
+    return subject.asObservable().pipe(finalize(() => unsubscribe()));
   }
 
   @Get('books/:bookId/chapters/:chapterNumber')

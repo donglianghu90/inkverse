@@ -42,7 +42,10 @@ export interface LlmChapterUsageSummary {
   calls: LlmUsageCallRecord[];
 }
 
+export interface WorkflowContext { workflowId: string; bookId: string; chapterNumber: number; callSequence: number; }
+
 interface UsageScope {
+  workflowId: string;
   bookId: string;
   chapterNumber: number;
   startedAt: string;
@@ -56,7 +59,13 @@ export class LlmUsageTrackerService {
   private readonly storage = new AsyncLocalStorage<UsageScope>();
 
   async runWithChapterScope<T>(input: { bookId: string; chapterNumber: number }, job: () => Promise<T>): Promise<T> {
-    return this.storage.run({ bookId: input.bookId, chapterNumber: input.chapterNumber, startedAt: new Date().toISOString(), callSequence: 0, consumed: false, calls: [] }, job);
+    const wid = `wf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return this.storage.run({ workflowId: wid, bookId: input.bookId, chapterNumber: input.chapterNumber, startedAt: new Date().toISOString(), callSequence: 0, consumed: false, calls: [] }, job);
+  }
+
+  getWorkflowContext(): WorkflowContext | null {
+    const scope = this.storage.getStore();
+    return scope ? { workflowId: scope.workflowId, bookId: scope.bookId, chapterNumber: scope.chapterNumber, callSequence: scope.callSequence } : null;
   }
 
   recordCall(input: Omit<LlmUsageCallRecord, 'callIndex'>): void {

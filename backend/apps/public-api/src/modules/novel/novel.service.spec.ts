@@ -34,6 +34,8 @@ function createServiceForArtifactTests() {
     {} as any,
     {} as any,
     {} as any,
+    {} as any,
+    {} as any,
   );
 
   return { service, chapterRepo, artifactRepo };
@@ -138,5 +140,44 @@ describe('NovelService.getChapterArtifacts', () => {
     expect(alignment.remediation?.severity).toBe('high');
     expect(alignment.remediation?.reasons.join(' | ')).toContain('mustHit');
     expect(alignment.remediation?.rewritePrompt).toContain('必须命中');
+  });
+});
+
+describe('NovelService.mergeNamingConvention', () => {
+  it('prefers template naming defaults and preserves analyzed fallback fields', () => {
+    const { service } = createServiceForArtifactTests();
+    const merged = (service as any).mergeNamingConvention(
+      {
+        personNameStyle: '模板人名',
+        locationNameStyle: '模板地名',
+        examples: { personNames: ['模板甲'] },
+        taboos: ['禁词A'],
+      },
+      {
+        personNameStyle: '分析人名',
+        locationNameStyle: '分析地名',
+        abilityNameStyle: '分析能力',
+        examples: { personNames: ['分析甲'], locationNames: ['分析地名样例'] },
+        taboos: ['禁词B'],
+      },
+    );
+    expect(merged.personNameStyle).toBe('模板人名');
+    expect(merged.locationNameStyle).toBe('模板地名');
+    expect(merged.abilityNameStyle).toBe('分析能力');
+    expect(merged.examples.personNames).toEqual(['模板甲']);
+    expect(merged.examples.locationNames).toEqual(['分析地名样例']);
+    expect(merged.taboos).toEqual(['禁词A']);
+  });
+
+  it('returns analyzed naming when template defaults are incomplete', () => {
+    const { service } = createServiceForArtifactTests();
+    const analyzed = {
+      personNameStyle: '分析人名',
+      locationNameStyle: '分析地名',
+      examples: { personNames: ['分析甲'], locationNames: ['分析城'] },
+      taboos: [],
+    };
+    const merged = (service as any).mergeNamingConvention({ personNameStyle: '模板人名缺地名' }, analyzed);
+    expect(merged).toEqual(analyzed);
   });
 });

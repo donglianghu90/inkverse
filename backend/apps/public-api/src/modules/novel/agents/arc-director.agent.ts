@@ -2,14 +2,15 @@
  * 卷级导演（步骤 1）：
  * 把卷合同翻译成单章可执行指令，约束意图层不要偏离卷目标。
  */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../llm/llm.service';
 import {
   ArcDirectorDirective,
   StoryState,
   arcDirectorDirectiveSchema,
 } from '../schemas/novel-state.schemas';
-import { buildArcContext, buildCompactContext } from '../prompting/novel-playbook';
+import { buildArcContext, buildCompactContext, UNIFIED_AGENT_MAX_CHARACTERS } from '../prompting/novel-playbook';
+import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 
 const STAGE_HINT_BY_BEAT_ROLE: Record<string, ArcDirectorDirective['arcStage']> = {
   setup: 'entry',
@@ -37,6 +38,8 @@ const TECHNIQUE_GUIDES: Record<string, (progress: number) => string> = {
 
 @Injectable()
 export class ArcDirectorAgent {
+  private readonly logger = new Logger(ArcDirectorAgent.name);
+
   constructor(private readonly llm: LlmService) {}
 
   async direct(
@@ -49,7 +52,7 @@ export class ArcDirectorAgent {
     if (!arc) return this.buildOffArcDirective(chapterNumber);
 
     const context = buildCompactContext(state, {
-      maxCharacters: 10,
+      maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
       maxChapterSummaries: 4,
       maxOpenThreads: 10,
       maxTimelineEvents: 10,
@@ -79,6 +82,14 @@ export class ArcDirectorAgent {
     const dueMilestones = (arc.antagonistMilestones ?? [])
       .filter((m) => m.chapterNumber <= chapterNumber + 1)
       .slice(0, 5);
+
+    const bank = state.foreshadowingBank ?? { deposits: [], totalPlanted: 0, totalResolved: 0 };
+    const upcomingPayoffs = bank.deposits.filter(
+      (d) => d.status === 'planted' && 
+             d.payoffWindow.earliestChapter > chapterNumber && 
+             d.payoffWindow.earliestChapter <= chapterNumber + 3
+    );
+
     const upcomingBeats = arc.chapterBeats
       .filter((b) => b.chapterNumber >= chapterNumber)
       .slice(0, 4)
@@ -92,7 +103,15 @@ export class ArcDirectorAgent {
 
     const techniqueHint = this.buildTechniqueHint(arc, chapterNumber);
 
-    return this.llm.generateStructured({
+    const characterGuidance = (state.currentVolume?.characterGoals ?? []).map((g) => ({
+      characterId: g.characterId,
+      characterName: g.characterName,
+      volumeStartState: g.volumeStartState,
+      volumeEndState: g.volumeEndState,
+      keyMoments: g.keyMoments ?? [],
+    }));
+
+    const directive = await this.llm.generateStructured({
       taskName: 'arc-director',
       schema: arcDirectorDirectiveSchema,
       tags: ['workflow', 'chapter', 'arc-director'],
@@ -107,8 +126,12 @@ ${techniqueHint}
 ${playbooks?.['agent:arc-director:output_rules'] ?? '- chapterNumber 必须是当前章号。\n- arcId 必须等于当前卷 arcId。\n- arcStage 只能从当前节拍和卷进度推导，禁止随意跳阶段。\n- chapterMission 必须是一个可执行动作句，避免空话。参考当前节拍的technique（叙事技法）来制定具体策略。\n- mustHit: 1-4 条，本章必须达成。\n- shouldAvoid: 1-4 条，本章应规避，尤其是破坏卷节奏的行为。\n- payoffThreadIds: 只能从卷合同 mustPayoffThreadIds 中选择，最多 3 条。\n- antagonistPressure: 描述反派/对手在本章的压力表现（可为心理、资源、行动）。\n- hookDirective: 指明本章结尾如何衔接下一章（对应当前 arcStage）。\n- pacingDirective: 指明节奏目标（快/中/慢 + 张力变化）。\n- riskBudget: entry/aftermath/transition 以 low/medium 为主；build/twist 以 medium 为主；climax 允许 high'}
 
 纪律：
-${playbooks?.['agent:arc-director:discipline'] ?? '- 不重复卷合同原文，要转为"本章可执行指令"。\n- 若当前章超出卷区间，使用 transition 或 off_arc 思路收束，不得硬拉高潮。\n- 指令必须服务读者体验：明确冲突、明确推进、明确钩子。'}
-${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
+${playbooks?.['agent:arc-director:discipline'] ?? '- 不重复卷合同原文，要转为"本章执行指令"。\n- 若当前章超出卷区间，使用 transition 或 off_arc 思路收束，不得硬拉高潮。\n- 指令必须服务读者体验：明确冲突、明确推进、明确钩子。'}
+
+${buildAudiencePromptBlock(state)}
+${playbooks?.['__bookStrategy'] ?? ''}
+${playbooks?.['__policySlice'] ?? ''}
+${this.buildNameGrowthArcHint(state, stageHint)}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
       userPrompt: `当前章：第${chapterNumber}章
 阶段提示：${stageHint}
 ${state.currentVolume ? `\n大卷上下文（第${state.currentVolume.volumeNumber}卷「${state.currentVolume.title}」）：\n- 核心冲突：${state.currentVolume.coreConflict}\n- 成长路线：${state.currentVolume.powerProgression.startLevel} → ${state.currentVolume.powerProgression.endLevel}\n- 主题焦点：${state.currentVolume.thematicFocus}\n- MiniArc槽位：${state.currentVolume.miniArcSlots.length}个\n${state.currentVolume.structuralInnovation ? '- 本卷叙事创新：' + state.currentVolume.structuralInnovation + '\n' : ''}` : ''}
@@ -127,10 +150,51 @@ ${JSON.stringify(mustPayoffThreads, null, 2)}
 反派里程碑（本章及下一章到期）：
 ${JSON.stringify(dueMilestones, null, 2)}
 
+即将回收的伏笔（唤醒期，请在 mustHit 或 shouldAvoid 中安排微弱的视觉/记忆唤醒）：
+${JSON.stringify(upcomingPayoffs.map(d => ({ label: d.label, description: d.description })), null, 2)}
+
 故事上下文：
 ${JSON.stringify(context, null, 2)}`,
       temperature: 0.35,
     });
+    const normalized = this.enforceStrategyConstraints(state, directive);
+    return { ...normalized, characterGuidance }; // 附加从 VolumeArc 直接提取的角色成长弧，不消耗 LLM token
+  }
+
+  private enforceStrategyConstraints(state: StoryState, directive: ArcDirectorDirective): ArcDirectorDirective {
+    const strategy = state.bookStrategy;
+    if (!strategy) return directive;
+    const next = { ...directive };
+    const allowedRisk = this.allowedRiskBudgetByStage(next.arcStage);
+    if (!allowedRisk.includes(next.riskBudget)) {
+      const original = next.riskBudget;
+      next.riskBudget = this.pickNearestRiskBudget(allowedRisk, next.riskBudget);
+      this.logger.log(`[Chapter ${next.chapterNumber}] arc-director riskBudget 钳制 ${original} -> ${next.riskBudget}`);
+    }
+    const threadMax = strategy.threadPolicy?.maxNewThreadsPerChapter;
+    if (typeof threadMax === 'number' && threadMax <= 0) {
+      const guard = '本章禁止引入新主支线，仅推进/回收现有伏线';
+      if (!next.shouldAvoid.some((s) => s.includes('引入新') || s.includes('新支线'))) next.shouldAvoid.push(guard);
+    }
+    const endingDirective = strategy.hookCadencePolicy?.chapterEndingDirective?.trim();
+    if (endingDirective && !next.hookDirective.includes(endingDirective)) {
+      next.hookDirective = `${next.hookDirective || '结尾制造可追更入口'}；${endingDirective}`;
+    }
+    return next;
+  }
+
+  private allowedRiskBudgetByStage(stage: ArcDirectorDirective['arcStage']): Array<ArcDirectorDirective['riskBudget']> {
+    if (stage === 'climax') return ['medium', 'high'];
+    if (stage === 'build' || stage === 'twist') return ['medium'];
+    return ['low', 'medium'];
+  }
+
+  private pickNearestRiskBudget(
+    allowed: Array<ArcDirectorDirective['riskBudget']>,
+    current: ArcDirectorDirective['riskBudget'],
+  ): ArcDirectorDirective['riskBudget'] {
+    const rank: Record<ArcDirectorDirective['riskBudget'], number> = { low: 1, medium: 2, high: 3 };
+    return [...allowed].sort((a, b) => Math.abs(rank[a] - rank[current]) - Math.abs(rank[b] - rank[current]))[0];
   }
 
   private buildTechniqueHint(arc: NonNullable<StoryState['currentArc']>, chapterNumber: number): string {
@@ -158,6 +222,49 @@ ${JSON.stringify(context, null, 2)}`,
     if (progress < 0.25) return 'entry';
     if (progress < 0.7) return 'build';
     return 'twist';
+  }
+
+  private buildNameGrowthArcHint(state: StoryState, stageHint: ArcDirectorDirective['arcStage']): string {
+    if (stageHint !== 'entry' && stageHint !== 'climax') return '';
+    const growthArc = state.seed.protagonistConcept.nameGrowthArc;
+    if (!growthArc?.length) return '';
+    const protagonist = state.characters.find((c) => c.id === 'char_protagonist');
+    if (!protagonist) return '';
+    const outlinePoints = state.roughOutline.points;
+    const phaseIdx = this.resolveGrowthArcPhaseIndex(state.chapterCursor, outlinePoints.length, growthArc.length, state.roughOutline.estimatedTotalChapters ?? 0, outlinePoints.map((p) => p.tentativeChapterRange ?? ''));
+    const idx = Math.max(0, Math.min(phaseIdx, growthArc.length - 1));
+    const phase = growthArc[idx];
+    return `\n=== 主角名此阶段的重量（可选激活，勿强求） ===\n` +
+      `「${protagonist.name}」此阶段外界感受：${phase.interpretation}\n` +
+      `主角内心感受：${phase.selfPerception}\n` +
+      `若本章是阶段转折，可在 mustHit 中加入"让名字的含义在一个细节里自然升华"——一句话、一个停顿足矣，不必刻意。\n`;
+  }
+
+  private resolveGrowthArcPhaseIndex(
+    chapter: number,
+    outlineCount: number,
+    growthCount: number,
+    estimatedTotalChapters: number,
+    ranges: string[],
+  ): number {
+    for (let i = 0; i < ranges.length; i++) {
+      const parsed = this.parseChapterRange(ranges[i]);
+      if (parsed && chapter >= parsed.start && chapter <= parsed.end) {
+        return outlineCount === growthCount ? i : Math.floor((i / Math.max(1, outlineCount)) * growthCount);
+      }
+    }
+    const total = Math.max(estimatedTotalChapters, chapter, 1);
+    const progress = Math.max(0, Math.min(1, chapter / total));
+    return Math.floor(progress * Math.max(1, growthCount));
+  }
+
+  private parseChapterRange(raw: string): { start: number; end: number } | null {
+    if (!raw) return null;
+    const nums = (raw.match(/\d+/g) ?? []).map((s) => parseInt(s, 10)).filter(Number.isFinite);
+    if (nums.length < 2) return null;
+    const start = Math.min(nums[0], nums[1]);
+    const end = Math.max(nums[0], nums[1]);
+    return { start, end };
   }
 
   private buildOffArcDirective(chapterNumber: number): ArcDirectorDirective {

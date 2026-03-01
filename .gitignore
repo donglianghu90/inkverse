@@ -1,6 +1,7 @@
 node_modules
 backend/dist
 backend/node_modules
+backend/logs
 frontend/apps/web/node_modules
 frontend/apps/web/dist
 frontend/apps/web/.umi

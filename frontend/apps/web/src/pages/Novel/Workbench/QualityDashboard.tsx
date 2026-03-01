@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { BookTokenUsage } from '@/services/novel';
 
@@ -6,6 +6,9 @@ interface Props {
   latestKpi: { qualityScore: number; overallScore: number } | null;
   tokenUsage?: BookTokenUsage | null;
 }
+
+const TIER_LABELS: Record<string, string> = { creative: '创作', standard: '推理', lightweight: '轻量' };
+const PROVIDER_COLORS: Record<string, string> = { gemini: 'text-blue-600', claude: 'text-orange-600', openai: 'text-green-600' };
 
 function scoreColor(score: number): string {
   if (score >= 8.5) return 'text-emerald-600 bg-emerald-500';
@@ -25,9 +28,21 @@ function fmtCost(usd: number): string {
   return `$${usd.toFixed(4)}`;
 }
 
+function fmtDuration(ms: number): string {
+  if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`;
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+function pctBar(value: number, total: number, color: string) {
+  const pct = total > 0 ? Math.max(2, (value / total) * 100) : 0;
+  return <div className={cn('h-1 rounded-full', color)} style={{ width: `${pct}%` }} />;
+}
+
 export const QualityDashboard: React.FC<Props> = ({ latestKpi, tokenUsage }) => {
   const hasKpi = !!latestKpi;
   const hasToken = !!tokenUsage && tokenUsage.totalCalls > 0;
+  const [expandModel, setExpandModel] = useState(false);
 
   if (!hasKpi && !hasToken) {
     return (
@@ -136,6 +151,92 @@ export const QualityDashboard: React.FC<Props> = ({ latestKpi, tokenUsage }) => 
                 <span className="text-amber-600">
                   {fmtCost(tokenUsage!.chapters.filter((c) => c.chapterNumber > 0).reduce((s, c) => s + c.estimatedCostUsd, 0) / chapterCount)}
                 </span>
+              </div>
+            </div>
+          )}
+
+          {/* 按提供商分组 */}
+          {tokenUsage!.byProvider.length > 0 && (
+            <div className="border-t pt-2 space-y-2">
+              <p className="text-[11px] text-muted-foreground font-medium">按服务商</p>
+              {tokenUsage!.byProvider.map((bp) => (
+                <div key={bp.provider} className="space-y-0.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className={cn('font-medium capitalize', PROVIDER_COLORS[bp.provider] || 'text-foreground')}>
+                      {bp.provider}
+                    </span>
+                    <span className="tabular-nums text-muted-foreground">{bp.calls} 次 · {fmtCost(bp.estimatedCostUsd)}</span>
+                  </div>
+                  <div className="h-1 w-full rounded-full bg-muted overflow-hidden">
+                    {pctBar(bp.totalTokens, tokenUsage!.totalTokens, bp.provider === 'gemini' ? 'bg-blue-500' : bp.provider === 'claude' ? 'bg-orange-500' : 'bg-green-500')}
+                  </div>
+                  <div className="flex gap-3 text-[10px] tabular-nums text-muted-foreground">
+                    <span>入 {fmtTokens(bp.promptTokens)}</span>
+                    <span>出 {fmtTokens(bp.completionTokens)}</span>
+                    <span>共 {fmtTokens(bp.totalTokens)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 按模型分组 */}
+          {tokenUsage!.byModel.length > 0 && (
+            <div className="border-t pt-2 space-y-2">
+              <button
+                className="flex items-center gap-1 text-[11px] text-muted-foreground font-medium hover:text-foreground transition-colors w-full"
+                onClick={() => setExpandModel(!expandModel)}
+              >
+                <span className={cn('transition-transform inline-block', expandModel ? 'rotate-90' : '')}>▸</span>
+                按模型明细（{tokenUsage!.byModel.length} 个）
+              </button>
+              {expandModel && tokenUsage!.byModel.map((bm) => (
+                <div key={bm.model} className="rounded border bg-muted/30 p-2 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className={cn('text-[11px] font-medium truncate max-w-[55%]', PROVIDER_COLORS[bm.provider] || 'text-foreground')} title={bm.model}>
+                      {bm.model}
+                    </span>
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground">{TIER_LABELS[bm.tier] || bm.tier}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 text-[10px] tabular-nums">
+                    <div>
+                      <p className="text-muted-foreground">调用</p>
+                      <p className="font-medium">{bm.calls} 次</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">总 tokens</p>
+                      <p className="font-medium">{fmtTokens(bm.totalTokens)}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">费用</p>
+                      <p className="font-medium text-amber-600">{fmtCost(bm.estimatedCostUsd)}</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3 text-[10px] tabular-nums text-muted-foreground">
+                    <span className="text-blue-500">入 {fmtTokens(bm.promptTokens)}</span>
+                    <span className="text-violet-500">出 {fmtTokens(bm.completionTokens)}</span>
+                    <span>均耗 {fmtDuration(bm.avgDurationMs)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 按章节明细 */}
+          {chapterCount > 0 && (
+            <div className="border-t pt-2 space-y-2">
+              <p className="text-[11px] text-muted-foreground font-medium">各章消耗</p>
+              <div className="space-y-1">
+                {tokenUsage!.chapters.filter((c) => c.chapterNumber > 0).map((ch) => (
+                  <div key={ch.chapterNumber} className="flex items-center justify-between text-[10px] tabular-nums py-0.5">
+                    <span className="text-muted-foreground w-10 shrink-0">第{ch.chapterNumber}章</span>
+                    <div className="flex-1 mx-2 h-1 rounded-full bg-muted overflow-hidden">
+                      {pctBar(ch.totalTokens, Math.max(...tokenUsage!.chapters.filter((c) => c.chapterNumber > 0).map((c) => c.totalTokens)), 'bg-indigo-500')}
+                    </div>
+                    <span className="shrink-0 text-muted-foreground">{fmtTokens(ch.totalTokens)}</span>
+                    <span className="shrink-0 w-14 text-right text-amber-600">{fmtCost(ch.estimatedCostUsd)}</span>
+                  </div>
+                ))}
               </div>
             </div>
           )}

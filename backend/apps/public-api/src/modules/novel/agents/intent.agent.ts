@@ -14,7 +14,9 @@ import {
   buildCharacterArcContext,
   buildKpiTrendHints,
   buildWritingLessonsHint,
+  UNIFIED_AGENT_MAX_CHARACTERS,
 } from '../prompting/novel-playbook';
+import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 
 @Injectable()
 export class IntentAgent {
@@ -28,7 +30,7 @@ export class IntentAgent {
   ): Promise<ChapterIntent> {
     const chapterNumber = state.chapterCursor;
     const context = buildCompactContext(state, {
-      maxCharacters: 10,
+      maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
       maxChapterSummaries: 5,
       maxOpenThreads: 10,
       maxTimelineEvents: 12,
@@ -63,7 +65,28 @@ export class IntentAgent {
       .filter((c) => !blockedIds.includes(c.id) && !foreshadowOnly.includes(c.id))
       .map((c) => c.id);
 
-    return this.llm.generateStructured({
+    const budget = state.bookStrategy?.characterBudget;
+    const charMap = new Map(state.characters.map((c) => [c.id, c]));
+    const shouldAppear: string[] = [];
+    const coolingIds: string[] = [];
+    for (const id of activeIds) {
+      const c = charMap.get(id);
+      if (!c) continue;
+      const gap = chapterNumber - (c.status.lastSeenChapter ?? 0);
+      const imp = c.status.narrativeImportance ?? 'minor';
+      if (imp === 'core' && gap >= (budget?.coreAbsenceAlert ?? 3)) shouldAppear.push(id);
+      else if (imp === 'major' && gap >= (budget?.majorAbsenceAlert ?? 8)) shouldAppear.push(id);
+      if (imp === 'minor' && gap < (budget?.minorCooldown ?? 5) && gap > 0) coolingIds.push(id);
+      if (imp === 'cameo' && gap < (budget?.cameoCooldown ?? 15) && gap > 0) coolingIds.push(id);
+    }
+    const fadingIds = activeIds.filter((id) => charMap.get(id)?.status.lifecycleStatus === 'fading');
+    const groupByImp = (tier: string) => activeIds.filter((id) => (charMap.get(id)?.status.narrativeImportance ?? 'minor') === tier);
+    const coreIds = groupByImp('core');
+    const majorIds = groupByImp('major');
+    const otherIds = activeIds.filter((id) => !coreIds.includes(id) && !majorIds.includes(id));
+    const nameOf = (id: string) => charMap.get(id)?.name ?? id;
+
+    const intent = await this.llm.generateStructured({
       taskName: 'chapter-intent',
       schema: chapterIntentSchema,
       tags: ['workflow', 'chapter', 'intent'],
@@ -86,8 +109,11 @@ ${playbooks?.['agent:intent:data_intuition'] ?? '- 爽感：关注dopamineSchedu
 
 === 角色可用性（硬规则） ===
 ${playbooks?.['agent:intent:character_availability'] ?? '- 死亡/退场角色绝对不出现在activeCharacterIds中。\n- return_planned但未到章的角色仅允许伏笔提及。'}
+${buildAudiencePromptBlock(state)}
+${playbooks?.['__bookStrategy'] ?? ''}
+${playbooks?.['__policySlice'] ?? ''}
 ${state.seed.thematicCore ? `\n=== 主题内核 ===\n核心命题：${state.seed.thematicCore.centralQuestion}\n本章的目标/冲突应该能从某个角度触及这个命题——不需要回答，只需要让读者感受到。` : ''}
-${arcDirective ? `\n=== 卷级导演指令（必须满足）===\n- 阶段：${arcDirective.arcStage}，使命：${arcDirective.chapterMission}\n- 必须命中：${arcDirective.mustHit.join('；') || '无'}，应规避：${arcDirective.shouldAvoid.join('；') || '无'}\n- 节奏：${arcDirective.pacingDirective || '无'}，钩子：${arcDirective.hookDirective || '无'}，风险：${arcDirective.riskBudget}` : ''}
+${arcDirective ? `\n=== 卷级导演指令（必须满足）===\n- 阶段：${arcDirective.arcStage}，使命：${arcDirective.chapterMission}\n- 必须命中：${arcDirective.mustHit.join('；') || '无'}，应规避：${arcDirective.shouldAvoid.join('；') || '无'}\n- 节奏：${arcDirective.pacingDirective || '无'}，钩子：${arcDirective.hookDirective || '无'}，风险：${arcDirective.riskBudget}${arcDirective.characterGuidance?.length ? `\n=== 本卷角色成长目标（作为 characterArcGuidance 的制定依据）===\n${arcDirective.characterGuidance.map((g) => `- ${g.characterName}：${g.volumeStartState} → ${g.volumeEndState}${g.keyMoments.length ? '，关键时刻：' + g.keyMoments.slice(0, 2).join('；') : ''}`).join('\n')}` : ''}` : ''}
 ${isEarly ? '\n' + buildFirstChaptersPlaybook(state.bookPromptProfile?.worldProfile?.goldenFingerApplicable) : ''}${kpiHints.length > 0 ? '\n动态提示：\n' + kpiHints.join('\n') : ''}
 ${buildWritingLessonsHint(state.writingLessons ?? [], ['pacing', 'hook', 'structure', 'emotion'])}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
       userPrompt: `故事上下文：
@@ -105,8 +131,11 @@ ${characterArcAnalysis.map((c) => `${c['角色']}：${c['近期表现'] ?? '正�
 
 约束：
 - 章号${chapterNumber}（进度${((chapterNumber / (state.roughOutline.estimatedTotalChapters ?? 600)) * 100).toFixed(1)}%），目标字数${state.seed.targetChapterWordCount ?? 3000}字
-- 可用角色：${activeIds.join(',')}${blockedIds.length > 0 ? `\n- 禁止出场：${blockedIds.join(',')}` : ''}${foreshadowOnly.length > 0 ? `\n- 仅可伏笔提及：${foreshadowOnly.join(',')}` : ''}
-- 伏线：${openThreads.length}条开放${overdueThreads.length > 0 ? `，${overdueThreads.map((t) => t.label).join('、')}逾期` : ''}
+- 角色[核心]：${coreIds.map((id) => `${nameOf(id)}(${id})`).join('、') || '无'}
+- 角色[重要]：${majorIds.map((id) => `${nameOf(id)}(${id})`).join('、') || '无'}
+- 角色[其他]：${otherIds.map((id) => `${nameOf(id)}(${id})`).join('、') || '无'}${blockedIds.length > 0 ? `\n- 禁止出场：${blockedIds.join(',')}` : ''}${foreshadowOnly.length > 0 ? `\n- 仅可伏笔提及：${foreshadowOnly.join(',')}` : ''}${shouldAppear.length > 0 ? `\n- ⚠️ 建议出场（缺席过久）：${shouldAppear.map((id) => `${nameOf(id)}(缺席${chapterNumber - (charMap.get(id)?.status.lastSeenChapter ?? 0)}章)`).join('、')}` : ''}${coolingIds.length > 0 ? `\n- 冷却中（非必要不出场）：${coolingIds.map((id) => `${nameOf(id)}`).join('、')}` : ''}${fadingIds.length > 0 ? `\n- 淡出中（仅提及或短暂露面）：${fadingIds.map((id) => { const c = charMap.get(id)!; return `${c.name}(${c.status.maxSceneRole ?? 'brief_appearance'})`; }).join('、')}` : ''}
+- 本章角色上限：${budget?.maxPresentPerChapter ?? 6}人（去重）
+- 伏线：${openThreads.length}条开放${overdueThreads.length > 0 ? `，${overdueThreads.map((t) => t.label).join('、')}逾期` : ''}${(() => { const vol = state.currentVolume; if (!vol?.exitCharacterPlan?.length) return ''; const due = vol.exitCharacterPlan.filter((p) => Math.abs(p.exitChapterEstimate - chapterNumber) <= 2); return due.length ? `\n- 📤 本卷退场计划临近：${due.map((p) => `${p.characterId}→${p.exitType}(约ch${p.exitChapterEstimate}，${p.reason})`).join('；')}` : ''; })()}
 - 上一章钩子：${state.lastHook || '（首章）'}
 ${(() => {
   const hookHistory = state.recentHookTypes ?? [];
@@ -133,6 +162,8 @@ ${(() => {
   if (urgentPlant.length) parts.push(`⚠️ 紧急埋设：${urgentPlant.map((d) => `${d.label}(${d.category})-"${d.embeddingGuidance.slice(0, 30)}"`).join('；')}`);
   if (dueToPlant.length > urgentPlant.length) parts.push(`可选埋设：${dueToPlant.filter((d) => !urgentPlant.includes(d)).map((d) => d.label).join('、')}`);
   if (duePayoff.length) parts.push(`可回收伏笔：${duePayoff.map((d) => `${d.label}-"${d.payoffDescription.slice(0, 30)}"`).join('；')}`);
+  const charHints = bank.deposits.filter((d) => d.pendingCharacterHint && d.status !== 'resolved' && d.pendingCharacterHint.formalIntroChapter > chapterNumber);
+  if (charHints.length) parts.push(`角色预告（仅暗示，不可正式出场）：${charHints.map((d) => `「${d.pendingCharacterHint!.characterLabel}」-${d.pendingCharacterHint!.hintGuidance.slice(0, 30)}`).join('；')}`);
   return parts.length ? '\n伏笔银行：\n' + parts.join('\n') : '';
 })()}
 ${(() => {
@@ -158,8 +189,24 @@ ${(() => {
 
 为第${chapterNumber}章设定意图。
 emotionDirection要描述情绪变化曲线（如"从A到B再到C"），不要只写一个形容词。
-wordCountRange范围：${Math.round((state.seed.targetChapterWordCount ?? 3000) * 0.85)}-${Math.round((state.seed.targetChapterWordCount ?? 3000) * 1.15)}字。`,
+wordCountRange范围：${Math.round((state.seed.targetChapterWordCount ?? 3000) * 0.85)}-${Math.round((state.seed.targetChapterWordCount ?? 3000) * 1.15)}字。
+请为本章核心出场角色提取 characterVoiceAnchors（标志性台词/口癖），作为后续生成的强锚点。`,
       temperature: 0.5,
     });
+    const policyMax = state.bookStrategy?.threadPolicy?.maxNewThreadsPerChapter;
+    if (typeof policyMax === 'number') {
+      intent.threadGuidance.maxNewThreads = Math.max(
+        0,
+        Math.min(intent.threadGuidance.maxNewThreads, Math.min(3, policyMax)),
+      );
+    }
+    const blockedSet = new Set([...blockedIds, ...foreshadowOnly]);
+    intent.characterAvailability.activeCharacterIds = intent.characterAvailability.activeCharacterIds.filter((id) => !blockedSet.has(id));
+    intent.characterAvailability.blockedCharacterIds = [...new Set([...intent.characterAvailability.blockedCharacterIds, ...blockedIds])];
+    intent.characterAvailability.foreshadowOnlyCharacterIds = [...new Set([...intent.characterAvailability.foreshadowOnlyCharacterIds, ...foreshadowOnly])];
+    for (const id of shouldAppear) {
+      if (!intent.characterAvailability.activeCharacterIds.includes(id)) intent.characterAvailability.activeCharacterIds.push(id);
+    }
+    return intent;
   }
 }

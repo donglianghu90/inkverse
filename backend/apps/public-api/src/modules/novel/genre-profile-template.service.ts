@@ -2,7 +2,13 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
-import { GenreProfileTemplateEntity, SeedAnalyzerHints, CachedAgentSections } from './entities/genre-profile-template.entity';
+import { ConfigService } from '@packages/modules';
+import {
+  GenreProfileTemplateEntity,
+  SeedAnalyzerHints,
+  CachedAgentSections,
+  AudienceDirectiveMeta,
+} from './entities/genre-profile-template.entity';
 import { bookPromptProfileSchema, BookPromptProfile } from './schemas/novel-state.schemas';
 import { LlmService } from './llm/llm.service';
 import { PromptProfilerAgent } from './agents/prompt-profiler.agent';
@@ -16,6 +22,9 @@ import {
   HORROR_REFERENCE_PROFILE, SUPERNATURAL_REFERENCE_PROFILE, ADVENTURE_REFERENCE_PROFILE,
   GAME_REFERENCE_PROFILE, SPORTS_REFERENCE_PROFILE, SUPERPOWER_REFERENCE_PROFILE,
   EPIC_REFERENCE_PROFILE, FANTASY_ROMANCE_REFERENCE_PROFILE, CHILDREN_REFERENCE_PROFILE,
+  XUANHUAN_REFERENCE_PROFILE, URBAN_ROMANCE_REFERENCE_PROFILE, ANCIENT_ROMANCE_REFERENCE_PROFILE,
+  INFINITE_FLOW_REFERENCE_PROFILE, LIGHT_NOVEL_REFERENCE_PROFILE, POST_APOCALYPTIC_REFERENCE_PROFILE,
+  SUSPENSE_THRILLER_REFERENCE_PROFILE, ESPORTS_REFERENCE_PROFILE, VRMMO_REFERENCE_PROFILE
 } from './prompting/genre-reference-profiles';
 import {
   URBAN_PLAYBOOKS, HISTORICAL_PLAYBOOKS, WUXIA_PLAYBOOKS, MILITARY_PLAYBOOKS,
@@ -26,6 +35,21 @@ import {
 import { z } from 'zod';
 import { RuleAtom, CATEGORY_TO_OUTPUT_KEY } from './schemas/rule-engine.schemas';
 import { parsePlaybookTextToAtoms } from './prompting/default-rule-atoms';
+
+function normalizeJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeJsonValue);
+  if (value && typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>).sort().reduce<Record<string, unknown>>((acc, key) => {
+      acc[key] = normalizeJsonValue((value as Record<string, unknown>)[key]);
+      return acc;
+    }, {});
+  }
+  return value;
+}
+
+function isSameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(normalizeJsonValue(a)) === JSON.stringify(normalizeJsonValue(b));
+}
 
 // ---------------------------------------------------------------------------
 // 题材定制 Playbook — 全部 7 种规则按题材深度定制
@@ -378,111 +402,469 @@ interface SystemSeed {
   genreKeywords: string[]; profile: BookPromptProfile | null;
   seedHints: SeedAnalyzerHints | null;
   ruleAtoms?: RuleAtom[];
+  audienceMeta?: AudienceDirectiveMeta;
 }
 
-const SYSTEM_SEEDS: SystemSeed[] = [
+function getDefaultNamingDefaultsForGenre(genreLike: string): NonNullable<SeedAnalyzerHints['namingDefaults']> {
+  const g = genreLike.toLowerCase();
+  if (/(仙侠|玄幻|修仙|武侠|xianxia|xuanhuan|wuxia)/.test(g)) {
+    return {
+      personNameStyle: '二到三字中文名，优先自然/五行意象，避免现代英文拼写',
+      locationNameStyle: '地貌+方位或意象组合（如“北陵”“落霞谷”）',
+      abilityNameStyle: '能力名偏古风意象或功法体系术语，避免现代口语化命名',
+      factionNameStyle: '宗门/世家/王朝式命名，统一世界观语感',
+      examples: { personNames: ['凌霜', '顾长歌', '沈青岚'], locationNames: ['落霞谷', '北陵城'] },
+      taboos: ['英文名', '现代网络梗命名'],
+    };
+  }
+  if (/(西方奇幻|western-fantasy|奇幻|fantasy)/.test(g)) {
+    return {
+      personNameStyle: '可中可西但需同文明音韵统一（人类/精灵/矮人命名规则分层）',
+      locationNameStyle: '王国/城邦/遗迹命名统一语系，避免中西混搭突兀',
+      abilityNameStyle: '法术/技能命名需符合同一语系与文明风格',
+      factionNameStyle: '骑士团/公会/王室/教团等组织命名需层级清晰',
+      examples: { personNames: ['Arthur Vale', 'Elyra', 'Thorne'], locationNames: ['Silverkeep', 'Ashen Vale'] },
+      taboos: ['中西命名体系混杂', '无语系规律的生造词'],
+    };
+  }
+  if (/(科幻|sci-fi|scifi|赛博|机甲|星际)/.test(g)) {
+    return {
+      personNameStyle: '姓名/代号并存，允许编号或呼号，保持组织体系一致',
+      locationNameStyle: '空间站/殖民地/舰队基地命名，突出科技感与层级',
+      abilityNameStyle: '科技能力/协议/模块命名应简洁清晰并可追踪',
+      factionNameStyle: '公司/舰队/议会/研究所命名需体现组织功能',
+      examples: { personNames: ['林序-07', '韩霁', 'Kestrel'], locationNames: ['天枢轨道站', 'C-12殖民环'] },
+      taboos: ['玄幻式功法命名', '缺乏系统性的编号规则'],
+    };
+  }
+  if (/(战争\/军事|军事|military|战争|谍战|特种兵)/.test(g)) {
+    return {
+      personNameStyle: '简洁有辨识度，结合军衔/代号/呼号，避免花哨',
+      locationNameStyle: '战区/防线/据点命名，强调方位与战术语义',
+      abilityNameStyle: '装备/战术/行动代号命名需专业且可落地',
+      factionNameStyle: '军团/战区/情报系统命名应体现编制关系',
+      examples: { personNames: ['周烈', '“灰狼”沈拓', '顾砚'], locationNames: ['北境三号防线', '青岚前进基地'] },
+      taboos: ['娱乐化昵称堆叠', '脱离军事语境的中二称号'],
+    };
+  }
+  if (/(无限流|infinite-flow|规则怪谈|恐怖|灵异|悬疑惊悚|suspense-thriller|horror|supernatural)/.test(g)) {
+    return {
+      personNameStyle: '优先短名/代号，便于高压副本中快速识别与记忆',
+      locationNameStyle: '副本/禁区/规则场命名短促明确，带危险提示感',
+      abilityNameStyle: '规则/诅咒/道具命名应可执行且有边界',
+      factionNameStyle: '调查局/结社/隐秘组织命名需暗示信息差',
+      examples: { personNames: ['许岚', '“白鸦”', '周祁'], locationNames: ['第四病栋', '雾港12号站'] },
+      taboos: ['过长难记代号', '无规则定义的抽象术语'],
+    };
+  }
+  if (/(末世危机|post-apocalyptic|末世|废土)/.test(g)) {
+    return {
+      personNameStyle: '生存语感优先，可带绰号但不过度中二',
+      locationNameStyle: '避难所/据点/污染区命名一眼可懂',
+      abilityNameStyle: '资源/改造/异化能力命名需体现代价与限制',
+      factionNameStyle: '避难所联盟/掠夺团/净化组织命名应体现生存立场',
+      examples: { personNames: ['沈砾', '“扳手”阿川', '林昼'], locationNames: ['黎明避难所', '黑雨污染区'] },
+      taboos: ['无生存语境的唯美命名', '灾难等级定义混乱'],
+    };
+  }
+  if (/(电子竞技|虚拟网游|体育竞技|esports|vrmmo|sports|game)/.test(g)) {
+    return {
+      personNameStyle: '本名+ID双轨命名，ID需短、好读、可传播',
+      locationNameStyle: '赛场/俱乐部/服务器地名，强调赛事与运营语境',
+      abilityNameStyle: '战术/流派/技能命名应可复用且便于解说',
+      factionNameStyle: '战队/俱乐部/公会命名需风格统一',
+      examples: { personNames: ['陈临(ID:Lin)', '苏禾(ID:Hex)', '宋野(ID:Apex)'], locationNames: ['星环联赛主舞台', '曙光一区'] },
+      taboos: ['难读ID', '脱离竞技语境的玄幻称号'],
+    };
+  }
+  if (/(轻小说|light-novel|二次元)/.test(g)) {
+    return {
+      personNameStyle: '轻巧顺口、可带一点梗感，但避免过度夸张',
+      locationNameStyle: '校园/社团/街区命名可爱且清晰，保持日常感',
+      abilityNameStyle: '能力/设定名可轻量中二，但需保持自洽',
+      factionNameStyle: '学生会/社团/组织命名应有角色辨识度',
+      examples: { personNames: ['白川悠', '林可奈', '顾时雨'], locationNames: ['樱丘学园', '银杏商店街'] },
+      taboos: ['过度堆梗', '音译生硬且不可读'],
+    };
+  }
+  if (/(冒险\/探险|adventure|冒险|探险|盗墓|寻宝)/.test(g)) {
+    return {
+      personNameStyle: '短而硬朗、便于队内称呼，绰号可体现技能分工',
+      locationNameStyle: '遗迹/禁区/海域/山脉命名应突出地理风险与未知感',
+      abilityNameStyle: '工具/机关/线索系统命名需可追踪',
+      factionNameStyle: '探险团/考古队/地下组织命名需功能清晰',
+      examples: { personNames: ['顾野', '“罗盘”林策', '唐砾'], locationNames: ['黑帆海沟', '沉星遗迹'] },
+      taboos: ['同质化地名', '缺少方位与风险信息'],
+    };
+  }
+  if (/(超能力\/异能|superpower|异能|超能力|觉醒|学院)/.test(g)) {
+    return {
+      personNameStyle: '现代名为主，可配能力代号，避免中二堆词',
+      locationNameStyle: '学院/研究所/管控区命名需体现制度与阵营差异',
+      abilityNameStyle: '能力名需体现触发条件/代价，避免无边界词汇',
+      factionNameStyle: '学院派/官方机构/地下势力命名应阵营分明',
+      examples: { personNames: ['季衡', '宁初', '代号“棱镜”'], locationNames: ['新曜异能学院', '第七收容区'] },
+      taboos: ['无代价无边界的能力命名', '重复度过高的代号'],
+    };
+  }
+  if (/(史诗\/传奇|epic|史诗|传奇|群像|王朝兴衰)/.test(g)) {
+    return {
+      personNameStyle: '可采用名/姓/称号并行体系，主角群命名要区分文明来源',
+      locationNameStyle: '帝国/城邦/古战场命名强调历史纵深与地缘格局',
+      abilityNameStyle: '权柄/誓约/古器命名需体现文明层级',
+      factionNameStyle: '王朝/议会/教团/部族命名需体现政治关系',
+      examples: { personNames: ['阿列斯·维恩', '裴烬', '“北境之狮”岑岳'], locationNames: ['赤曜帝国', '白霜长垣'] },
+      taboos: ['无文明差异的同质命名', '缺乏历史感的现代词汇'],
+    };
+  }
+  if (/(儿童\/少儿文学|children|儿童|少儿|童话)/.test(g)) {
+    return {
+      personNameStyle: '亲切易读、发音明快，避免生僻字与过复杂称号',
+      locationNameStyle: '场景名应具画面感与温暖想象，便于低龄读者记忆',
+      abilityNameStyle: '魔法/道具名应直观正向，避免恐怖化表达',
+      factionNameStyle: '学校/家庭/伙伴组织命名应温暖清晰',
+      examples: { personNames: ['小满', '豆豆', '安安'], locationNames: ['彩虹镇', '风铃森林'] },
+      taboos: ['黑暗化命名', '难读难记生僻字'],
+    };
+  }
+  if (/(古代言情|ancient-romance|古代|宫斗|宅斗)/.test(g)) {
+    return {
+      personNameStyle: '古风中文名，可结合名/字/号体系，避免现代口语化命名',
+      locationNameStyle: '府邸/州郡/宫苑命名，符合古代礼制与地理语感',
+      abilityNameStyle: '技能/谋略/礼法术语命名贴合古代语境',
+      factionNameStyle: '家族/后宫/朝堂势力命名应体现尊卑秩序',
+      examples: { personNames: ['沈清辞', '裴砚之', '谢明昭'], locationNames: ['长乐宫', '临安侯府'] },
+      taboos: ['现代口头禅命名', '英文缩写'],
+    };
+  }
+  if (/(幻想言情|fantasy-romance|仙侠恋|神魔恋)/.test(g)) {
+    return {
+      personNameStyle: '古风与幻想混合命名，保留诗性与宿命感',
+      locationNameStyle: '仙域/神域/秘境命名，强调唯美与层级',
+      abilityNameStyle: '术法/血脉/契约命名需服务情感主线',
+      factionNameStyle: '仙门/神族/魔域命名需阵营清晰',
+      examples: { personNames: ['姬扶月', '谢无咎', '云照晚'], locationNames: ['太初天阙', '忘川镜海'] },
+      taboos: ['硬科技感命名', '破坏仙侠语感的现代词'],
+    };
+  }
+  if (/(现代言情|urban-romance|言情|都市|romance)/.test(g)) {
+    return {
+      personNameStyle: '现代常见中文名，简洁顺口，避免古风生僻字',
+      locationNameStyle: '现代城市/街区/地标命名，贴近现实语境',
+      abilityNameStyle: '若存在超常设定，命名应偏生活化，避免中二浮夸',
+      factionNameStyle: '公司/家族/圈层组织命名，符合现代语境',
+      examples: { personNames: ['程予安', '陆知夏', '周言'], locationNames: ['滨江公寓', '临江路'] },
+      taboos: ['古风生僻字堆叠', '中二式称号'],
+    };
+  }
+  if (/(历史|权谋|古代|historical)/.test(g)) {
+    return {
+      personNameStyle: '古代语感中文名，可结合名/字/号体系',
+      locationNameStyle: '州郡城池/关隘风格命名，符合古代政区语感',
+      abilityNameStyle: '技能/兵法/谋略命名应贴合古代语境',
+      factionNameStyle: '朝廷/藩镇/家族/门阀式命名',
+      examples: { personNames: ['谢玄机', '裴慎', '柳明昭'], locationNames: ['青州', '雁门关'] },
+      taboos: ['现代词汇直译', '英文缩写'],
+    };
+  }
+  return {
+    personNameStyle: '符合题材语境且易记的人名，避免突兀跨风格命名',
+    locationNameStyle: '与世界观语境一致的地名，保持同一文明命名规律',
+    examples: { personNames: ['林湛', '许未央', '顾遥'], locationNames: ['旧港区', '灰塔城'] },
+    taboos: ['跨题材突兀命名'],
+  };
+}
+
+function ensureSeedHintsNamingDefaults(
+  seedHints: SeedAnalyzerHints | null | undefined,
+  genreLike: string,
+): SeedAnalyzerHints {
+  const base = seedHints ?? {};
+  return {
+    ...base,
+    namingDefaults: base.namingDefaults ?? getDefaultNamingDefaultsForGenre(genreLike),
+  };
+}
+
+const GENRE_AUDIENCE_META: Record<string, AudienceDirectiveMeta> = {
+  'xianxia': {
+    audienceTags: ['修仙', '升级', '长生', '法宝', '道心', '杀伐果断'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['苍凉', '宏大', '残酷', '超脱'],
+    relationshipDensity: 'low', // 修仙者多孤独，情感线偏淡或为点缀
+    hardConstraints: ['不能圣母', '战力体系不能崩坏', '必须有境界突破的爽感'],
+    softPreferences: ['喜欢看捡漏/夺宝', '喜欢看越阶挑战的底牌揭晓'],
+  },
+  'xuanhuan': {
+    audienceTags: ['热血', '装逼打脸', '退婚流', '无敌', '越阶挑战'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['热血', '爽快', '霸气'],
+    relationshipDensity: 'medium', // 兄弟情、红颜知己较多
+    hardConstraints: ['绝不能憋屈', '反派必须被狠狠打脸', '升级速度要快'],
+    softPreferences: ['喜欢看拍卖会装逼', '喜欢看震惊路人'],
+  },
+  'urban': {
+    audienceTags: ['神豪', '逆袭', '职场', '捡漏', '扮猪吃虎'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['轻松', '爽快', '接地气'],
+    relationshipDensity: 'high', // 社交、人脉、红颜知己是核心
+    hardConstraints: ['不能有太长期的压抑', '装逼要自然不能太生硬', '社会逻辑不能太离谱'],
+    softPreferences: ['喜欢看前倨后恭', '喜欢看金钱碾压'],
+  },
+  'historical': {
+    audienceTags: ['争霸', '种田', '科技碾压', '权谋', '改变历史'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['厚重', '爽快', '热血'],
+    relationshipDensity: 'high', // 君臣、名将、后宫
+    hardConstraints: ['常识不能犯低级错误', '不能强行降智古人', '科技树攀升要有过渡'],
+    softPreferences: ['喜欢看古人震惊', '喜欢收服历史名将'],
+  },
+  'western-fantasy': {
+    audienceTags: ['魔法', '史诗', '冒险', '异族', '领主'],
+    protagonistFocusTags: ['male_lead', 'ensemble'],
+    toneTags: ['宏大', '神秘', '史诗感'],
+    relationshipDensity: 'medium', // 冒险小队羁绊
+    hardConstraints: ['魔法体系必须自洽', '世界观不能太单薄'],
+    softPreferences: ['喜欢看不同种族的文化碰撞', '喜欢看古老遗迹的探索'],
+  },
+  'sci-fi': {
+    audienceTags: ['机甲', '星战', '赛博朋克', '基因进化', '废土'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['冷峻', '震撼', '宏大'],
+    relationshipDensity: 'low', // 更关注技术和宇宙探索
+    hardConstraints: ['科技设定不能自相矛盾', '不能写成披着科幻皮的修仙'],
+    softPreferences: ['喜欢看巨舰大炮的对轰', '喜欢看高科技碾压低维文明'],
+  },
+  'wuxia': {
+    audienceTags: ['极道', '加点', '江湖', '杀伐果断', '肌肉碾压'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['热血', '暴力', '江湖气'],
+    relationshipDensity: 'medium', // 师徒、兄弟、仇敌
+    hardConstraints: ['不能圣母', '武打描写必须有力量感', '主角不能太憋屈'],
+    softPreferences: ['喜欢看拳拳到肉的打斗', '喜欢看加点带来的瞬间提升'],
+  },
+  'military': {
+    audienceTags: ['军事', '战争', '谍战', '特种兵', '热血'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['铁血', '悲壮', '热血'],
+    relationshipDensity: 'medium', // 战友情、上下级、敌我博弈
+    hardConstraints: ['军事常识不能出错', '战争残酷性要真实', '不能美化战争'],
+    softPreferences: ['喜欢看以少胜多', '喜欢看战术博弈'],
+  },
+  'mystery': {
+    audienceTags: ['悬疑', '反转', '推理', '智斗', '细思极恐'],
+    protagonistFocusTags: ['male_lead', 'dual_lead'],
+    toneTags: ['压抑', '冷冽', '紧张'],
+    relationshipDensity: 'low', // 主要是主角与凶手/谜题的博弈
+    hardConstraints: ['逻辑必须严密', '反转必须有伏笔', '不能机械降神'],
+    softPreferences: ['喜欢看智商碾压', '喜欢看意料之外的真相'],
+  },
+  'infinite-flow': {
+    audienceTags: ['主神空间', '副本', '智斗', '杀伐果断', '强化'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['紧张', '绝望', '爽快'],
+    relationshipDensity: 'medium', // 团队内部的信任与背叛
+    hardConstraints: ['主角绝不能圣母', '副本规则必须有解', '强化必须有明显提升'],
+    softPreferences: ['喜欢看卡BUG破局', '喜欢看反杀资深者/背叛者'],
+  },
+  'light-novel': {
+    audienceTags: ['二次元', '吐槽', '反套路', '日常', '修罗场'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['轻松', '搞笑', '治愈'],
+    relationshipDensity: 'high', // 角色互动是核心
+    hardConstraints: ['角色人设不能崩', '不能太苦大仇深', '梗要自然'],
+    softPreferences: ['喜欢看全员迪化(脑补)', '喜欢看修罗场'],
+  },
+  'post-apocalyptic': {
+    audienceTags: ['末世', '丧尸', '囤物资', '庇护所', '杀伐果断'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['压抑', '残酷', '爽快'],
+    relationshipDensity: 'low', // 极度缺乏信任
+    hardConstraints: ['绝对不能有圣母情节', '物资消耗逻辑要合理', '主角必须自私'],
+    softPreferences: ['喜欢看疯狂囤货', '喜欢看安全屋升级', '喜欢看反杀白眼狼'],
+  },
+  'suspense-thriller': {
+    audienceTags: ['惊悚', '心理战', '连环杀手', '不可靠叙事'],
+    protagonistFocusTags: ['male_lead', 'dual_lead'],
+    toneTags: ['阴暗', '压抑', '疯狂'],
+    relationshipDensity: 'medium', // 施害者与受害者的心理羁绊
+    hardConstraints: ['动机必须立得住', '不能强行降智', '氛围不能断'],
+    softPreferences: ['喜欢看高智商犯罪', '喜欢看心理防线崩溃'],
+  },
+  'horror': {
+    audienceTags: ['规则怪谈', '克苏鲁', '逃生', '细思极恐'],
+    protagonistFocusTags: ['male_lead', 'dual_lead'],
+    toneTags: ['诡异', '绝望', '刺激'],
+    relationshipDensity: 'low', // 孤独求生为主
+    hardConstraints: ['不能靠纯血浆吓人', '规则必须有逻辑', '主角必须有反抗余地'],
+    softPreferences: ['喜欢看日常中的异常', '喜欢看利用规则反杀诡异'],
+  },
+  'supernatural': {
+    audienceTags: ['民俗', '风水', '鬼故事', '温情', '捉鬼'],
+    protagonistFocusTags: ['male_lead', 'dual_lead'],
+    toneTags: ['阴森', '神秘', '温情'],
+    relationshipDensity: 'medium', // 人鬼情未了，师徒传承
+    hardConstraints: ['民俗设定不能太离谱', '不能全都是坏鬼'],
+    softPreferences: ['喜欢看鬼故事背后的真相', '喜欢看民间法术的展示'],
+  },
+  'adventure': {
+    audienceTags: ['探险', '盗墓', '寻宝', '秘境', '求生'],
+    protagonistFocusTags: ['male_lead', 'ensemble'],
+    toneTags: ['神秘', '紧张', '震撼'],
+    relationshipDensity: 'medium', // 探险小队的生死羁绊
+    hardConstraints: ['地理/环境设定要合理', '危险不能全靠人为制造'],
+    softPreferences: ['喜欢看发现未知文明的震撼', '喜欢看破解古老机关'],
+  },
+  'esports': {
+    audienceTags: ['电竞', '比赛', '操作', '团队', '热血'],
+    protagonistFocusTags: ['male_lead', 'ensemble'],
+    toneTags: ['热血', '激情', '青春'],
+    relationshipDensity: 'high', // 战队兄弟情是核心
+    hardConstraints: ['游戏战术不能太外行', '不能全靠主角一个人一打五'],
+    softPreferences: ['喜欢看极限反杀', '喜欢看夺冠时的全场欢呼'],
+  },
+  'vrmmo': {
+    audienceTags: ['网游', '首杀', '爆装备', '隐藏职业', '公会战'],
+    protagonistFocusTags: ['male_lead'],
+    toneTags: ['爽快', '热血', '探索'],
+    relationshipDensity: 'medium', // 公会兄弟与敌对势力
+    hardConstraints: ['数值体系不能崩坏', '现实与游戏的逻辑要自洽'],
+    softPreferences: ['喜欢看爆出极品神器的瞬间', '喜欢看全服通告的装逼感'],
+  },
+  'sports': {
+    audienceTags: ['竞技', '热血', '成长', '突破极限', '冠军'],
+    protagonistFocusTags: ['male_lead', 'ensemble'],
+    toneTags: ['励志', '热血', '感动'],
+    relationshipDensity: 'medium', // 队友、教练、对手
+    hardConstraints: ['运动常识不能错', '不能完全靠开挂不训练'],
+    softPreferences: ['喜欢看绝杀时刻', '喜欢看伤病复出后的王者归来'],
+  },
+  'superpower': {
+    audienceTags: ['异能', '学院', '都市奇幻', '脑洞', '进化'],
+    protagonistFocusTags: ['male_lead', 'ensemble'],
+    toneTags: ['热血', '青春', '奇幻'],
+    relationshipDensity: 'high', // 学院生活、团队合作
+    hardConstraints: ['能力设定必须有代价/限制', '不能战力膨胀太快'],
+    softPreferences: ['喜欢看弱能力玩出花', '喜欢看能力觉醒时的震惊全场'],
+  },
+  'epic': {
+    audienceTags: ['群像', '权力游戏', '战争', '王朝兴衰', '宏大叙事'],
+    protagonistFocusTags: ['ensemble'],
+    toneTags: ['厚重', '悲壮', '史诗感'],
+    relationshipDensity: 'high', // 复杂的家族、政治、盟友关系
+    hardConstraints: ['多线叙事不能乱', '重要角色的死亡要有意义', '不能是单一爽文'],
+    softPreferences: ['喜欢看大场面的战役', '喜欢看智商在线的权力博弈'],
+  },
+  'urban-romance': {
+    audienceTags: ['甜宠', '撩人', '马甲', '破镜重圆', '打脸绿茶'],
+    protagonistFocusTags: ['female_lead', 'dual_lead'],
+    toneTags: ['高甜', '苏爽', '拉扯'],
+    relationshipDensity: 'high', // 绝对核心是男女主互动
+    hardConstraints: ['男主绝不能油腻', '女主不能是纯傻白甜', '误会必须长嘴能解开'],
+    softPreferences: ['喜欢看男主吃醋', '喜欢看女主掉马甲震惊全场', '喜欢看极致偏爱'],
+  },
+  'ancient-romance': {
+    audienceTags: ['宅斗', '宫斗', '重生复仇', '权臣', '王爷'],
+    protagonistFocusTags: ['female_lead', 'dual_lead'],
+    toneTags: ['古风', '步步惊心', '深情'],
+    relationshipDensity: 'high', // 家族关系、后宫争斗、男女主
+    hardConstraints: ['必须符合古代礼法逻辑', '女主反击必须有理有据', '文风不能太白话'],
+    softPreferences: ['喜欢看手撕极品亲戚', '喜欢看男主用权力护妻', '喜欢看重生虐渣'],
+  },
+  'fantasy-romance': {
+    audienceTags: ['仙侠恋', '虐恋', '师徒', '宿命', '三生三世'],
+    protagonistFocusTags: ['female_lead', 'dual_lead'],
+    toneTags: ['唯美', '虐心', '仙气'],
+    relationshipDensity: 'high', // 跨越种族/阶级的绝对羁绊
+    hardConstraints: ['虐心不能强行降智', '世界观设定必须服务于感情线', '必须HE'],
+    softPreferences: ['喜欢看追妻火葬场', '喜欢看男主为女主对抗天下', '喜欢看身份反转'],
+  },
+  'children': {
+    audienceTags: ['童话', '冒险', '魔法', '友谊', '成长'],
+    protagonistFocusTags: ['ensemble'],
+    toneTags: ['温暖', '明亮', '奇妙'],
+    relationshipDensity: 'high', // 伙伴、宠物、家人
+    hardConstraints: ['语言必须适合儿童', '不能有过度恐怖血腥', '不能生硬说教'],
+    softPreferences: ['喜欢看奇妙的魔法设定', '喜欢看伙伴间的互助', '喜欢看战胜坏人'],
+  },
+};
+
+const RAW_SYSTEM_SEEDS: SystemSeed[] = [
   // ── 有手写 Profile + Playbook 的标杆题材 ──
   {
-    genreKey: 'xianxia', displayName: '玄幻/仙侠', description: '仙侠修真、异界大陆、魔法世界、神魔大战、灵气复苏',
-    genreKeywords: ['玄幻', '仙侠', '修仙', '魔法', '异世界', '穿越', '重生', '系统', '升级', '战斗', '神魔', '灵气复苏', 'fantasy'],
+    genreKey: 'xianxia', displayName: '仙侠', description: '传统仙侠、凡人流、洪荒流、修真文明',
+    genreKeywords: ['仙侠', '修真', '凡人流', '长生', '法宝', '飞升', '天劫', '宗门', '道心', 'xianxia'],
     profile: XIANXIA_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: ['逆袭式：被小看→积蓄→关键爆发→震惊众人→更大舞台→再被小看'],
-      goldenFingerGuidance: '玄幻金手指应是修炼/血脉/器物类，进化路径是境界突破，限制是灵气/资质/天劫。',
-      worldBuildingDirectives: '需要完整的修炼等级体系、宗门/势力层级、天材地宝体系，地图从小到大逐步展开。',
+      coreLoopPatterns: ['修真式：获取资源→闭关突破→外出历练/秘境寻宝→遭遇强敌→反杀夺宝'],
+      goldenFingerGuidance: '仙侠金手指多为辅助修炼类（如神秘小瓶、熟练度面板），强调"财侣法地"的积累。',
+      worldBuildingDirectives: '需要严密的境界体系（炼气、筑基、金丹等）和残酷的修真界黑森林法则。',
     },
     ruleAtoms: playbookDictToAtoms(XIANXIA_PLAYBOOKS),
   },
   {
-    genreKey: 'romance', displayName: '言情/爱情', description: '现代言情、古代言情、穿越言情、重生言情、豪门甜宠、暗恋、悬疑情感',
-    genreKeywords: ['言情', '恋爱', '青春', '甜宠', 'romance', '婚恋', '暗恋', '总裁', '豪门', '先婚后爱', '破镜重圆', '失忆', '穿越言情', '重生言情'],
-    profile: ROMANCE_REFERENCE_PROFILE,
+    genreKey: 'xuanhuan', displayName: '玄幻', description: '东方玄幻、异界大陆、高武世界、御兽流',
+    genreKeywords: ['玄幻', '异界', '高武', '血脉', '系统', '无敌', '退婚流', '装逼打脸', 'fantasy'],
+    profile: XUANHUAN_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: ['情感式：误解→接近→摩擦→心动→外部阻碍→更深纠葛'],
-      goldenFingerGuidance: '言情通常不需要金手指，角色魅力本身就是驱动力。如需要可设为特殊才能/家世背景。',
-      worldBuildingDirectives: '都市背景需真实感，职场/校园/家庭关系网要立体，社会阶层差异制造冲突。',
+      coreLoopPatterns: ['逆袭式：被小看→获得奇遇→修炼升级→大比/决战打脸→换地图'],
+      goldenFingerGuidance: '玄幻金手指应极其强大（老爷爷、至尊骨、顶级血脉），是越阶挑战的资本。',
+      worldBuildingDirectives: '地图从小到大无限套娃（下界、上界、神界），力量体系多元（斗气、魂力等）。',
     },
-    ruleAtoms: playbookDictToAtoms(ROMANCE_PLAYBOOKS),
+    ruleAtoms: playbookDictToAtoms(XIANXIA_PLAYBOOKS),
   },
   {
-    genreKey: 'mystery', displayName: '悬疑/推理', description: '侦探推理、犯罪心理、法律推理、谋杀谜案、破案故事',
-    genreKeywords: ['悬疑', '推理', '侦探', '刑侦', '犯罪', '谋杀', 'mystery', 'thriller', '惊悚', '探案', '破案', '密室', '法律'],
-    profile: MYSTERY_REFERENCE_PROFILE,
-    seedHints: {
-      coreLoopPatterns: ['解谜式：发现异常→追查→更大谜团→碎片答案→世界观扩大'],
-      goldenFingerGuidance: '悬疑通常不需要超自然金手指。可以是超强观察力/逻辑推理能力/特殊信息渠道。',
-      worldBuildingDirectives: '需要严密的逻辑链，线索必须公平呈现，反转要合理不能硬编。',
-    },
-    ruleAtoms: playbookDictToAtoms(MYSTERY_PLAYBOOKS),
-  },
-  {
-    genreKey: 'urban', displayName: '现实题材', description: '都市、青春校园、家庭、职场、成长、社会、情感',
-    genreKeywords: ['都市', '现实', '商战', '权谋', '职场', '日常', '异能', '青春', '校园', '家庭', '成长', '社会', 'urban'],
+    genreKey: 'urban', displayName: '都市现实', description: '都市重生、神豪、职场逆袭、捡漏、年代文',
+    genreKeywords: ['都市', '现实', '神豪', '重生', '职场', '捡漏', '打脸', '年代文', 'urban'],
     profile: URBAN_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '博弈式（商战/权谋）：布局→试探→对手反击→绝境→翻盘→更大棋局',
-        '成长式（都市日常）：挑战→挣扎→小突破→新认知→更大挑战',
-      ],
-      goldenFingerGuidance: '都市金手指可以是重生记忆、系统面板、特殊人脉/信息渠道，要与现实逻辑不冲突。',
-      worldBuildingDirectives: '现实背景需要真实感，商业/政治/社会规则要可信，权力结构要立体。',
+      coreLoopPatterns: ['逆袭式：现实困境→获得金手指/重生→财富地位跃升→打脸势利眼'],
+      goldenFingerGuidance: '都市金手指多为神豪系统、未来记忆、透视眼等，直接转化为现实利益。',
+      worldBuildingDirectives: '以现代社会为背景，强调金钱、人脉、权力的运作逻辑和阶层差异。',
     },
     ruleAtoms: playbookDictToAtoms(URBAN_PLAYBOOKS),
   },
   {
-    genreKey: 'historical', displayName: '历史', description: '正史历史、架空历史、历史传奇、古风传奇、三国隋唐宋',
-    genreKeywords: ['历史', '架空', '宫斗', '朝堂', '三国', '大明', '大唐', '秦', '隋唐', '宋', '古风', '传奇', 'historical'],
+    genreKey: 'historical', displayName: '历史', description: '架空历史、朝堂权谋、种田争霸、科技碾压',
+    genreKeywords: ['历史', '架空', '穿越', '权谋', '种田', '争霸', '科技', '名将', 'historical'],
     profile: HISTORICAL_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '博弈式（朝堂/宫斗）：布局→试探→对手反击→绝境→翻盘→更大棋局',
-        '传奇式（人物传记）：出身→磨难→崛起→巅峰→抉择→落幕',
-      ],
-      goldenFingerGuidance: '历史金手指通常是穿越者的现代知识/记忆，限制是历史惯性和人心复杂性。',
-      worldBuildingDirectives: '历史背景需符合时代质感（语言、制度、生活细节），架空需自洽的政治/军事体系。',
+      coreLoopPatterns: ['争霸式：地狱开局→发明创造/展现才华→震惊古人→掌握权力→平定天下'],
+      goldenFingerGuidance: '历史文最大的金手指是"现代知识"和"历史走向的先知"，偶尔辅以系统。',
+      worldBuildingDirectives: '需要符合时代背景的服饰、礼仪、制度，以及合理的科技树攀升逻辑。',
     },
     ruleAtoms: playbookDictToAtoms(HISTORICAL_PLAYBOOKS),
   },
   {
-    genreKey: 'western-fantasy', displayName: '西方奇幻', description: '魔法史诗、中世纪奇幻、魔幻现实主义、灵异神怪',
-    genreKeywords: ['西方奇幻', '魔法', '史诗', '中世纪', '魔幻现实', '灵异', '神怪', '精灵', '龙', '骑士', 'epic fantasy'],
+    genreKey: 'western-fantasy', displayName: '西方奇幻', description: '剑与魔法、史诗奇幻、领主种田、异族',
+    genreKeywords: ['奇幻', '魔法', '剑与魔法', '精灵', '巨龙', '领主', '史诗', 'western-fantasy'],
     profile: WESTERN_FANTASY_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '史诗式：预言/召唤→集结同伴→试炼→黑暗势力逼近→最终决战→新纪元',
-        '成长式：天赋觉醒→魔法学院→禁忌知识→阴谋揭露→选择阵营→改变世界',
-      ],
-      goldenFingerGuidance: '西方奇幻金手指是血脉/预言/神器类，进化路径是魔法等级/元素掌控，限制是魔力消耗和禁忌代价。',
-      worldBuildingDirectives: '需要种族体系（人类/精灵/矮人等）、魔法规则、神祇信仰、王国势力版图，史诗感和宏大世界观是核心。',
+      coreLoopPatterns: ['冒险式：接到使命→组建团队→探索未知→对抗邪恶势力'],
+      goldenFingerGuidance: '西幻金手指多为特殊血脉、唯一魔法天赋或领主系统。',
+      worldBuildingDirectives: '需要构建完整的魔法体系、多种族文化差异和神明/信仰体系。',
     },
     ruleAtoms: playbookDictToAtoms(WESTERN_FANTASY_PLAYBOOKS),
   },
   {
-    genreKey: 'sci-fi', displayName: '科幻', description: '硬科幻、软科幻、赛博朋克、星际战争、未来世界、平行宇宙、人工智能',
-    genreKeywords: ['科幻', 'sci-fi', '星际', '太空', '赛博朋克', '末世', '废土', '机甲', '人工智能', 'AI', '克隆', '基因', '平行宇宙', '未来'],
+    genreKey: 'sci-fi', displayName: '科幻', description: '星际机甲、赛博朋克、基因飞升、末世废土',
+    genreKeywords: ['科幻', '星际', '机甲', '赛博朋克', '基因', '进化', '废土', 'sci-fi'],
     profile: SCI_FI_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '探索式（硬科幻）：发现未知现象→科学假设→实验验证→更深层谜团→认知突破→世界观升级',
-        '生存式（末世/废土）：危机降临→求生挣扎→建立据点→新威胁→技术进化→社会重建',
-        '科技博弈式（星际/赛博朋克）：技术差距→情报收集→逆向突破→短暂优势→对手迭代→更大格局',
-      ],
-      goldenFingerGuidance: '科幻金手指应是科技/信息/知识类（AI助手、未来科技数据库、基因编辑能力），进化路径是技术迭代而非境界突破，限制是物理定律和资源瓶颈。',
-      worldBuildingDirectives: '世界观需要一套内自洽的科技树/文明等级体系，不同势力的技术路线要有差异化，避免"魔法化科技"。距离感、时间尺度、能源约束要有体现。',
+      coreLoopPatterns: ['进化式：生存危机→科技/基因突破→阶层跃升→星际争霸'],
+      goldenFingerGuidance: '科幻金手指多为高级智脑、基因药剂、机械合成系统。',
+      worldBuildingDirectives: '需要硬核的科技设定，强调科技对社会结构和人性的影响。',
     },
     ruleAtoms: playbookDictToAtoms(SCI_FI_PLAYBOOKS),
   },
   {
-    genreKey: 'wuxia', displayName: '武侠', description: '传统武侠、新武侠、江湖复仇、门派恩怨',
-    genreKeywords: ['武侠', '江湖', '门派', '复仇', '侠客', '武功', '刀剑', '恩怨', '新武侠', 'wuxia'],
+    genreKey: 'wuxia', displayName: '武侠', description: '传统武侠、高武世界、极道流、面板加点',
+    genreKeywords: ['武侠', '高武', '极道', '江湖', '面板', '加点', '杀伐果断', 'wuxia'],
     profile: WUXIA_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '复仇式：灭门/陷害→流浪习武→结交豪杰→揭露真相→最终对决→江湖归隐',
-        '成长式：少年入江湖→拜师学艺→卷入纷争→武功突破→侠义抉择→一代宗师',
-      ],
-      goldenFingerGuidance: '武侠金手指是秘籍/奇遇/名师类，进化路径是武功境界（招式→内力→意境），限制是经脉/体质/心境。',
-      worldBuildingDirectives: '需要江湖势力格局（门派/帮会/朝廷）、武功体系（内功/外功/轻功/暗器）、江湖规矩和道义体系。',
+      coreLoopPatterns: ['复仇/升级式：结怨→闭关加点→出关碾压→卷入更大江湖纷争'],
+      goldenFingerGuidance: '武侠金手指多为熟练度面板、武学融合系统，强调"一力降十会"。',
+      worldBuildingDirectives: '需要构建门派势力、江湖规矩和充满破坏力的武学体系。',
     },
     ruleAtoms: playbookDictToAtoms(WUXIA_PLAYBOOKS),
   },
@@ -501,156 +883,336 @@ const SYSTEM_SEEDS: SystemSeed[] = [
     ruleAtoms: playbookDictToAtoms(MILITARY_PLAYBOOKS),
   },
   {
-    genreKey: 'horror', displayName: '恐怖/惊悚', description: '都市惊悚、心理恐惧、克苏鲁、无限流、生存恐怖',
-    genreKeywords: ['恐怖', '克苏鲁', '无限流', 'horror', '惊悚', '求生', '心理恐惧', '生存', '恐怖游戏'],
+    genreKey: 'mystery', displayName: '悬疑推理', description: '侦探推理、高智商犯罪、民俗悬疑、规则怪谈',
+    genreKeywords: ['悬疑', '推理', '侦探', '犯罪', '智斗', '反转', 'mystery'],
+    profile: MYSTERY_REFERENCE_PROFILE,
+    seedHints: {
+      coreLoopPatterns: ['解谜式：发现异常→陷入危机→寻找线索→逻辑推理→反转破局'],
+      goldenFingerGuidance: '悬疑文通常不依赖超自然金手指，主角的"高智商"和"观察力"就是外挂。',
+      worldBuildingDirectives: '需要严密的逻辑链条、公平的线索呈现和意料之外的反转。',
+    },
+    ruleAtoms: playbookDictToAtoms(MYSTERY_PLAYBOOKS),
+  },
+  {
+    genreKey: 'infinite-flow', displayName: '无限流', description: '主神空间、副本生存、诸天万界、轮回者',
+    genreKeywords: ['无限流', '主神空间', '副本', '生存', '轮回', '智斗', '强化', 'infinite-flow'],
+    profile: INFINITE_FLOW_REFERENCE_PROFILE,
+    seedHints: {
+      coreLoopPatterns: ['轮回式：进入副本→摸索规则→智斗破局→回归结算→强化升级'],
+      goldenFingerGuidance: '无限流金手指多为先知优势（知道剧情）或特殊天赋（如百倍奖励）。',
+      worldBuildingDirectives: '需要设计风格各异的副本世界和严密的积分兑换/强化体系。',
+    },
+    ruleAtoms: playbookDictToAtoms(MYSTERY_PLAYBOOKS),
+  },
+  {
+    genreKey: 'light-novel', displayName: '轻小说', description: '二次元、搞笑吐槽、反套路、日常修罗场',
+    genreKeywords: ['轻小说', '二次元', '搞笑', '吐槽', '反套路', '日常', '修罗场', 'light-novel'],
+    profile: LIGHT_NOVEL_REFERENCE_PROFILE,
+    seedHints: {
+      coreLoopPatterns: ['日常式：平静日常→突发奇葩事件→全员脑补/搞笑解决→回归日常'],
+      goldenFingerGuidance: '轻小说金手指往往带有搞笑属性（如"绝对选项"、"只会平A"）。',
+      worldBuildingDirectives: '世界观可以夸张离谱，重点是角色属性的碰撞和轻松幽默的氛围。',
+    },
+    ruleAtoms: playbookDictToAtoms(FANTASY_ROMANCE_PLAYBOOKS),
+  },
+  {
+    genreKey: 'post-apocalyptic', displayName: '末世危机', description: '丧尸末日、天灾求生、废土重建、囤物资',
+    genreKeywords: ['末世', '丧尸', '天灾', '废土', '生存', '囤物资', '庇护所', 'post-apocalyptic'],
+    profile: POST_APOCALYPTIC_REFERENCE_PROFILE,
+    seedHints: {
+      coreLoopPatterns: ['生存式：危机爆发→疯狂囤货→建立庇护所→抵御尸潮/掠夺者'],
+      goldenFingerGuidance: '末世金手指多为无限空间、合成系统、避难所升级系统。',
+      worldBuildingDirectives: '需要营造物资极度匮乏、秩序崩坏、人性险恶的压抑氛围。',
+    },
+    ruleAtoms: playbookDictToAtoms(MYSTERY_PLAYBOOKS),
+  },
+  {
+    genreKey: 'suspense-thriller', displayName: '悬疑惊悚', description: '心理惊悚、连环杀手、不可靠叙事、密室逃脱',
+    genreKeywords: ['惊悚', '心理战', '连环杀手', '密室', '不可靠叙事', 'suspense-thriller'],
+    profile: SUSPENSE_THRILLER_REFERENCE_PROFILE,
+    seedHints: {
+      coreLoopPatterns: ['逃生式：陷入绝境→心理博弈→发现盲点→极限反杀/逃脱'],
+      goldenFingerGuidance: '惊悚文极少有金手指，强调普通人在极端压力下的心理素质和智商。',
+      worldBuildingDirectives: '需要营造极度压抑、封闭的空间感和细思极恐的心理氛围。',
+    },
+    ruleAtoms: playbookDictToAtoms(MYSTERY_PLAYBOOKS),
+  },
+  {
+    genreKey: 'horror', displayName: '恐怖/规则怪谈', description: '规则怪谈、克苏鲁、民俗恐怖、灵异复苏',
+    genreKeywords: ['恐怖', '规则怪谈', '克苏鲁', '灵异', '惊悚', '逃生', 'horror'],
     profile: HORROR_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: ['生存式：规则发现→求生验证→暂时安全→规则变化→更深恐惧→真相逼近'],
-      goldenFingerGuidance: '恐怖金手指可以是特殊感知/规则解读能力/诡异道具，限制是使用代价和理智值消耗。',
-      worldBuildingDirectives: '需要一套内自洽的"诡异规则"体系，恐惧来源于未知而非血腥，信息控制和压迫感是核心。',
+      coreLoopPatterns: ['解谜求生式：发现异常→触碰规则→试错/献祭→找到漏洞→极限反杀'],
+      goldenFingerGuidance: '恐怖文金手指多为提示系统、免疫污染、特殊道具（如染血的斧头）。',
+      worldBuildingDirectives: '需要设计看似荒诞但逻辑自洽的怪谈规则，以及不可名状的恐惧感。',
     },
     ruleAtoms: playbookDictToAtoms(HORROR_PLAYBOOKS),
   },
   {
-    genreKey: 'supernatural', displayName: '灵异/超自然', description: '鬼故事、灵媒通灵、诡异事件、民间鬼怪',
-    genreKeywords: ['灵异', '超自然', '鬼', '鬼怪', '通灵', '灵媒', '诡异', '阴阳', '民间', '驱邪', '风水', 'supernatural'],
+    genreKey: 'supernatural', displayName: '灵异/民俗', description: '风水秘术、捉鬼驱邪、民间传说、阴阳眼',
+    genreKeywords: ['灵异', '民俗', '风水', '捉鬼', '道术', '阴阳眼', 'supernatural'],
     profile: SUPERNATURAL_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '探秘式：遭遇异象→半信半疑→能力觉醒→接触灵界→揭示因果→平衡阴阳',
-        '除灵式：接到委托→调查异象→发现真相→对抗恶灵→化解怨念→留下悬念',
-      ],
-      goldenFingerGuidance: '灵异金手指是阴阳眼/通灵体质/祖传术法类，进化路径是灵力等级/术法精通，限制是阳寿消耗/因果反噬/阴阳失衡。',
-      worldBuildingDirectives: '需要阴阳两界体系、灵力/术法规则、民间传说融入、鬼怪等级分类，神秘感和敬畏感是核心，不是纯恐惧而是"奇"。',
+      coreLoopPatterns: ['单元剧式：接受委托→调查灵异事件→斗法/解开心结→超度/消灭'],
+      goldenFingerGuidance: '灵异文金手指多为阴阳眼、祖传道术、神秘法器。',
+      worldBuildingDirectives: '需要融入真实的民间习俗、风水八卦，营造"日常中的超自然"感。',
     },
     ruleAtoms: playbookDictToAtoms(SUPERNATURAL_PLAYBOOKS),
   },
   {
-    genreKey: 'adventure', displayName: '冒险/探险', description: '荒野求生、宝藏探险、末世探险、极限挑战',
-    genreKeywords: ['冒险', '探险', '荒野', '求生', '宝藏', '末世', '极限', '探索', 'adventure', '盗墓', '寻宝'],
+    genreKey: 'adventure', displayName: '冒险/探险', description: '盗墓寻宝、荒野求生、秘境探索、深海/太空探险',
+    genreKeywords: ['冒险', '探险', '盗墓', '寻宝', '求生', '秘境', 'adventure'],
     profile: ADVENTURE_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '探索式：线索发现→组队出发→未知危险→同伴考验→宝藏/真相→更大谜团',
-        '求生式：灾难降临→资源争夺→建立据点→外部威胁→突围/迁徙→新世界',
-      ],
-      goldenFingerGuidance: '冒险金手指可以是特殊感知/古地图/先祖遗物/求生天赋，限制是体力/资源/环境极端条件。',
-      worldBuildingDirectives: '需要丰富的地理环境（丛林/沙漠/深海/地下城）、生态系统、古文明遗迹，未知感和发现感是核心驱动力。',
+      coreLoopPatterns: ['探索式：获得线索→组建团队→克服自然天险→破解机关→获得宝藏/真相'],
+      goldenFingerGuidance: '探险文金手指多为寻宝雷达、古老血脉、动植物沟通能力。',
+      worldBuildingDirectives: '需要极其真实的地理/环境描写和专业的求生/探险知识。',
     },
     ruleAtoms: playbookDictToAtoms(ADVENTURE_PLAYBOOKS),
   },
   {
-    genreKey: 'game', displayName: '游戏/电竞', description: '虚拟游戏世界、MMORPG、电竞选手成长、游戏攻略流',
-    genreKeywords: ['游戏', '电竞', '网游', '虚拟现实', 'VR', '系统流', 'game', '副本', '公会', 'MMORPG', '攻略'],
-    profile: GAME_REFERENCE_PROFILE,
+    genreKey: 'esports', displayName: '电子竞技', description: 'MOBA、FPS、职业联赛、冠军梦、退役复出',
+    genreKeywords: ['电竞', '游戏', '比赛', '操作', '团队', '冠军', 'esports'],
+    profile: ESPORTS_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: ['升级式：发现隐藏机制→独特流派→副本挑战→排名攀升→巅峰对决→新版本/新世界'],
-      goldenFingerGuidance: '游戏金手指可以是隐藏职业/BUG利用/GM权限/前世记忆，限制是游戏规则和版本更新。',
-      worldBuildingDirectives: '需要完整的游戏系统（职业/技能/装备/副本），需要竞技生态（公会/排名/赛事）。',
+      coreLoopPatterns: ['竞技式：日常训练→遭遇强敌→战术/操作突破→赢得比赛→冲击冠军'],
+      goldenFingerGuidance: '电竞文金手指多为超强反应速度、战术模拟器、重生带回的先知版本理解。',
+      worldBuildingDirectives: '需要真实的电竞生态（俱乐部、转会、舆论）和硬核的游戏战术描写。',
     },
     ruleAtoms: playbookDictToAtoms(GAME_PLAYBOOKS),
   },
   {
-    genreKey: 'sports', displayName: '体育/竞技', description: '篮球、足球、搏击、体育励志',
-    genreKeywords: ['体育', '篮球', '足球', '搏击', '拳击', '跑步', '竞技', '励志', '运动', 'sports', '赛车'],
+    genreKey: 'vrmmo', displayName: '虚拟网游', description: '全息网游、数据流、首杀、隐藏职业、公会争霸',
+    genreKeywords: ['网游', '虚拟现实', '数据流', '首杀', '隐藏职业', '公会', 'vrmmo'],
+    profile: VRMMO_REFERENCE_PROFILE,
+    seedHints: {
+      coreLoopPatterns: ['升级打宝式：练级→触发隐藏任务→获得极品装备→公会战装逼'],
+      goldenFingerGuidance: '网游文金手指多为唯一隐藏职业、超高幸运值、重生带来的攻略记忆。',
+      worldBuildingDirectives: '需要严谨的数值体系、丰富的技能设定和庞大的玩家公会生态。',
+    },
+    ruleAtoms: playbookDictToAtoms(GAME_PLAYBOOKS),
+  },
+  {
+    genreKey: 'sports', displayName: '体育竞技', description: '篮球、足球、田径、热血青春、体坛巨星',
+    genreKeywords: ['体育', '竞技', '运动', '热血', '冠军', '巨星', 'sports'],
     profile: SPORTS_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '成长式：天赋/热爱→训练磨砺→首次比赛→挫折低谷→突破极限→巅峰对决',
-        '团队式：加入队伍→磨合冲突→战术成型→淘汰赛→决赛→冠军/传承',
-      ],
-      goldenFingerGuidance: '体育金手指可以是身体天赋/前世记忆/数据分析能力，限制是伤病/体能极限/心理压力。',
-      worldBuildingDirectives: '需要真实的运动规则体系、联赛/锦标赛架构、训练体系，热血和汗水的真实感是核心。',
+      coreLoopPatterns: ['成长式：刻苦训练→遭遇挫折/伤病→突破极限→赛场绝杀'],
+      goldenFingerGuidance: '体育文金手指多为身体素质强化系统、球星技能抽取面板。',
+      worldBuildingDirectives: '需要专业的运动知识、真实的赛事赛制和令人热血沸腾的赛场描写。',
     },
     ruleAtoms: playbookDictToAtoms(SPORTS_PLAYBOOKS),
   },
   {
-    genreKey: 'superpower', displayName: '超能力/魔法', description: '超能力者、魔法学院、少年觉醒',
+    genreKey: 'superpower', displayName: '超能力/异能', description: '都市异能、灵气复苏、异能学院、超级英雄',
     genreKeywords: ['超能力', '异能', '魔法学院', '觉醒', '超人', '变异', '能力者', 'superpower', '学院'],
     profile: SUPERPOWER_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '觉醒式：普通人→意外觉醒→能力失控→学习控制→卷入阵营斗争→守护/改变世界',
-        '学院式：入学→分班/测试→天赋展露→校内竞争→外部威胁入侵→毕业大考',
-      ],
+      coreLoopPatterns: ['觉醒式：普通人→意外觉醒→能力失控→学习控制→卷入阵营斗争→守护/改变世界',
+      '学院式：入学→分班/测试→天赋展露→校内竞争→外部威胁入侵→毕业大考'],
       goldenFingerGuidance: '超能力金手指是独特/稀有能力类型，进化路径是能力等级/新用法开发，限制是身体负荷/副作用/能量消耗。',
       worldBuildingDirectives: '需要能力分类体系（元素/精神/身体强化等）、能力者社会组织（学院/政府机构/地下组织）、普通人与能力者的社会关系。',
     },
     ruleAtoms: playbookDictToAtoms(SUPERPOWER_PLAYBOOKS),
   },
   {
-    genreKey: 'epic', displayName: '史诗/传奇', description: '王朝兴衰、大陆征伐、神话再造',
-    genreKeywords: ['史诗', '传奇', '王朝', '征伐', '神话', '英雄', '命运', '帝国', 'epic', '群像'],
+    genreKey: 'epic', displayName: '史诗/传奇', description: '群像剧、权力游戏、王朝兴衰、文明碰撞',
+    genreKeywords: ['史诗', '群像', '权谋', '战争', '王朝', '命运', 'epic'],
     profile: EPIC_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '王朝式：乱世→群雄并起→合纵连横→统一/分裂→盛世/衰亡→新纪元',
-        '英雄式：预言/使命→集结→试炼→牺牲→最终决战→传说流传',
-      ],
-      goldenFingerGuidance: '史诗通常不需要个人金手指，驱动力是命运/血脉/天命，限制是历史洪流和人心向背。',
-      worldBuildingDirectives: '需要宏大的世界版图、多种族/文明体系、神话传说体系、王朝更迭规律，格局感和命运感是核心。',
+      coreLoopPatterns: ['多线交织式：多方势力布局→矛盾激化→爆发全面战争→旧秩序毁灭/新秩序建立'],
+      goldenFingerGuidance: '史诗文极少有个人金手指，主角的"金手指"往往是其血脉、领袖魅力或时代气运。',
+      worldBuildingDirectives: '需要极其宏大的世界观、错综复杂的势力关系和深刻的命运悲剧感。',
     },
     ruleAtoms: playbookDictToAtoms(EPIC_PLAYBOOKS),
   },
   {
-    genreKey: 'fantasy-romance', displayName: '幻想爱情', description: '穿越恋爱、虚拟恋爱、神话恋爱',
-    genreKeywords: ['穿越恋爱', '虚拟恋爱', '神话恋爱', '仙恋', '人妖恋', '跨时空', '异世恋', 'fantasy romance'],
-    profile: FANTASY_ROMANCE_REFERENCE_PROFILE,
+    genreKey: 'urban-romance', displayName: '现代言情', description: '霸总甜宠、娱乐圈马甲、破镜重圆、先婚后爱',
+    genreKeywords: ['现言', '甜宠', '霸总', '马甲', '娱乐圈', '破镜重圆', 'urban-romance'],
+    profile: URBAN_ROMANCE_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '跨界式：意外穿越→身份隐藏→相遇心动→世界观冲突→选择留下/离开→跨越界限在一起',
-        '宿命式：前世纠葛→今生重逢→记忆觉醒→命运阻碍→打破宿命→永恒之爱',
-      ],
-      goldenFingerGuidance: '幻想爱情金手指可以是穿越能力/前世记忆/神力，限制是时空规则/神界律法/回归代价。',
-      worldBuildingDirectives: '需要两个世界的对比设定（现代vs古代/人间vs仙界），跨界规则和代价，爱情与世界规则的冲突是核心张力。',
+      coreLoopPatterns: ['拉扯式：相遇/重逢→暧昧试探→误会/危机→确认心意→高甜撒糖'],
+      goldenFingerGuidance: '现言金手指多为女主的隐藏马甲（神医/黑客/顶级设计师）或男主的无底线偏爱。',
+      worldBuildingDirectives: '需要营造浪漫的都市氛围，强调男女主之间的性张力和情绪价值。',
     },
-    ruleAtoms: playbookDictToAtoms(FANTASY_ROMANCE_PLAYBOOKS),
+    ruleAtoms: playbookDictToAtoms(ROMANCE_PLAYBOOKS),
   },
   {
-    genreKey: 'children', displayName: '儿童/少儿文学', description: '动物故事、成长寓言、幻想冒险',
-    genreKeywords: ['儿童', '少儿', '童话', '动物', '成长', '寓言', '幻想', '冒险', 'children', '少年'],
+    genreKey: 'ancient-romance', displayName: '古代言情', description: '宅斗宫斗、重生复仇、权臣宠妻、替嫁联姻',
+    genreKeywords: ['古言', '宅斗', '宫斗', '重生', '复仇', '权臣', '王爷', 'ancient-romance'],
+    profile: ANCIENT_ROMANCE_REFERENCE_PROFILE,
+    seedHints: {
+      coreLoopPatterns: ['复仇逆袭式：遭遇算计/重生→隐忍布局→绝地反击打脸→收获权力与爱情'],
+      goldenFingerGuidance: '古言金手指多为重生先知、随身空间/灵泉，或男主滔天的权势。',
+      worldBuildingDirectives: '需要符合古代封建礼教的背景，强调嫡庶尊卑和后宅/朝堂的阴谋算计。',
+    },
+    ruleAtoms: playbookDictToAtoms(ROMANCE_PLAYBOOKS),
+  },
+  {
+    genreKey: 'fantasy-romance', displayName: '幻想言情', description: '仙侠虐恋、师徒禁忌、三生三世、人妖相恋',
+    genreKeywords: ['幻言', '仙侠恋', '虐恋', '师徒', '宿命', '神魔', 'fantasy-romance'],
+    profile: FANTASY_ROMANCE_REFERENCE_PROFILE,
+    seedHints: {
+      coreLoopPatterns: ['宿命式：相遇/收徒→暗生情愫→身份暴露/大劫降临→生离死别→重生/重逢'],
+      goldenFingerGuidance: '幻言金手指多为女主隐藏的逆天血脉（如上古神女）或男主三界最强的战力。',
+      worldBuildingDirectives: '需要唯美仙气的世界观，设定服务于制造跨越种族/宿命的爱情阻碍。',
+    },
+    ruleAtoms: playbookDictToAtoms(ROMANCE_PLAYBOOKS),
+  },
+  {
+    genreKey: 'children', displayName: '儿童/少儿文学', description: '童话、魔法校园、动物拟人、成长冒险',
+    genreKeywords: ['少儿', '童话', '魔法', '冒险', '友谊', '成长', 'children'],
     profile: CHILDREN_REFERENCE_PROFILE,
     seedHints: {
-      coreLoopPatterns: [
-        '成长式：好奇心→冒险出发→遇到困难→友谊/勇气→克服挑战→成长领悟',
-        '奇遇式：发现秘密世界→结交伙伴→承担使命→团队合作→拯救/守护→回归日常',
-      ],
-      goldenFingerGuidance: '儿童文学金手指应是想象力/善良/勇气/友谊等品质驱动，限制是年龄认知和成长阶段。',
-      worldBuildingDirectives: '世界观要充满想象力和温暖感，善恶分明但不简单化，动物/精灵/魔法元素增加趣味性，教育意义自然融入而非说教。',
+      coreLoopPatterns: ['成长冒险式：平静生活→发现秘密/遇到麻烦→和小伙伴一起解决→获得成长'],
+      goldenFingerGuidance: '少儿文金手指多为神奇的道具（如魔法棒）、会说话的动物伙伴。',
+      worldBuildingDirectives: '需要充满想象力、色彩明亮的世界，传递勇敢、善良、友谊等正向价值观。',
     },
     ruleAtoms: playbookDictToAtoms(CHILDREN_PLAYBOOKS),
   },
 ];
 
+const SYSTEM_SEEDS: SystemSeed[] = RAW_SYSTEM_SEEDS.map((seed) => ({
+  ...seed,
+  seedHints: {
+    ...(seed.seedHints ?? {}),
+    namingDefaults: seed.seedHints?.namingDefaults ?? getDefaultNamingDefaultsForGenre(seed.genreKey),
+  },
+  audienceMeta: seed.audienceMeta ?? GENRE_AUDIENCE_META[seed.genreKey] ?? GENRE_AUDIENCE_META.urban,
+}));
+
 @Injectable()
 export class GenreProfileTemplateService implements OnModuleInit {
   private readonly logger = new Logger(GenreProfileTemplateService.name);
+  private readonly matchingEnabled: boolean;
+  private readonly maxAudienceInfluence: number;
+  private readonly weightGenre: number;
+  private readonly weightAudience: number;
+  private readonly weightFocus: number;
+  private readonly weightTone: number;
 
   constructor(
     @InjectRepository(GenreProfileTemplateEntity)
     private readonly repo: Repository<GenreProfileTemplateEntity>,
+    private readonly config: ConfigService,
     private readonly llm: LlmService,
     private readonly promptProfiler: PromptProfilerAgent,
-  ) {}
+  ) {
+    this.matchingEnabled = this.config.get<boolean>('novel.audienceStrategy.enabled') !== false;
+    this.maxAudienceInfluence = this.getNumCfg('novel.audienceStrategy.maxAudienceInfluence', 0.35);
+    this.weightGenre = this.getNumCfg('novel.audienceStrategy.weight.genre', 0.55);
+    this.weightAudience = this.getNumCfg('novel.audienceStrategy.weight.audience', 0.25);
+    this.weightFocus = this.getNumCfg('novel.audienceStrategy.weight.protagonistFocus', 0.1);
+    this.weightTone = this.getNumCfg('novel.audienceStrategy.weight.tone', 0.1);
+  }
 
   async onModuleInit(): Promise<void> {
     await this.seedSystemTemplates();
+    await this.backfillMissingNamingDefaults();
+  }
+
+  private getNumCfg(key: string, fallback: number): number {
+    const raw = this.config.get<string | number>(key);
+    const val = Number(raw);
+    return Number.isFinite(val) ? val : fallback;
+  }
+
+  private clamp(n: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, n));
+  }
+
+  private normalizeTags(tags?: string[]): string[] {
+    return (tags ?? []).map((t) => t.trim().toLowerCase()).filter(Boolean);
+  }
+
+  private mergeAudienceMeta(entity: GenreProfileTemplateEntity, meta?: Partial<AudienceDirectiveMeta>): void {
+    if (!meta) return;
+    if (meta.audienceTags) entity.audienceTags = meta.audienceTags;
+    if (meta.protagonistFocusTags) entity.protagonistFocusTags = meta.protagonistFocusTags;
+    if (meta.toneTags) entity.toneTags = meta.toneTags;
+    if (meta.relationshipDensity) entity.relationshipDensity = meta.relationshipDensity;
+    if (meta.hardConstraints) entity.hardConstraints = meta.hardConstraints;
+    if (meta.softPreferences) entity.softPreferences = meta.softPreferences;
+  }
+
+  private resolveWeightsForGenre(genre: string): { genre: number; audience: number; focus: number; tone: number } {
+    const g = genre.toLowerCase();
+    const isHistorical = g.includes('历史') || g.includes('historical');
+    const isMystery = g.includes('悬疑') || g.includes('推理') || g.includes('mystery');
+    const isMilitary = g.includes('军事') || g.includes('战争') || g.includes('military');
+    if (isHistorical || isMystery || isMilitary) return { genre: 0.65, audience: 0.2, focus: 0.1, tone: 0.05 };
+    const isRomance = g.includes('言情') || g.includes('romance') || g.includes('爱情');
+    if (isRomance) return { genre: 0.45, audience: 0.35, focus: 0.1, tone: 0.1 };
+    return { genre: this.weightGenre, audience: this.weightAudience, focus: this.weightFocus, tone: this.weightTone };
+  }
+
+  private scoreTemplateMatch(
+    template: GenreProfileTemplateEntity,
+    input: { genre: string; targetAudience?: string; protagonistFocus?: string; tonePreference?: string; audienceTags?: string[] },
+  ): { total: number; detail: Record<string, number> } {
+    const genreText = input.genre.toLowerCase();
+    const audienceText = (input.targetAudience ?? '').toLowerCase();
+    const toneText = (input.tonePreference ?? '').toLowerCase();
+    const inputTags = new Set(this.normalizeTags(input.audienceTags));
+    const tplAudienceList = template.audienceTags ?? [];
+    const tplFocusList = template.protagonistFocusTags ?? [];
+    const tplToneList = template.toneTags ?? [];
+    const tplAudience = new Set(this.normalizeTags(tplAudienceList));
+    const tplTone = new Set(this.normalizeTags(tplToneList));
+    const genreScore = (template.genreKeywords ?? []).some((kw) => genreText.includes(kw.toLowerCase())) ? 1 : 0;
+    let audienceScore = 0;
+    if (audienceText && tplAudienceList.length) {
+      const matched = tplAudienceList.filter((tag) => audienceText.includes(tag.toLowerCase())).length;
+      audienceScore = matched / Math.max(1, tplAudienceList.length);
+    }
+    if (inputTags.size > 0 && tplAudience.size > 0) {
+      let overlap = 0;
+      for (const tag of inputTags) if (tplAudience.has(tag)) overlap += 1;
+      audienceScore = Math.max(audienceScore, overlap / Math.max(1, inputTags.size));
+    }
+    let focusScore = 0;
+    if (input.protagonistFocus && tplFocusList.length) {
+      focusScore = tplFocusList.includes(input.protagonistFocus as any) ? 1 : 0;
+    }
+    let toneScore = 0;
+    if (toneText && tplToneList.length) {
+      const matched = tplToneList.filter((tag) => toneText.includes(tag.toLowerCase())).length;
+      toneScore = matched / Math.max(1, tplToneList.length);
+    }
+    const w = this.resolveWeightsForGenre(input.genre);
+    const cappedAudienceWeight = Math.min(w.audience, this.maxAudienceInfluence);
+    const total = this.clamp(
+      genreScore * w.genre + audienceScore * cappedAudienceWeight + focusScore * w.focus + toneScore * w.tone,
+      0,
+      1,
+    );
+    return {
+      total,
+      detail: {
+        genre: Number((genreScore * w.genre).toFixed(4)),
+        audience: Number((audienceScore * cappedAudienceWeight).toFixed(4)),
+        protagonistFocus: Number((focusScore * w.focus).toFixed(4)),
+        tone: Number((toneScore * w.tone).toFixed(4)),
+      },
+    };
   }
 
   async seedSystemTemplates(): Promise<void> { // 启动时同步系统预置模板；增量补充所有空字段（v2: genreKey 修正）
     const pending: SystemSeed[] = [];
     const profilePending: { seed: SystemSeed; entity: GenreProfileTemplateEntity }[] = [];
+    let updatedCount = 0;
+    let createdCount = 0;
     for (const seed of SYSTEM_SEEDS) {
       const exists = await this.repo.findOneBy({ userId: IsNull() as any, genreKey: seed.genreKey });
       if (exists) {
         let needSave = false;
-        if (seed.ruleAtoms?.length && JSON.stringify(exists.ruleAtoms ?? []) !== JSON.stringify(seed.ruleAtoms)) {
+        if (seed.ruleAtoms?.length && !isSameJson(exists.ruleAtoms ?? [], seed.ruleAtoms)) {
           exists.ruleAtoms = seed.ruleAtoms;
           needSave = true;
           this.logger.log(`[seed] 系统模板已同步 ruleAtoms: ${seed.displayName}`);
         }
         const profileEmpty = !exists.profileJson || !Object.keys(exists.profileJson).length || !('writerGuide' in exists.profileJson);
-        if (seed.profile && JSON.stringify(exists.profileJson ?? {}) !== JSON.stringify(seed.profile as unknown as Record<string, unknown>)) {
+        if (seed.profile && !isSameJson(exists.profileJson ?? {}, seed.profile as unknown as Record<string, unknown>)) {
           exists.profileJson = seed.profile as unknown as Record<string, unknown>;
           needSave = true;
           this.logger.log(`[seed] 系统模板已同步 profileJson: ${seed.displayName}`);
@@ -658,28 +1220,57 @@ export class GenreProfileTemplateService implements OnModuleInit {
           profilePending.push({ seed, entity: exists });
         }
         const desiredCache = GenreProfileTemplateService.buildDefaultAgentSections(exists.ruleAtoms ?? [], seed.genreKey);
-        if (JSON.stringify(exists.cachedAgentSections ?? null) !== JSON.stringify(desiredCache)) {
+        if (!isSameJson(exists.cachedAgentSections ?? null, desiredCache)) {
           exists.cachedAgentSections = desiredCache;
           needSave = true;
           this.logger.log(`[seed] 系统模板已同步 cachedAgentSections: ${seed.displayName}`);
         }
-        if (needSave) { exists.systemVersion += 1; await this.repo.save(exists); }
+        if (!isSameJson({
+          audienceTags: exists.audienceTags ?? [],
+          protagonistFocusTags: exists.protagonistFocusTags ?? [],
+          toneTags: exists.toneTags ?? [],
+          relationshipDensity: exists.relationshipDensity ?? 'medium',
+          hardConstraints: exists.hardConstraints ?? [],
+          softPreferences: exists.softPreferences ?? [],
+        }, seed.audienceMeta)) {
+          this.mergeAudienceMeta(exists, seed.audienceMeta);
+          needSave = true;
+          this.logger.log(`[seed] 系统模板已同步 audienceMeta: ${seed.displayName}`);
+        }
+        if (seed.seedHints && !isSameJson(exists.seedHints ?? {}, seed.seedHints)) {
+          exists.seedHints = seed.seedHints;
+          needSave = true;
+          this.logger.log(`[seed] 系统模板已同步 seedHints: ${seed.displayName}`);
+        }
+        if (needSave) {
+          exists.systemVersion += 1;
+          await this.repo.save(exists);
+          updatedCount += 1;
+        }
         continue;
       }
       if (seed.profile) {
-        const entity = await this.repo.save(this.repo.create({
+        await this.repo.save(this.repo.create({
           userId: null, genreKey: seed.genreKey, displayName: seed.displayName,
           description: seed.description, genreKeywords: seed.genreKeywords,
           profileJson: seed.profile as unknown as Record<string, unknown>,
           seedHints: seed.seedHints, ruleAtoms: seed.ruleAtoms ?? [],
           cachedAgentSections: GenreProfileTemplateService.buildDefaultAgentSections(seed.ruleAtoms, seed.genreKey),
+          audienceTags: seed.audienceMeta?.audienceTags ?? [],
+          protagonistFocusTags: seed.audienceMeta?.protagonistFocusTags ?? [],
+          toneTags: seed.audienceMeta?.toneTags ?? [],
+          relationshipDensity: seed.audienceMeta?.relationshipDensity ?? 'medium',
+          hardConstraints: seed.audienceMeta?.hardConstraints ?? [],
+          softPreferences: seed.audienceMeta?.softPreferences ?? [],
           isSystem: true, parentTemplateId: null, systemVersion: 1,
         }));
+        createdCount += 1;
         this.logger.log(`[seed] 系统模板已创建(含默认 agentSections): ${seed.displayName}`);
       } else {
         pending.push(seed);
       }
     }
+    this.logger.log(`[seed] 启动同步完成: updated=${updatedCount}, created=${createdCount}, pendingAi=${pending.length}, emptyProfileAi=${profilePending.length}`);
     if (pending.length) {
       this.logger.log(`[seed] ${pending.length} 个题材需 AI 生成 Profile，开始后台生成...`);
       this.aiSeedPending(pending).catch((err) => this.logger.error(`[seed] AI 批量生成异常: ${err.message}`));
@@ -716,6 +1307,7 @@ export class GenreProfileTemplateService implements OnModuleInit {
         entity.profileJson = result.profileJson;
         entity.seedHints = entity.seedHints ?? result.seedHints;
         entity.cachedAgentSections = result.cachedAgentSections ?? entity.cachedAgentSections;
+        this.mergeAudienceMeta(entity, seed.audienceMeta);
         entity.systemVersion += 1;
         await this.repo.save(entity);
         this.logger.log(`[seed] AI 补充 Profile 完成: ${seed.displayName} (v${entity.systemVersion})`);
@@ -746,6 +1338,12 @@ export class GenreProfileTemplateService implements OnModuleInit {
         userId: null, genreKey: seed.genreKey, displayName: seed.displayName,
         description: seed.description, genreKeywords: seed.genreKeywords,
         profileJson, seedHints, ruleAtoms, cachedAgentSections,
+        audienceTags: seed.audienceMeta?.audienceTags ?? [],
+        protagonistFocusTags: seed.audienceMeta?.protagonistFocusTags ?? [],
+        toneTags: seed.audienceMeta?.toneTags ?? [],
+        relationshipDensity: seed.audienceMeta?.relationshipDensity ?? 'medium',
+        hardConstraints: seed.audienceMeta?.hardConstraints ?? [],
+        softPreferences: seed.audienceMeta?.softPreferences ?? [],
         isSystem: true, parentTemplateId: null, systemVersion: 1,
       }));
     }
@@ -777,13 +1375,19 @@ export class GenreProfileTemplateService implements OnModuleInit {
           seedHints: sys.seedHints ? JSON.parse(JSON.stringify(sys.seedHints)) : null,
           ruleAtoms: sys.ruleAtoms?.length ? JSON.parse(JSON.stringify(sys.ruleAtoms)) : [],
           cachedAgentSections: sys.cachedAgentSections ? JSON.parse(JSON.stringify(sys.cachedAgentSections)) : null,
+          audienceTags: [...(sys.audienceTags ?? [])],
+          protagonistFocusTags: [...(sys.protagonistFocusTags ?? [])],
+          toneTags: [...(sys.toneTags ?? [])],
+          relationshipDensity: sys.relationshipDensity ?? 'medium',
+          hardConstraints: [...(sys.hardConstraints ?? [])],
+          softPreferences: [...(sys.softPreferences ?? [])],
           isSystem: false, parentTemplateId: sys.id,
           systemVersion: 1, syncedSystemVersion: sys.systemVersion, isUserModified: false,
         }));
         continue;
       }
       const versionBehind = sys.systemVersion > existing.syncedSystemVersion;
-      const agentOutdated = JSON.stringify(existing.cachedAgentSections ?? null) !== JSON.stringify(sys.cachedAgentSections ?? null);
+      const agentOutdated = !isSameJson(existing.cachedAgentSections ?? null, sys.cachedAgentSections ?? null);
       if ((versionBehind || agentOutdated) && !existing.isUserModified) {
         existing.displayName = sys.displayName; existing.description = sys.description;
         existing.genreKeywords = [...sys.genreKeywords];
@@ -791,6 +1395,12 @@ export class GenreProfileTemplateService implements OnModuleInit {
         existing.seedHints = sys.seedHints ? JSON.parse(JSON.stringify(sys.seedHints)) : null;
         existing.ruleAtoms = sys.ruleAtoms?.length ? JSON.parse(JSON.stringify(sys.ruleAtoms)) : [];
         existing.cachedAgentSections = sys.cachedAgentSections ? JSON.parse(JSON.stringify(sys.cachedAgentSections)) : null;
+        existing.audienceTags = [...(sys.audienceTags ?? [])];
+        existing.protagonistFocusTags = [...(sys.protagonistFocusTags ?? [])];
+        existing.toneTags = [...(sys.toneTags ?? [])];
+        existing.relationshipDensity = sys.relationshipDensity ?? 'medium';
+        existing.hardConstraints = [...(sys.hardConstraints ?? [])];
+        existing.softPreferences = [...(sys.softPreferences ?? [])];
         existing.syncedSystemVersion = sys.systemVersion;
         await this.repo.save(existing);
       }
@@ -807,14 +1417,24 @@ export class GenreProfileTemplateService implements OnModuleInit {
     genreKey: string; displayName: string; description?: string;
     genreKeywords?: string[]; profileJson: Record<string, unknown>;
     seedHints?: SeedAnalyzerHints; ruleAtoms?: RuleAtom[];
+    audienceMeta?: Partial<AudienceDirectiveMeta>;
   }): Promise<GenreProfileTemplateEntity> {
     const existing = await this.repo.findOneBy({ userId, genreKey: dto.genreKey });
     if (existing) throw new BadRequestException(`你已有 genreKey="${dto.genreKey}" 的模板，请编辑或删除后重建`);
+    if (!dto.audienceMeta?.audienceTags?.length || !dto.audienceMeta?.protagonistFocusTags?.length || !dto.audienceMeta?.toneTags?.length) {
+      throw new BadRequestException('新建模板必须提供 audienceMeta（audienceTags/protagonistFocusTags/toneTags）');
+    }
     return this.repo.save(this.repo.create({
       userId, genreKey: dto.genreKey, displayName: dto.displayName,
       description: dto.description ?? '', genreKeywords: dto.genreKeywords ?? [],
-      profileJson: dto.profileJson, seedHints: dto.seedHints ?? null,
+      profileJson: dto.profileJson, seedHints: ensureSeedHintsNamingDefaults(dto.seedHints, dto.genreKey),
       ruleAtoms: dto.ruleAtoms ?? [], isSystem: false, parentTemplateId: null,
+      audienceTags: dto.audienceMeta.audienceTags ?? [],
+      protagonistFocusTags: dto.audienceMeta.protagonistFocusTags ?? [],
+      toneTags: dto.audienceMeta.toneTags ?? [],
+      relationshipDensity: dto.audienceMeta.relationshipDensity ?? 'medium',
+      hardConstraints: dto.audienceMeta.hardConstraints ?? [],
+      softPreferences: dto.audienceMeta.softPreferences ?? [],
     }));
   }
 
@@ -822,6 +1442,7 @@ export class GenreProfileTemplateService implements OnModuleInit {
     displayName?: string; description?: string; genreKeywords?: string[];
     profileJson?: Record<string, unknown>; seedHints?: SeedAnalyzerHints;
     ruleAtoms?: RuleAtom[]; cachedAgentSections?: CachedAgentSections;
+    audienceMeta?: Partial<AudienceDirectiveMeta>;
   }): Promise<GenreProfileTemplateEntity> {
     const entity = await this.getById(id);
     if (entity.userId !== userId) throw new BadRequestException('只能编辑自己的模板');
@@ -829,11 +1450,13 @@ export class GenreProfileTemplateService implements OnModuleInit {
     if (dto.description !== undefined) entity.description = dto.description;
     if (dto.genreKeywords !== undefined) entity.genreKeywords = dto.genreKeywords;
     if (dto.profileJson !== undefined) entity.profileJson = dto.profileJson;
-    if (dto.seedHints !== undefined) entity.seedHints = dto.seedHints;
+    if (dto.seedHints !== undefined) entity.seedHints = ensureSeedHintsNamingDefaults(dto.seedHints, entity.genreKey);
     if (dto.ruleAtoms !== undefined) entity.ruleAtoms = dto.ruleAtoms;
     if (dto.cachedAgentSections !== undefined) entity.cachedAgentSections = dto.cachedAgentSections;
+    if (dto.audienceMeta) this.mergeAudienceMeta(entity, dto.audienceMeta);
     const profileOrRulesChanged = dto.profileJson !== undefined || dto.ruleAtoms !== undefined;
     if (profileOrRulesChanged) entity.cachedAgentSections = null;
+    entity.seedHints = ensureSeedHintsNamingDefaults(entity.seedHints, entity.genreKey);
     entity.isUserModified = true;
     return this.repo.save(entity);
   }
@@ -865,6 +1488,12 @@ export class GenreProfileTemplateService implements OnModuleInit {
     entity.seedHints = sys.seedHints ? JSON.parse(JSON.stringify(sys.seedHints)) : null;
     entity.ruleAtoms = sys.ruleAtoms?.length ? JSON.parse(JSON.stringify(sys.ruleAtoms)) : [];
     entity.cachedAgentSections = sys.cachedAgentSections ? JSON.parse(JSON.stringify(sys.cachedAgentSections)) : null;
+    entity.audienceTags = [...(sys.audienceTags ?? [])];
+    entity.protagonistFocusTags = [...(sys.protagonistFocusTags ?? [])];
+    entity.toneTags = [...(sys.toneTags ?? [])];
+    entity.relationshipDensity = sys.relationshipDensity ?? 'medium';
+    entity.hardConstraints = [...(sys.hardConstraints ?? [])];
+    entity.softPreferences = [...(sys.softPreferences ?? [])];
     entity.syncedSystemVersion = sys.systemVersion;
     entity.isUserModified = false;
     return this.repo.save(entity);
@@ -880,27 +1509,72 @@ export class GenreProfileTemplateService implements OnModuleInit {
       seedHints: source.seedHints ? JSON.parse(JSON.stringify(source.seedHints)) : null,
       ruleAtoms: source.ruleAtoms?.length ? JSON.parse(JSON.stringify(source.ruleAtoms)) : [],
       cachedAgentSections: source.cachedAgentSections ? JSON.parse(JSON.stringify(source.cachedAgentSections)) : null,
+      audienceTags: [...(source.audienceTags ?? [])],
+      protagonistFocusTags: [...(source.protagonistFocusTags ?? [])],
+      toneTags: [...(source.toneTags ?? [])],
+      relationshipDensity: source.relationshipDensity ?? 'medium',
+      hardConstraints: [...(source.hardConstraints ?? [])],
+      softPreferences: [...(source.softPreferences ?? [])],
       isSystem: false, parentTemplateId: source.parentTemplateId ?? source.id,
       syncedSystemVersion: source.syncedSystemVersion, isUserModified: false,
     }));
   }
 
-  async findBestMatch(genre: string, userId?: string): Promise<GenreProfileTemplateEntity | null> {
+  async findBestMatchWithScore(
+    input: { genre: string; targetAudience?: string; protagonistFocus?: string; tonePreference?: string; audienceTags?: string[] },
+    userId?: string,
+  ): Promise<{ template: GenreProfileTemplateEntity | null; score: number; detail?: Record<string, number> }> {
     if (userId) await this.syncSystemTemplates(userId); // 确保用户模板已同步
     const all = userId ? await this.repo.findBy({ userId }) : await this.repo.findBy({ isSystem: true });
-    const g = genre.toLowerCase();
+    if (!all.length) return { template: null, score: 0 };
+    if (!this.matchingEnabled) return { template: all[0], score: 1, detail: { genre: 1, audience: 0, protagonistFocus: 0, tone: 0 } };
+    let winner = all[0];
+    let winnerScore = -1;
+    let winnerDetail: Record<string, number> | undefined;
     for (const t of all) {
-      if (t.genreKeywords.some((kw) => g.includes(kw.toLowerCase()))) return t;
+      const scored = this.scoreTemplateMatch(t, input);
+      if (scored.total > winnerScore) {
+        winner = t;
+        winnerScore = scored.total;
+        winnerDetail = scored.detail;
+      }
     }
-    return all[0] ?? null; // 无精确匹配时返回第一个兜底
+    return { template: winner, score: Number(winnerScore.toFixed(4)), detail: winnerDetail };
   }
 
-  async getSeedHintsForGenre(genre: string, userId?: string): Promise<SeedAnalyzerHints | null> {
-    const tpl = await this.findBestMatch(genre, userId);
-    if (tpl?.seedHints) return tpl.seedHints;
-    const g = genre.toLowerCase();
+  async findBestMatch(
+    genreOrInput: string | { genre: string; targetAudience?: string; protagonistFocus?: string; tonePreference?: string; audienceTags?: string[] },
+    userId?: string,
+  ): Promise<GenreProfileTemplateEntity | null> {
+    const input = typeof genreOrInput === 'string' ? { genre: genreOrInput } : genreOrInput;
+    const result = await this.findBestMatchWithScore(input, userId);
+    return result.template;
+  }
+
+  async getSeedHintsForGenre(
+    genreOrInput: string | { genre: string; targetAudience?: string; protagonistFocus?: string; tonePreference?: string; audienceTags?: string[] },
+    userId?: string,
+  ): Promise<SeedAnalyzerHints | null> {
+    const tpl = await this.findBestMatch(genreOrInput, userId);
+    if (tpl?.seedHints) return ensureSeedHintsNamingDefaults(tpl.seedHints, tpl.genreKey);
+    const g = (typeof genreOrInput === 'string' ? genreOrInput : genreOrInput.genre).toLowerCase();
     const staticMatch = SYSTEM_SEEDS.find((s) => s.genreKeywords.some((kw) => g.includes(kw)));
-    return staticMatch?.seedHints ?? null;
+    if (staticMatch?.seedHints) return ensureSeedHintsNamingDefaults(staticMatch.seedHints, staticMatch.genreKey);
+    return ensureSeedHintsNamingDefaults(null, g);
+  }
+
+  private async backfillMissingNamingDefaults(): Promise<void> {
+    const all = await this.repo.find();
+    let patched = 0;
+    for (const tpl of all) {
+      const next = ensureSeedHintsNamingDefaults(tpl.seedHints, tpl.genreKey || tpl.displayName);
+      if (!isSameJson(tpl.seedHints ?? {}, next)) {
+        tpl.seedHints = next;
+        await this.repo.save(tpl);
+        patched += 1;
+      }
+    }
+    if (patched > 0) this.logger.log(`[seedHints] 已回填 namingDefaults: ${patched} 条模板`);
   }
 
   /** 确保模板有 cachedAgentSections（无则从默认模板+题材覆盖填充），供 createBook 直接使用 */
@@ -994,6 +1668,7 @@ ${baseRef ? `=== 参考范例 ===\n${baseRef}\n` : ''}
       coreLoopPatterns: portrait.suggestedCoreLoops,
       goldenFingerGuidance: portrait.goldenFingerStyle,
       worldBuildingDirectives: portrait.worldBuildingStyle,
+      namingDefaults: getDefaultNamingDefaultsForGenre(dto.genreName),
     };
 
     // 第三阶段：生成题材定制 Playbook（全部 7 种）

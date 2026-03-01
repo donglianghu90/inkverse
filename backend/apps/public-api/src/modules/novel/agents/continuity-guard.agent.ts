@@ -11,7 +11,7 @@ import {
   StoryState,
   continuityPreCheckSchema,
 } from '../schemas/novel-state.schemas';
-import { buildCompactContext } from '../prompting/novel-playbook';
+import { buildCompactContext, UNIFIED_AGENT_MAX_CHARACTERS } from '../prompting/novel-playbook';
 
 @Injectable()
 export class ContinuityGuardAgent {
@@ -19,7 +19,7 @@ export class ContinuityGuardAgent {
 
   async preCheck(state: StoryState, intent: ChapterIntent): Promise<ContinuityPreCheck> {
     const context = buildCompactContext(state, {
-      maxCharacters: 12,
+      maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
       maxChapterSummaries: 3,
       maxOpenThreads: 8,
     });
@@ -27,7 +27,8 @@ export class ContinuityGuardAgent {
     const blockedCharacters = state.characters
       .filter((c) => {
         const lc = c.status.lifecycleStatus ?? 'active';
-        return lc === 'dead' || lc === 'exited' || lc === 'dormant';
+        const canRef = c.status.dormantReference ?? false;
+        return ((lc === 'dead' || lc === 'exited') && !canRef) || (lc === 'dormant' && !canRef);
       })
       .map((c) => `${c.name}(${c.id}): ${c.status.lifecycleStatus}`);
 

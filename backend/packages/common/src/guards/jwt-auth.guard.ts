@@ -9,6 +9,7 @@ import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@packages/modules';
 import { JwtService } from '@nestjs/jwt';
 import Redis from 'ioredis';
+import { createHash } from 'crypto';
 import { IS_PUBLIC_KEY } from './public.decorator';
 
 export interface JwtPayload {
@@ -63,13 +64,10 @@ export class JwtAuthGuard implements CanActivate {
       // 将用户信息添加到请求对象
       request.user = payload;
       
-      // 从 Redis 获取存储的 token
-      // 统一使用 inkverse:user:token:${id} 格式
-      const redisKey = `inkverse:user:token:${payload.id}`;
-      const storedToken = await this.redis.get(redisKey);
-      
-      // 如果 Redis 中没有 token 或者 token 不匹配，则认为 token 无效
-      if (!storedToken || storedToken !== token) {
+      const tokenHash = createHash('sha256').update(token).digest('hex');
+      const redisKey = `inkverse:user:token:${payload.id}:${tokenHash}`;
+      const exists = await this.redis.exists(redisKey);
+      if (!exists) {
         throw new UnauthorizedException('token 已失效，请重新登录');
       }
       

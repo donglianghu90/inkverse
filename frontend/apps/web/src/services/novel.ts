@@ -9,6 +9,9 @@ export interface CreateBookParams {
   mainIdea: string;
   genre: string;
   targetAudience: string;
+  protagonistFocus?: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble';
+  tonePreference?: string;
+  audienceTags?: string[];
   mainStoryGoal: string;
   titleHint?: string;
   targetChapterWordCount?: number;
@@ -498,7 +501,7 @@ export interface BookTokenUsage {
   totalCalls: number;
   byProvider: Array<{ provider: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number }>;
   byModel: Array<{ model: string; provider: string; tier: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; avgDurationMs: number }>;
-  chapters: Array<{ chapterNumber: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; totalCalls: number }>;
+  chapters: Array<{ chapterNumber: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; totalCalls: number; byModel?: Array<{ model: string; provider: string; tier: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; avgDurationMs: number }> }>;
 }
 
 export async function getBookTokenUsage(bookId: string): Promise<BookTokenUsage> {
@@ -514,6 +517,26 @@ export async function updateBookProfile(
   profile: BookPromptProfile,
 ): Promise<BookPromptProfile> {
   return request(`${BASE}/books/${bookId}/profile`, { method: 'PUT', data: profile });
+}
+
+export interface AudienceDirective {
+  audienceTags: string[];
+  protagonistFocus: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble';
+  tonePreference: string;
+  relationshipDensity: 'low' | 'medium' | 'high';
+  hardConstraints: string[];
+  softPreferences: string[];
+}
+
+export async function getBookAudience(bookId: string): Promise<AudienceDirective> {
+  return request(`${BASE}/books/${bookId}/audience`);
+}
+
+export async function updateBookAudience(
+  bookId: string,
+  audience: AudienceDirective,
+): Promise<AudienceDirective> {
+  return request(`${BASE}/books/${bookId}/audience`, { method: 'PUT', data: audience });
 }
 
 export async function getWorld(bookId: string): Promise<WorldData> {
@@ -582,6 +605,11 @@ export async function getGenerationStatus(bookId: string): Promise<GenerationSta
 export function getGenerateSSEUrl(bookId: string): string {
   const token = getToken();
   return `${BASE}/books/${bookId}/chapters/generate-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+}
+
+export function getProgressSSEUrl(bookId: string): string {
+  const token = getToken();
+  return `${BASE}/books/${bookId}/chapters/progress-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 /* ========== Pipeline ========== */
@@ -805,6 +833,20 @@ export interface SeedAnalyzerHints {
   coreLoopPatterns?: string[];
   goldenFingerGuidance?: string;
   worldBuildingDirectives?: string;
+  namingDefaults?: {
+    personNameStyle?: string;
+    locationNameStyle?: string;
+    abilityNameStyle?: string;
+    factionNameStyle?: string;
+    itemNameStyle?: string;
+    examples?: {
+      personNames?: string[];
+      locationNames?: string[];
+      abilityNames?: string[];
+      factionNames?: string[];
+    };
+    taboos?: string[];
+  };
 }
 
 export interface RuleAtom {
@@ -826,6 +868,15 @@ export interface CachedAgentSections {
   ruleAtoms?: RuleAtom[];
 }
 
+export interface AudienceMeta {
+  audienceTags?: string[];
+  protagonistFocusTags?: Array<'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'>;
+  toneTags?: string[];
+  relationshipDensity?: 'low' | 'medium' | 'high';
+  hardConstraints?: string[];
+  softPreferences?: string[];
+}
+
 export interface GenreProfileTemplate {
   id: string;
   userId: string | null;
@@ -837,6 +888,12 @@ export interface GenreProfileTemplate {
   seedHints: SeedAnalyzerHints | null;
   ruleAtoms: RuleAtom[];
   cachedAgentSections: CachedAgentSections | null;
+  audienceTags: string[];
+  protagonistFocusTags: Array<'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'>;
+  toneTags: string[];
+  relationshipDensity: 'low' | 'medium' | 'high';
+  hardConstraints: string[];
+  softPreferences: string[];
   isSystem: boolean;
   parentTemplateId: string | null;
   systemVersion: number;
@@ -856,6 +913,7 @@ export interface CreateGenreTemplateParams {
   seedHints?: SeedAnalyzerHints;
   ruleAtoms?: RuleAtom[];
   cachedAgentSections?: CachedAgentSections;
+  audienceMeta?: AudienceMeta;
 }
 
 export interface UpdateGenreTemplateParams {
@@ -866,6 +924,7 @@ export interface UpdateGenreTemplateParams {
   seedHints?: SeedAnalyzerHints;
   ruleAtoms?: RuleAtom[];
   cachedAgentSections?: CachedAgentSections;
+  audienceMeta?: AudienceMeta;
 }
 
 export interface AiGenerateProfileParams {

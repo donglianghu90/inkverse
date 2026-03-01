@@ -81,7 +81,8 @@ export class AuthController {
   @ApiResponse({ status: 401, description: '未授权' })
   async logout(@Req() req: any) {
     const adminId = req.user?.id;
-    await this.authService.logout(adminId);
+    const token = req.headers?.authorization?.split(' ')[1];
+    await this.authService.logout(adminId, token);
     return this.responseService.success({ success: true });
   }
 

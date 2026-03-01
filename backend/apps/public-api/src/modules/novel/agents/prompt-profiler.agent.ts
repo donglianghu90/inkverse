@@ -23,7 +23,11 @@ import {
   WUXIA_REFERENCE_PROFILE, MILITARY_REFERENCE_PROFILE,
   HORROR_REFERENCE_PROFILE, SUPERNATURAL_REFERENCE_PROFILE,
   ADVENTURE_REFERENCE_PROFILE, GAME_REFERENCE_PROFILE,
+  ESPORTS_REFERENCE_PROFILE, VRMMO_REFERENCE_PROFILE,
   SPORTS_REFERENCE_PROFILE, SUPERPOWER_REFERENCE_PROFILE,
+  LIGHT_NOVEL_REFERENCE_PROFILE, POST_APOCALYPTIC_REFERENCE_PROFILE,
+  SUSPENSE_THRILLER_REFERENCE_PROFILE, INFINITE_FLOW_REFERENCE_PROFILE,
+  XUANHUAN_REFERENCE_PROFILE, URBAN_ROMANCE_REFERENCE_PROFILE, ANCIENT_ROMANCE_REFERENCE_PROFILE,
   EPIC_REFERENCE_PROFILE, FANTASY_ROMANCE_REFERENCE_PROFILE,
   CHILDREN_REFERENCE_PROFILE,
 } from '../prompting/genre-reference-profiles';
@@ -33,6 +37,9 @@ export interface ProfileInput {
   targetAudience: string;
   mainIdea: string;
   tone?: string;
+  protagonistFocus?: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'; // 主角聚焦
+  tonePreference?: string; // 调性偏好
+  audienceTags?: string[]; // 受众标签
   mainStoryGoal?: string;
   targetChapterWordCount?: number;
   plannedTotalChapters?: { min: number; max: number };
@@ -40,6 +47,15 @@ export interface ProfileInput {
 }
 
 const GENRE_KEYWORDS: Array<{ profile: BookPromptProfile; keywords: string[] }> = [
+  { profile: XUANHUAN_REFERENCE_PROFILE, keywords: ['玄幻', '高武', '异界', '御兽', '退婚流', 'xuanhuan'] },
+  { profile: INFINITE_FLOW_REFERENCE_PROFILE, keywords: ['无限流', '主神空间', '轮回', '副本', 'infinite-flow'] },
+  { profile: LIGHT_NOVEL_REFERENCE_PROFILE, keywords: ['轻小说', '二次元', '轻改', 'light-novel'] },
+  { profile: POST_APOCALYPTIC_REFERENCE_PROFILE, keywords: ['末世危机', '末世', '废土', 'post-apocalyptic', '丧尸'] },
+  { profile: SUSPENSE_THRILLER_REFERENCE_PROFILE, keywords: ['悬疑惊悚', '心理惊悚', '连环杀手', 'suspense-thriller'] },
+  { profile: ESPORTS_REFERENCE_PROFILE, keywords: ['电子竞技', '电竞', 'esports', '职业联赛'] },
+  { profile: VRMMO_REFERENCE_PROFILE, keywords: ['虚拟网游', '全息网游', 'vrmmo', 'mmo', '网游'] },
+  { profile: URBAN_ROMANCE_REFERENCE_PROFILE, keywords: ['现代言情', '都市言情', '甜宠', '先婚后爱', 'urban-romance'] },
+  { profile: ANCIENT_ROMANCE_REFERENCE_PROFILE, keywords: ['古代言情', '宅斗', '宫斗', '重生复仇', 'ancient-romance'] },
   { profile: URBAN_REFERENCE_PROFILE, keywords: ['都市', '现实', '职场', '商战', '白领', '都市生活', '社会', '现代'] },
   { profile: HISTORICAL_REFERENCE_PROFILE, keywords: ['历史', '朝堂', '权谋', '宫廷', '三国', '架空历史', '古代', '王朝'] },
   { profile: WUXIA_REFERENCE_PROFILE, keywords: ['武侠', '江湖', '侠客', '门派', '武林', '刀剑', '新武侠'] },
@@ -53,11 +69,11 @@ const GENRE_KEYWORDS: Array<{ profile: BookPromptProfile; keywords: string[] }> 
   { profile: SPORTS_REFERENCE_PROFILE, keywords: ['体育', '竞技', '篮球', '足球', '拳击', '赛车', '格斗'] },
   { profile: SUPERPOWER_REFERENCE_PROFILE, keywords: ['超能力', '异能', '觉醒', '变异', '超英', '能力者'] },
   { profile: EPIC_REFERENCE_PROFILE, keywords: ['史诗', '传奇', '群像', '王朝', '文明', '多线'] },
-  { profile: FANTASY_ROMANCE_REFERENCE_PROFILE, keywords: ['仙恋', '神话爱情', '跨界恋爱', '前世今生', '人妖恋', '仙凡恋'] },
+  { profile: FANTASY_ROMANCE_REFERENCE_PROFILE, keywords: ['幻想言情', '仙恋', '神话爱情', '跨界恋爱', '前世今生', '人妖恋', '仙凡恋', 'fantasy-romance'] },
   { profile: CHILDREN_REFERENCE_PROFILE, keywords: ['儿童', '少儿', '童话', '少年', '成长', '校园冒险'] },
   { profile: ROMANCE_REFERENCE_PROFILE, keywords: ['言情', '恋爱', '青春', '甜宠', 'romance', '婚恋', '暗恋', '总裁', '豪门', '先婚后爱'] },
   { profile: MYSTERY_REFERENCE_PROFILE, keywords: ['悬疑', '推理', '侦探', '刑侦', '犯罪', '谋杀', 'mystery', '探案', '破案', '密室'] },
-  { profile: XIANXIA_REFERENCE_PROFILE, keywords: ['玄幻', '仙侠', '修仙', '奇幻', '魔法', '异世界', '穿越', '重生', '系统', '升级', 'fantasy'] },
+  { profile: XIANXIA_REFERENCE_PROFILE, keywords: ['仙侠', '修仙', '飞升', '宗门', '渡劫', '凡人流', 'xianxia'] },
 ];
 
 @Injectable()
@@ -170,7 +186,9 @@ ${referenceExample}
 题材类型：${input.genre}
 目标读者：${input.targetAudience}
 核心创意：${input.mainIdea}
-调性：${input.tone || '请根据题材与创意自动推断'}
+调性：${input.tonePreference || input.tone || '请根据题材与创意自动推断'}
+${input.protagonistFocus ? `叙事聚焦：${input.protagonistFocus}（${{ female_lead: '女主视角优先，细腻情感为主轴', male_lead: '男主视角优先，爽感进阶为主轴', dual_lead: '双主角平衡推进，互动张力为核心', ensemble: '群像叙事，多视角交织' }[input.protagonistFocus]})` : ''}
+${input.audienceTags?.length ? `受众标签：${input.audienceTags.join('、')}（写作手册的风格/节奏/爽感定义应匹配此受众群体）` : ''}
 ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
 规模：每章约 ${input.targetChapterWordCount ?? 3000} 字，计划 ${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800} 章
 

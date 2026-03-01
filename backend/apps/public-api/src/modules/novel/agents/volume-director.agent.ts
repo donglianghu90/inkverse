@@ -1,5 +1,5 @@
 /** 大卷导演 — 根据全书预计总章数动态规划大卷跨度的宏观叙事弧，管理跨MiniArc的线索和角色成长。 */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
 import { LlmService } from '../llm/llm.service';
 import { BookPromptTemplateService } from '../book-prompt-template.service';
@@ -11,9 +11,12 @@ import {
   foreshadowingDepositSchema,
 } from '../schemas/novel-state.schemas';
 import { buildCompactContext } from '../prompting/novel-playbook';
+import { buildAudiencePromptBlock } from '../prompting/audience-directive';
+import { buildBookStrategyPromptBlock } from '../prompting/book-strategy';
 
 @Injectable()
 export class VolumeDirectorAgent {
+  private readonly logger = new Logger(VolumeDirectorAgent.name);
   constructor(private readonly llm: LlmService, private readonly promptTplService: BookPromptTemplateService) {}
 
   private async loadSec(bookId: string): Promise<Record<string, string>> {
@@ -25,13 +28,18 @@ export class VolumeDirectorAgent {
     return map;
   }
 
-  /** 规划大卷 + 同时生成伏笔种子。返回 [卷, 伏笔种子列表]。 */
+  /** 规划大卷 + 同时生成伏笔种子。伏笔生成失败时降级为空数组，不影响卷规划保存。 */
   async planVolumeWithForeshadowing(
     state: StoryState,
     additionalSystemPrompt?: string,
   ): Promise<{ volume: VolumeArc; deposits: ForeshadowingDeposit[] }> {
     const volume = await this.planVolume(state, additionalSystemPrompt);
-    const deposits = await this.generateForeshadowingDeposits(state, volume);
+    let deposits: ForeshadowingDeposit[] = [];
+    try {
+      deposits = await this.generateForeshadowingDeposits(state, volume);
+    } catch (err) {
+      this.logger.warn(`[Foreshadowing] 伏笔种子生成失败，降级为空数组: ${(err as Error).message}`);
+    }
     return { volume, deposits };
   }
 
@@ -114,6 +122,11 @@ ${sec['agent:volume-director:mini_arc_rules'] ?? '- 每卷3-6个MiniArc\n- 第�
 === 硬规则 ===
 ${sec['agent:volume-director:hard_rules'] ?? '- volumeId 格式：vol_序号\n- powerProgression 必须具体（不能是"变强了"）\n- subPlots 至少包含1条main线+1条secondary线\n- forbiddenElements 继承上一卷的已用梗\n- characterGoals 至少覆盖主角+1个重要配角'}
 - 估计章数${volRange}之间
+- newCharacterPlan：规划本卷新引入的角色（role/代号/预计出场章节/目的），总数不超${state.bookStrategy?.characterBudget?.maxNewPerArc ?? 3}
+- exitCharacterPlan：规划本卷退场的角色（characterId/退场方式fading|dormant|dead|exited/预计章节/原因）
+
+${buildAudiencePromptBlock(state)}
+${buildBookStrategyPromptBlock(state.bookStrategy)}
 ${additionalSystemPrompt ? '\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`,
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}
@@ -141,14 +154,26 @@ ${openThreads || '（暂无）'}
     });
   }
 
-  /** 基于卷规划生成前瞻式伏笔种子。 */
+  /** 基于卷规划生成前瞻式伏笔种子。使用纯required生成schema避免Gemini的optional/default兼容性问题 */
   private async generateForeshadowingDeposits(
     state: StoryState,
     volume: VolumeArc,
   ): Promise<ForeshadowingDeposit[]> {
-    const schema = z.object({
-      deposits: z.array(foreshadowingDepositSchema).min(3).max(12),
+    const genDeposit = z.object({ // 生成专用schema — 仅含LLM应产出的字段，去除运行时状态(.optional/.default)
+      depositId: z.string(), label: z.string(),
+      category: z.enum(['character_secret', 'power_seed', 'world_rule', 'relationship_hint', 'plot_twist', 'prophecy', 'chekhov_gun', 'atmospheric']),
+      description: z.string(), embeddingGuidance: z.string(), payoffDescription: z.string(),
+      plantWindow: z.object({ earliestChapter: z.number().int().min(1), latestChapter: z.number().int().min(1) }),
+      payoffWindow: z.object({ earliestChapter: z.number().int().min(1), latestChapter: z.number().int().min(1) }),
+      relatedCharacterIds: z.array(z.string()), relatedPlotThreadIds: z.array(z.string()),
+      priority: z.enum(['must_plant', 'should_plant', 'nice_to_have']),
+      pendingCharacterHint: z.object({
+        characterLabel: z.string(),
+        hintGuidance: z.string(),
+        formalIntroChapter: z.number().int().min(1),
+      }).optional(),
     });
+    const schema = z.object({ deposits: z.array(genDeposit).min(3).max(12) });
     const volSpan = volume.estimatedEndChapter - volume.startChapter + 1;
     const minPayoffGap = Math.max(3, Math.round(volSpan * 0.15)); // 伏笔回收至少间隔卷跨度的15%
 
@@ -169,6 +194,12 @@ ${sec['agent:volume-foreshadowing:embedding'] ?? '描述如何自然嵌入（不
 === 伏笔窗口规则 ===
 ${sec['agent:volume-foreshadowing:window_rules'] ?? `- plantWindow: 越早越好，给足发酵时间\n- payoffWindow: 至少间隔${minPayoffGap}章\n- must_plant: 核心剧情必需\n- should_plant: 大幅提升后续冲击力\n- nice_to_have: 锦上添花，增加重读价值`}
 
+=== 角色预注册伏笔 ===
+如果某条伏笔涉及一个尚未正式出场的角色（如"神秘剑客""幕后黑手"），填写 pendingCharacterHint：
+- characterLabel：角色代号（如"神秘剑客"）
+- hintGuidance：如何在正式出场前埋暗示（背影/传闻/遗物等）
+- formalIntroChapter：预计正式出场章节
+
 depositId格式：fsd_vol${volume.volumeNumber}_序号`,
       userPrompt: `卷规划：
 - 标题：${volume.title}
@@ -182,6 +213,6 @@ depositId格式：fsd_vol${volume.volumeNumber}_序号`,
       temperature: 0.6,
     });
 
-    return result.deposits;
+    return result.deposits.map(d => ({ ...d, status: 'pending' as const }));
   }
 }

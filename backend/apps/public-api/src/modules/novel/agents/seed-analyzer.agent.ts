@@ -9,8 +9,10 @@ import { z } from 'zod';
 import {
   storySeedSchema,
   roughOutlineSchema,
+  namingConventionSchema,
   StorySeed,
   RoughOutline,
+  NamingConvention,
 } from '../schemas/novel-state.schemas';
 import { WRITING_SOUL_PLAYBOOK } from '../prompting/novel-playbook';
 
@@ -18,6 +20,9 @@ export interface SeedAnalysisInput {
   mainIdea: string;
   genre: string;
   targetAudience: string;
+  protagonistFocus?: 'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'; // 主角叙事聚焦
+  tonePreference?: string; // 调性偏好
+  audienceTags?: string[]; // 受众标签
   titleHint?: string;
   mainStoryGoal?: string;
   targetChapterWordCount?: number;
@@ -26,15 +31,30 @@ export interface SeedAnalysisInput {
     coreLoopPatterns?: string[];
     goldenFingerGuidance?: string;
     worldBuildingDirectives?: string;
+    namingDefaults?: {
+      personNameStyle?: string;
+      locationNameStyle?: string;
+      abilityNameStyle?: string;
+      factionNameStyle?: string;
+      itemNameStyle?: string;
+      examples?: {
+        personNames?: string[];
+        locationNames?: string[];
+        abilityNames?: string[];
+        factionNames?: string[];
+      };
+      taboos?: string[];
+    };
   };
 }
 
 const seedAnalysisOutputSchema = z.object({
   seed: storySeedSchema,
   outline: roughOutlineSchema,
+  namingConvention: namingConventionSchema,
 });
 
-type SeedAnalysisOutput = z.infer<typeof seedAnalysisOutputSchema>;
+type SeedAnalysisOutput = z.infer<typeof seedAnalysisOutputSchema> & { namingConvention?: NamingConvention };
 type OutlinePhase = 'opening' | 'development' | 'climax' | 'resolution';
 
 @Injectable()
@@ -91,6 +111,68 @@ ${input.seedHints?.coreLoopPatterns?.length ? `- ${input.seedHints.coreLoopPatte
 - 反派/对手有梯度——不能一开始打终极boss
 ${input.seedHints?.worldBuildingDirectives ? `- 【题材定制】${input.seedHints.worldBuildingDirectives}` : ''}
 
+=== 命名哲学（按题材差异化） ===
+命名不是贴标签，而是种下一粒会发芽的种子。不同题材，"成长"的载体完全不同：
+
+【玄幻/修仙/武侠】
+- 名字本身承载汉字意象（五行/自然/境界），象征多层次
+- 成长载体：境界称号+外号叠加，名字不变但名号越堆越重
+- nameGrowthArc：同一个名字，不同阶段旁人如何震惊于这三个字
+- 示例："陈尘"→初期被嘲笑的"尘埃"→中期"震了天榜的陈尘"→终期"不敢直呼的存在"
+- namingConvention：二/三字古风汉名含五行/自然意象，禁英文名/现代词
+
+【言情/都市言情】
+- 名字本身可以普通，成长不靠名字象征，靠关键人物如何称呼你的亲密度变化
+- 成长载体：称呼亲密度弧线（"陆小姐"→"程程"→"老婆"）
+- nameGrowthArc：storyPhase 对应感情阶段，interpretation 写称呼变化
+- namingConvention：现代两三字常用名，禁古风生僻字
+
+【历史/权谋/古代】
+- 名/字/号三层系统，谁有资格叫你哪个名字本身就是权力象征
+- 成长载体：官职爵位变化（被直呼名→被称字→无人敢称名）
+- nameGrowthArc：每阶段圈子+称谓变化，皇帝赐字是最高荣誉
+
+【悬疑/推理/惊悚】
+- 名字可以是谜本身：真实身份 vs 假名，身份剥洋葱就是弧线
+- 成长载体：代号→别名→真名揭露的戏剧冲击
+- nameGrowthArc：每阶段读者对"这个人是谁"的认知层次
+
+【西幻/奇幻】
+- 命名规律比象征更重要：同一文明名字要有音韵一致性（精灵/矮人/人类各不同）
+- 成长载体：冠名/封号（"Arthur" → "Arthur the Dragonslayer"）
+
+【科幻】
+- 可中可西，或代号/编号，"从编号到被人记住名字"本身就是弧线
+- 成长载体：军衔/职称，或从无名到有名
+
+【战争/军事】
+- 命名强调系统感与职业感：军衔、代号、战区名、作战单位要统一风格
+- 成长载体：军衔晋升与战功称号变化（士兵→班长→连长/王牌指挥官）
+
+【无限流/规则怪谈/恐怖】
+- 命名优先"可记忆的代号"：副本名、规则名、组织名要短而锋利
+- 成长载体：从被规则追杀的编号者到能反向制定规则的人
+
+【末世危机/废土】
+- 命名要有生存语感：据点名、物资体系名、灾难等级名要一眼可懂
+- 成长载体：从幸存者标签到据点领袖/秩序制定者
+
+【电竞/体育/虚拟网游】
+- 命名强调可传播性：ID/外号/战术名要便于读者记忆与讨论
+- 成长载体：青训/路人王→首发/主力→冠军称号或历史级ID
+
+【轻小说/二次元】
+- 命名允许轻巧和梗感，但必须避免过度中二导致出戏
+- 成长载体：从玩梗式人设到被读者真正共情的角色标签
+
+通用原则：
+- 配角/反派名要有两面性，不过于直白（"夺命"太露，"谢玄机"有层次）
+- 牺牲型配角名可含离/别/逝意象，预埋悲剧而读者不自知
+- nameGrowthArc 阶段数 = outline.points 阶段数，每阶段必须有情感转变
+- seed.protagonistConcept.nameRationale：说明命名出发点（一句话，说清楚为什么叫这个名字）
+- namingConvention 需输出 personNameStyle/locationNameStyle/abilityNameStyle/factionNameStyle/taboos/examples
+${input.seedHints?.namingDefaults ? `- 【系统题材模板命名默认值（优先遵循）】${JSON.stringify(input.seedHints.namingDefaults)}` : ''}
+
 === 读者画像（readerPersona） ===
 精确建模目标读者：demographics、dailyFrustrations、coreFantasy、projectionAnchor、emotionalNeeds、triggerScenes
 - projectionAnchor 最关键：主角身上什么特质让读者觉得"这就是我想成为的人"
@@ -120,6 +202,9 @@ ${WRITING_SOUL_PLAYBOOK}`,
 核心创意：${input.mainIdea}
 类型：${input.genre}
 目标读者：${input.targetAudience}
+${input.protagonistFocus ? `叙事聚焦：${input.protagonistFocus}（${({ female_lead: '女主视角优先', male_lead: '男主视角优先', dual_lead: '双主角平衡', ensemble: '群像叙事' })[input.protagonistFocus]})` : ''}
+${input.tonePreference ? `调性偏好：${input.tonePreference}` : ''}
+${input.audienceTags?.length ? `受众标签：${input.audienceTags.join('、')}` : ''}
 ${input.titleHint ? `书名提示：${input.titleHint}` : ''}
 ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
 规模：每章约 ${input.targetChapterWordCount ?? 3000} 字，计划 ${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800} 章
@@ -135,11 +220,14 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
 8. seed.goldenFinger 设计一个独特的、有限制的、可进化的金手指——进化阶段数量要匹配总章数（每100-150章约1个进化阶段）
 9. seed.thematicCore 设计核心命题——不是剧情目标，而是人性命题。thematicProgression 阶段数匹配大纲阶段数。
 10. seed.conceptEvaluation 诚实评估这个概念的商业潜力，特别评估"世界观深度是否够支撑 ${input.plannedTotalChapters?.min ?? 500}+ 章"
-10. outline.points 包含合理数量的故事阶段节点（匹配 ${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800} 章的规模，每阶段约占总章数的8%-15%），每个标明阶段和暂定章节范围
-11. outline.estimatedTotalChapters 设为你估算的合理总章数
-12. outline.estimatedVolumes 根据总章数和故事结构估算合理卷数（参考：50章→1卷，100章→2卷，200章→3卷，400章→4卷，600章→5卷，1000章→6-8卷）
-13. outline.endingDirection 只给一个模糊的结局方向，允许后续调整
-14. 如果你评估出来概念偏弱（hookScore < 6 或 overallViability = weak），主动在生成中调整优化`,
+11. outline.points 包含合理数量的故事阶段节点（匹配 ${input.plannedTotalChapters?.min ?? 500}-${input.plannedTotalChapters?.max ?? 800} 章的规模，每阶段约占总章数的8%-15%），每个标明阶段和暂定章节范围
+12. outline.estimatedTotalChapters 设为你估算的合理总章数
+13. outline.estimatedVolumes 根据总章数和故事结构估算合理卷数（参考：50章→1卷，100章→2卷，200章→3卷，400章→4卷，600章→5卷，1000章→6-8卷）
+14. outline.endingDirection 只给一个模糊的结局方向，允许后续调整
+15. 如果你评估出来概念偏弱（hookScore < 6 或 overallViability = weak），主动在生成中调整优化
+16. seed.protagonistConcept.nameRationale：一句话说明命名出发点（为什么叫这个名字，与题材/主题/性格/命运的关联）
+17. seed.protagonistConcept.nameGrowthArc：阶段数与 outline.points 数量相同，每阶段 interpretation + selfPerception 必须有情感转变，按题材选择合适的成长载体（玄幻=震慑感变化，言情=称呼亲密度，历史=官职称谓，悬疑=身份认知）
+18. namingConvention：输出完整的命名规范，包含 personNameStyle/locationNameStyle/abilityNameStyle（如有）/factionNameStyle（如有）/taboos/examples（至少3个人名示例和2个地名示例）`,
       temperature: 0.6,
     });
     return this.normalizeAndValidate(raw as Record<string, unknown>, input);
@@ -149,6 +237,7 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
     const root = this.asRecord(raw);
     const seedRaw = this.asRecord(root.seed);
     const outlineRaw = this.asRecord(root.outline);
+    const namingRaw = this.asRecord(root.namingConvention);
 
     const plannedMin = this.asInt(seedRaw.plannedTotalChapters, 'min')
       ?? input.plannedTotalChapters?.min
@@ -173,6 +262,8 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
         logline: this.asString(seedRaw.logline) || input.mainIdea,
         protagonistConcept: {
           name: this.asString(protagonistRaw.name) || '未命名主角',
+          nameRationale: this.asString(protagonistRaw.nameRationale) || undefined,
+          nameGrowthArc: this.normalizeNameGrowthArc(protagonistRaw.nameGrowthArc),
           situation: this.asString(protagonistRaw.situation) || input.mainIdea.slice(0, 80),
           coreDesire: this.asString(protagonistRaw.coreDesire) || input.mainStoryGoal || '在冲突中活下来并找到答案',
           personality: this.asString(protagonistRaw.personality) || '坚韧且谨慎',
@@ -188,6 +279,7 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
         thematicCore: this.normalizeThematicCore(thematicRaw),
       },
       outline: this.normalizeOutline(outlineRaw, plannedMin, plannedMax),
+      namingConvention: this.normalizeNamingConvention(namingRaw, input.genre, input.seedHints?.namingDefaults),
     };
 
     return seedAnalysisOutputSchema.parse(normalized);
@@ -348,6 +440,170 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
     }).filter(Boolean);
     const dedup = [...new Set(mapped)];
     return dedup.length ? dedup : ['mystery_solving'];
+  }
+
+  private normalizeNameGrowthArc(value: unknown): Array<{ storyPhase: string; interpretation: string; selfPerception: string }> | undefined {
+    if (!Array.isArray(value) || value.length === 0) return undefined;
+    const result = value.map((item) => {
+      const r = this.asRecord(item);
+      return {
+        storyPhase: this.asString(r.storyPhase) || this.asString(r.phase) || '阶段',
+        interpretation: this.asString(r.interpretation) || this.asString(r.externalView) || '',
+        selfPerception: this.asString(r.selfPerception) || this.asString(r.internalView) || '',
+      };
+    }).filter((a) => a.interpretation || a.selfPerception);
+    return result.length ? result : undefined;
+  }
+
+  private normalizeNamingConvention(
+    raw: Record<string, unknown>,
+    genre: string,
+    templateDefaults?: NonNullable<SeedAnalysisInput['seedHints']>['namingDefaults'],
+  ): Record<string, unknown> | undefined {
+    const fallback = this.genreNamingFallback(genre);
+    const defaults = this.asRecord(templateDefaults ?? {});
+    const defaultExamples = this.asRecord(defaults.examples);
+    if (Object.keys(raw).length === 0 && Object.keys(defaults).length === 0) return fallback;
+    const examplesRaw = this.asRecord(raw.examples);
+    return {
+      personNameStyle: this.asString(defaults.personNameStyle) || this.asString(raw.personNameStyle) || fallback.personNameStyle,
+      locationNameStyle: this.asString(defaults.locationNameStyle) || this.asString(raw.locationNameStyle) || fallback.locationNameStyle,
+      abilityNameStyle: this.asString(defaults.abilityNameStyle) || this.asString(raw.abilityNameStyle) || undefined,
+      factionNameStyle: this.asString(defaults.factionNameStyle) || this.asString(raw.factionNameStyle) || undefined,
+      itemNameStyle: this.asString(defaults.itemNameStyle) || this.asString(raw.itemNameStyle) || undefined,
+      examples: {
+        personNames: this.normalizeStringArray(defaultExamples.personNames ?? examplesRaw.personNames ?? raw.personNameExamples, fallback.examples.personNames),
+        locationNames: this.normalizeStringArray(defaultExamples.locationNames ?? examplesRaw.locationNames ?? raw.locationNameExamples, fallback.examples.locationNames),
+        abilityNames: this.normalizeStringArray(defaultExamples.abilityNames ?? examplesRaw.abilityNames ?? raw.abilityNameExamples, []),
+        factionNames: this.normalizeStringArray(defaultExamples.factionNames ?? examplesRaw.factionNames ?? raw.factionNameExamples, []),
+      },
+      taboos: this.normalizeStringArray(defaults.taboos ?? raw.taboos, []),
+    };
+  }
+
+  private genreNamingFallback(genre: string): {
+    personNameStyle: string;
+    locationNameStyle: string;
+    examples: { personNames: string[]; locationNames: string[] };
+  } {
+    const g = genre.toLowerCase();
+    if (/(玄幻|仙侠|修仙|武侠|xianxia|xuanhuan|wuxia)/.test(g)) {
+      return {
+        personNameStyle: '二到三字中文名，优先自然/五行意象，避免现代英文拼写',
+        locationNameStyle: '地貌+方位或意象组合（如“北陵”“落霞谷”）',
+        examples: { personNames: ['凌霜', '顾长歌', '沈青岚'], locationNames: ['落霞谷', '北陵城'] },
+      };
+    }
+    if (/(西方奇幻|western-fantasy|奇幻|fantasy)/.test(g)) {
+      return {
+        personNameStyle: '可中可西但需同文明音韵统一（人类/精灵/矮人命名规则分层）',
+        locationNameStyle: '王国/城邦/遗迹命名统一语系，避免中西混搭突兀',
+        examples: { personNames: ['Arthur Vale', 'Elyra', 'Thorne'], locationNames: ['Silverkeep', 'Ashen Vale'] },
+      };
+    }
+    if (/(科幻|sci-fi|scifi|赛博|机甲|星际)/.test(g)) {
+      return {
+        personNameStyle: '姓名/代号并存，允许编号或呼号，保持组织体系一致',
+        locationNameStyle: '空间站/殖民地/舰队基地命名，突出科技感与层级',
+        examples: { personNames: ['林序-07', '韩霁', 'Kestrel'], locationNames: ['天枢轨道站', 'C-12殖民环'] },
+      };
+    }
+    if (/(战争\/军事|军事|military|战争|谍战|特种兵)/.test(g)) {
+      return {
+        personNameStyle: '简洁有辨识度，结合军衔/代号/呼号，避免花哨',
+        locationNameStyle: '战区/防线/据点命名，强调方位与战术语义',
+        examples: { personNames: ['周烈', '“灰狼”沈拓', '顾砚'], locationNames: ['北境三号防线', '青岚前进基地'] },
+      };
+    }
+    if (/(无限流|infinite-flow|规则怪谈|恐怖|灵异|悬疑惊悚|suspense-thriller|horror|supernatural)/.test(g)) {
+      return {
+        personNameStyle: '优先短名/代号，便于高压副本中快速识别与记忆',
+        locationNameStyle: '副本/禁区/规则场命名短促明确，带危险提示感',
+        examples: { personNames: ['许岚', '“白鸦”', '周祁'], locationNames: ['第四病栋', '雾港12号站'] },
+      };
+    }
+    if (/(末世危机|post-apocalyptic|末世|废土)/.test(g)) {
+      return {
+        personNameStyle: '生存语感优先，可带绰号但不过度中二',
+        locationNameStyle: '避难所/据点/污染区命名一眼可懂',
+        examples: { personNames: ['沈砾', '“扳手”阿川', '林昼'], locationNames: ['黎明避难所', '黑雨污染区'] },
+      };
+    }
+    if (/(电子竞技|虚拟网游|体育竞技|esports|vrmmo|sports|game)/.test(g)) {
+      return {
+        personNameStyle: '本名+ID双轨命名，ID需短、好读、可传播',
+        locationNameStyle: '赛场/俱乐部/服务器地名，强调赛事与运营语境',
+        examples: { personNames: ['陈临(ID:Lin)', '苏禾(ID:Hex)', '宋野(ID:Apex)'], locationNames: ['星环联赛主舞台', '曙光一区'] },
+      };
+    }
+    if (/(轻小说|light-novel|二次元)/.test(g)) {
+      return {
+        personNameStyle: '轻巧顺口、可带一点梗感，但避免过度夸张',
+        locationNameStyle: '校园/社团/街区命名可爱且清晰，保持日常感',
+        examples: { personNames: ['白川悠', '林可奈', '顾时雨'], locationNames: ['樱丘学园', '银杏商店街'] },
+      };
+    }
+    if (/(冒险\/探险|adventure|冒险|探险|盗墓|寻宝)/.test(g)) {
+      return {
+        personNameStyle: '短而硬朗、便于队内称呼，绰号可体现技能分工',
+        locationNameStyle: '遗迹/禁区/海域/山脉命名应突出地理风险与未知感',
+        examples: { personNames: ['顾野', '“罗盘”林策', '唐砾'], locationNames: ['黑帆海沟', '沉星遗迹'] },
+      };
+    }
+    if (/(超能力\/异能|superpower|异能|超能力|觉醒|学院)/.test(g)) {
+      return {
+        personNameStyle: '现代名为主，可配能力代号，避免中二堆词',
+        locationNameStyle: '学院/研究所/管控区命名需体现制度与阵营差异',
+        examples: { personNames: ['季衡', '宁初', '代号“棱镜”'], locationNames: ['新曜异能学院', '第七收容区'] },
+      };
+    }
+    if (/(史诗\/传奇|epic|史诗|传奇|群像|王朝兴衰)/.test(g)) {
+      return {
+        personNameStyle: '可采用名/姓/称号并行体系，主角群命名要区分文明来源',
+        locationNameStyle: '帝国/城邦/古战场命名强调历史纵深与地缘格局',
+        examples: { personNames: ['阿列斯·维恩', '裴烬', '“北境之狮”岑岳'], locationNames: ['赤曜帝国', '白霜长垣'] },
+      };
+    }
+    if (/(儿童\/少儿文学|children|儿童|少儿|童话)/.test(g)) {
+      return {
+        personNameStyle: '亲切易读、发音明快，避免生僻字与过复杂称号',
+        locationNameStyle: '场景名应具画面感与温暖想象，便于低龄读者记忆',
+        examples: { personNames: ['小满', '豆豆', '安安'], locationNames: ['彩虹镇', '风铃森林'] },
+      };
+    }
+    if (/(古代言情|ancient-romance|古代|宫斗|宅斗)/.test(g)) {
+      return {
+        personNameStyle: '古风中文名，可结合名/字/号体系，避免现代口语化命名',
+        locationNameStyle: '府邸/州郡/宫苑命名，符合古代礼制与地理语感',
+        examples: { personNames: ['沈清辞', '裴砚之', '谢明昭'], locationNames: ['长乐宫', '临安侯府'] },
+      };
+    }
+    if (/(幻想言情|fantasy-romance|仙侠恋|神魔恋)/.test(g)) {
+      return {
+        personNameStyle: '古风与幻想混合命名，保留诗性与宿命感',
+        locationNameStyle: '仙域/神域/秘境命名，强调唯美与层级',
+        examples: { personNames: ['姬扶月', '谢无咎', '云照晚'], locationNames: ['太初天阙', '忘川镜海'] },
+      };
+    }
+    if (/(现代言情|urban-romance|言情|都市|romance)/.test(g)) {
+      return {
+        personNameStyle: '现代常见中文名，简洁顺口，避免古风生僻字',
+        locationNameStyle: '现代城市/街区/地标命名，贴近现实语境',
+        examples: { personNames: ['程予安', '陆知夏', '周言'], locationNames: ['滨江公寓', '临江路'] },
+      };
+    }
+    if (/(历史|权谋|古代)/.test(g)) {
+      return {
+        personNameStyle: '古代语感中文名，可结合名/字/号体系',
+        locationNameStyle: '州郡城池/关隘风格命名，符合古代政区语感',
+        examples: { personNames: ['谢玄机', '裴慎', '柳明昭'], locationNames: ['青州', '雁门关'] },
+      };
+    }
+    return {
+      personNameStyle: '符合题材语境且易记的人名，避免突兀跨风格命名',
+      locationNameStyle: '与世界观语境一致的地名，保持同一文明命名规律',
+      examples: { personNames: ['林湛', '许未央', '顾遥'], locationNames: ['旧港区', '灰塔城'] },
+    };
   }
 
   private asRecord(v: unknown): Record<string, unknown> {

@@ -21,7 +21,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./apps/config-test/test/jest-e2e.json",
     "init:admin": "ts-node -r tsconfig-paths/register scripts/init-admin.ts",
-    "add-scheme-fields": "ts-node -r tsconfig-paths/register scripts/add-scheme-fields.ts"
+    "add-scheme-fields": "ts-node -r tsconfig-paths/register scripts/add-scheme-fields.ts",
+    "backfill:chapter-memory-character-states": "ts-node -r tsconfig-paths/register scripts/backfill-chapter-memory-character-states.ts"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^8.17.1",

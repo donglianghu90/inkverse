@@ -25,7 +25,9 @@ import {
   buildStyleDNA,
   buildCharacterVoiceMatrix,
   buildWritingLessonsHint,
+  UNIFIED_AGENT_MAX_CHARACTERS,
 } from '../prompting/novel-playbook';
+import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 import { MiniArcChapterBeat } from '../schemas/novel-state.schemas';
 import { DetailContextService } from '../detail-context.service';
 
@@ -110,7 +112,7 @@ export class CreativeWriterAgent {
     const blocks: string[] = [];
 
     // ── 第一层：铁律 ──
-    blocks.push(`=== 铁律（违反即失败）===\n${playbooks?.['agent:creative-writer:iron_rules'] ?? '1. 禁止出场角色绝对不出现（死亡/退场/休眠）。\n2. 开头承接上章场景、语气和情绪。\n3. 结尾必须有让读者翻下一章的驱动力。\n4. 字数在意图范围内。\n5. 只输出中文小说正文，禁止元叙述/提纲/数据。\n6. 禁止开头三段使用反问句/设问句起手——直接切入场景和动作。\n7. 同一章内禁止重复使用相同情绪描写词（如两次"不由得"、两次"心中一动"）。\n8. 对话中禁止角色复述自己刚做过的事——"我已经……了"这类废话删掉，用行动推进。'}`);
+    blocks.push(`=== 铁律（违反即失败）===\n${playbooks?.['agent:creative-writer:iron_rules'] ?? '1. 禁止出场角色绝对不出现（死亡/退场/休眠）。\n2. 淡出角色遵守其maxSceneRole限制：mention_only=仅可被他人提及或回忆，brief_appearance=短暂露面不超过2句对白，supporting=可出场但不可主导剧情。\n3. 开头承接上章场景、语气和情绪。\n4. 结尾必须有让读者翻下一章的驱动力。\n5. 字数在意图范围内。\n6. 只输出中文小说正文，禁止元叙述/提纲/数据。\n7. 禁止开头三段使用反问句/设问句起手——直接切入场景和动作。\n8. 同一章内禁止重复使用相同情绪描写词（如两次"不由得"、两次"心中一动"）。\n9. 对话中禁止角色复述自己刚做过的事——"我已经……了"这类废话删掉，用行动推进。'}`);
 
     // ── 第二层：本书灵魂（深层文风DNA） ──
     if (state.styleAnchor) {
@@ -173,7 +175,7 @@ export class CreativeWriterAgent {
     playbooks?: Record<string, string>,
   ): Promise<ChapterDraft> {
     const proseContext = buildCompactContextProse(state, {
-      maxCharacters: 12,
+      maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
       maxChapterSummaries: 6,
       maxOpenThreads: 10,
       maxTimelineEvents: 12,
@@ -188,6 +190,9 @@ export class CreativeWriterAgent {
     );
 
     let systemPrompt = this.buildDynamicRules(chapterType, state, intent, playbooks) +
+      `\n\n${buildAudiencePromptBlock(state)}` +
+      `\n\n${playbooks?.['__bookStrategy'] ?? ''}` +
+      `\n\n${playbooks?.['__policySlice'] ?? ''}` +
       (additionalSystemPrompt ? `\n\n=== 作者补充指示 ===\n${additionalSystemPrompt}` : '');
 
     if (detailCtx && detailCtx.trim().length > 0) {
@@ -215,9 +220,59 @@ export class CreativeWriterAgent {
       arcSection = lines.join('\n');
     }
 
+    // 补充 writeScene() 级别的角色心理/对话矩阵/知识边界（聚焦本章活跃角色）
+    const activeCharIds = new Set(intent.characterAvailability?.activeCharacterIds ?? []);
+    const activeChars = state.characters
+      .filter((c) => activeCharIds.has(c.id))
+      .slice(0, 8); // 整章模式限8个，避免 prompt 膨胀
+    const charMap = new Map(state.characters.map((c) => [c.id, c]));
+
+    const psychSnippets = activeChars
+      .filter((c) => c.psychology)
+      .map((c) => {
+        const p = c.psychology!;
+        const parts = [`${c.name}(${p.emotionalBaseline})`];
+        if (p.currentMood) parts.push(`当前:${p.currentMood}`);
+        if (p.innerConflict) parts.push(`矛盾:${p.innerConflict.tension}`);
+        const unresolvedEmotions = (p.emotionalMemories ?? []).filter((e) => e.unresolved).slice(-2);
+        if (unresolvedEmotions.length) parts.push(`未消化:${unresolvedEmotions.map((e) => `${e.emotion}(ch${e.chapterNumber})`).join(',')}`);
+        return parts.join(' | ');
+      }).join('\n');
+
+    const dialogueMatrix = activeChars.flatMap((c) => {
+      const pairs: string[] = [];
+      if (c.voice?.defaultDialogueStrategy) {
+        const ds = c.voice.defaultDialogueStrategy;
+        pairs.push(`${c.name}[默认]：谎言=${ds.liePattern}，情绪泄露=${ds.emotionalLeakage}`);
+      }
+      (c.psychology?.interactionPatterns ?? [])
+        .filter((ip) => activeCharIds.has(ip.targetCharacterId))
+        .slice(0, 3)
+        .forEach((ip) => {
+          const target = charMap.get(ip.targetCharacterId);
+          const ds = ip.dialogueStrategy;
+          pairs.push(`${c.name}→${target?.name ?? ip.targetCharacterId}：${ip.pattern}(${ip.chemistryType})${ds?.subtextLayer ? '，潜台词=' + ds.subtextLayer : ''}`);
+        });
+      return pairs;
+    });
+
+    const knowledgeBoundary = activeChars.filter((c) => c.knowledgeState?.knownFacts?.length || c.knowledgeState?.falseBeliefs?.length || c.knowledgeState?.blindSpots?.length).map((c) => {
+      const ks = c.knowledgeState!;
+      const parts = [`${c.name}的知识边界：`];
+      const secrets = (ks.knownFacts ?? []).filter((f) => f.isSecret);
+      if (secrets.length) parts.push(`  秘密(不可泄露)：${secrets.map((f) => f.content.slice(0, 30)).join('；')}`);
+      if (ks.falseBeliefs?.length) parts.push(`  错误认知(必须体现)：${ks.falseBeliefs.map((f) => f.wrongBelief.slice(0, 30)).join('；')}`);
+      if (ks.blindSpots?.length) parts.push(`  盲区(完全不知)：${ks.blindSpots.slice(0, 3).join('、')}`);
+      return parts.join('\n');
+    });
+
     const voiceProfiles = state.characters
-      .filter((c) => c.voice?.speechPattern)
-      .map((c) => `${c.name}：说话风格-${c.voice!.speechPattern}${c.voice!.verbalTics?.length ? '，口头禅-' + c.voice!.verbalTics.join('/') : ''}`)
+      .filter((c) => c.voice?.speechPattern || intent.characterVoiceAnchors?.some(a => a.characterId === c.id))
+      .map((c) => {
+        const anchor = intent.characterVoiceAnchors?.find(a => a.characterId === c.id);
+        const base = `${c.name}：说话风格-${c.voice?.speechPattern || '默认'}${c.voice?.verbalTics?.length ? '，口头禅-' + c.voice!.verbalTics.join('/') : ''}`;
+        return anchor ? `${base} | 标志性台词/口癖："${anchor.signatureQuote}"` : base;
+      })
       .join('\n');
     const voiceSection = voiceProfiles.length > 0
       ? `\n角色声音档案（写对白时必须遵循，遮住名字应能猜出是谁说的）：\n${voiceProfiles}`
@@ -263,7 +318,7 @@ export class CreativeWriterAgent {
       continuitySection = `\n=== 连续性提醒 ===\n${continuityInjections.map((c) => `⚠ ${c}`).join('\n')}`;
     }
 
-    return this.llm.generateStructured({
+    const draft = await this.llm.generateStructured({
       taskName: 'creative-writer',
       schema: chapterDraftSchema,
       tags: ['workflow', 'chapter', 'draft'],
@@ -287,7 +342,10 @@ ${proseContext}
 - 钩子方向：${intent.hookDirection}
 - 正文字数：${intent.wordCountRange.min}-${intent.wordCountRange.max}字
 ${previousChapterEnding ? `\n上一章结尾原文（精确承接场景、语气和情绪）：\n「${previousChapterEnding}」` : ''}
-${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSection}${rewriteSection}${continuitySection}
+${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSection}
+${psychSnippets ? `\n角色心理状态（影响行为和决策）：\n${psychSnippets}` : ''}
+${dialogueMatrix.length ? `\n对话策略矩阵（潜台词层）：\n${dialogueMatrix.join('\n')}` : ''}
+${knowledgeBoundary.length ? `\n⚠ 角色知识边界（信息隔离，严禁违反）：\n${knowledgeBoundary.join('\n')}` : ''}${rewriteSection}${continuitySection}
 
 创作要求：
 - 文风贴合${state.seed.targetAudience}的中文网文阅读习惯。
@@ -295,6 +353,8 @@ ${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSect
 - 输出完整中文章节正文。`,
       temperature,
     });
+    draft.chapterNumber = intent.chapterNumber;
+    return draft;
   }
 
   /** 场景级写作 — 每个场景独立生成，精度远高于整章一次性生成。 */
@@ -317,8 +377,12 @@ ${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSect
 
     const voiceMatrix = buildCharacterVoiceMatrix(state, scene.presentCharacterIds);
     const voiceSnippets = voiceMatrix || presentChars
-      .filter((c) => c!.voice?.speechPattern)
-      .map((c) => `${c!.name}：${c!.voice!.speechPattern}${c!.voice!.verbalTics?.length ? '，口头禅-' + c!.voice!.verbalTics.join('/') : ''}`)
+      .filter((c) => c!.voice?.speechPattern || intent.characterVoiceAnchors?.some(a => a.characterId === c!.id))
+      .map((c) => {
+        const anchor = intent.characterVoiceAnchors?.find(a => a.characterId === c!.id);
+        const base = `${c!.name}：${c!.voice?.speechPattern || '默认'}${c!.voice?.verbalTics?.length ? '，口头禅-' + c!.voice!.verbalTics.join('/') : ''}`;
+        return anchor ? `${base} | 标志性台词/口癖："${anchor.signatureQuote}"` : base;
+      })
       .join('\n');
 
     const psychSnippets = presentChars
@@ -372,6 +436,9 @@ ${ arcSection ? `\n角色弧线：\n${arcSection}` : ''}${voiceSection}${gapSect
 
 === 灵魂层 ===
 ${state.styleAnchor ? buildStyleDNA(state.styleAnchor, scene.purpose) : `${profile.writerGuide.coreIdentity}\n${profile.writerGuide.pacingGuide}\n${profile.writerGuide.dialogueGuide}`}
+${buildAudiencePromptBlock(state)}
+${playbooks?.['__bookStrategy'] ?? ''}
+${playbooks?.['__policySlice'] ?? ''}
 ${playbooks?.['agent:creative-writer:writing_soul'] ?? '你的使命是"创作故事"而非"执行任务"。意图给方向，铁律是安全边界，边界内你拥有充分的创作自由——好的意外比严格执行计划更有价值。'}
 ${playbooks?.['agent:creative-writer:writing_instinct'] ?? '写作直觉：写"他感到XX"时停下改成动作和感官；每句对话至少完成两个任务；紧张短句平静长句长短交替像呼吸'}
 

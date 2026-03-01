@@ -8,6 +8,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import { z, ZodTypeAny } from 'zod';
 import { LlmUsageTrackerService } from './llm-usage-tracker.service';
+import { LlmTraceLoggerService } from './llm-trace-logger.service';
 import { ConfigService } from '@packages/modules';
 
 export type LlmProvider = 'gemini' | 'claude' | 'openai';
@@ -44,48 +45,47 @@ export interface TaskRoute { provider: LlmProvider; tier: ModelTier; }
 
 /**
  * 任务→模型路由表（三Provider最优分配）
- * Claude Opus: 读者直面的文学创作（写作/编辑/缝合/声音DNA）
- * Claude Sonnet: 深度推理的规划/审核/分析
- * OpenAI GPT-5: 初稿写作+多样性审阅（避免Claude自评自赞）
- * Gemini Pro: 中等复杂度分析
+ * Gemini Creative: 读者直面的文学创作（写作/编辑/缝合/声音DNA）
+ * Gemini Standard: 深度推理的规划/审核/分析 + 中等复杂度分析
+ * OpenAI GPT-5: 初稿写作+多样性审阅
  * Gemini Flash: 结构化提取/轻量检查（成本最低）
  */
 const TASK_ROUTES: Record<string, TaskRoute> = {
-  // ═══ Claude Opus — 文学创作（读者直面内容） ═══
-  'creative-writer':    { provider: 'claude', tier: 'creative' },
-  'scene-writer':       { provider: 'claude', tier: 'creative' },
-  'scene-stitcher':     { provider: 'claude', tier: 'creative' },
-  'chapter-editor':     { provider: 'claude', tier: 'creative' },
-  'hook-crafter':       { provider: 'claude', tier: 'creative' },
-  'patch-rewriter':     { provider: 'claude', tier: 'creative' },
-  'character-voice-coach': { provider: 'claude', tier: 'creative' },
+  // ═══ Gemini Creative — 文学创作（读者直面内容） ═══
+  'creative-writer':    { provider: 'gemini', tier: 'creative' },
+  'scene-writer':       { provider: 'gemini', tier: 'creative' },
+  'scene-stitcher':     { provider: 'gemini', tier: 'creative' },
+  'chapter-editor':     { provider: 'gemini', tier: 'creative' },
+  'hook-crafter':       { provider: 'gemini', tier: 'creative' },
+  'patch-rewriter':     { provider: 'gemini', tier: 'creative' },
+  'character-voice-coach': { provider: 'gemini', tier: 'creative' },
   // ═══ OpenAI GPT-5 — 初稿写作+多样性审阅 ═══
-  'draft-writer':       { provider: 'openai', tier: 'creative' },
-  'reader-jury':        { provider: 'openai', tier: 'standard' },
-  // ═══ Claude Sonnet — 规划/审核/深度分析 ═══
-  'arc-director':       { provider: 'claude', tier: 'standard' },
-  'chapter-intent':     { provider: 'claude', tier: 'standard' },
-  'scene-planner':      { provider: 'claude', tier: 'standard' },
-  'chapter-reviewer':   { provider: 'claude', tier: 'standard' },
-  'bible-crystallization': { provider: 'claude', tier: 'standard' },
-  'outline-revision':   { provider: 'claude', tier: 'standard' },
-  'volume-director':    { provider: 'claude', tier: 'standard' },
-  'volume-foreshadowing': { provider: 'claude', tier: 'standard' },
-  'editor-in-chief':    { provider: 'claude', tier: 'standard' },
-  'ip-bible-architect': { provider: 'claude', tier: 'standard' },
-  'cast-bootstrap':     { provider: 'claude', tier: 'standard' },
-  'arc-architect':      { provider: 'claude', tier: 'standard' },
-  'arc-planning':       { provider: 'claude', tier: 'standard' },
-  'scene-designer':     { provider: 'claude', tier: 'standard' },
-  'style-director':     { provider: 'claude', tier: 'standard' },
-  // ═══ Gemini Pro — 中等复杂度分析 ═══
+  'draft-writer':       { provider: 'gemini', tier: 'creative' },
+  'reader-jury':        { provider: 'gemini', tier: 'standard' },
+  // ═══ Gemini Standard — 规划/审核/深度分析 ═══
+  'arc-director':       { provider: 'gemini', tier: 'standard' },
+  'chapter-intent':     { provider: 'gemini', tier: 'standard' },
+  'scene-planner':      { provider: 'gemini', tier: 'standard' },
+  'chapter-reviewer':   { provider: 'gemini', tier: 'standard' },
+  'bible-crystallization': { provider: 'gemini', tier: 'standard' },
+  'outline-revision':   { provider: 'gemini', tier: 'standard' },
+  'volume-director':    { provider: 'gemini', tier: 'standard' },
+  'volume-foreshadowing': { provider: 'gemini', tier: 'standard' },
+  'editor-in-chief':    { provider: 'gemini', tier: 'standard' },
+  'ip-bible-architect': { provider: 'gemini', tier: 'standard' },
+  'cast-bootstrap':     { provider: 'gemini', tier: 'standard' },
+  'arc-architect':      { provider: 'gemini', tier: 'standard' },
+  'arc-planning':       { provider: 'gemini', tier: 'standard' },
+  'scene-designer':     { provider: 'gemini', tier: 'standard' },
+  'style-director':     { provider: 'gemini', tier: 'standard' },
+  // ═══ Gemini Standard — 中等复杂度分析 ═══
   'seed-analyzer':      { provider: 'gemini', tier: 'standard' },
   'reader-pulse-analyzer': { provider: 'gemini', tier: 'standard' },
   'consistency-audit':  { provider: 'gemini', tier: 'standard' },
   'pacing-analyzer':    { provider: 'gemini', tier: 'standard' },
   'continuity-guard':   { provider: 'gemini', tier: 'standard' },
-  'prompt-profiler':    { provider: 'claude', tier: 'standard' },
-  'agent-section-generator': { provider: 'claude', tier: 'standard' },
+  'prompt-profiler':    { provider: 'gemini', tier: 'standard' },
+  'agent-section-generator': { provider: 'gemini', tier: 'standard' },
   'chapter-contract-manager': { provider: 'gemini', tier: 'standard' },
   'continuity-auditor': { provider: 'gemini', tier: 'standard' },
   'retrospective-learner': { provider: 'gemini', tier: 'standard' },
@@ -119,6 +119,7 @@ export class LlmService {
 
   constructor(
     private readonly usageTracker: LlmUsageTrackerService,
+    private readonly traceLogger: LlmTraceLoggerService,
     private readonly configService: ConfigService,
   ) {
     const llm = (this.configService.get('llm') ?? {}) as Record<string, unknown>;
@@ -221,7 +222,11 @@ export class LlmService {
     this.logger.debug(`[${input.taskName}] SYSTEM (${input.systemPrompt.length}c) USER (${input.userPrompt.length}c)`);
 
     const promptLen = input.systemPrompt.length + input.userPrompt.length;
-    if (promptLen > this.cfg.maxPromptChars) this.logger.warn(`[${input.taskName}] prompt ${promptLen}c > budget ${this.cfg.maxPromptChars}`);
+    if (promptLen > this.cfg.maxPromptChars) {
+      const overflow = promptLen - this.cfg.maxPromptChars;
+      this.logger.warn(`[${input.taskName}] prompt ${promptLen}c > budget ${this.cfg.maxPromptChars}，截断 userPrompt ${overflow}c`);
+      input = { ...input, userPrompt: input.userPrompt.slice(0, Math.max(1000, input.userPrompt.length - overflow)) + '\n[...上下文因超限已截断，请基于已有信息完成任务]' };
+    }
 
     const attempts = this.buildAttemptChain(route);
     let lastError: unknown;
@@ -270,22 +275,32 @@ export class LlmService {
     const schema = provider === 'gemini' ? LlmService.sanitizeSchemaForGemini(toJsonSchema(input.schema as any)) : input.schema;
     const structuredModel = (chatModel as any).withStructuredOutput(schema, { includeRaw: true });
     const messages = [new SystemMessage(input.systemPrompt), new HumanMessage(input.userPrompt)];
+    const wCtx = this.usageTracker.getWorkflowContext();
+    const traceBase = { taskName: input.taskName, provider, model: modelName, tier, temperature, tags, metadata: input.metadata ?? {}, input: { system: input.systemPrompt, user: input.userPrompt }, ...(wCtx ? { workflowId: wCtx.workflowId, bookId: wCtx.bookId, chapterNumber: wCtx.chapterNumber, callSequence: wCtx.callSequence + 1 } : {}) };
 
     let response: unknown;
     let lastErr: unknown;
+    let retryCount = 0;
     for (let retry = 0; retry <= LlmService.CALL_MAX_RETRIES; retry++) {
       try {
         const config: RunnableConfig = { runName: input.taskName, tags, metadata: { taskName: input.taskName, provider, model: modelName, tier, ...input.metadata } };
         if (retry === 0 && this.cfg.tracingEnabled) this.logger.log(`[${input.taskName}] LangSmith tracing (project=${this.cfg.tracingProject})`);
         response = await structuredModel.invoke(messages, config);
         if (retry > 0) this.logger.log(`[${input.taskName}] 第${retry}次重试成功 (${provider}/${modelName})`);
+        retryCount = retry;
         break;
       } catch (error) {
         lastErr = error;
+        retryCount = retry;
         const status = (error as any)?.status ?? (error as any)?.statusCode ?? (error as any)?.code;
-        const retryable = LlmService.RETRYABLE_STATUS.has(Number(status));
+        const errMsg = ((error as Error).message ?? '').toLowerCase();
+        const isNetworkError = typeof status === 'string' && /^(ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT)$/i.test(status) || /(timeout|econnreset|etimedout|socket hang up|network|fetch failed)/i.test(errMsg);
+        const retryable = LlmService.RETRYABLE_STATUS.has(Number(status)) || isNetworkError;
         if (!retryable || retry >= LlmService.CALL_MAX_RETRIES) {
           this.logger.error(`[${input.taskName}] ====== LLM 调用失败 (${provider}/${modelName}) ====== ${Date.now() - t0}ms\n  错误: ${(error as Error).message}${retry > 0 ? ` (已重试${retry}次)` : ''}`);
+          const errUsage = this.extractUsageFromError(error);
+          const errTokens = errUsage ?? { prompt: 0, completion: 0, total: 0, source: 'missing' as const };
+          this.traceLogger.logTrace({ ...traceBase, durationMs: Date.now() - t0, tokens: { prompt: errTokens.prompt, completion: errTokens.completion, total: errTokens.total, source: errTokens.source }, cost: { usd: LlmService.estimateCost(errTokens.prompt, errTokens.completion, rates), inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: null, status: 'error', error: (error as Error).message, retries: retry });
           throw error;
         }
         const delay = LlmService.CALL_BASE_DELAY_MS * Math.pow(2, retry) * (0.5 + Math.random() * 0.5);
@@ -307,7 +322,9 @@ export class LlmService {
     );
     this.logger.debug(`[${input.taskName}] AI 输出:\n${this.truncate(JSON.stringify(wrapped.parsed, null, 2), 2000)}`);
 
-    if (wrapped.parsed == null) { // withStructuredOutput 解析失败，视为可重试错误
+    this.traceLogger.logTrace({ ...traceBase, durationMs, tokens: { prompt: usage.promptTokens, completion: usage.completionTokens, total: usage.totalTokens, source: usage.source }, cost: { usd: cost, inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: wrapped.parsed, status: wrapped.parsed == null ? 'error' : 'success', error: wrapped.parsed == null ? '结构化输出解析为 null' : undefined, retries: retryCount });
+
+    if (wrapped.parsed == null) {
       const err = new Error(`[${input.taskName}] 结构化输出解析为 null (${provider}/${modelName})，模型返回内容无法匹配 schema`);
       (err as any).status = 500;
       throw err;
@@ -323,18 +340,20 @@ export class LlmService {
     return wrapped.parsed;
   }
 
+  private static readonly LLM_TIMEOUT_MS = 180_000; // 3分钟，防止hung连接
+
   private createChatModel(provider: LlmProvider, cfg: ProviderConfig, model: string, temperature: number) {
     const proxyHeaders = cfg.baseUrl ? { 'User-Agent': 'Mozilla/5.0' } : undefined;
     if (provider === 'claude') {
       return new ChatAnthropic({
         anthropicApiKey: cfg.apiKey, anthropicApiUrl: cfg.baseUrl,
-        model, temperature, maxRetries: 3, maxTokens: 16384,
-        clientOptions: proxyHeaders ? { defaultHeaders: proxyHeaders } : undefined,
+        model, temperature, maxRetries: 0, maxTokens: 16384,
+        clientOptions: { timeout: LlmService.LLM_TIMEOUT_MS, ...(proxyHeaders ? { defaultHeaders: proxyHeaders } : {}) },
       });
     }
     if (provider === 'openai') {
       return new ChatOpenAI({
-        apiKey: cfg.apiKey, model, temperature, maxRetries: 3,
+        apiKey: cfg.apiKey, model, temperature, maxRetries: 0, timeout: LlmService.LLM_TIMEOUT_MS,
         useResponsesApi: true, streamUsage: false,
         configuration: {
           baseURL: cfg.baseUrl,
@@ -343,9 +362,9 @@ export class LlmService {
       });
     }
     return new ChatGoogleGenerativeAI({
-      apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, model, temperature, maxRetries: 3,
+      apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, model, temperature, maxRetries: 0,
       ...(proxyHeaders ? { customHeaders: proxyHeaders } : {}),
-    });
+    } as any);
   }
 
   // ═══ Token提取 — 兼容Gemini/Claude/OpenAI三种response格式 ═══
@@ -377,32 +396,39 @@ export class LlmService {
     'unevaluatedItems', 'contentEncoding', 'contentMediaType', 'uniqueItems',
     '$id', '$ref', '$defs', 'definitions', '$anchor', '$dynamicRef', '$dynamicAnchor',
     'prefixItems', '$comment', 'examples', 'deprecated', 'readOnly', 'writeOnly',
+    'minItems', 'maxItems', 'minimum', 'maximum', 'multipleOf', 'minLength', 'maxLength', 'pattern', // Gemini structured output 不支持数值/数组/字符串约束
   ]);
 
   static sanitizeSchemaForGemini(obj: unknown): Record<string, unknown> {
     if (typeof obj !== 'object' || obj === null) return obj as Record<string, unknown>;
     const o = { ...obj } as Record<string, unknown>;
     for (const k of LlmService.GEMINI_UNSUPPORTED_KEYS) delete o[k];
-    if ('exclusiveMinimum' in o) { const v = o['exclusiveMinimum'] as number; o['minimum'] = Number.isInteger(v) ? v + 1 : v; delete o['exclusiveMinimum']; }
-    if ('exclusiveMaximum' in o) { const v = o['exclusiveMaximum'] as number; o['maximum'] = Number.isInteger(v) ? v - 1 : v; delete o['exclusiveMaximum']; }
-    if ('minItems' in o && typeof o['minItems'] === 'number' && o['minItems'] <= 0) delete o['minItems'];
-    if ('minLength' in o && typeof o['minLength'] === 'number' && o['minLength'] <= 0) delete o['minLength'];
+    if ('exclusiveMinimum' in o) { delete o['exclusiveMinimum']; }
+    if ('exclusiveMaximum' in o) { delete o['exclusiveMaximum']; }
     if (Array.isArray(o['type'])) { const types = (o['type'] as string[]).filter((t) => t !== 'null'); o['type'] = types[0] ?? 'string'; o['nullable'] = true; }
-    if (Array.isArray(o['anyOf'])) {
-      const vs = o['anyOf'] as Record<string, unknown>[], nonNull = vs.filter((v) => v['type'] !== 'null');
-      if (nonNull.length === 1 && nonNull.length < vs.length) { Object.assign(o, LlmService.sanitizeSchemaForGemini(nonNull[0])); o['nullable'] = true; delete o['anyOf']; }
-      else { o['anyOf'] = vs.map((v) => LlmService.sanitizeSchemaForGemini(v)); }
-    }
-    if (Array.isArray(o['oneOf'])) {
-      const vs = o['oneOf'] as Record<string, unknown>[], nonNull = vs.filter((v) => v['type'] !== 'null');
-      if (nonNull.length === 1 && nonNull.length < vs.length) { Object.assign(o, LlmService.sanitizeSchemaForGemini(nonNull[0])); o['nullable'] = true; delete o['oneOf']; }
-      else { o['oneOf'] = vs.map((v) => LlmService.sanitizeSchemaForGemini(v)); }
-    }
+    const isNullLike = (v: Record<string, unknown>) => v['type'] === 'null' || (Object.keys(v).length <= 1 && 'not' in v) || Object.keys(v).length === 0; // { "not": {} } 来自 Zod .optional()
+    const collapseUnion = (key: 'anyOf' | 'oneOf') => {
+      if (!Array.isArray(o[key])) return;
+      const vs = o[key] as Record<string, unknown>[];
+      const real = vs.filter((v) => !isNullLike(v)), hadNull = real.length < vs.length;
+      if (real.length <= 1) { if (real.length === 1) Object.assign(o, LlmService.sanitizeSchemaForGemini(real[0])); else { o['type'] = 'string'; } if (hadNull) o['nullable'] = true; delete o[key]; }
+      else { o[key] = real.map((v) => LlmService.sanitizeSchemaForGemini(v)); }
+    };
+    collapseUnion('anyOf');
+    collapseUnion('oneOf');
     if (o['const'] !== undefined) { o['enum'] = [o['const']]; delete o['const']; }
     for (const key of Object.keys(o)) {
       if (key === 'anyOf' || key === 'oneOf' || key === 'enum') continue;
       if (Array.isArray(o[key])) o[key] = (o[key] as unknown[]).map((item) => LlmService.sanitizeSchemaForGemini(item));
       else if (typeof o[key] === 'object' && o[key] !== null) o[key] = LlmService.sanitizeSchemaForGemini(o[key]);
+    }
+    // Gemini 要求所有 properties 必须列入 required；缺失字段标记 nullable
+    if (o['type'] === 'object' && typeof o['properties'] === 'object' && o['properties'] !== null) {
+      const props = o['properties'] as Record<string, Record<string, unknown>>;
+      const keys = Object.keys(props);
+      const cur = new Set(Array.isArray(o['required']) ? o['required'] as string[] : []);
+      for (const k of keys) { if (!cur.has(k)) props[k] = { ...props[k], nullable: true }; }
+      o['required'] = keys;
     }
     return o;
   }
@@ -423,4 +449,16 @@ export class LlmService {
   private isRecord(v: unknown): v is Record<string, unknown> { return typeof v === 'object' && v !== null; }
   private toRecord(v: unknown): Record<string, unknown> | null { return this.isRecord(v) ? v : null; }
   private truncate(text: string, maxLen: number): string { return text.length <= maxLen ? text : text.slice(0, maxLen) + `\n... [截断，共 ${text.length} 字符]`; }
+
+  /** 尝试从错误对象中提取 token 用量（部分 API 即使返回错误也携带 usage） */
+  private extractUsageFromError(error: unknown): { prompt: number; completion: number; total: number; source: string } | null {
+    const e = error as Record<string, unknown> | undefined;
+    if (!e) return null;
+    const resp = this.toRecord(e.response) ?? this.toRecord(e.error) ?? this.toRecord((e.rawError as Record<string, unknown>)?.response);
+    const usage = resp ? (this.toRecord(resp.usage) ?? this.toRecord(resp.usage_metadata)) : null;
+    if (!usage) return null;
+    const p = this.toInt(usage.input_tokens) || this.toInt(usage.prompt_tokens);
+    const c = this.toInt(usage.output_tokens) || this.toInt(usage.completion_tokens);
+    return p + c > 0 ? { prompt: p, completion: c, total: p + c, source: 'error_response' } : null;
+  }
 }

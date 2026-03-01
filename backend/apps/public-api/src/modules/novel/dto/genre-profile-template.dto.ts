@@ -1,7 +1,7 @@
 /** 题材 Profile 模板 CRUD + AI 生成 DTO */
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsNotEmpty, IsObject, IsOptional, IsString, IsUUID, MaxLength, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsNotEmpty, IsObject, IsOptional, IsString, IsUUID, MaxLength, ValidateNested } from 'class-validator';
 
 export class SeedAnalyzerHintsDto {
   @ApiPropertyOptional({ description: '题材核心循环模式', example: ['探索式：发现→假设→验证→更深谜团'] })
@@ -15,6 +15,49 @@ export class SeedAnalyzerHintsDto {
   @ApiPropertyOptional({ description: '世界观构建方向' })
   @IsString() @IsOptional()
   worldBuildingDirectives?: string;
+
+  @ApiPropertyOptional({ description: '命名默认规则（系统模板默认值）' })
+  @IsObject() @IsOptional()
+  namingDefaults?: {
+    personNameStyle?: string;
+    locationNameStyle?: string;
+    abilityNameStyle?: string;
+    factionNameStyle?: string;
+    itemNameStyle?: string;
+    examples?: {
+      personNames?: string[];
+      locationNames?: string[];
+      abilityNames?: string[];
+      factionNames?: string[];
+    };
+    taboos?: string[];
+  };
+}
+
+export class AudienceMetaDto {
+  @ApiPropertyOptional({ description: '受众标签', example: ['女性向', '18-35岁', '网文读者'] })
+  @IsArray() @IsString({ each: true }) @IsOptional()
+  audienceTags?: string[];
+
+  @ApiPropertyOptional({ description: '主角聚焦标签', example: ['female_lead'] })
+  @IsArray() @IsIn(['female_lead', 'male_lead', 'dual_lead', 'ensemble'], { each: true }) @IsOptional()
+  protagonistFocusTags?: Array<'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'>;
+
+  @ApiPropertyOptional({ description: '调性标签', example: ['细腻慢热', '治愈温暖'] })
+  @IsArray() @IsString({ each: true }) @IsOptional()
+  toneTags?: string[];
+
+  @ApiPropertyOptional({ description: '关系密度', enum: ['low', 'medium', 'high'], default: 'medium' })
+  @IsIn(['low', 'medium', 'high']) @IsOptional()
+  relationshipDensity?: 'low' | 'medium' | 'high';
+
+  @ApiPropertyOptional({ description: '题材硬约束（不可破）' })
+  @IsArray() @IsString({ each: true }) @IsOptional()
+  hardConstraints?: string[];
+
+  @ApiPropertyOptional({ description: '柔性偏好（可调优）' })
+  @IsArray() @IsString({ each: true }) @IsOptional()
+  softPreferences?: string[];
 }
 
 export class CreateGenreProfileTemplateDto {
@@ -49,6 +92,10 @@ export class CreateGenreProfileTemplateDto {
   @ApiPropertyOptional({ description: '预生成的 Agent 指令缓存' })
   @IsObject() @IsOptional()
   cachedAgentSections?: { sections: Array<{ agentId: string; key: string; content: string }>; ruleAtoms?: any[] };
+
+  @ApiPropertyOptional({ description: '受众策略元数据（新建模板推荐必填）' })
+  @ValidateNested() @Type(() => AudienceMetaDto) @IsOptional()
+  audienceMeta?: AudienceMetaDto;
 }
 
 export class UpdateGenreProfileTemplateDto {
@@ -74,6 +121,10 @@ export class UpdateGenreProfileTemplateDto {
   @ApiPropertyOptional({ description: '预生成的 Agent 指令缓存' })
   @IsObject() @IsOptional()
   cachedAgentSections?: { sections: Array<{ agentId: string; key: string; content: string }>; ruleAtoms?: any[] };
+
+  @ApiPropertyOptional({ description: '受众策略元数据' })
+  @ValidateNested() @Type(() => AudienceMetaDto) @IsOptional()
+  audienceMeta?: AudienceMetaDto;
 }
 
 export class AiGenerateProfileDto {

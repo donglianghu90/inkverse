@@ -78,13 +78,31 @@ export const conceptEvaluationSchema = z.object({
   suggestions: z.array(z.string()),
 }).optional();
 
+export const audienceDirectiveSchema = z.object({
+  audienceTags: z.array(z.string()).default([]),
+  protagonistFocus: z.enum(['female_lead', 'male_lead', 'dual_lead', 'ensemble']).default('male_lead'),
+  tonePreference: z.string().default(''),
+  relationshipDensity: z.enum(['low', 'medium', 'high']).default('medium'),
+  hardConstraints: z.array(z.string()).default([]),
+  softPreferences: z.array(z.string()).default([]),
+});
+
 export const storySeedSchema = z.object({
   title: z.string(),
   genre: z.string(),
   targetAudience: z.string(),
+  audienceTags: z.array(z.string()).default([]),
+  protagonistFocus: z.enum(['female_lead', 'male_lead', 'dual_lead', 'ensemble']).optional(),
+  tonePreference: z.string().optional(),
   logline: z.string(),
   protagonistConcept: z.object({
     name: z.string(),
+    nameRationale: z.string().optional(), // 命名出发点（玄幻=汉字意象，言情=普通但真实，历史=名/字/号来源）
+    nameGrowthArc: z.array(z.object({
+      storyPhase: z.string(), // 对应 roughOutline.points 阶段描述
+      interpretation: z.string(), // 外界视角：玄幻=震慑感，言情=称呼亲密度，历史=官职称谓，悬疑=身份认知
+      selfPerception: z.string(), // 主角对这个名字/身份的内心感受
+    })).optional(),
     situation: z.string(),
     coreDesire: z.string(),
     personality: z.string(),
@@ -231,6 +249,10 @@ export const chapterIntentSchema = z.object({
     arcHints: z.array(characterArcHintSchema),
     emotionalLogicNotes: z.string(),
   }),
+  characterVoiceAnchors: z.array(z.object({
+    characterId: z.string(),
+    signatureQuote: z.string(), // 提取该角色最具代表性的一句台词作为生成参考
+  })).optional(),
   wordCountRange: z.object({
     min: z.number().int().min(1),
     max: z.number().int().min(1),
@@ -261,6 +283,14 @@ export const arcDirectorDirectiveSchema = z.object({
   hookDirective: z.string().default(''),
   pacingDirective: z.string().default(''),
   riskBudget: z.enum(['low', 'medium', 'high']).default('medium'),
+  /** 从 VolumeArc.characterGoals 注入的角色成长弧，供 IntentAgent 直接使用，无需重新推导 */
+  characterGuidance: z.array(z.object({
+    characterId: z.string(),
+    characterName: z.string(),
+    volumeStartState: z.string(),
+    volumeEndState: z.string(),
+    keyMoments: z.array(z.string()).default([]),
+  })).default([]),
 });
 
 // ---------------------------------------------------------------------------
@@ -385,7 +415,19 @@ export const volumeArcSchema = z.object({
   miniArcSlots: z.array(volumeArcMiniArcSlotSchema).min(2).max(8),
   climaxEstimatedChapter: z.number().int().min(1),
   characterGoals: z.array(volumeArcCharacterGoalSchema).default([]),
-  thematicFocus: z.string(), // 本卷主题焦点
+  newCharacterPlan: z.array(z.object({
+    role: z.enum(['supporting', 'villain', 'npc']),
+    label: z.string(),
+    introChapterEstimate: z.number().int().min(1),
+    purpose: z.string(),
+  })).default([]),
+  exitCharacterPlan: z.array(z.object({
+    characterId: z.string(),
+    exitType: z.enum(['fading', 'dormant', 'dead', 'exited']),
+    exitChapterEstimate: z.number().int().min(1),
+    reason: z.string(),
+  })).default([]),
+  thematicFocus: z.string(),
   forbiddenElements: z.array(z.string()).default([]), // 本卷禁止使用的元素
   structuralInnovation: z.string().default(''), // 本卷叙事创新（如"双线叙事""悬疑揭露""非线性时间线"）
   narrativeExperiment: z.string().default(''), // 一句话描述本卷在叙事形式上的实验
@@ -652,8 +694,13 @@ export const foreshadowingDepositSchema = z.object({
   priority: z.enum(['must_plant', 'should_plant', 'nice_to_have']).default('should_plant'),
   status: z.enum(['pending', 'planted', 'payoff_ready', 'resolved', 'expired']).default('pending'),
   plantedAtChapter: z.number().int().min(1).optional(),
-  plantedSnippet: z.string().optional(), // 实际嵌入的文本摘录
+  plantedSnippet: z.string().optional(),
   resolvedAtChapter: z.number().int().min(1).optional(),
+  pendingCharacterHint: z.object({
+    characterLabel: z.string(),
+    hintGuidance: z.string(),
+    formalIntroChapter: z.number().int().min(1),
+  }).optional(),
 });
 
 export const foreshadowingBankSchema = z.object({
@@ -903,6 +950,52 @@ export const feedbackStateSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Book Strategy (L2) — 每本书的中层策略，介于题材基线与章节动态之间
+// ---------------------------------------------------------------------------
+export const hookCadencePolicySchema = z.object({
+  preferredTypes: z.array(z.string()).default([]),
+  avoidRecentRepeatWindow: z.number().int().min(1).default(3),
+  urgencyBias: z.enum(['conservative', 'balanced', 'aggressive']).default('balanced'),
+  chapterEndingDirective: z.string().default(''),
+});
+
+export const threadPolicySchema = z.object({
+  maxNewThreadsPerChapter: z.number().int().min(0).max(5).default(1),
+  preferredActions: z.array(z.enum(['touch', 'advance', 'payoff', 'seed'])).default(['touch', 'advance']),
+  overduePriority: z.enum(['low', 'medium', 'high']).default('high'),
+  payoffDensityBias: z.enum(['low', 'medium', 'high']).default('medium'),
+  guidance: z.string().default(''),
+});
+
+export const characterFocusPolicySchema = z.object({
+  coreCharacterIds: z.array(z.string()).default([]),
+  supportCharacterIds: z.array(z.string()).default([]),
+  rotationMode: z.enum(['tight', 'balanced', 'wide']).default('balanced'),
+  minCharacterMomentPerChapter: z.number().int().min(0).max(3).default(1),
+  guidance: z.string().default(''),
+});
+
+export const characterBudgetSchema = z.object({
+  maxPresentPerChapter: z.number().int().min(2).max(12).default(6),
+  maxNewPerArc: z.number().int().min(1).max(8).default(3),
+  coreAbsenceAlert: z.number().int().min(1).max(10).default(3),
+  majorAbsenceAlert: z.number().int().min(2).max(20).default(8),
+  minorCooldown: z.number().int().min(0).max(20).default(5),
+  cameoCooldown: z.number().int().min(0).max(50).default(15),
+});
+
+export const bookStrategySchema = z.object({
+  coreNarrativeContract: z.string().default(''),
+  toneGuardrails: z.array(z.string()).default([]),
+  audienceDeliveryPolicy: z.string().default(''),
+  hookCadencePolicy: hookCadencePolicySchema.default({}),
+  threadPolicy: threadPolicySchema.default({}),
+  characterFocusPolicy: characterFocusPolicySchema.default({}),
+  characterBudget: characterBudgetSchema.default({}),
+  lastRefreshedAtChapter: z.number().int().min(1).default(1),
+});
+
+// ---------------------------------------------------------------------------
 // Story State
 // ---------------------------------------------------------------------------
 
@@ -918,6 +1011,8 @@ export const storyStateSchema = z.object({
 
   // Book prompt profile — AI-generated writing guide, genre-adaptive.
   bookPromptProfile: bookPromptProfileSchema,
+  audienceDirective: audienceDirectiveSchema.optional(),
+  bookStrategy: bookStrategySchema.optional(),
 
   // Crystallized assets — grow over time, optional initially.
   bible: storyBibleSchema.optional(),
@@ -993,24 +1088,37 @@ export const storyStateSchema = z.object({
 
   // Runtime state.
   chapterCursor: z.number().int().min(1),
-  characters: z.array(characterSchema),
-  locations: z.array(locationSchema),
-  items: z.array(itemSchema),
+  characters: z.array(characterSchema).default([]),
+  locations: z.array(locationSchema).default([]),
+  items: z.array(itemSchema).default([]),
   chapterSummaries: z.array(z.object({
     chapterNumber: z.number().int().nonnegative(),
     summary: z.string(),
-  })),
-  openPlotThreads: z.array(z.string()),
+  })).default([]),
+  openPlotThreads: z.array(z.string()).default([]),
   relationGraph: z.array(relationshipEdgeSchema).default([]),
   timelineEvents: z.array(timelineEventSchema).default([]),
   plotThreadLedger: z.array(plotThreadSchema).default([]),
   characterFactLedger: z.array(characterFactSchema).optional(),
-  lastHook: z.string(),
+  lastHook: z.string().default(''),
   recentHookTypes: z.array(z.object({
     chapterNumber: z.number().int().min(1),
     hookType: z.string(),
   })).default([]),
-  kpiHistory: z.array(generationKpiSchema),
+  kpiHistory: z.array(generationKpiSchema).default([]),
+
+  qualityMetricsHistory: z.array(z.object({
+    chapterNumber: z.number().int().min(1),
+    hookRepeatRate: z.number().min(0).max(1).default(0),
+    characterArcHitRate: z.number().min(0).max(1).default(1),
+    genreMismatchFlags: z.array(z.string()).default([]),
+    styleDriftScore: z.number().min(0).max(1).optional(),
+    coreAbsenceRate: z.number().min(0).max(1).default(0),
+    cameoOveruseRate: z.number().min(0).max(1).default(0),
+    fadingCount: z.number().int().nonnegative().default(0),
+    presentCharacterCount: z.number().int().nonnegative().default(0),
+    newCharactersInArc: z.number().int().nonnegative().default(0),
+  })).default([]),
 
   // Reader feedback — 三层分析 + 采纳判定。
   feedbackState: feedbackStateSchema.default({
@@ -1180,6 +1288,9 @@ export const sceneContractSchema = z.object({
   paceDirective: z.enum(['slow_burn', 'steady', 'accelerating', 'breakneck', 'stillness']),
   estimatedWords: z.number().int().min(1),
   transitionHint: z.string(),
+  subtext: z.string().optional(), // 潜台词：角色表面在做什么，内心真正在想什么（制造张力）
+  sensoryAnchors: z.array(z.string()).max(3).default([]), // 强制描写的具体感官细节（如：生锈的铁腥味），消除AI味
+  isParallel: z.boolean().default(false), // 是否与上一场景并发生成（如双线叙事）
   characterMoment: z.object({
     characterId: z.string(),
     type: z.enum(['inner_test', 'relationship_shift', 'revelation', 'choice', 'growth', 'regression']),
@@ -1267,6 +1378,11 @@ export type ReaderComment = z.infer<typeof readerCommentSchema>;
 export type ReaderFeedback = z.infer<typeof readerFeedbackSchema>;
 export type FeedbackAdoption = z.infer<typeof feedbackAdoptionSchema>;
 export type ReaderFeedbackAnalysis = z.infer<typeof readerFeedbackAnalysisSchema>;
+export type AudienceDirective = z.infer<typeof audienceDirectiveSchema>;
+export type HookCadencePolicy = z.infer<typeof hookCadencePolicySchema>;
+export type ThreadPolicy = z.infer<typeof threadPolicySchema>;
+export type CharacterFocusPolicy = z.infer<typeof characterFocusPolicySchema>;
+export type BookStrategy = z.infer<typeof bookStrategySchema>;
 export type FeedbackState = z.infer<typeof feedbackStateSchema>;
 export type ContinuityPreCheck = z.infer<typeof continuityPreCheckSchema>;
 export type PacingAnalysis = z.infer<typeof pacingAnalysisSchema>;
