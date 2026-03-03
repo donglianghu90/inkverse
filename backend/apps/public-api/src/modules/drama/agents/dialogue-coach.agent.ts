@@ -1,58 +1,94 @@
 /**
- * 台词教练 — 润色剧本中的台词，确保每个角色的说话风格与voiceProfile一致。
- * 输入：EpisodeScript + CharacterIdentity[]，输出：润色后的 EpisodeScript。
+ * 台词教练 — 分场景润色台词，注入角色关系+秘密上下文，驱动潜台词和情感张力。
  */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
 import {
-  episodeScriptSchema, EpisodeScript, CharacterIdentity, DramaPromptProfile,
+  scriptSceneSchema, episodeScriptSchema, EpisodeScript, CharacterIdentity, DramaPromptProfile, ScriptScene, DramaState,
 } from '../schemas/drama-state.schemas';
+import { buildDialogueCoachSystemPrompt } from '../prompting/drama-playbook';
+import { DramaPromptTemplateService } from '../prompting/drama-prompt-template.service';
 
-const coachOutputSchema = z.object({ script: episodeScriptSchema });
+const sceneCoachOutputSchema = z.object({ scene: scriptSceneSchema });
 
 @Injectable()
 export class DialogueCoachAgent {
-  constructor(private readonly llm: LlmService) {}
+  private readonly logger = new Logger(DialogueCoachAgent.name);
+  constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
   async polish(
-    script: EpisodeScript, characters: CharacterIdentity[], profile?: DramaPromptProfile,
+    script: EpisodeScript, characters: CharacterIdentity[], profile?: DramaPromptProfile, dramaId?: string, state?: DramaState,
   ): Promise<EpisodeScript> {
     const charVoices = characters.map(c =>
       `${c.characterId}(${c.name}): 音色=${c.voiceProfile.timbre}, 风格=${c.voiceProfile.speakingStyle}, 口癖="${c.voiceProfile.catchphrase}", 语速=${c.voiceProfile.speed}`
     ).join('\n');
+    const sysPrompt = dramaId
+      ? await this.promptService.buildPrompt(dramaId, 'dialogue-coach', buildDialogueCoachSystemPrompt({ dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide }))
+      : buildDialogueCoachSystemPrompt({ dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide });
 
-    const raw = await this.llm.generateStructured({
-      taskName: 'drama-dialogue-coach',
-      schema: coachOutputSchema,
-      systemPrompt: `你是短剧台词教练。你的任务是润色剧本中的台词，确保：
+    const activeSecrets = (state?.secretLedger ?? []).filter(s => !s.resolved).map(s => ({
+      id: s.id ?? '', secret: s.secret ?? '', knownBy: s.knownBy ?? [], hiddenFrom: s.hiddenFrom ?? [], resolved: !!s.resolved,
+    }));
 
-1. 每个角色的台词风格与其 voiceProfile 严格一致
-   - 霸总说话简短有力，不解释不废话
-   - 白莲花柔声细语但暗藏锋芒
-   - 闺蜜说话直接爽快
-2. 台词短且有力：单句不超过15个字（除了关键独白）
-3. 潜台词比明说更好：不直接说"我喜欢你"，用行为暗示
-4. 每个角色的口癖自然融入（不是每句都加，而是关键时刻使用）
-5. parenthetical（括号注释）要精准，指导演员/TTS表演
-6. 保持剧本结构不变，只润色对话内容和 parenthetical
+    const polished: ScriptScene[] = [];
+    for (let i = 0; i < script.scenes.length; i++) {
+      const scene = script.scenes[i];
+      if (!scene.dialogues?.length) { polished.push(scene); continue; }
+      if (i > 0) await new Promise(r => setTimeout(r, 300));
+      this.logger.log(`E${script.episodeNumber} 台词润色 场景${i + 1}/${script.scenes.length}`);
 
-${profile?.scriptwriterGuide?.dialogueGuide ?? ''}`,
+      // 提取本场出场角色ID
+      const sceneCharIds = new Set((scene.dialogues ?? []).map(d => d.characterId).filter(Boolean));
+      const secretCtx = this.buildSceneSecretContext(sceneCharIds, activeSecrets);
 
-      userPrompt: `请润色第 ${script.episodeNumber} 集的台词：
+      try {
+        const raw = await this.llm.generateStructured({
+          taskName: 'drama-dialogue-coach',
+          schema: sceneCoachOutputSchema,
+          systemPrompt: sysPrompt,
+          userPrompt: `润色第 ${script.episodeNumber} 集场景 ${i + 1}（${scene.purpose}）的台词：
 
 角色配音档案：
 ${charVoices}
 
-当前剧本（需润色台词）：
-${JSON.stringify(script, null, 0)}
+${secretCtx ? `=== 秘密上下文（决定潜台词方向） ===\n${secretCtx}\n` : ''}当前场景：
+${JSON.stringify(scene, null, 0)}
 
-要求：返回完整的润色后剧本，保持 scenes 结构不变，只优化 dialogues 中的 text 和 parenthetical。`,
-      temperature: 0.5,
-    });
+=== 润色要求 ===
+1. 保持结构不变，只优化 dialogues 中的 text 和 parenthetical
+2. 每句台词不超过15个中文字（关键独白例外，但也不超过25字）
+3. 知情者说话要有"话中有话"的暗示，不知情者要自然天真
+4. parenthetical 必须包含语气动作指示（如：冷笑、故作轻松、攥紧拳头）
+5. 短剧节奏：禁止寒暄废话，每句话都要推进剧情或加深情感张力`,
+          temperature: 0.5,
+        });
+        const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
+        const s = typeof root.scene === 'object' && root.scene ? root.scene : root;
+        polished.push(scriptSceneSchema.parse({ ...scene, dialogues: (s as any).dialogues ?? scene.dialogues, actions: (s as any).actions ?? scene.actions }));
+      } catch (err) {
+        this.logger.warn(`E${script.episodeNumber} 场景${i + 1}润色降级: ${(err as Error).message}`);
+        polished.push(scene);
+      }
+    }
+    return episodeScriptSchema.parse({ ...script, scenes: polished });
+  }
 
-    const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
-    const s = typeof root.script === 'object' && root.script ? root.script : root;
-    return episodeScriptSchema.parse(s);
+  /** 构建场景维度的秘密上下文：只输出与本场角色相关的秘密 */
+  private buildSceneSecretContext(
+    sceneCharIds: Set<string>,
+    secrets: Array<{ id: string; secret: string; knownBy: string[]; hiddenFrom: string[]; resolved: boolean }>,
+  ): string {
+    if (!secrets.length || !sceneCharIds.size) return '';
+    const relevant = secrets.filter(s =>
+      s.knownBy.some(id => sceneCharIds.has(id)) || s.hiddenFrom.some(id => sceneCharIds.has(id)),
+    );
+    if (!relevant.length) return '';
+    return relevant.map(s => {
+      const present = (ids: string[]) => ids.filter(id => sceneCharIds.has(id));
+      const knowers = present(s.knownBy);
+      const hidden = present(s.hiddenFrom);
+      return `🔒 "${s.secret}" — 在场知情者:${knowers.join(',') || '无'} 在场不知情者:${hidden.join(',') || '无'}`;
+    }).join('\n');
   }
 }

@@ -94,6 +94,14 @@ export const dramaPromptProfileSchema = z.object({
 // Phase 2: 视觉资产 (Visual Assets)
 // ---------------------------------------------------------------------------
 
+export const characterVariationSchema = z.object({ // 角色外观变体（换装/受伤/伪装等）
+  variationId: z.string(),
+  name: z.string(), // "正式西装" / "受伤状态" / "伪装造型"
+  costume: z.string(), // 服饰描述
+  visualPromptOverride: z.string(), // 覆盖 defaultCostume 的英文T2I提示词
+  referenceImageUrl: z.string().default(''), // 变体参考图URL
+});
+
 export const characterIdentitySchema = z.object({
   characterId: z.string(),
   name: z.string(),
@@ -106,14 +114,15 @@ export const characterIdentitySchema = z.object({
   age: z.string(),
   faceReferencePrompt: z.string(), // T2I 面部参考提示词（英文）
   voiceProfile: z.object({
-    ttsVoiceId: z.string().default(''), // TTS 音色ID（对接具体TTS服务时填充）
+    ttsVoiceId: z.string().default(''),
     pitch: z.enum(['low', 'medium', 'high']).default('medium'),
     speed: z.enum(['slow', 'normal', 'fast']).default('normal'),
-    timbre: z.string(), // 音色描述（如"低沉磁性""清脆甜美"）
-    speakingStyle: z.string(), // 说话风格（如"简短有力""温柔婉转""阴阳怪气"）
-    catchphrase: z.string().default(''), // 口癖
+    timbre: z.string(),
+    speakingStyle: z.string(),
+    catchphrase: z.string().default(''),
   }),
-  defaultCostume: z.string(), // 默认服饰描述
+  defaultCostume: z.string(),
+  variations: z.array(characterVariationSchema).default([]), // 角色外观变体列表
 });
 
 export const sceneLocationSchema = z.object({
@@ -313,6 +322,11 @@ export const shotSchema = z.object({
   flashbackSourceEpisode: z.number().int().min(1).optional(), // 闪回引用的原始集号
   flashbackSourceShotId: z.string().optional(), // 闪回引用的原始ShotID
   isPreview: z.boolean().default(false), // 是否为"下集预告"Shot
+  firstFramePrompt: z.string().optional(), // T2I 首帧提示词（比 visualPrompt 更精确的静帧描述）
+  lastFramePrompt: z.string().optional(), // T2I 尾帧提示词（用于关键帧插值模式）
+  firstFrameImageUrl: z.string().optional(), // T2I 生成的首帧图 URL
+  lastFrameImageUrl: z.string().optional(), // T2I 生成的尾帧图 URL（关键帧插值）
+  characterVariationIds: z.record(z.string(), z.string()).optional(), // characterId → variationId 映射
 });
 
 export const episodeStoryboardSchema = z.object({
@@ -461,6 +475,11 @@ export const dramaDeterministicCheckSchema = z.object({
     rule: z.string(),
     detail: z.string(),
   })),
+  hardFails: z.array(z.object({
+    rule: z.string(),
+    detail: z.string(),
+    severity: z.enum(['hard', 'soft']),
+  })).default([]),
 });
 
 // ---------------------------------------------------------------------------
@@ -522,6 +541,8 @@ export const dramaStateSchema = z.object({
     dimensions: z.record(z.string(), z.number()),
     generatedAt: z.string(),
   })).default([]),
+
+  storySoFar: z.string().default(''), // 滚动压缩的全局剧情摘要，供长程上下文引用
 });
 
 // ---------------------------------------------------------------------------
@@ -531,6 +552,7 @@ export const dramaStateSchema = z.object({
 export type DramaAudienceDirective = z.infer<typeof dramaAudienceDirectiveSchema>;
 export type DramaSeed = z.infer<typeof dramaSeedSchema>;
 export type DramaPromptProfile = z.infer<typeof dramaPromptProfileSchema>;
+export type CharacterVariation = z.infer<typeof characterVariationSchema>;
 export type CharacterIdentity = z.infer<typeof characterIdentitySchema>;
 export type SceneLocation = z.infer<typeof sceneLocationSchema>;
 export type VisualStyleGuide = z.infer<typeof visualStyleGuideSchema>;

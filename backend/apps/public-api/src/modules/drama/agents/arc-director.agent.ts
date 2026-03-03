@@ -1,19 +1,23 @@
 /**
- * 段落导演 — 管理当前段落（Arc Segment）的进度，决定何时开新段落。
- * 在每集开始前调用，确保当前段落规划存在且有效。
+ * 段落导演 — 管理段落进度 + 按需展开骨架集概要。
+ * planOrRefresh: 规划/复用段落。expandEpisodeSynopses: 将骨架集补充为详细概要。
  */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
 import {
-  arcSegmentSchema, ArcSegment, DramaState, DramaSeed, SeriesOutline,
+  arcSegmentSchema, ArcSegment, DramaState, EpisodeSynopsis, episodeSynopsisSchema,
 } from '../schemas/drama-state.schemas';
+import { buildArcDirectorSystemPrompt, buildArcExpansionSystemPrompt } from '../prompting/drama-playbook';
+import { DramaPromptTemplateService } from '../prompting/drama-prompt-template.service';
 
 const arcOutputSchema = z.object({ segment: arcSegmentSchema });
+const expansionOutputSchema = z.object({ episodes: z.array(episodeSynopsisSchema) });
 
 @Injectable()
 export class ArcDirectorAgent {
-  constructor(private readonly llm: LlmService) {}
+  private readonly logger = new Logger(ArcDirectorAgent.name);
+  constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
   async planOrRefresh(state: DramaState, episodeNumber: number): Promise<ArcSegment> {
     const current = state.currentArcSegment;
@@ -23,18 +27,7 @@ export class ArcDirectorAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-arc-director',
       schema: arcOutputSchema,
-      systemPrompt: `你是短剧段落导演。你的任务是为接下来的10-20集规划一个段落（Arc Segment）。
-段落有明确的核心矛盾、情感主题和高潮集。每个段落就像一个"小赛季"。
-
-=== 段落规划原则 ===
-1. 段落长度：10-20集，按剧情密度调整
-2. 每段落有独立的核心矛盾（不是全剧主线的重复，而是主线的一个维度）
-3. 角色的情感弧线要在段落内有闭合（从startState到endState）
-4. climaxEpisode = 本段落的高潮集，通常在段落后1/3处
-5. 如果有前面段落的数据，确保故事推进而非重复
-
-所有输出简体中文。`,
-
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcDirectorSystemPrompt()),
       userPrompt: `当前状态：
 全剧标题：${state.seed.title}
 已生成集数：${episodeNumber - 1}
@@ -42,6 +35,7 @@ export class ArcDirectorAgent {
 已完成段落数：${state.arcSegments.length}
 ${current ? `上一段落：${current.segmentTitle}（${current.startEpisode}-${current.endEpisode}集，矛盾：${current.coreConflict}）` : '尚无段落'}
 最近剧情：\n${recentSummaries || '（暂无）'}
+${state.storySoFar ? `全局剧情概要：\n${state.storySoFar.slice(0, 800)}` : ''}
 上集悬念：${state.lastCliffhanger || '无'}
 主角：${state.seed.protagonistConcept.name}
 角色列表：${state.characters.map(c => c.name).join('、')}
@@ -53,5 +47,44 @@ ${current ? `上一段落：${current.segmentTitle}（${current.startEpisode}-${
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
     const seg = typeof root.segment === 'object' && root.segment ? root.segment : root;
     return arcSegmentSchema.parse(seg);
+  }
+
+  /** 将骨架集（coreConflict='待展开'）展开为详细概要 */
+  async expandEpisodeSynopses(state: DramaState, segment: ArcSegment, episodeNumbers: number[]): Promise<EpisodeSynopsis[]> {
+    if (!episodeNumbers.length) return [];
+    this.logger.log(`展开骨架集 E${episodeNumbers[0]}-E${episodeNumbers[episodeNumbers.length - 1]}`);
+    const recentSummaries = state.episodeSummaries.slice(-5).map(s => `E${s.episodeNumber}: ${s.summary}`).join('\n');
+    const paywallSet = new Set(state.seriesOutline?.paywallEpisodes ?? []);
+
+    const raw = await this.llm.generateStructured({
+      taskName: 'drama-arc-director',
+      schema: expansionOutputSchema,
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcExpansionSystemPrompt()),
+      userPrompt: `请为以下骨架集补充详细概要：
+
+全剧：${state.seed.title}（${state.seed.genre}）
+核心矛盾：${state.seed.coreConflict}
+当前段落：${segment.segmentTitle}（E${segment.startEpisode}-E${segment.endEpisode}，矛盾：${segment.coreConflict}，情感主题：${segment.emotionalTheme}）
+高潮集：E${segment.climaxEpisode}
+角色目标：${segment.characterGoals.map(g => `${g.characterId}:${g.startState}→${g.endState}`).join('；')}
+
+需展开集号：${episodeNumbers.join(',')}
+其中付费集：${episodeNumbers.filter(n => paywallSet.has(n)).join(',') || '无'}
+
+${state.storySoFar ? `全局概要：\n${state.storySoFar.slice(0, 600)}` : ''}
+最近剧情：\n${recentSummaries || '（暂无）'}
+上集悬念：${state.lastCliffhanger || '无'}
+可用角色：${state.characters.map(c => `${c.characterId}(${c.name})`).join('、')}
+
+每集必须包含：title/coreConflict/cliffhanger/emotionalArc/keyCharacterIds/estimatedDurationSec=${state.seed.targetEpisodeDurationSec}`,
+      temperature: 0.5,
+    });
+
+    const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
+    const eps = Array.isArray(root.episodes) ? root.episodes : [];
+    return eps.map((e: any, i: number) => {
+      const epNum = episodeNumbers[i] ?? (typeof e.episodeNumber === 'number' ? e.episodeNumber : episodeNumbers[0] + i);
+      return episodeSynopsisSchema.parse({ ...e, episodeNumber: epNum, isPaywall: paywallSet.has(epNum) || !!e.isPaywall });
+    });
   }
 }

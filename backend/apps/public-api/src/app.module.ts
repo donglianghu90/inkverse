@@ -11,6 +11,7 @@ import { JwtModule } from "@nestjs/jwt";
 import { LlmModule } from "./modules/novel/llm/llm.module";
 import { NovelModule } from "./modules/novel/novel.module";
 import { DramaModule } from "./modules/drama/drama.module";
+import { MediaModule } from "./modules/media/media.module";
 import { AuthModule } from "./modules/auth/auth.module";
 
 @Module({
@@ -136,6 +137,7 @@ import { AuthModule } from "./modules/auth/auth.module";
     LlmModule,
     NovelModule,
     DramaModule,
+    MediaModule,
   ],
   controllers: [],
   providers: [GlobalErrorInterceptor, GlobalFilter, UnifiedInterceptor, JwtAuthGuard],

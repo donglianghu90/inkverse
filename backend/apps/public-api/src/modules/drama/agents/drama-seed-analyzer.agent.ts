@@ -6,6 +6,7 @@ import { Injectable } from '@nestjs/common';
 import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
 import { dramaSeedSchema, DramaSeed } from '../schemas/drama-state.schemas';
+import { buildSeedAnalyzerSystemPrompt } from '../prompting/drama-playbook';
 
 export interface DramaSeedInput {
   mainIdea: string;
@@ -35,43 +36,7 @@ export class DramaSeedAnalyzerAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-seed-analyzer',
       schema: seedOutputSchema,
-      systemPrompt: `你是一位顶尖短剧编剧策划师，专精竖屏微短剧（2-6分钟/集）。你的目标是从用户创意中提炼出一个让观众"前3集上头、第10集付费、追完全剧"的短剧种子。
-
-=== 短剧铁律 ===
-- 总集数 ${epMin}-${epMax} 集，每集约 ${durSec} 秒（${Math.round(durSec / 60)} 分钟）
-- 前3集 = 生死线，必须在第1集前15秒抓住观众（强冲突开场，禁止慢热铺垫）
-- 每集必须有至少1个"爽点"或"反转"或"悬念钩子"
-- 台词 > 动作 > 旁白，禁止大段心理描写（观众看不到你的内心戏）
-- 核心矛盾必须清晰、极端、容易共情（如：被抛弃的前妻其实是隐藏富豪）
-
-=== 短剧核心循环 ===
-短剧的"核心循环"不同于网文，节奏必须更快更密：
-- 霸总类：误解→被虐→身份揭露→打脸反转→更大的误解…（每3-5集一个小循环）
-- 战神类：被轻视→展露实力→震惊全场→更强的敌人出现…
-- 穿越类：现代知识碾压→被怀疑→化险为夷→更大的危机…
-- 复仇类：发现真相碎片→布局→反击→对手更深的阴谋…
-- 甜宠类：误会→接近→心动→阻碍→更甜的互动…
-- 重生类：利用前世记忆→改变命运→蝴蝶效应→新的危机…
-- 核心循环的关键：每3-5集完成一个小循环，每循环结尾必须抬升stakes
-
-=== 冲突设计原则 ===
-- 反派必须明确（短剧没时间暗线反派）：是谁？为什么坏？和主角什么关系？
-- 冲突要"可视化"——观众能用眼睛看到冲突（打耳光比心理博弈更直接）
-- "打脸"是短剧第一生产力：被欺负者反杀，越狠越爽
-- 核心爽点类型（catharsisType）明确定义：打脸逆袭/真相揭露/身份反转/甜蜜暴击/复仇成功
-
-=== 付费设计 ===
-- 前3-8集免费：快速建立人物+核心冲突+第一个小高潮
-- 第8-15集设置第一个付费卡点：必须是"最不能停下来"的悬念位置
-- catharsisType 决定付费卡点的设计：身份揭露型→卡在"即将揭露"的前一秒
-
-=== 角色设计原则 ===
-- 主角：代入感强，有明确的冤屈/不公/困境，性格特征用行为展示（不是旁白告诉你）
-- 反派：动机清晰，最好和主角有私人纠葛（前夫/继母/商业对手）
-- 配角：精简！短剧最多4-5个有名字的角色，多了观众记不住
-- 角色名字要简短好记，适合对话中反复出现
-
-所有输出简体中文。`,
+      systemPrompt: buildSeedAnalyzerSystemPrompt({ epMin, epMax, durSec }),
 
       userPrompt: `请分析这个创意并生成短剧种子：
 

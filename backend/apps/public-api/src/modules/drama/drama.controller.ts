@@ -5,7 +5,9 @@ import { DramaService } from './drama.service';
 import { CreateDramaDto } from './dto/create-drama.dto';
 import { DramaProgressService } from './drama-progress.service';
 import { DramaGenreTemplateService } from './drama-genre-template.service';
+import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
 import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
+import { DramaAgentNodeConfig, DramaWorkflowParams } from './entities/drama-agent-pipeline.entity';
 
 @Controller('drama')
 export class DramaController {
@@ -13,6 +15,7 @@ export class DramaController {
     private readonly dramaService: DramaService,
     private readonly progressService: DramaProgressService,
     private readonly genreTemplateService: DramaGenreTemplateService,
+    private readonly pipelineService: DramaAgentPipelineService,
   ) {}
 
   /* ─── 题材模板（静态路由优先于 :dramaId 参数路由） ─── */
@@ -47,6 +50,27 @@ export class DramaController {
     return this.genreTemplateService.clone(id, req.user?.userId ?? 'anonymous');
   }
 
+  /* ─── Pipeline 配置 ─── */
+
+  @Get(':dramaId/pipeline')
+  async getPipeline(@Param('dramaId') dramaId: string) { return this.pipelineService.getPipeline(dramaId); }
+
+  @Put(':dramaId/pipeline/draft')
+  async savePipelineDraft(@Param('dramaId') dramaId: string, @Body() body: { nodes: DramaAgentNodeConfig[] }) {
+    return this.pipelineService.saveDraft(dramaId, body.nodes);
+  }
+
+  @Post(':dramaId/pipeline/publish')
+  async publishPipeline(@Param('dramaId') dramaId: string) { return this.pipelineService.publish(dramaId); }
+
+  @Put(':dramaId/pipeline/params')
+  async savePipelineParams(@Param('dramaId') dramaId: string, @Body() params: Partial<DramaWorkflowParams>) {
+    return this.pipelineService.saveWorkflowParams(dramaId, params);
+  }
+
+  @Get(':dramaId/pipeline/topology')
+  async getPipelineTopology(@Param('dramaId') dramaId: string) { return this.pipelineService.getTopology(dramaId); }
+
   /* ─── CRUD ─── */
 
   @Post()
@@ -66,7 +90,7 @@ export class DramaController {
 
   @Post(':dramaId/episodes/generate')
   async generateEpisode(@Param('dramaId') dramaId: string, @Query('count') count?: string) {
-    return this.dramaService.generateEpisodes(dramaId, parseInt(count || '1', 10));
+    return this.dramaService.generateEpisodes(dramaId, parseInt(count || '1', 10)); // 异步启动，立即返回
   }
 
   @Get(':dramaId/episodes')
@@ -84,6 +108,21 @@ export class DramaController {
     return this.dramaService.getVisualAssets(dramaId);
   }
 
+  @Post(':dramaId/visual-assets/:assetId/regenerate')
+  async regenerateAssetImage(@Param('dramaId') dramaId: string, @Param('assetId') assetId: string) {
+    return this.dramaService.regenerateAssetImage(dramaId, assetId);
+  }
+
+  @Post(':dramaId/episodes/:episodeNumber/generate-media')
+  async generateEpisodeMedia(@Param('dramaId') dramaId: string, @Param('episodeNumber') ep: string) {
+    return this.dramaService.generateEpisodeMedia(dramaId, parseInt(ep, 10));
+  }
+
+  @Get(':dramaId/episodes/:episodeNumber/media-status')
+  async getEpisodeMediaStatus(@Param('dramaId') dramaId: string, @Param('episodeNumber') ep: string) {
+    return this.dramaService.getEpisodeMediaStatus(dramaId, parseInt(ep, 10));
+  }
+
   /* ─── SSE: 创建进度 ─── */
 
   @Sse(':dramaId/create-sse')
@@ -92,7 +131,7 @@ export class DramaController {
     const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
     const unsub = this.progressService.subscribe(dramaId, (event) => {
       subject.next({ data: event } as MessageEvent);
-      if (event.done && (event.step === 'create_4' || event.error)) { clearInterval(heartbeat); setTimeout(() => subject.complete(), 200); }
+      if (event.done && (event.step === 'create_5' || event.error)) { clearInterval(heartbeat); setTimeout(() => subject.complete(), 200); }
     });
     return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
   }
@@ -122,6 +161,45 @@ export class DramaController {
     setTimeout(async () => {
       try {
         const result = await this.dramaService.generateEpisodes(dramaId, n);
+        subject.next({ data: { _type: 'result', ...result } } as MessageEvent);
+      } catch (err: any) {
+        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
+      } finally {
+        this.progressService.clearGenerating(key);
+        clearInterval(heartbeat);
+        unsub();
+        setTimeout(() => subject.complete(), 200);
+      }
+    }, 0);
+
+    return subject.asObservable();
+  }
+
+  /* ─── SSE: 媒体生成进度（触发 + 推送） ─── */
+
+  @Sse(':dramaId/episodes/:episodeNumber/generate-media-sse')
+  async generateMediaSse(
+    @Param('dramaId') dramaId: string,
+    @Param('episodeNumber') ep: string,
+  ): Promise<Observable<MessageEvent>> {
+    const subject = new Subject<MessageEvent>();
+    const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
+    const episodeNumber = parseInt(ep, 10);
+    const key = `${dramaId}:media:${episodeNumber}`;
+
+    const alreadyRunning = !this.progressService.markGenerating(key);
+    const unsub = this.progressService.subscribe(dramaId, (event) => {
+      if (event.phase === 'media' && event.episodeNumber === episodeNumber) subject.next({ data: event } as MessageEvent);
+    });
+
+    if (alreadyRunning) {
+      subject.next({ data: { reconnected: true, message: '已重连到正在进行的媒体生成任务' } } as MessageEvent);
+      return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
+    }
+
+    setTimeout(async () => {
+      try {
+        const result = await this.dramaService.generateEpisodeMedia(dramaId, episodeNumber);
         subject.next({ data: { _type: 'result', ...result } } as MessageEvent);
       } catch (err: any) {
         subject.next({ data: { done: true, error: err.message } } as MessageEvent);

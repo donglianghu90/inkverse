@@ -8,36 +8,27 @@ import { z } from 'zod';
 import {
   episodeStoryboardSchema, EpisodeStoryboard, EpisodeReview, DramaState,
 } from '../schemas/drama-state.schemas';
+import { buildScriptEditorSystemPrompt } from '../prompting/drama-playbook';
+import { DramaPromptTemplateService } from '../prompting/drama-prompt-template.service';
 
 const editorOutputSchema = z.object({ storyboard: episodeStoryboardSchema });
 
 @Injectable()
 export class ScriptEditorAgent {
-  constructor(private readonly llm: LlmService) {}
+  constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
   async fix(
     state: DramaState, storyboard: EpisodeStoryboard, review: EpisodeReview,
+    priorityIssues?: Array<{ category: string; severity: string; description: string; suggestedFix: string }>,
   ): Promise<EpisodeStoryboard> {
-    const issues = review.issuesFound
-      .filter(i => i.severity === 'critical' || i.severity === 'moderate')
-      .map(i => `[${i.severity}/${i.category}] ${i.description} → 建议：${i.suggestedFix}`)
-      .join('\n');
-
-    if (!issues) return storyboard; // 无需修复
+    const issueList = priorityIssues?.length ? priorityIssues : review.issuesFound.filter(i => i.severity === 'critical' || i.severity === 'moderate');
+    const issues = issueList.map(i => `[${i.severity}/${i.category}] ${i.description} → 建议：${i.suggestedFix}`).join('\n');
+    if (!issues) return storyboard;
 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-script-editor',
       schema: editorOutputSchema,
-      systemPrompt: `你是短剧剧本精修编辑。你的唯一任务是修复审核中发现的问题。
-
-=== 修复原则 ===
-1. 只修复被标记的问题，不做"顺便优化"
-2. 修复时保持与整体风格一致
-3. 如果修复涉及台词变化，确保角色说话风格不变
-4. 如果修复涉及镜头调整，确保 visualPrompt 同步更新
-5. 修复后的 shot 总时长偏差不超过原来的 ±10%
-
-所有输出简体中文（visualPrompt 保持英文）。`,
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'script-editor', buildScriptEditorSystemPrompt()),
 
       userPrompt: `修复第 ${storyboard.episodeNumber} 集分镜板：
 

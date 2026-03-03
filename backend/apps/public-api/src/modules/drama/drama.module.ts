@@ -1,4 +1,4 @@
-/** Drama module — 短剧引擎，独立于 Novel 模块，从创意到 Shot JSON 的完整生成链路。 */
+/** Drama module — 短剧引擎，独立于 Novel 模块，从创意到 Shot JSON + 媒体生成的完整链路。 */
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DramaEntity } from './entities/drama.entity';
@@ -6,9 +6,14 @@ import { EpisodeEntity } from './entities/episode.entity';
 import { VisualAssetEntity } from './entities/visual-asset.entity';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
 import { DramaGenreTemplateEntity } from './entities/drama-genre-template.entity';
+import { DramaAgentPipelineEntity } from './entities/drama-agent-pipeline.entity';
+import { MediaModule } from '../media/media.module';
 import { DramaController } from './drama.controller';
 import { DramaService } from './drama.service';
 import { EpisodeWorkflowService } from './episode-workflow.service';
+import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
+import { DramaWorkflowTopologyService } from './drama-workflow-topology.service';
+import { MediaOrchestratorService } from './media-orchestrator.service';
 import { DramaProgressService } from './drama-progress.service';
 import { DramaGenreTemplateService } from './drama-genre-template.service';
 import { DramaSeedAnalyzerAgent } from './agents/drama-seed-analyzer.agent';
@@ -29,17 +34,20 @@ import { PacingAnalyzerAgent } from './agents/pacing-analyzer.agent';
 import { HookCrafterAgent } from './agents/hook-crafter.agent';
 import { EpisodeRecorderAgent } from './agents/episode-recorder.agent';
 import { DramaDeterministicCheckerService } from './validators/deterministic-checker.service';
+import { DramaPromptTemplateService } from './prompting/drama-prompt-template.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       DramaEntity, EpisodeEntity, VisualAssetEntity,
-      DramaWorkflowExecutionEntity, DramaGenreTemplateEntity,
+      DramaWorkflowExecutionEntity, DramaGenreTemplateEntity, DramaAgentPipelineEntity,
     ]),
+    MediaModule,
   ],
   controllers: [DramaController],
   providers: [
-    DramaService, EpisodeWorkflowService, DramaProgressService, DramaGenreTemplateService,
+    DramaService, EpisodeWorkflowService, DramaAgentPipelineService, DramaWorkflowTopologyService, MediaOrchestratorService,
+    DramaProgressService, DramaGenreTemplateService,
     DramaSeedAnalyzerAgent, SeriesDirectorAgent, VisualAssetDesignerAgent,
     DramaProfilerAgent, DramaStrategyAgent,
     ArcDirectorAgent, EpisodeDirectorAgent, ContinuityGuardAgent,
@@ -48,6 +56,7 @@ import { DramaDeterministicCheckerService } from './validators/deterministic-che
     ScriptReviewerAgent, ScriptEditorAgent,
     PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent,
     DramaDeterministicCheckerService,
+    DramaPromptTemplateService,
   ],
 })
 export class DramaModule {}

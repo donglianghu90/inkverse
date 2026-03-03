@@ -18,6 +18,13 @@ export default {
       timeout: 900_000,
       proxyTimeout: 900_000,
     },
+    '/api/media': {
+      target: 'http://localhost:8099',
+      changeOrigin: true,
+      pathRewrite: { '^/api/media': '/api/inkverse/media' },
+      timeout: 900_000,
+      proxyTimeout: 900_000,
+    },
     '/api/auth': {
       target: 'http://localhost:8099',
       changeOrigin: true,

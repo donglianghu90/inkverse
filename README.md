@@ -6,15 +6,32 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 
 独立于小说模块的短剧生成引擎，从创意到逐镜头 Shot JSON 的完整链路。
 
-### 创建流程（5步）
-`SeedAnalyzer` → `SeriesDirector`（全剧大纲+分集概要+付费卡点） → `VisualAssetDesigner`（角色锁脸+配音+场景+风格指南） → `DramaProfiler`（编剧手册） → `DramaStrategy`（付费/悬念/角色预算策略）
+### 创建流程（6步）
+`SeedAnalyzer` → `SeriesDirector`（全剧大纲+分集概要+付费卡点） → `VisualAssetDesigner`（角色锁脸+配音+场景+风格指南+**角色变体衣橱**） → **参考图生成**（T2I 角色定妆照+场景图+**变体参考图**，以base图为参考保持面部一致） → `DramaProfiler`（编剧手册） → `DramaStrategy`（付费/悬念/角色预算策略）
 
-### 逐集生成 Pipeline（13步）
-`ArcDirector`（段落规划） → `EpisodeDirector`（集级意图） → `ContinuityGuard`（连续性预检） → `Scriptwriter`（剧本） → `DialogueCoach`（台词润色） → `StoryboardDirector`（分镜Shot+T2V visualPrompt） → `AudioDirector`（BGM/SFX/环境音/TTS标注） → `DeterministicChecker`（硬规则校验） → `ScriptReviewer`（质量审核） → `ScriptEditor`（精修循环，最多2轮） → `PacingAnalyzer`（节奏分析） → `HookCrafter`（集末悬念+下集预告） → `EpisodeRecorder`（知识记录+闪回标注）
+### 逐集生成 Pipeline（13步，支持断点续跑+可配置参数）
+`ArcDirector`（段落规划） → `EpisodeDirector`（集级意图） → `ContinuityGuard`（连续性预检，**阻断性问题自动回退EpisodeDirector重试**） → `Scriptwriter`（剧本） → `DialogueCoach`（台词润色，可关闭） → `StoryboardDirector`（**按场景分步生成**Shot+首尾帧提示词） → `AudioDirector`（BGM/SFX/环境音/TTS标注） → `DeterministicChecker`（硬规则阻断/软规则警告） → `ScriptReviewer`（质量审核） → `ScriptEditor`（**定向精修**，传入critical issues，轮数可配） → `PacingAnalyzer`（节奏分析，可关闭） → `HookCrafter`（集末悬念+下集预告，可关闭） → `EpisodeRecorder`（知识记录+闪回标注）
+
+- **断点续跑**：逐集和创建流程（6步）每步完成后写入checkpoint，中断后自动从上次中断处恢复，跳过已完成步骤，节省LLM调用
+- **启动恢复**：服务重启时自动扫描超过5分钟仍处于 `running` 的创建流程，有checkpoint数据的尝试恢复，无数据的标记失败
+- **WorkflowParams可配置**：精修轮数(`maxEditRounds`)、连续性重试次数(`maxContinuityRetries`)、质量通过分数(`qualityPassScore`)、台词润色/节奏分析/悬念设计开关均通过 Pipeline 配置动态读取
+
+### Pipeline 编排配置（DramaAgentPipelineEntity）
+- **节点可配置**：13个Agent节点支持启用/禁用/重排序，6个核心节点（ArcDirector/EpisodeDirector/Scriptwriter/StoryboardDirector/DeterministicChecker/EpisodeRecorder）不可删除
+- **草稿/发布模式**：`draftNodes` 支持自由编辑，`publish` 后生效到 `publishedNodes`，逐集Pipeline读取发布版本
+- **WorkflowParams**：`maxEditRounds`(精修轮数,默认2)、`maxContinuityRetries`(连续性重试,默认1)、`qualityPassScore`(质量阈值,默认7.0)、`enableDialogueCoach/PacingAnalyzer/HookCrafter`(可选节点开关,默认true)
+- **拓扑可视化**：4阶段（准备→编剧→制作→后期）线性链拓扑，含条件分支（精修判断门）和重试回环，支持前端ReactFlow渲染
+
+### Prompt 集中管理（Drama Playbook）
+- **drama-playbook.ts**：17个Agent的System Prompt集中管理为builder函数，运行时参数化，支持统一修改和A/B测试
+- **DramaPromptTemplateService**：从Pipeline配置读取`additionalSystemPrompt`叠加到Playbook基础prompt上，实现per-agent的prompt微调
+- 创建阶段5个Agent（SeedAnalyzer/SeriesDirector/VisualDesigner/Profiler/Strategy）直接使用Playbook函数
+- 逐集阶段12个Agent通过PromptTemplateService组合Playbook+Pipeline自定义追加
 
 ### 数据模型
 - `DramaState`：顶层聚合，包含 seed/outline/characters/locations/visualStyle/strategy/promptProfile/secretLedger/flashbackBank 等
-- `Shot`：最小粒度，每个 Shot 包含 camera（角度/运动/构图/景深）、characters（动作/表情/位置）、dialogue（TTS emotion/volume/pace）、audio（bgm/sfx/ambience）、visualPrompt（英文 T2V 提示词）、subtitle、duration、transition
+- `CharacterIdentity`：角色身份，含 faceDescription/faceReferencePrompt/voiceProfile/defaultCostume/**variations**（外观变体列表：换装/受伤/伪装等）
+- `Shot`：最小粒度，含 camera/characters/dialogue/audio/visualPrompt（英文20-50词）/subtitle/duration/transition/firstFramePrompt/lastFramePrompt（**首尾帧关键帧插值提示词**）/firstFrameImageUrl/**lastFrameImageUrl**/**characterVariationIds**（角色变体选择映射）
 - `EpisodeLoreRecord`：知识记录，含 characterStateDeltas/plotAdvances/newSecrets/flashbackCandidates
 
 ### 题材模板系统
@@ -23,11 +40,35 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 - 用户可自定义题材模板（CRUD + 克隆），系统模板自动同步
 - `DramaGenreTemplateEntity` 持久化于 `drama_genre_templates` 表，字段设计参考小说模板但更轻量
 
+### 逐集媒体生成流水线（MediaOrchestrator）
+文本 Pipeline 完成后，可手动触发完整单集媒体生成（四阶段流水线，**并发优化**）：
+1. **Phase 0 — T2I 首帧+尾帧图片生成**（可通过 `media.pipeline.skipImageGeneration=true` 跳过）
+   - **并发池**：同时最多 3 个 T2I 请求（`T2I_CONCURRENCY=3`），大幅缩短生成时间
+   - 每个 Shot 生成首帧（`firstFramePrompt`）和尾帧（`lastFramePrompt`）两张图片
+   - **动态参考图权重**：特写镜头增大角色参考图权重(0.6)，全景镜头增大场景权重(0.4)
+   - **角色变体支持**：Shot 可通过 `characterVariationIds` 指定使用角色变体参考图
+   - **前帧参考**：上一 Shot 的生成图作为下一 Shot 的弱参考(weight=0.15)，保持镜头间视觉连贯
+   - 场景去重：同 `sceneId` 共享场景背景参考图
+2. **Phase 1 — I2V/T2V 视频生成（关键帧插值）**
+   - **并发提交**：同时最多 2 个视频任务（`I2V_CONCURRENCY=2`）
+   - **关键帧插值模式**：首帧图作为 `first_frame`、尾帧图作为 `last_frame` 传入，起止画面均可控
+   - 角色参考图：出场角色定妆照（或变体图）作为 `character` 参考
+   - 闪回精确复用 + 预览跳过
+   - **事件驱动等待**：监听 `MediaJobService` 的 `completed` 事件，30分钟超时
+3. **Phase 2 — TTS 语音合成**：逐 Shot 为有对白的镜头生成语音
+   - 角色音色匹配 + 情感/语速控制
+   - Provider: 火山引擎 openspeech（豆包 TTS），未配置时自动跳过
+4. **Phase 3 — FFmpeg 视频合成**：拼接所有 Shot 视频 + TTS + BGM + SFX + 字幕
+- **Shot级重试**：T2I首帧/尾帧和I2V视频生成支持指数退避自动重试（最多2次，2s→4s），重试全部失败后仍走降级路径
+- **断点续传**：`shotMediaMap` 中已 `completed` 的 Shot 会被跳过
+- **任务恢复**：服务重启时自动扫描未完成的媒体任务
+
 ### SSE 实时进度
-- **创建阶段**：`GET /api/drama/:dramaId/create-sse` — 订阅 5 步创建流程进度（种子分析→大纲→视觉设计→编剧手册+策略→完成）
+- **创建阶段**：`GET /api/drama/:dramaId/create-sse` — 订阅 6 步创建流程进度（种子分析→大纲→视觉设计→参考图生成→编剧手册+策略→完成）
 - **逐集生成**：`GET /api/drama/:dramaId/episodes/generate-sse?count=N` — 触发生成并推送 13 步 Pipeline 进度，完成后返回结果
+- **媒体生成**：`GET /api/drama/:dramaId/episodes/:episodeNumber/generate-media-sse` — 触发单集媒体生成并推送 `phase: 'media'` 进度，完成后返回结果
 - **纯监听**：`GET /api/drama/:dramaId/episodes/progress-sse` — 只监听不触发，用于多端观察
-- `DramaProgressService`：EventEmitter 驱动，支持 `create`/`episode` 两种 phase，15 秒心跳保活
+- `DramaProgressService`：EventEmitter 驱动，支持 `create`/`episode`/`media` 三种 phase，15 秒心跳保活
 - 前端 CreateDrama 页面在第 5 步展示实时进度条和步骤状态
 - 前端 DramaWorkbench 生成时展示进度条和当前步骤
 
@@ -35,13 +76,22 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 - `POST /api/drama` — 创建短剧（触发5步创建流程）
 - `GET /api/drama` — 列表
 - `GET /api/drama/:dramaId` — 详情（含完整 DramaState）
-- `POST /api/drama/:dramaId/episodes/generate?count=N` — 生成N集
+- `POST /api/drama/:dramaId/episodes/generate?count=N` — 异步启动N集生成（立即返回，后台执行）
 - `GET /api/drama/:dramaId/episodes` — 分集列表
 - `GET /api/drama/:dramaId/episodes/:episodeNumber` — 集详情（含 script/storyboard/review/loreRecord）
-- `GET /api/drama/:dramaId/visual-assets` — 视觉资产
+- `GET /api/drama/:dramaId/visual-assets` — 视觉资产（含 referenceImageUrl）
+- `POST /api/drama/:dramaId/visual-assets/:assetId/regenerate` — 重新生成参考图
+- `POST /api/drama/:dramaId/episodes/:episodeNumber/generate-media` — 触发单集 Shot 视频生成
+- `GET /api/drama/:dramaId/episodes/:episodeNumber/media-status` — 查询单集媒体生成进度
 - `GET /api/drama/:dramaId/create-sse` — 创建进度 SSE
 - `GET /api/drama/:dramaId/episodes/generate-sse?count=N` — 生成进度 SSE
+- `GET /api/drama/:dramaId/episodes/:episodeNumber/generate-media-sse` — 媒体生成进度 SSE（触发+推送）
 - `GET /api/drama/:dramaId/episodes/progress-sse` — 纯监听进度 SSE
+- `GET /api/drama/:dramaId/pipeline` — 获取Pipeline配置（含草稿/发布节点+WorkflowParams）
+- `PUT /api/drama/:dramaId/pipeline/draft` — 保存Pipeline草稿（body: `{ nodes: [...] }`）
+- `POST /api/drama/:dramaId/pipeline/publish` — 发布Pipeline草稿到生效版本
+- `PUT /api/drama/:dramaId/pipeline/params` — 更新WorkflowParams（body: Partial<DramaWorkflowParams>）
+- `GET /api/drama/:dramaId/pipeline/topology` — 获取Pipeline拓扑（phases/nodes/edges/params，用于前端可视化）
 - `GET /api/drama/genre-templates/list` — 题材模板列表
 - `GET /api/drama/genre-templates/:id` — 题材模板详情
 - `POST /api/drama/genre-templates` — 创建自定义题材模板
@@ -53,6 +103,69 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 - 书架页 Tab 切换（小说/短剧）
 - 创建短剧页（`/novel/create-drama`）：4步向导（创意→题材模板选择&平台→主线&剧名→规模配置）+ SSE 实时进度
 - 短剧工作台（`/novel/drama/:dramaId`）：基本信息+SSE实时进度+分集列表+集详情弹窗（剧本场景/分镜概览/质量审核）
+
+## 媒体生成模块（Media Module）
+
+独立的多 Provider 媒体生成框架，支持图片生成（T2I/I2I）和视频生成（T2V/I2V），架构设计为可插拔的策略模式，更换 Provider 只需实现接口 + 改配置。
+
+### 架构设计
+- **策略模式 + Provider 注册表**：`ProviderRegistryService` 在启动时根据配置自动初始化并注册所有可用 Provider，业务层通过 `MediaService` 门面调用，完全不感知底层实现
+- **配置驱动切换**：`media.defaultImageProvider` / `media.defaultVideoProvider` 控制默认 Provider，无需改代码
+- **异步任务轮询**：视频生成为异步任务（提交→轮询），`MediaJobService` 自动轮询（8秒间隔），结果持久化至 `media_jobs` 表，支持断线续查
+- **事件驱动**：任务完成时通过 `EventEmitter` 发出 `completed` 事件，`MediaOrchestrator` 监听事件而非自身轮询
+- **本地持久化存储**：`LocalStorageService` 管理 `storage/` 目录（images/videos/audio/tmp），所有媒体产出物写入持久化目录
+
+### 当前 Provider
+| 能力 | Provider | 平台 | 说明 |
+|------|----------|------|------|
+| T2I | Seedream | 火山方舟 | 文生图/图生图/多图融合，角色定妆照+场景参考图 |
+| T2V | Seedance | 火山方舟 | 文生视频/图生视频，支持参考图锁脸 |
+| TTS | 豆包 TTS | openspeech.bytedance.com | 多音色语音合成，支持情感/语速控制 |
+- 统一鉴权 + 自动重试（HTTP 客户端层 `VolcengineClient`）
+
+### 音频资源库（BGM/SFX/Ambience）
+- `AudioResourceService`：语义标签→音频文件URL映射，支持 BGM（10 mood）、SFX（12 sound）、Ambience（8 场景）
+- 支持自定义映射：`assets/audio/mapping.json` 覆盖/扩展默认映射
+- 支持 OSS 远程 URL 或本地文件路径
+
+### FFmpeg 视频合成（VideoComposerService）
+- 5 步合成流程：下载远程视频→concat 拼接→TTS 音频混入→BGM 混音→ASS 字幕烧录
+- 需要系统安装 FFmpeg（`brew install ffmpeg`），未安装时自动跳过合成步骤
+
+### 扩展新 Provider（示例：接入 Kling）
+1. 创建 `providers/kling/kling-video.provider.ts`，实现 `VideoProvider` 接口
+2. 在 `ProviderRegistryService.onModuleInit()` 中添加 `initKling()` 初始化逻辑
+3. 配置 `media.kling.apiKey` 等参数，`media.defaultVideoProvider = kling`
+
+### 配置项（`backend/config/public.properties`）
+| 配置键 | 说明 | 默认值 |
+|--------|------|--------|
+| `media.volcengine.apiKey` | 方舟 API Key | — |
+| `media.volcengine.baseUrl` | API 基础地址 | `https://ark.cn-beijing.volces.com/api/v3` |
+| `media.volcengine.image.model` | Seedream 模型名 | `seedream-5-0-lite-250901` |
+| `media.volcengine.image.defaultSize` | 默认图片尺寸 | `1024x1024` |
+| `media.volcengine.video.model` | Seedance 模型名 | `seedance-2-0-250901` |
+| `media.volcengine.video.defaultDuration` | 默认视频时长(秒) | `5` |
+| `media.volcengine.video.defaultQuality` | 默认视频质量 | `720p` |
+| `media.volcengine.tts.appId` | 豆包 TTS 应用 ID | — |
+| `media.volcengine.tts.token` | 豆包 TTS 访问令牌 | — |
+| `media.volcengine.tts.cluster` | TTS 集群 | `volcano_tts` |
+| `media.volcengine.tts.defaultVoiceType` | 默认音色 | `zh_female_cancan_mars_bigtts` |
+| `media.audio.baseUrl` | 音频资源 OSS 前缀 | — |
+| `media.audio.baseDir` | 音频资源本地目录 | `./assets/audio` |
+| `media.defaultImageProvider` | 默认图片 Provider | `volcengine` |
+| `media.defaultVideoProvider` | 默认视频 Provider | `volcengine` |
+| `media.defaultTtsProvider` | 默认 TTS Provider | `volcengine` |
+| `media.storage.baseDir` | 媒体持久化存储根目录 | `./storage` |
+| `media.pipeline.skipImageGeneration` | 跳过 T2I 首帧图生成 | `false` |
+
+### API 端点
+- `GET /api/media/providers` — 查看已注册的 Provider 列表
+- `POST /api/media/image/generate` — 生成图片（同步返回）
+- `POST /api/media/video/submit` — 提交视频生成任务（异步）
+- `GET /api/media/video/:jobId` — 查询视频任务状态
+- `DELETE /api/media/video/:jobId` — 取消视频任务
+- `GET /api/media/jobs?dramaId=xxx` — 查询某短剧关联的所有媒体任务
 
 ## 写作与生成优化
 

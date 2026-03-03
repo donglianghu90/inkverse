@@ -8,12 +8,14 @@ import { z } from 'zod';
 import {
   episodeLoreRecordSchema, EpisodeLoreRecord, EpisodeStoryboard, EpisodeScript, DramaState,
 } from '../schemas/drama-state.schemas';
+import { buildEpisodeRecorderSystemPrompt } from '../prompting/drama-playbook';
+import { DramaPromptTemplateService } from '../prompting/drama-prompt-template.service';
 
 const recorderOutputSchema = z.object({ record: episodeLoreRecordSchema });
 
 @Injectable()
 export class EpisodeRecorderAgent {
-  constructor(private readonly llm: LlmService) {}
+  constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
   async record(
     state: DramaState, script: EpisodeScript, storyboard: EpisodeStoryboard,
@@ -22,24 +24,7 @@ export class EpisodeRecorderAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-episode-recorder',
       schema: recorderOutputSchema,
-      systemPrompt: `你是短剧知识记录员。你的任务是从本集剧本+分镜中提取所有关键信息，用于后续集的上下文传递。
-
-=== 必须记录 ===
-1. summary：3-5句话概括本集发生了什么
-2. characterStateDeltas：每个出场角色的状态变化
-   - emotionalShift：情绪变化（如"从愤怒到震惊"）
-   - relationshipChanges：关系变化（如"与陆子轩从仇视变为暂时合作"）
-   - newKnowledge：角色获得的新信息（如"发现了林婉清不是亲生女儿"）
-   - costumeUsed：本集使用的服饰
-3. plotAdvances：本集推进的剧情线（2-5条）
-4. newSecrets：本集产生的新秘密（谁知道、对谁隐瞒）
-5. flashbackCandidates：适合后续作为闪回引用的高情感密度镜头
-   - shotId + reason + emotionalWeight
-   - 只标记真正有"后续回忆价值"的镜头（表白、揭真相、重大决定等）
-6. cliffhangerResolution：上集悬念在本集如何解决的
-7. newCliffhanger：本集留下的新悬念
-
-所有输出简体中文。`,
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-recorder', buildEpisodeRecorderSystemPrompt()),
 
       userPrompt: `记录第 ${script.episodeNumber} 集知识：
 

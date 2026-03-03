@@ -4,7 +4,7 @@ import { EventEmitter } from 'events';
 
 export interface DramaProgressEvent {
   dramaId: string;
-  phase: 'create' | 'episode'; // 创建阶段 or 逐集生成阶段
+  phase: 'create' | 'episode' | 'media'; // 创建 / 逐集生成 / 媒体生成
   episodeNumber?: number;
   step: string;
   stepIndex: number;
@@ -38,11 +38,11 @@ export class DramaProgressService {
   }
 
   emit(event: DramaProgressEvent): void {
-    const genKey = `${event.dramaId}:generate`;
-    const a = this.active.get(genKey);
-    if (a) {
-      a.lastStep = event.message ?? event.step;
-      if (event.totalSteps > 0) a.progress = Math.round(((event.stepIndex + (event.done ? 1 : 0.5)) / event.totalSteps) * 100);
+    const keys = [`${event.dramaId}:generate`];
+    if (event.phase === 'media' && event.episodeNumber) keys.push(`${event.dramaId}:media:${event.episodeNumber}`);
+    for (const k of keys) {
+      const a = this.active.get(k);
+      if (a) { a.lastStep = event.message ?? event.step; if (event.totalSteps > 0) a.progress = Math.round(((event.stepIndex + (event.done ? 1 : 0.5)) / event.totalSteps) * 100); }
     }
     this.emitter.emit(`progress:${event.dramaId}`, event);
   }

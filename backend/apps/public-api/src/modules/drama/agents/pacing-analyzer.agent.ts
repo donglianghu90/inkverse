@@ -6,6 +6,8 @@ import { Injectable } from '@nestjs/common';
 import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
 import { EpisodeStoryboard, DramaState } from '../schemas/drama-state.schemas';
+import { buildPacingAnalyzerSystemPrompt } from '../prompting/drama-playbook';
+import { DramaPromptTemplateService } from '../prompting/drama-prompt-template.service';
 
 const pacingResultSchema = z.object({
   overallPacing: z.enum(['too_slow', 'slightly_slow', 'good', 'slightly_fast', 'too_fast']),
@@ -23,7 +25,7 @@ export type PacingResult = z.infer<typeof pacingResultSchema>;
 
 @Injectable()
 export class PacingAnalyzerAgent {
-  constructor(private readonly llm: LlmService) {}
+  constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
   async analyze(state: DramaState, storyboard: EpisodeStoryboard): Promise<PacingResult> {
     const shotSummary = storyboard.shots.map(s =>
@@ -33,21 +35,7 @@ export class PacingAnalyzerAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-pacing-analyzer',
       schema: pacingResultSchema,
-      systemPrompt: `你是短剧节奏分析师。分析分镜板的节奏曲线，给出评估和建议。
-
-=== 节奏判断标准 ===
-- 连续3个Shot以上无对话无动作 = drag（拖沓）
-- 连续5个Shot以上都是1-2秒快切 = rush（过密，观众看不清）
-- BGM从高强度突然变低而没有剧情缓冲 = 情绪跳跃
-- 全集高强度占比超过60% = 观众疲劳
-- 全集低强度占比超过50% = 可能流失
-
-=== 理想节奏模式 ===
-开场（15%）：快节奏抓人
-铺垫（20%）：中节奏建立
-上升（25%）：逐渐加速
-高潮（25%）：最快节奏
-落幕+钩子（15%）：短暂缓冲后留悬念`,
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'pacing-analyzer', buildPacingAnalyzerSystemPrompt()),
 
       userPrompt: `分析第 ${storyboard.episodeNumber} 集节奏：
 

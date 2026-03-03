@@ -2,6 +2,10 @@ node_modules
 backend/dist
 backend/node_modules
 backend/logs
+storage
+backend/assets/audio/bgm/
+backend/assets/audio/sfx/
+backend/assets/audio/ambience/
 frontend/apps/web/node_modules
 frontend/apps/web/dist
 frontend/apps/web/.umi
@@ -14,3 +18,4 @@ frontend/apps/web/.umi-development
 frontend/apps/web/.umi-test
 frontend/apps/web/.umi-production
 frontend/apps/web/.umi-development
+backend/config/public.properties

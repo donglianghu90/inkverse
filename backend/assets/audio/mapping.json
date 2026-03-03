@@ -1,0 +1,37 @@
+{
+  "bgm": {
+    "tension_building": "bgm/tension.mp3",
+    "romantic_sweet": "bgm/romantic.mp3",
+    "epic_reveal": "bgm/epic.mp3",
+    "sad_piano": "bgm/sad-piano.mp3",
+    "comedy_light": "bgm/comedy.mp3",
+    "action_intense": "bgm/action.mp3",
+    "mysterious": "bgm/mysterious.mp3",
+    "triumphant": "bgm/triumphant.mp3",
+    "heartbreak": "bgm/heartbreak.mp3"
+  },
+  "sfx": {
+    "door_slam": "sfx/door-slam.mp3",
+    "glass_break": "sfx/glass-break.mp3",
+    "slap": "sfx/slap.mp3",
+    "phone_ring": "sfx/phone-ring.mp3",
+    "car_engine": "sfx/car-engine.mp3",
+    "footsteps": "sfx/footsteps.mp3",
+    "rain": "sfx/rain.mp3",
+    "thunder": "sfx/thunder.mp3",
+    "crowd_gasp": "sfx/crowd-gasp.mp3",
+    "heartbeat": "sfx/heartbeat.mp3",
+    "wind": "sfx/wind.mp3",
+    "typing": "sfx/typing.mp3"
+  },
+  "ambience": {
+    "office_quiet": "ambience/office.mp3",
+    "rain_heavy": "ambience/rain-heavy.mp3",
+    "rain_light": "ambience/rain-light.mp3",
+    "crowd_murmur": "ambience/crowd.mp3",
+    "night_crickets": "ambience/crickets.mp3",
+    "traffic": "ambience/traffic.mp3",
+    "restaurant_bg": "ambience/restaurant.mp3",
+    "wind": "ambience/wind.mp3"
+  }
+}

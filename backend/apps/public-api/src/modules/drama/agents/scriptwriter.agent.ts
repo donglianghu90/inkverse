@@ -1,6 +1,5 @@
 /**
- * 编剧 Agent — 根据 EpisodeIntent + 上下文生成本集剧本（EpisodeScript）。
- * 剧本由多个场景（ScriptScene）组成，每场景含台词+动作+情绪标注。
+ * 编剧 Agent — 短剧核心创作引擎。注入深度上下文：故事全貌、角色关系、秘密、策略、质量反馈。
  */
 import { Injectable } from '@nestjs/common';
 import { LlmService } from '../../novel/llm/llm.service';
@@ -8,83 +7,104 @@ import { z } from 'zod';
 import {
   episodeScriptSchema, EpisodeScript, DramaState, EpisodeIntent, DramaContinuityCheck,
 } from '../schemas/drama-state.schemas';
+import { buildScriptwriterSystemPrompt } from '../prompting/drama-playbook';
+import { DramaPromptTemplateService } from '../prompting/drama-prompt-template.service';
 
 const scriptOutputSchema = z.object({ script: episodeScriptSchema });
 
 @Injectable()
 export class ScriptwriterAgent {
-  constructor(private readonly llm: LlmService) {}
+  constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
   async write(
     state: DramaState, intent: EpisodeIntent, continuity: DramaContinuityCheck,
   ): Promise<EpisodeScript> {
     const profile = state.promptProfile;
     const guide = profile?.scriptwriterGuide;
-    const charMap = state.characters.map(c =>
-      `${c.characterId}(${c.name}): 性格=${c.voiceProfile.speakingStyle}, 口癖="${c.voiceProfile.catchphrase}"`
-    ).join('\n');
+    const epNum = intent.episodeNumber;
+
+    // 角色说话风格 + 角色间关系
+    const charMap = state.characters.map(c => {
+      const activeInfo = intent.activeCharacters.find(a => a.characterId === c.characterId);
+      return `${c.characterId}(${c.name}): 性格=${c.voiceProfile.speakingStyle}, 口癖="${c.voiceProfile.catchphrase}"${activeInfo ? `, 本集角色=${activeInfo.role}, 情绪=${activeInfo.emotionalState}` : ''}`;
+    }).join('\n');
+
+    // 未揭露的秘密（编剧必须知道谁知道什么，才能写出潜台词）
+    const activeSecrets = state.secretLedger.filter(s => !s.resolved);
+    const secretCtx = activeSecrets.length
+      ? activeSecrets.map(s => `🔒 "${s.secret}" — 知情:${s.knownBy.join(',')} 隐瞒:${s.hiddenFrom.join(',')}`).join('\n')
+      : '（无活跃秘密）';
+
+    // 质量反馈（从最近3集KPI中提取弱项，防止重复犯错）
+    const recentKpi = state.kpiHistory.slice(-3);
+    const weakDims = this.extractWeakDimensions(recentKpi);
 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-scriptwriter',
       schema: scriptOutputSchema,
-      systemPrompt: `${guide?.coreIdentity ?? '你是一位短剧编剧，擅长用最少的台词传递最大的信息量。'}
-
-=== 编剧铁律 ===
-${guide?.genreRules?.map((r, i) => `${i + 1}. ${r}`).join('\n') ?? '1. 每场戏必须有冲突或信息推进\n2. 台词简短有力，单句不超过15字\n3. 禁止大段心理描写'}
-
-=== 台词风格 ===
-${guide?.dialogueGuide ?? '简短有力，关键信息用表情+一句话传递。禁止长独白。'}
-
-=== 节奏指南 ===
-${guide?.pacingGuide ?? '每场戏20-60秒，全集3-6个场景。'}
-
-=== 视觉叙事 ===
-${guide?.visualNarrativeGuide ?? '优先用画面叙事，一个眼神胜过三句解释。'}
-
-=== 禁止模式 ===
-${guide?.forbiddenPatterns?.join('、') ?? '禁止连续误会推剧情、禁止无脑虐主'}
-
-=== 场景结构 ===
-- 每个 scene 有明确的 purpose（hook_opening/conflict/revelation/emotional/action/confrontation/romantic/transition/climax/cliffhanger）
-- dialogues 数组：每条对话含 characterId + text + parenthetical（括号注释如"冷笑""握紧拳头"）
-- actions 数组：每条动作描写，characterId 为空表示环境动作
-- emotionalEntry/emotionalExit：场景情绪入口和出口
-- sceneId 格式：ep{N}_sc{M}
-
-所有输出简体中文。`,
-
-      userPrompt: `第 ${intent.episodeNumber} 集剧本创作：
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'scriptwriter', buildScriptwriterSystemPrompt({ guide })),
+      userPrompt: `第 ${epNum} 集剧本创作：
 
 === 集级意图 ===
 目标：${intent.goals.join('；')}
 情绪方向：${intent.emotionDirection}
 钩子方向：${intent.hookDirection}
 上集衔接：${intent.carryoverFromLastEpisode}
-是否付费集：${intent.isPaywallEpisode ? '是（必须在最关键时刻结束）' : '否'}
+是否付费集：${intent.isPaywallEpisode ? '是（必须在最关键时刻结束，让观众不得不付费）' : '否'}
 目标时长：${intent.durationTargetSec} 秒
 
-=== 出场角色 ===
-${intent.activeCharacters.map(c => `${c.characterId}: ${c.role} | 情绪=${c.emotionalState}${c.costumeOverride ? ` | 服饰=${c.costumeOverride}` : ''}`).join('\n')}
+=== 故事全貌 ===
+${state.storySoFar ? state.storySoFar.slice(0, 800) : '（第一集，无前情）'}
+上集悬念：${state.lastCliffhanger || '无'}
+${state.currentArcSegment ? `当前段落：${state.currentArcSegment.segmentTitle}（矛盾：${state.currentArcSegment.coreConflict}，情感主题：${state.currentArcSegment.emotionalTheme}）` : ''}
+${state.strategy?.coreNarrativeContract ? `叙事契约：${state.strategy.coreNarrativeContract}` : ''}
 
-=== 角色说话风格 ===
+=== 出场角色 + 说话风格 ===
 ${charMap}
 
-=== 连续性注入 ===
+=== 秘密地图（编剧必读：决定谁能说什么、谁在演戏） ===
+${secretCtx}
+
+=== 连续性约束 ===
 ${continuity.contextInjections.join('\n') || '（无特殊注意事项）'}
 ${continuity.warnings.length > 0 ? `⚠️ 连续性警告：${continuity.warnings.map(w => w.description).join('；')}` : ''}
 
-=== 使用场景 ===
+=== 场景 ===
 ${intent.locationIds.map(id => {
   const loc = state.locations.find(l => l.locationId === id);
-  return loc ? `${id}(${loc.name}): ${loc.description.slice(0, 50)}...` : id;
+  return loc ? `${id}(${loc.name}): ${loc.description.slice(0, 80)}` : id;
 }).join('\n')}
 
-请创作本集完整剧本。每个场景的 sceneId 用 ep${intent.episodeNumber}_sc1, ep${intent.episodeNumber}_sc2... 格式。`,
+${weakDims ? `=== 质量警告（前几集弱项，本集务必加强） ===\n${weakDims}` : ''}
+
+=== 创作铁律（违反即不合格） ===
+1. 每句台词不超过15个中文字（关键独白除外）
+2. 第一场必须是 hook_opening，最后一场必须是 cliffhanger
+3. 知道秘密的角色说话要有"知情者的优越感"，不知道的要有"被蒙在鼓里的天真"
+4. 每场戏必须有信息增量（推进剧情/揭露线索/反转/情绪爆发），禁止无意义过场
+5. sceneId 格式：ep${epNum}_sc1, ep${epNum}_sc2...`,
       temperature: 0.65,
     });
 
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
     const script = typeof root.script === 'object' && root.script ? root.script : root;
     return episodeScriptSchema.parse(script);
+  }
+
+  /** 从最近KPI中提取持续低分维度，生成改进指令 */
+  private extractWeakDimensions(kpiHistory: Array<{ episodeNumber?: number; overallScore?: number; dimensions?: Record<string, number> }>): string {
+    if (!kpiHistory.length) return '';
+    const dimSums: Record<string, { total: number; count: number }> = {};
+    kpiHistory.forEach(k => Object.entries(k.dimensions ?? {}).forEach(([dim, score]) => {
+      if (!dimSums[dim]) dimSums[dim] = { total: 0, count: 0 };
+      dimSums[dim].total += score; dimSums[dim].count++;
+    }));
+    const weakOnes = Object.entries(dimSums)
+      .map(([dim, { total, count }]) => ({ dim, avg: total / count }))
+      .filter(d => d.avg < 7)
+      .sort((a, b) => a.avg - b.avg);
+    if (!weakOnes.length) return '';
+    const dimNameMap: Record<string, string> = { visualImpact: '画面冲击力', dialogueNaturalness: '台词自然度', pacing: '节奏紧凑度', hookStrength: '悬念强度', consistency: '连续性', emotionalImpact: '情感冲击力' };
+    return weakOnes.map(w => `⚠ ${dimNameMap[w.dim] || w.dim} 平均${w.avg.toFixed(1)}分 — 本集请重点加强`).join('\n');
   }
 }
