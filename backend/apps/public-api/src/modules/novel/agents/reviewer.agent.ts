@@ -18,8 +18,10 @@ import {
   PROSE_CRAFT_PLAYBOOK,
   buildChapterRhythmPlaybook,
   buildCompactContext,
+  buildCalibrationHint,
   UNIFIED_AGENT_MAX_CHARACTERS,
 } from '../prompting/novel-playbook';
+import { mapBeatRoleToChapterType } from '../prompting/chapter-type.utils';
 import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 
 @Injectable()
@@ -33,6 +35,9 @@ export class ReviewerAgent {
     additionalSystemPrompt?: string,
     playbooks?: Record<string, string>,
   ): Promise<ChapterReview> {
+    const chapterType = mapBeatRoleToChapterType(
+      state.currentArc?.chapterBeats?.find((b) => b.chapterNumber === intent.chapterNumber)?.role,
+    ) ?? 'general';
     const context = buildCompactContext(state, {
       maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
       maxChapterSummaries: 4,
@@ -49,6 +54,7 @@ export class ReviewerAgent {
       metadata: {
         bookId: state.bookId,
         chapterNumber: intent.chapterNumber,
+        chapterType,
       },
       systemPrompt: (() => {
         const profile = state.bookPromptProfile;
@@ -69,6 +75,10 @@ export class ReviewerAgent {
           ? `你是一位兼具文学素养与严格标准的${profile.generatedForGenre}小说评审。核心问题：这一章在文学层面有没有让人记住的独特表达？它是否在某个维度深化了核心命题？`
           : `你是一位严格但公正的${profile.generatedForGenre}网文第一读者。核心问题只有一个：作为付费读者，我想不想看下一章？`)}
 （目标读者：${profile.generatedForAudience}）
+
+=== 当前章节类型 ===
+${chapterType}
+${playbooks?.['CHAPTER_TYPE_REVIEWER_PLAYBOOK'] ? `\n=== 章型审阅专属指令 ===\n${playbooks['CHAPTER_TYPE_REVIEWER_PLAYBOOK']}` : ''}
 
 === 评价维度（0-10分，加权计算） ===
 - engagement（吸引力×${cal.dimensionWeights.engagement}）
@@ -120,7 +130,8 @@ ${buildAudiencePromptBlock(state)}
 ${playbooks?.['__bookStrategy'] ?? ''}
 ${playbooks?.['__policySlice'] ?? ''}
 ${buildChapterRhythmPlaybook(state.seed.targetChapterWordCount ?? 3000)}
-${state.bookPromptProfile?.writerGuide ? `\n=== 主题检查 ===\n${state.seed.thematicCore ? `核心命题：${state.seed.thematicCore.centralQuestion}\n本章是否在某个层面触及了核心命题？不需要每章直接讨论，但读者应该能隐约感受到。完全脱离主题的纯过渡章——engagement扣分。` : '（无主题内核，跳过）'}` : ''}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
+${state.bookPromptProfile?.writerGuide ? `\n=== 主题检查 ===\n${state.seed.thematicCore ? `核心命题：${state.seed.thematicCore.centralQuestion}\n本章是否在某个层面触及了核心命题？不需要每章直接讨论，但读者应该能隐约感受到。完全脱离主题的纯过渡章——engagement扣分。` : '（无主题内核，跳过）'}` : ''}
+${buildCalibrationHint(state)}${additionalSystemPrompt ? '\n\n=== 作者补充指示 ===\n' + additionalSystemPrompt : ''}`;
       })(),
       userPrompt: `故事上下文：
 ${JSON.stringify(context, null, 2)}

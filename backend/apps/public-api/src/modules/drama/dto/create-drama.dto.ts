@@ -39,4 +39,7 @@ export class CreateDramaDto {
 
   @IsOptional() @IsInt() @Min(20)
   plannedMaxEpisodes?: number;
+
+  @IsOptional() @IsString()
+  genreTemplateId?: string; // 指定题材模板 ID
 }

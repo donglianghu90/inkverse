@@ -19,6 +19,9 @@ const STAGE_HINT_BY_BEAT_ROLE: Record<string, ArcDirectorDirective['arcStage']> 
   climax: 'climax',
   aftermath: 'aftermath',
   transition: 'transition',
+  introspective: 'build',
+  fragmentary: 'build',
+  atmospheric: 'entry',
 };
 
 const TECHNIQUE_GUIDES: Record<string, (progress: number) => string> = {
@@ -163,7 +166,11 @@ ${JSON.stringify(context, null, 2)}`,
       temperature: 0.35,
     });
     const normalized = this.enforceStrategyConstraints(state, directive);
-    return { ...normalized, characterGuidance }; // 附加从 VolumeArc 直接提取的角色成长弧，不消耗 LLM token
+    if (arc.arcId && normalized.arcId !== arc.arcId) { // LLM可能输出卷标题而非arcId格式，强制修正
+      this.logger.warn(`[Chapter ${chapterNumber}] arc-director arcId 格式修正：「${normalized.arcId}」→「${arc.arcId}」`);
+      normalized.arcId = arc.arcId;
+    }
+    return { ...normalized, characterGuidance };
   }
 
   private enforceStrategyConstraints(state: StoryState, directive: ArcDirectorDirective): ArcDirectorDirective {

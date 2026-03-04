@@ -76,6 +76,8 @@ import { GenreProfileTemplateService } from './genre-profile-template.service';
 import { RuleCompilerService } from './rule-compiler.service';
 import { MemoryRetrieverService } from './memory-retriever.service';
 import { TaskRecoveryService } from './task-recovery.service';
+import { ChapterCalibrationService } from './chapter-calibration.service';
+import { GenreCalibrationService } from './genre-calibration.service';
 
 @Module({
   imports: [
@@ -153,6 +155,8 @@ import { TaskRecoveryService } from './task-recovery.service';
     TaskRecoveryService,
     GenreProfileTemplateService,
     RuleCompilerService,
+    ChapterCalibrationService,
+    GenreCalibrationService,
   ],
 })
 export class NovelModule {}

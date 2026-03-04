@@ -4,9 +4,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BookPromptTemplateEntity, BookPromptTemplates, PromptSection, PromptEditRecord } from './entities/book-prompt-template.entity';
 import { buildDefaultRulePack } from './prompting/default-templates';
+import { DEFAULT_SYSTEM_ATOMS } from './prompting/default-rule-atoms';
 import type { RuleAtom } from './schemas/rule-engine.schemas';
 
 const MAX_HISTORY = 20;
+const MANDATORY_SYSTEM_OUTPUT_KEYS = new Set([
+  'CHAPTER_TYPE_WRITING_PLAYBOOK',
+  'CHAPTER_TYPE_SCENE_PLAN_PLAYBOOK',
+  'CHAPTER_TYPE_SCENE_PURPOSE_PLAYBOOK',
+  'CHAPTER_TYPE_INTENT_PLAYBOOK',
+  'CHAPTER_TYPE_REVIEWER_PLAYBOOK',
+]);
 
 export interface PromptTemplateView {
   bookId: string;
@@ -56,6 +64,7 @@ export class BookPromptTemplateService {
   async getTemplates(bookId: string): Promise<PromptTemplateView> {
     let entity = await this.repo.findOneBy({ bookId });
     if (!entity) { await this.initDefault(bookId); entity = await this.repo.findOneBy({ bookId }); }
+    entity = await this.ensureSystemAtoms(entity!);
     return this.toView(entity!);
   }
 
@@ -186,7 +195,19 @@ export class BookPromptTemplateService {
     let entity = await this.repo.findOneBy({ bookId });
     if (!entity) { await this.initDefault(bookId); entity = await this.repo.findOneBy({ bookId }); }
     if (!entity) throw new NotFoundException(`BookPromptTemplate not found: ${bookId}`);
-    return entity;
+    return this.ensureSystemAtoms(entity);
+  }
+
+  private async ensureSystemAtoms(entity: BookPromptTemplateEntity): Promise<BookPromptTemplateEntity> {
+    const current = entity.templates.ruleAtoms ?? [];
+    const existingIds = new Set(current.map((a) => a.id));
+    const mandatoryAtoms = DEFAULT_SYSTEM_ATOMS.filter((a) => MANDATORY_SYSTEM_OUTPUT_KEYS.has(a.outputKey));
+    const missing = mandatoryAtoms.filter((a) => !existingIds.has(a.id));
+    if (missing.length <= 0) return entity;
+    entity.templates.ruleAtoms = [...current, ...missing];
+    const saved = await this.repo.save(entity);
+    this.logger.log(`[PromptTemplate] 回填缺失系统规则 ${missing.length} 条 bookId=${entity.bookId}`);
+    return saved;
   }
 
   private toView(entity: BookPromptTemplateEntity): PromptTemplateView {

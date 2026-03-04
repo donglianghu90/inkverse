@@ -87,6 +87,13 @@ export const dramaPromptProfileSchema = z.object({
       emotionalImpact: z.number().min(0.5).max(2.0).default(1.0),
     }),
     genreSpecificChecks: z.array(z.string()).min(2),
+    calibrationHistory: z.array(z.object({ // 维度权重微调历史
+      episode: z.number().int().min(1),
+      dimension: z.string(),
+      oldWeight: z.number(),
+      newWeight: z.number(),
+      reason: z.string(),
+    })).default([]),
   }),
 });
 
@@ -543,6 +550,16 @@ export const dramaStateSchema = z.object({
   })).default([]),
 
   storySoFar: z.string().default(''), // 滚动压缩的全局剧情摘要，供长程上下文引用
+
+  // 集级校准追踪 — 近期重复问题模式（滑动窗口）
+  recentIssuePatterns: z.array(z.object({
+    pattern: z.string(), // 问题模式描述
+    dimension: z.string(), // 归属审阅维度
+    occurrences: z.number().int().min(1),
+    firstSeenEpisode: z.number().int().min(1),
+    lastSeenEpisode: z.number().int().min(1),
+    status: z.enum(['active', 'resolved', 'expired']).default('active'),
+  })).default([]),
 });
 
 // ---------------------------------------------------------------------------

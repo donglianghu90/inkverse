@@ -2,9 +2,25 @@
 import { Injectable } from '@nestjs/common';
 import { RuleAtom, RuleCondition, CompileContext } from './schemas/rule-engine.schemas';
 
+export interface CompiledRuleMeta {
+  id: string;
+  title: string;
+  outputKey: string;
+  priority: number;
+}
+
+export interface CompileResultWithMeta {
+  compiled: Record<string, string>;
+  matchedAtoms: CompiledRuleMeta[];
+}
+
 @Injectable()
 export class RuleCompilerService {
   compile(atoms: RuleAtom[], context: CompileContext): Record<string, string> {
+    return this.compileWithMeta(atoms, context).compiled;
+  }
+
+  compileWithMeta(atoms: RuleAtom[], context: CompileContext): CompileResultWithMeta {
     const matched = atoms
       .filter((a) => a.isEnabled && a.targetAgents.includes(context.agentId) && this.matchAll(a.conditions, context))
       .sort((a, b) => b.priority - a.priority);
@@ -16,7 +32,10 @@ export class RuleCompilerService {
     }
     const result: Record<string, string> = {};
     for (const [key, parts] of groups) result[key] = parts.join('\n\n');
-    return result;
+    return {
+      compiled: result,
+      matchedAtoms: matched.map((a) => ({ id: a.id, title: a.title, outputKey: a.outputKey, priority: a.priority })),
+    };
   }
 
   compileAll(atoms: RuleAtom[], baseCtx: Omit<CompileContext, 'agentId'>, agentIds: string[]): Record<string, string> {

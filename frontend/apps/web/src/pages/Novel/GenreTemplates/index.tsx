@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { message } from 'antd';
 import {
   Plus, Loader2, Copy, Trash2, Sparkles, Pencil, Shield, ChevronRight, ChevronDown,
-  BookOpen, Search, X, Wand2, ArrowLeft,
+  BookOpen, Search, X, Wand2, ArrowLeft, Film,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +20,13 @@ import {
   cloneGenreTemplate, aiGenerateProfile, syncGenreTemplateFromSystem, createGenreTemplate,
   type GenreProfileTemplate, type AiGenerateProfileParams, type RuleAtom,
 } from '@/services/novel';
+import {
+  listDramaGenreTemplates, getDramaGenreTemplate, updateDramaGenreTemplate,
+  deleteDramaGenreTemplate, cloneDramaGenreTemplate, aiGenerateDramaTemplate,
+  type DramaGenreTemplate, type AiGenerateDramaTemplateParams,
+} from '@/services/drama';
+
+type ContentTab = 'novel' | 'drama';
 
 const GENRE_COLORS: Record<string, string> = {
   xianxia: 'from-violet-500 to-indigo-600',
@@ -47,6 +54,18 @@ const GENRE_COLORS: Record<string, string> = {
   vrmmo: 'from-emerald-400 to-teal-600',
   'urban-romance': 'from-rose-400 to-pink-600',
   'ancient-romance': 'from-red-400 to-rose-600',
+};
+
+const DRAMA_GENRE_COLORS: Record<string, string> = {
+  boss: 'from-amber-500 to-rose-600', sweet: 'from-pink-400 to-rose-500',
+  warrior: 'from-red-600 to-orange-700', timetravel: 'from-violet-500 to-purple-700',
+  palace: 'from-amber-600 to-red-700', revenge: 'from-zinc-600 to-red-800',
+  rebirth: 'from-emerald-500 to-teal-700', suspense: 'from-slate-500 to-zinc-700',
+  urban: 'from-orange-400 to-rose-500', ancient: 'from-yellow-600 to-amber-800',
+};
+
+const PLATFORM_LABELS: Record<string, string> = {
+  douyin: '抖音', kuaishou: '快手', reelshort: 'ReelShort', dramabox: 'DramaBox', generic: '通用',
 };
 
 const PLAYBOOK_META: Record<string, { label: string; desc: string; agents: string[] }> = {
@@ -276,6 +295,80 @@ const AiGenerateDialog: React.FC<{
           <div className="space-y-2">
             <Label>目标读者</Label>
             <Input placeholder="如：18-35岁科幻爱好者" value={form.targetAudience ?? ''} onChange={(e) => setForm({ ...form, targetAudience: e.target.value })} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={loading}>取消</Button>
+          <Button onClick={handleGenerate} disabled={loading}>
+            {loading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />生成中...</> : <><Sparkles className="w-4 h-4 mr-2" />开始生成</>}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+/* ─── Drama AI Generate Dialog ─── */
+
+const DramaAiGenerateDialog: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  onGenerated: () => void;
+}> = ({ open, onClose, onGenerated }) => {
+  const [form, setForm] = useState<AiGenerateDramaTemplateParams>({ genreName: '' });
+  const [loading, setLoading] = useState(false);
+  const [worksInput, setWorksInput] = useState('');
+
+  const handleGenerate = async () => {
+    if (!form.genreName.trim()) { message.warning('请输入题材名称'); return; }
+    setLoading(true);
+    try {
+      await aiGenerateDramaTemplate({
+        ...form,
+        referenceWorks: worksInput.trim() ? worksInput.split(/[,，、]/).map((s) => s.trim()).filter(Boolean) : undefined,
+      });
+      message.success('AI 生成完成，请在列表中查看');
+      onGenerated();
+      onClose();
+    } catch (err: any) {
+      message.error(err?.data?.message || 'AI 生成失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Wand2 className="w-5 h-5 text-primary" />AI 生成短剧题材模板</DialogTitle>
+          <DialogDescription>描述你想要的短剧题材风格，AI 将自动生成受众定位、创作引导和爽点策略</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-5 pt-4 pb-2">
+          <div className="space-y-2">
+            <Label>题材名称 *</Label>
+            <Input placeholder="如：霸总逆袭、甜宠日常、悬疑反转" value={form.genreName} onChange={(e) => setForm({ ...form, genreName: e.target.value })} />
+          </div>
+          <div className="space-y-2">
+            <Label>风格描述</Label>
+            <Textarea placeholder="如：高甜互动+身份反差+每集一个反转..." rows={3} value={form.styleDescription ?? ''} onChange={(e) => setForm({ ...form, styleDescription: e.target.value })} />
+          </div>
+          <div className="space-y-2">
+            <Label>参考作品（逗号分隔）</Label>
+            <Input placeholder="如：闪婚后傅先生马甲藏不住了、墨雨云间" value={worksInput} onChange={(e) => setWorksInput(e.target.value)} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>目标受众</Label>
+              <Input placeholder="如：18-35岁女性" value={form.targetAudience ?? ''} onChange={(e) => setForm({ ...form, targetAudience: e.target.value })} />
+            </div>
+            <div className="space-y-2">
+              <Label>目标平台</Label>
+              <select className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm" value={form.platformTarget ?? ''} onChange={(e) => setForm({ ...form, platformTarget: e.target.value || undefined })}>
+                <option value="">自动推荐</option>
+                {Object.entries(PLATFORM_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </div>
           </div>
         </div>
         <DialogFooter>
@@ -834,20 +927,185 @@ const TemplateEditPanel: React.FC<{
   );
 };
 
+/* ─── Drama Template Card ─── */
+const DramaTemplateCard: React.FC<{
+  tpl: DramaGenreTemplate;
+  onEdit: (tpl: DramaGenreTemplate) => void;
+  onClone: (id: string) => void;
+  onDelete: (tpl: DramaGenreTemplate) => void;
+}> = ({ tpl, onEdit, onClone, onDelete }) => {
+  const gradient = DRAMA_GENRE_COLORS[tpl.genreKey] ?? 'from-violet-500 to-fuchsia-600';
+  return (
+    <Card className="group cursor-pointer hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 overflow-hidden relative" onClick={() => onEdit(tpl)}>
+      <div className={cn('h-2 bg-gradient-to-r', gradient)} />
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline gap-2">
+              <h3 className="font-semibold text-sm truncate">{tpl.displayName}</h3>
+              {tpl.isSystem && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0"><Shield className="w-3 h-3 mr-0.5" />预置</Badge>}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{tpl.description || '暂无描述'}</p>
+          </div>
+          <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {tpl.genreKeywords.slice(0, 4).map((kw) => <Badge key={kw} variant="outline" className="text-[10px] px-1.5 py-0">{kw}</Badge>)}
+          {(tpl.platformTags ?? []).slice(0, 3).map((p) => <Badge key={p} className="text-[10px] px-1.5 py-0 bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300">{PLATFORM_LABELS[p] ?? p}</Badge>)}
+        </div>
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex gap-1.5">
+            {tpl.audienceTags?.slice(0, 2).map((t) => <span key={t}>{t}</span>)}
+          </div>
+          <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onClone(tpl.id)} title="克隆"><Copy className="w-3.5 h-3.5" /></Button>
+            {!tpl.isSystem && <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(tpl)} title="删除"><Trash2 className="w-3.5 h-3.5" /></Button>}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+/* ─── Drama Template Edit Panel ─── */
+const DramaEditPanel: React.FC<{ tplId: string; onBack: () => void; onSaved: () => void }> = ({ tplId, onBack, onSaved }) => {
+  const [tpl, setTpl] = useState<DramaGenreTemplate | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [displayName, setDisplayName] = useState('');
+  const [description, setDescription] = useState('');
+  const [keywords, setKeywords] = useState('');
+  const [audienceTags, setAudienceTags] = useState<string[]>([]);
+  const [protagonistFocusTags, setProtagonistFocusTags] = useState<string[]>([]);
+  const [toneTags, setToneTags] = useState<string[]>([]);
+  const [platformTags, setPlatformTags] = useState<string[]>([]);
+  const [seedHints, setSeedHints] = useState<Record<string, any>>({});
+
+  useEffect(() => {
+    setLoading(true);
+    getDramaGenreTemplate(tplId).then((data) => {
+      setTpl(data); setDisplayName(data.displayName); setDescription(data.description);
+      setKeywords(data.genreKeywords.join('、'));
+      setAudienceTags(data.audienceTags ?? []); setProtagonistFocusTags(data.protagonistFocusTags ?? []);
+      setToneTags(data.toneTags ?? []); setPlatformTags(data.platformTags ?? []);
+      setSeedHints(data.seedHints ?? {});
+    }).catch(() => message.error('加载短剧模板详情失败')).finally(() => setLoading(false));
+  }, [tplId]);
+
+  const handleSave = async () => {
+    if (!tpl) return;
+    setSaving(true);
+    try {
+      await updateDramaGenreTemplate(tplId, {
+        displayName, description, genreKeywords: keywords.split(/[,，、\s]+/).filter(Boolean),
+        audienceTags, protagonistFocusTags: protagonistFocusTags as any, toneTags, platformTags, seedHints,
+      });
+      message.success('保存成功'); onSaved();
+    } catch (err: any) { message.error(err?.data?.message || '保存失败'); }
+    finally { setSaving(false); }
+  };
+
+  if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
+  if (!tpl) return <div className="text-center py-12 text-muted-foreground">模板不存在</div>;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <Button variant="ghost" size="sm" onClick={onBack} className="gap-1.5"><ArrowLeft className="w-4 h-4" />返回列表</Button>
+        <Button size="sm" onClick={handleSave} disabled={saving}>
+          {saving ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Pencil className="w-4 h-4 mr-1.5" />}保存修改
+        </Button>
+      </div>
+      <Tabs defaultValue="basic" className="w-full">
+        <TabsList className="w-full grid grid-cols-4">
+          <TabsTrigger value="basic">基本信息</TabsTrigger>
+          <TabsTrigger value="audience">受众与平台</TabsTrigger>
+          <TabsTrigger value="seedhints">创作引导</TabsTrigger>
+          <TabsTrigger value="profile">扩展配置</TabsTrigger>
+        </TabsList>
+        <TabsContent value="basic" className="space-y-4 pt-4">
+          <div><Label>显示名称</Label><Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} /></div>
+          <div><Label>描述</Label><Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></div>
+          <div><Label>关键词（顿号/逗号分隔）</Label><Input value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="霸总、总裁、豪门" /></div>
+        </TabsContent>
+        <TabsContent value="audience" className="space-y-4 pt-4">
+          <FormSection title="受众标签">
+            <StrList value={audienceTags} onChange={setAudienceTags} ph="如: 女性向、18-35岁" />
+          </FormSection>
+          <FormSection title="主角聚焦">
+            <div className="flex flex-wrap gap-2">
+              {['female_lead', 'male_lead', 'dual_lead', 'ensemble'].map(tag => {
+                const labels: Record<string, string> = { female_lead: '女主视角', male_lead: '男主视角', dual_lead: '双主角', ensemble: '群像' };
+                const selected = protagonistFocusTags.includes(tag);
+                return <Badge key={tag} variant={selected ? 'default' : 'outline'} className="cursor-pointer" onClick={() => setProtagonistFocusTags(selected ? protagonistFocusTags.filter(t => t !== tag) : [...protagonistFocusTags, tag])}>{labels[tag]}</Badge>;
+              })}
+            </div>
+          </FormSection>
+          <FormSection title="调性标签">
+            <StrList value={toneTags} onChange={setToneTags} ph="如: 爽快、反转、高甜" />
+          </FormSection>
+          <FormSection title="目标平台">
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(PLATFORM_LABELS).map(([key, label]) => {
+                const selected = platformTags.includes(key);
+                return <Badge key={key} variant={selected ? 'default' : 'outline'} className="cursor-pointer" onClick={() => setPlatformTags(selected ? platformTags.filter(t => t !== key) : [...platformTags, key])}>{label}</Badge>;
+              })}
+            </div>
+          </FormSection>
+        </TabsContent>
+        <TabsContent value="seedhints" className="space-y-4 pt-4">
+          <FormSection title="爽点预设">
+            <StrList value={seedHints.catharsisPresets ?? []} onChange={(v) => setSeedHints(p => ({ ...p, catharsisPresets: v }))} ph="如: 打脸、身份揭露、逆袭归来" />
+          </FormSection>
+          <FormSection title="冲突模式">
+            <StrList value={seedHints.conflictPatterns ?? []} onChange={(v) => setSeedHints(p => ({ ...p, conflictPatterns: v }))} ph="如: 阶级对立、身份反差、前任纠葛" />
+          </FormSection>
+          <FormSection title="付费卡点策略">
+            <Textarea className="text-xs" rows={3} value={seedHints.paywallStrategyHints ?? ''} onChange={(e) => setSeedHints(p => ({ ...p, paywallStrategyHints: e.target.value }))} placeholder="描述关键付费卡点的设置策略..." />
+          </FormSection>
+          <FormSection title="视觉风格提示" defaultOpen={false}>
+            <Textarea className="text-xs" rows={2} value={seedHints.visualStyleHints ?? ''} onChange={(e) => setSeedHints(p => ({ ...p, visualStyleHints: e.target.value }))} placeholder="如: 暖色调、柔光滤镜、都市质感..." />
+          </FormSection>
+          <FormSection title="台词风格提示" defaultOpen={false}>
+            <Textarea className="text-xs" rows={2} value={seedHints.dialogueStyleHints ?? ''} onChange={(e) => setSeedHints(p => ({ ...p, dialogueStyleHints: e.target.value }))} placeholder="如: 短句为主、金句密集、情绪张力强..." />
+          </FormSection>
+        </TabsContent>
+        <TabsContent value="profile" className="space-y-4 pt-4">
+          <p className="text-xs text-muted-foreground">短剧 Profile 扩展配置，后续版本将支持更多定制项。</p>
+          <FormSection title="平台默认参数" defaultOpen={false}>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div><Label className="text-[10px]">目标平台</Label><Input className="text-xs h-8 mt-1" value={seedHints.platformDefaults?.platformTarget ?? ''} onChange={(e) => setSeedHints(p => ({ ...p, platformDefaults: { ...(p.platformDefaults ?? {}), platformTarget: e.target.value } }))} placeholder="douyin" /></div>
+              <div><Label className="text-[10px]">画面比例</Label><Input className="text-xs h-8 mt-1" value={seedHints.platformDefaults?.aspectRatio ?? ''} onChange={(e) => setSeedHints(p => ({ ...p, platformDefaults: { ...(p.platformDefaults ?? {}), aspectRatio: e.target.value } }))} placeholder="9:16" /></div>
+              <div><Label className="text-[10px]">单集时长(秒)</Label><Input type="number" className="text-xs h-8 mt-1" value={seedHints.platformDefaults?.durationSec ?? ''} onChange={(e) => setSeedHints(p => ({ ...p, platformDefaults: { ...(p.platformDefaults ?? {}), durationSec: parseInt(e.target.value) || undefined } }))} placeholder="90" /></div>
+            </div>
+          </FormSection>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+};
+
 /* ─── Main Page ─── */
 const GenreTemplatesPage: React.FC = () => {
+  const [contentTab, setContentTab] = useState<ContentTab>('novel');
   const [templates, setTemplates] = useState<GenreProfileTemplate[]>([]);
+  const [dramaTemplates, setDramaTemplates] = useState<DramaGenreTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showAiDialog, setShowAiDialog] = useState(false);
+  const [showDramaAiDialog, setShowDramaAiDialog] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [dramaEditingId, setDramaEditingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<GenreProfileTemplate | null>(null);
+  const [dramaDeleteTarget, setDramaDeleteTarget] = useState<DramaGenreTemplate | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   const fetchTemplates = useCallback(async () => {
     setLoading(true);
-    try { setTemplates(await listGenreTemplates()); }
-    catch { message.error('加载题材模板失败'); }
+    try {
+      const [novels, dramas] = await Promise.all([listGenreTemplates(), listDramaGenreTemplates()]);
+      setTemplates(novels); setDramaTemplates(dramas);
+    } catch { message.error('加载题材模板失败'); }
     finally { setLoading(false); }
   }, []);
 
@@ -856,8 +1114,14 @@ const GenreTemplatesPage: React.FC = () => {
   const handleClone = async (id: string) => {
     try {
       await cloneGenreTemplate(id);
-      message.success('克隆成功');
-      fetchTemplates();
+      message.success('克隆成功'); fetchTemplates();
+    } catch (err: any) { message.error(err?.data?.message || '克隆失败'); }
+  };
+
+  const handleDramaClone = async (id: string) => {
+    try {
+      await cloneDramaGenreTemplate(id);
+      message.success('克隆成功'); fetchTemplates();
     } catch (err: any) { message.error(err?.data?.message || '克隆失败'); }
   };
 
@@ -866,9 +1130,17 @@ const GenreTemplatesPage: React.FC = () => {
     setDeleting(true);
     try {
       await deleteGenreTemplate(deleteTarget.id);
-      message.success('删除成功');
-      setDeleteTarget(null);
-      fetchTemplates();
+      message.success('删除成功'); setDeleteTarget(null); fetchTemplates();
+    } catch (err: any) { message.error(err?.data?.message || '删除失败'); }
+    finally { setDeleting(false); }
+  };
+
+  const handleDramaDelete = async () => {
+    if (!dramaDeleteTarget) return;
+    setDeleting(true);
+    try {
+      await deleteDramaGenreTemplate(dramaDeleteTarget.id);
+      message.success('删除成功'); setDramaDeleteTarget(null); fetchTemplates();
     } catch (err: any) { message.error(err?.data?.message || '删除失败'); }
     finally { setDeleting(false); }
   };
@@ -876,93 +1148,110 @@ const GenreTemplatesPage: React.FC = () => {
   const filtered = templates.filter((t) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
-    return t.displayName.toLowerCase().includes(q) || t.genreKey.toLowerCase().includes(q) ||
-      t.genreKeywords.some((kw) => kw.toLowerCase().includes(q));
+    return t.displayName.toLowerCase().includes(q) || t.genreKey.toLowerCase().includes(q) || t.genreKeywords.some((kw) => kw.toLowerCase().includes(q));
+  });
+
+  const filteredDrama = dramaTemplates.filter((t) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return t.displayName.toLowerCase().includes(q) || t.genreKey.toLowerCase().includes(q) || t.genreKeywords.some((kw) => kw.toLowerCase().includes(q));
   });
 
   if (editingId) {
     return (
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
-        <TemplateEditPanel
-          tplId={editingId}
-          onBack={() => { setEditingId(null); fetchTemplates(); }}
-          onSaved={(newId) => { fetchTemplates(); if (newId) setEditingId(newId); }}
-        />
+        <TemplateEditPanel tplId={editingId} onBack={() => { setEditingId(null); fetchTemplates(); }} onSaved={(newId) => { fetchTemplates(); if (newId) setEditingId(newId); }} />
+      </div>
+    );
+  }
+
+  if (dramaEditingId) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
+        <DramaEditPanel tplId={dramaEditingId} onBack={() => { setDramaEditingId(null); fetchTemplates(); }} onSaved={fetchTemplates} />
       </div>
     );
   }
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <BookOpen className="w-6 h-6 text-primary" />题材模板管理
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            管理题材的写作档案、创意引导和写作规则等定制内容，创建小说时自动匹配使用
-          </p>
-        </div>
-        <div className="flex gap-2 shrink-0">
-          <Button variant="outline" size="sm" onClick={() => setShowAiDialog(true)}>
-            <Wand2 className="w-4 h-4 mr-1.5" />AI 生成
-          </Button>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+          <BookOpen className="w-6 h-6 text-primary" />题材模板管理
+        </h1>
+        <p className="text-sm text-muted-foreground mt-1">管理小说和短剧的题材模板，创建作品时自动匹配使用</p>
+        <div className="flex items-center gap-4 mt-4 border-b">
+          {(['novel', 'drama'] as ContentTab[]).map(t => (
+            <button key={t} className={cn('flex items-center gap-1.5 text-sm font-medium pb-2.5 border-b-2 -mb-px transition-colors', contentTab === t ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')} onClick={() => { setContentTab(t); setSearch(''); }}>
+              {t === 'novel' ? <><BookOpen className="w-3.5 h-3.5" />小说 ({templates.length})</> : <><Film className="w-3.5 h-3.5" />短剧 ({dramaTemplates.length})</>}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <Input
-          className="pl-9 pr-8"
-          placeholder="搜索题材名称、关键词..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        {search && (
-          <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setSearch('')}>
-            <X className="w-4 h-4 text-muted-foreground hover:text-foreground" />
-          </button>
-        )}
+      <div className="flex items-center justify-between gap-4">
+        <div className="relative max-w-sm flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input className="pl-9 pr-8" placeholder="搜索题材名称、关键词..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          {search && <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setSearch('')}><X className="w-4 h-4 text-muted-foreground hover:text-foreground" /></button>}
+        </div>
+        <Button variant="outline" size="sm" onClick={() => contentTab === 'novel' ? setShowAiDialog(true) : setShowDramaAiDialog(true)}><Wand2 className="w-4 h-4 mr-1.5" />AI 生成</Button>
       </div>
 
       {loading ? (
         <div className="flex items-center justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
-      ) : filtered.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-            <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-3"><Plus className="w-6 h-6 text-muted-foreground" /></div>
-            <p className="text-sm text-muted-foreground mb-4">暂无题材模板，使用 AI 快速生成一个</p>
-            <Button variant="outline" size="sm" onClick={() => setShowAiDialog(true)}><Wand2 className="w-4 h-4 mr-1.5" />AI 生成新模板</Button>
-          </CardContent>
-        </Card>
+      ) : contentTab === 'novel' ? (
+        filtered.length === 0 ? (
+          <Card className="border-dashed">
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-3"><Plus className="w-6 h-6 text-muted-foreground" /></div>
+              <p className="text-sm text-muted-foreground mb-4">暂无小说题材模板，使用 AI 快速生成一个</p>
+              <Button variant="outline" size="sm" onClick={() => setShowAiDialog(true)}><Wand2 className="w-4 h-4 mr-1.5" />AI 生成新模板</Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filtered.map((t) => <TemplateCard key={t.id} tpl={t} onEdit={(tpl) => setEditingId(tpl.id)} onClone={handleClone} onDelete={setDeleteTarget} />)}
+          </div>
+        )
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((t) => (
-            <TemplateCard key={t.id} tpl={t} onEdit={(tpl) => setEditingId(tpl.id)} onClone={handleClone} onDelete={setDeleteTarget} />
-          ))}
-        </div>
+        filteredDrama.length === 0 ? (
+          <Card className="border-dashed">
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-3"><Film className="w-6 h-6 text-muted-foreground" /></div>
+              <p className="text-sm text-muted-foreground mb-4">暂无短剧题材模板，使用 AI 快速生成一个</p>
+              <Button variant="outline" size="sm" onClick={() => setShowDramaAiDialog(true)}><Wand2 className="w-4 h-4 mr-1.5" />AI 生成新模板</Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredDrama.map((t) => <DramaTemplateCard key={t.id} tpl={t} onEdit={(tpl) => setDramaEditingId(tpl.id)} onClone={handleDramaClone} onDelete={setDramaDeleteTarget} />)}
+          </div>
+        )
       )}
 
-      {/* Delete confirm dialog */}
       <Dialog open={!!deleteTarget} onOpenChange={(v) => !v && setDeleteTarget(null)}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>确认删除</DialogTitle>
-            <DialogDescription>删除模板「{deleteTarget?.displayName}」后无法恢复，确定继续？</DialogDescription>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>确认删除</DialogTitle><DialogDescription>删除模板「{deleteTarget?.displayName}」后无法恢复，确定继续？</DialogDescription></DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>取消</Button>
-            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
-              {deleting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
-              确认删除
-            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>{deleting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}确认删除</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!dramaDeleteTarget} onOpenChange={(v) => !v && setDramaDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>确认删除</DialogTitle><DialogDescription>删除短剧模板「{dramaDeleteTarget?.displayName}」后无法恢复，确定继续？</DialogDescription></DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDramaDeleteTarget(null)} disabled={deleting}>取消</Button>
+            <Button variant="destructive" onClick={handleDramaDelete} disabled={deleting}>{deleting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}确认删除</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <AiGenerateDialog open={showAiDialog} onClose={() => setShowAiDialog(false)} onGenerated={fetchTemplates} />
+      <DramaAiGenerateDialog open={showDramaAiDialog} onClose={() => setShowDramaAiDialog(false)} onGenerated={fetchTemplates} />
     </div>
   );
 };

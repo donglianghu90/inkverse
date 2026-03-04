@@ -36,6 +36,9 @@ export const ruleConditionSchema = z.object({
   value: z.union([z.string(), z.array(z.string()), z.number(), z.boolean()]),
 });
 
+export const RULE_SOURCES = ['system', 'genre', 'user', 'auto_calibration', 'lesson_promoted'] as const;
+export type RuleSource = (typeof RULE_SOURCES)[number];
+
 export const ruleAtomSchema = z.object({
   id: z.string().min(1),
   category: z.enum(RULE_CATEGORIES),
@@ -47,7 +50,11 @@ export const ruleAtomSchema = z.object({
   conditions: z.array(ruleConditionSchema).optional(),
   tags: z.array(z.string()).optional(),
   isEnabled: z.boolean().default(true),
-  source: z.enum(['system', 'genre', 'user']).default('system'),
+  source: z.enum(RULE_SOURCES).default('system'),
+  expiresAfterChapters: z.number().int().min(1).optional(), // auto_calibration 规则过期章数
+  createdAtChapter: z.number().int().min(1).optional(), // 创建时的章节号
+  hitCount: z.number().int().nonnegative().optional(), // 命中次数（用于衰减/升格判断）
+  lastHitChapter: z.number().int().min(1).optional(), // 最近一次命中的章节号
 });
 
 export const compileContextSchema = z.object({

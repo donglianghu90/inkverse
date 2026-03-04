@@ -1,9 +1,11 @@
-/** 短剧题材模板 Service — 系统预置 + 用户自定义 CRUD + 启动时种子同步 */
+/** 短剧题材模板 Service — 系统预置 + 用户自定义 CRUD + 启动时种子同步 + AI 生成 */
 import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
+import { z } from 'zod';
 import { DramaGenreTemplateEntity, DramaSeedHints } from './entities/drama-genre-template.entity';
 import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
+import { LlmService } from '../novel/llm/llm.service';
 
 const SYSTEM_TEMPLATES: Array<{
   genreKey: string; displayName: string; description: string;
@@ -90,6 +92,7 @@ export class DramaGenreTemplateService implements OnModuleInit {
 
   constructor(
     @InjectRepository(DramaGenreTemplateEntity) private readonly repo: Repository<DramaGenreTemplateEntity>,
+    private readonly llm: LlmService,
   ) {}
 
   async onModuleInit(): Promise<void> { await this.seedSystemTemplates(); }
@@ -212,5 +215,137 @@ export class DramaGenreTemplateService implements OnModuleInit {
   findBestMatch(genre: string): DramaSeedHints | null {
     const tpl = SYSTEM_TEMPLATES.find(t => t.genreKeywords.some(k => genre.includes(k)) || genre.includes(t.displayName));
     return tpl?.seedHints ?? null;
+  }
+
+  async aiGenerate(dto: {
+    genreName: string; styleDescription?: string; referenceWorks?: string[];
+    targetAudience?: string; platformTarget?: string;
+  }): Promise<{
+    displayName: string; description: string; genreKeywords: string[];
+    audienceTags: string[]; protagonistFocusTags: string[]; toneTags: string[];
+    platformTags: string[]; seedHints: DramaSeedHints; profileJson: Record<string, unknown>;
+  }> {
+    const portraitSchema = z.object({
+      coreIdentitySummary: z.string(),
+      keyGenreTraits: z.array(z.string()).min(3),
+      catharsisKeywords: z.array(z.string()).min(3), // 爽点关键词
+      hookKeywords: z.array(z.string()).min(3),
+      conflictPatterns: z.array(z.string()).min(3),
+      suggestedAudienceTags: z.array(z.string()).min(1),
+      suggestedProtagonistFocus: z.array(z.enum(['female_lead', 'male_lead', 'dual_lead', 'ensemble'])).min(1),
+      suggestedToneTags: z.array(z.string()).min(2),
+      suggestedPlatforms: z.array(z.string()).min(1),
+    });
+    const portrait = await this.llm.generateStructured({
+      taskName: 'drama-genre-portrait',
+      schema: portraitSchema,
+      tags: ['setup', 'drama-genre-portrait'],
+      systemPrompt: `你是一位资深短剧编剧总监，精通各类短剧题材的创作规律和平台特点。请根据用户描述的短剧题材生成一份"题材画像"。`,
+      userPrompt: `短剧题材：${dto.genreName}
+${dto.styleDescription ? `风格描述：${dto.styleDescription}` : ''}
+${dto.referenceWorks?.length ? `参考作品：${dto.referenceWorks.join('、')}` : ''}
+${dto.targetAudience ? `目标受众：${dto.targetAudience}` : ''}
+${dto.platformTarget ? `目标平台：${dto.platformTarget}` : ''}
+
+请生成题材画像 JSON：
+- coreIdentitySummary: 一段话描述理想编剧身份
+- keyGenreTraits: 5-8个题材核心特征
+- catharsisKeywords: 5-8个观众爽感关键词（如打脸/逆袭/甜蜜暴击）
+- hookKeywords: 5-8个集末钩子关键词
+- conflictPatterns: 5-8个核心冲突模式
+- suggestedAudienceTags: 推荐受众标签（如女性向/男性向/18-35岁）
+- suggestedProtagonistFocus: 推荐主角类型（female_lead/male_lead/dual_lead/ensemble）
+- suggestedToneTags: 推荐基调标签（如爽快/甜蜜/紧张/虐恋）
+- suggestedPlatforms: 推荐平台（douyin/kuaishou/reelshort/dramabox）`,
+      temperature: 0.5,
+    });
+
+    const seedHintsSchema = z.object({
+      catharsisPresets: z.array(z.string()).min(3),
+      conflictPatterns: z.array(z.string()).min(3),
+      paywallStrategyHints: z.string(),
+      visualStyleHints: z.string(),
+      dialogueStyleHints: z.string(),
+      platformDefaults: z.object({
+        platformTarget: z.string().optional(),
+        aspectRatio: z.string().optional(),
+        durationSec: z.number().optional(),
+      }).optional(),
+    });
+    const seedHintsRaw = await this.llm.generateStructured({
+      taskName: 'drama-genre-seed-hints',
+      schema: seedHintsSchema,
+      tags: ['setup', 'drama-seed-hints', 'ai-generate'],
+      systemPrompt: `你是一位短剧运营专家。根据题材画像，生成短剧创作引导配置。
+
+=== 题材画像 ===
+编剧身份：${portrait.coreIdentitySummary}
+核心特征：${portrait.keyGenreTraits.join('、')}
+爽感关键词：${portrait.catharsisKeywords.join('、')}
+冲突模式：${portrait.conflictPatterns.join('、')}`,
+      userPrompt: `短剧题材：${dto.genreName}
+${dto.platformTarget ? `目标平台：${dto.platformTarget}` : ''}
+
+请生成 JSON：
+- catharsisPresets: 推荐爽点类型列表（5-8个，如"打脸""身份揭露""甜蜜反转"）
+- conflictPatterns: 核心冲突模式列表（5-8个）
+- paywallStrategyHints: 付费卡点策略建议（一段文字，说明在哪些剧情节点设置付费卡点效果最佳）
+- visualStyleHints: 视觉风格提示（滤镜/色调/氛围建议）
+- dialogueStyleHints: 台词风格提示（语言风格/节奏/禁忌）
+- platformDefaults: 平台默认配置（platformTarget/aspectRatio/durationSec）`,
+      temperature: 0.5,
+    });
+
+    const profileSchema = z.object({
+      description: z.string(),
+      genreKeywords: z.array(z.string()).min(3),
+      scriptwriterGuide: z.object({
+        coreIdentity: z.string(),
+        genreRules: z.array(z.string()).min(5),
+        dialogueGuide: z.string(),
+        pacingGuide: z.string(),
+      }),
+      hookTypes: z.array(z.object({ id: z.string(), label: z.string(), description: z.string() })).min(3),
+      reviewerCalibration: z.object({
+        dimensionWeights: z.record(z.number()),
+        genreSpecificChecks: z.array(z.string()),
+      }),
+    });
+    const profileRaw = await this.llm.generateStructured({
+      taskName: 'drama-genre-profile-ai-generate',
+      schema: profileSchema,
+      tags: ['setup', 'drama-profile', 'ai-generate'],
+      systemPrompt: `你是一位短剧编剧培训专家。为「${dto.genreName}」题材生成编剧手册核心配置。
+
+=== 题材画像 ===
+编剧身份：${portrait.coreIdentitySummary}
+核心特征：${portrait.keyGenreTraits.join('、')}
+爽感关键词：${portrait.catharsisKeywords.join('、')}
+钩子关键词：${portrait.hookKeywords.join('、')}`,
+      userPrompt: `短剧题材：${dto.genreName}
+目标受众：${dto.targetAudience ?? '通用短剧观众'}
+
+请生成 JSON：
+- description: 一句话描述该题材（20字内）
+- genreKeywords: 题材关键词列表（5-8个）
+- scriptwriterGuide: 编剧指南（coreIdentity/genreRules/dialogueGuide/pacingGuide）
+- hookTypes: 集末钩子类型列表（5-8种，每种含 id/label/description）
+- reviewerCalibration: 审核校准（dimensionWeights 各维度权重/genreSpecificChecks 题材专项检查）`,
+      temperature: 0.6,
+    });
+
+    this.logger.log(`[aiGenerate] 短剧题材模板 AI 生成完成: ${dto.genreName}`);
+
+    return {
+      displayName: dto.genreName,
+      description: profileRaw.description,
+      genreKeywords: profileRaw.genreKeywords,
+      audienceTags: portrait.suggestedAudienceTags,
+      protagonistFocusTags: portrait.suggestedProtagonistFocus,
+      toneTags: portrait.suggestedToneTags,
+      platformTags: portrait.suggestedPlatforms,
+      seedHints: seedHintsRaw as DramaSeedHints,
+      profileJson: profileRaw as unknown as Record<string, unknown>,
+    };
   }
 }

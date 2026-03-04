@@ -287,15 +287,33 @@ export interface GenerateGoalResult {
   alternatives: string[];
 }
 
+export interface GenerateStoryGoalParams {
+  mainIdea: string;
+  genre: string;
+  targetAudience: string;
+  protagonistFocus?: string;
+  tonePreference?: string;
+  audienceTags?: string[];
+  titleHint?: string;
+}
+
 export async function generateStoryGoal(
   mainIdea: string,
   genre: string,
   targetAudience: string,
+  extra?: Partial<Omit<GenerateStoryGoalParams, 'mainIdea' | 'genre' | 'targetAudience'>>,
 ): Promise<GenerateGoalResult> {
-  return request(`${BASE}/idea/generate-goal`, {
-    method: 'POST',
-    data: { mainIdea, genre, targetAudience },
-  });
+  const data: GenerateStoryGoalParams = { mainIdea, genre, targetAudience, ...extra };
+  return request(`${BASE}/idea/generate-goal`, { method: 'POST', data });
+}
+
+export interface EnhanceGoalResult { enhanced: string; highlights: string[]; }
+
+export async function enhanceStoryGoal(
+  goal: string, mainIdea: string, genre: string, targetAudience: string,
+  extra?: Partial<Omit<GenerateStoryGoalParams, 'mainIdea' | 'genre' | 'targetAudience'>>,
+): Promise<EnhanceGoalResult> {
+  return request(`${BASE}/idea/enhance-goal`, { method: 'POST', data: { goal, mainIdea, genre, targetAudience, ...extra } });
 }
 
 export async function createBook(data: CreateBookParams): Promise<CreateBookResult> {

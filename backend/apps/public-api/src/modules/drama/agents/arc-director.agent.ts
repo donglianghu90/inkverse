@@ -46,7 +46,13 @@ ${state.storySoFar ? `全局剧情概要：\n${state.storySoFar.slice(0, 800)}` 
 
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
     const seg = typeof root.segment === 'object' && root.segment ? root.segment : root;
-    return arcSegmentSchema.parse(seg);
+    const parsed = arcSegmentSchema.parse(seg);
+    const expectedId = `arc_${state.arcSegments.length + 1}`;
+    if (parsed.segmentId !== expectedId) {
+      this.logger.warn(`segmentId 格式修正：「${parsed.segmentId}」→「${expectedId}」`);
+      parsed.segmentId = expectedId;
+    }
+    return parsed;
   }
 
   /** 将骨架集（coreConflict='待展开'）展开为详细概要 */

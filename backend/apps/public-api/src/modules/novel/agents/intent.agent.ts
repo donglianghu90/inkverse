@@ -17,6 +17,7 @@ import {
   buildDopamineDirective,
   UNIFIED_AGENT_MAX_CHARACTERS,
 } from '../prompting/novel-playbook';
+import { mapBeatRoleToChapterType } from '../prompting/chapter-type.utils';
 import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 
 @Injectable()
@@ -30,6 +31,9 @@ export class IntentAgent {
     playbooks?: Record<string, string>,
   ): Promise<ChapterIntent> {
     const chapterNumber = state.chapterCursor;
+    const chapterType = mapBeatRoleToChapterType(
+      state.currentArc?.chapterBeats?.find((b) => b.chapterNumber === chapterNumber)?.role,
+    ) ?? 'general';
     const context = buildCompactContext(state, {
       maxCharacters: UNIFIED_AGENT_MAX_CHARACTERS,
       maxChapterSummaries: 5,
@@ -92,7 +96,7 @@ export class IntentAgent {
       taskName: 'chapter-intent',
       schema: chapterIntentSchema,
       tags: ['workflow', 'chapter', 'intent'],
-      metadata: { bookId: state.bookId, chapterNumber },
+      metadata: { bookId: state.bookId, chapterNumber, chapterType },
       systemPrompt: `${playbooks?.['agent:intent:role'] ?? (isLiterary
         ? '你是一位兼具文学素养与叙事直觉的创作顾问。为下一章设定灵魂方向——不是施工图纸，而是创作灵感与主题探索的指引。'
         : '你是一位经验丰富的网文策划师。为下一章设定灵魂方向——不是施工图纸，而是灵感指引。')}
@@ -101,6 +105,10 @@ export class IntentAgent {
 ${playbooks?.['agent:intent:core_questions'] ?? (isLiterary
   ? '1. 这一章的核心张力是什么？（可以是外部冲突，也可以是内在矛盾、情感暗流、认知困境——不强制显性冲突）\n2. 读者读完应该是什么感受？（描述情绪变化曲线，允许"从平静到更深的平静"这样的微妙变化）\n3. 这一章在整个故事中的使命是什么？（推进什么？铺垫什么？深化什么主题？）\n4. 这一章在文学层面有什么独特的表达？（叙事视角、时间结构、意象系统、语言实验？）'
   : '1. 这一章的核心冲突/张力是什么？（没有冲突感的目标不合格）\n2. 读者读完应该是什么感受？（描述情绪变化曲线，如"从不安到震惊再到热血沸腾"）\n3. 这一章在整个故事中的使命是什么？（推进什么？铺垫什么？回收什么？）')}
+
+=== 当前章节类型 ===
+${chapterType}
+${playbooks?.['CHAPTER_TYPE_INTENT_PLAYBOOK'] ? `\n=== 章型意图专属指令 ===\n${playbooks['CHAPTER_TYPE_INTENT_PLAYBOOK']}` : ''}
 
 === 原则 ===
 ${playbooks?.['agent:intent:principles'] ?? (isLiterary

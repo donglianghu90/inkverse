@@ -33,6 +33,7 @@ import { cn } from '@/lib/utils';
 import {
   enhanceIdea,
   generateStoryGoal,
+  enhanceStoryGoal,
   updateBookProfile,
   createBookSession,
   createBookSseUrl,
@@ -119,6 +120,9 @@ const CreateBook: React.FC = () => {
 
   const [generatingGoal, setGeneratingGoal] = useState(false);
   const [goalAlternatives, setGoalAlternatives] = useState<string[]>([]);
+  const [enhancingGoal, setEnhancingGoal] = useState(false);
+  const [goalHighlights, setGoalHighlights] = useState<string[]>([]);
+  const [originalGoal, setOriginalGoal] = useState('');
   const [showSerialAdvanced, setShowSerialAdvanced] = useState(false);
 
   const [genreTemplates, setGenreTemplates] = useState<GenreProfileTemplate[]>([]);
@@ -197,20 +201,37 @@ const CreateBook: React.FC = () => {
     }
   };
 
-  const handleGenerateGoal = async () => {
+  const goalHasContent = (form.mainStoryGoal ?? '').trim().length >= 5;
+  const goalBusy = generatingGoal || enhancingGoal;
+
+  const handleGoalAI = async () => {
     if (!effectiveGenre || !effectiveAudience || !form.mainIdea) return;
-    setGeneratingGoal(true);
-    try {
-      const result = await generateStoryGoal(form.mainIdea, effectiveGenre, effectiveAudience);
-      if (result?.goal) {
-        setForm((prev) => ({ ...prev, mainStoryGoal: result.goal }));
-        setGoalAlternatives(result.alternatives ?? []);
-      }
-    } catch {
-      // keep empty
-    } finally {
-      setGeneratingGoal(false);
+    const extra = {
+      protagonistFocus: form.protagonistFocus,
+      tonePreference: form.tonePreference || undefined,
+      audienceTags: form.audienceTags?.length ? form.audienceTags : undefined,
+      titleHint: form.titleHint || undefined,
+    };
+    if (goalHasContent) {
+      setEnhancingGoal(true);
+      setOriginalGoal(form.mainStoryGoal);
+      try {
+        const result = await enhanceStoryGoal(form.mainStoryGoal, form.mainIdea, effectiveGenre, effectiveAudience, extra);
+        if (result?.enhanced) { setForm((prev) => ({ ...prev, mainStoryGoal: result.enhanced })); setGoalHighlights(result.highlights ?? []); }
+      } catch { /* keep original */ }
+      finally { setEnhancingGoal(false); }
+    } else {
+      setGeneratingGoal(true);
+      try {
+        const result = await generateStoryGoal(form.mainIdea, effectiveGenre, effectiveAudience, extra);
+        if (result?.goal) { setForm((prev) => ({ ...prev, mainStoryGoal: result.goal })); setGoalAlternatives(result.alternatives ?? []); }
+      } catch { /* keep empty */ }
+      finally { setGeneratingGoal(false); }
     }
+  };
+
+  const handleRevertGoal = () => {
+    if (originalGoal) { setForm((prev) => ({ ...prev, mainStoryGoal: originalGoal })); setGoalHighlights([]); setOriginalGoal(''); }
   };
 
   const handleSubmit = async () => {
@@ -810,23 +831,49 @@ const CreateBook: React.FC = () => {
                 if (goalAlternatives.length > 0) setGoalAlternatives([]);
               }}
             />
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
+              {originalGoal && (
+                <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground" onClick={handleRevertGoal}>
+                  <RotateCcw className="h-3 w-3" />还原
+                </Button>
+              )}
               <Button
-                variant="outline"
-                size="sm"
+                variant="outline" size="sm"
                 className="h-7 text-xs gap-1.5 border-primary/30 text-primary hover:bg-primary/5"
-                disabled={generatingGoal}
-                onClick={handleGenerateGoal}
+                disabled={goalBusy}
+                onClick={handleGoalAI}
               >
-                {generatingGoal ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Sparkles className="h-3 w-3" />
-                )}
-                {generatingGoal ? 'AI 生成中...' : 'AI 生成目标'}
+                {goalBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                {goalBusy ? (goalHasContent ? 'AI 美化中...' : 'AI 生成中...') : (goalHasContent ? 'AI 美化目标' : 'AI 生成目标')}
               </Button>
             </div>
           </div>
+
+          {goalHighlights.length > 0 && (
+            <Card className="relative overflow-hidden border-emerald-200/60 bg-gradient-to-br from-emerald-50 via-white to-teal-50/50 dark:border-emerald-800/40 dark:from-emerald-950/40 dark:via-background dark:to-teal-950/20">
+              <CardContent className="relative p-4 sm:p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-900/50">
+                    <Sparkles className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                  <span className="text-sm font-semibold leading-5 text-emerald-800 dark:text-emerald-300">AI 目标优化</span>
+                  <Badge variant="secondary" className="ml-auto text-[10px] h-5 px-1.5 bg-emerald-100/80 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400 border-0">
+                    {goalHighlights.length} 项优化
+                  </Badge>
+                </div>
+                <div className="space-y-2.5">
+                  {goalHighlights.map((h, i) => (
+                    <div key={i} className="flex items-start gap-3 animate-fade-in" style={{ animationDelay: `${i * 100}ms`, animationFillMode: 'backwards' }}>
+                      <span className="shrink-0 mt-[3px] flex items-center justify-center w-5 h-5 rounded-md bg-emerald-500/10 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">{i + 1}</span>
+                      <p className="text-sm leading-relaxed text-emerald-800/90 dark:text-emerald-300/90">
+                        {h.includes('：') ? (<><span className="font-semibold text-emerald-900 dark:text-emerald-200">{h.split('：')[0]}：</span>{h.split('：').slice(1).join('：')}</>) : h}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {goalAlternatives.length > 0 && (
             <Card className="border-primary/15 bg-gradient-to-br from-primary/3 to-transparent">

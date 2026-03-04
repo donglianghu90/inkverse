@@ -30,7 +30,7 @@ export class RetrospectiveLearnerAgent {
     const existingLessons = state.writingLessons ?? [];
 
     const result = await this.llm.generateStructured({
-      taskName: 'retrospective-learning',
+      taskName: 'retrospective-learner',
       schema: retrospectiveLessonsOutputSchema,
       tags: ['workflow', 'maintenance', 'retrospective'],
       metadata: { bookId: state.bookId, arcId },

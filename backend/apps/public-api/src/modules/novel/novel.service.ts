@@ -48,6 +48,7 @@ import { CHAPTER_RESYNC_QUEUE, ChapterResyncJobPayload } from './chapter-resync.
 import { AUTO_SERIALIZATION_QUEUE, AutoSerializationJobPayload } from './auto-serialization.queue';
 import { CreateBookCoreDto } from './dto/create-book-core.dto';
 import { GenreProfileTemplateService } from './genre-profile-template.service';
+import { ChapterCalibrationService } from './chapter-calibration.service';
 import { CreateBookDto } from './dto/create-book.dto';
 import { GenerateChaptersBatchDto } from './dto/generate-chapters-batch.dto';
 import {
@@ -219,6 +220,7 @@ export class NovelService {
     private readonly bookStrategyAgent: BookStrategyAgent,
     private readonly genreTemplateService: GenreProfileTemplateService,
     private readonly traceLogger: LlmTraceLoggerService,
+    private readonly calibrationService: ChapterCalibrationService,
   ) {}
 
   private buildAudienceDirective(
@@ -354,11 +356,21 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
     mainIdea: string;
     genre: string;
     targetAudience: string;
+    protagonistFocus?: string;
+    tonePreference?: string;
+    audienceTags?: string[];
+    titleHint?: string;
   }) {
     const goalSchema = z.object({
       goal: z.string(),
       alternatives: z.array(z.string()).min(2).max(3),
     });
+    const extra: string[] = [];
+    if (input.protagonistFocus) extra.push(`主角侧重：${input.protagonistFocus}`);
+    if (input.tonePreference) extra.push(`基调偏好：${input.tonePreference}`);
+    if (input.audienceTags?.length) extra.push(`受众标签：${input.audienceTags.join('、')}`);
+    if (input.titleHint) extra.push(`书名/标题提示：${input.titleHint}`);
+    const extraBlock = extra.length ? `\n${extra.join('\n')}` : '';
 
     return this.llm.generateStructured({
       taskName: 'story-goal-generator',
@@ -377,10 +389,53 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
 6. 同时给出 2-3 个备选目标（alternatives），风格/方向不同，供用户选择。`,
       userPrompt: `核心创意：${input.mainIdea}
 题材类型：${input.genre}
-目标读者：${input.targetAudience}
+目标读者：${input.targetAudience}${extraBlock}
 
 请生成一个最佳主线目标（goal）和 2-3 个备选方案（alternatives）。`,
       temperature: 0.8,
+    });
+  }
+
+  async enhanceGoal(input: {
+    goal: string; mainIdea: string; genre: string; targetAudience: string;
+    protagonistFocus?: string; tonePreference?: string; audienceTags?: string[]; titleHint?: string;
+  }) {
+    const schema = z.object({ enhanced: z.string(), highlights: z.array(z.string()).min(2).max(5) });
+    const ctx: string[] = [];
+    if (input.protagonistFocus) ctx.push(`主角侧重：${input.protagonistFocus}`);
+    if (input.tonePreference) ctx.push(`基调偏好：${input.tonePreference}`);
+    if (input.audienceTags?.length) ctx.push(`受众标签：${input.audienceTags.join('、')}`);
+    if (input.titleHint) ctx.push(`书名/标题提示：${input.titleHint}`);
+    const ctxBlock = ctx.length ? `\n${ctx.join('\n')}` : '';
+
+    return this.llm.generateStructured({
+      taskName: 'goal-enhancer',
+      schema,
+      tags: ['setup', 'goal-enhance'],
+      systemPrompt: `你是一位资深的网文策划编辑，擅长把粗糙的主线目标打磨为让读者欲罢不能的终极悬念。
+
+核心任务：对用户手写的主线目标进行"美化"——保留内核方向，提升表达力和悬念感。
+
+美化原则：
+1. 忠于原意：保留用户目标的核心方向和终极指向，绝不偏离。
+2. 层次感：表面目标和深层目标最好不同，制造认知反转空间。
+3. 延展性：美化后的目标要能支撑 500+ 章叙事而不显枯燥。
+4. 题材契合：根据题材特色调整目标风格——玄幻适合"登顶"式，悬疑适合"解谜"式，言情适合"归属"式。
+5. 悬念感：语言简洁有力，30-80 字，读完让人想知道"主角能做到吗"。
+6. 结合上下文：充分利用核心创意、题材、受众等信息让目标更精准贴合。
+
+输出说明：
+- enhanced：美化后的主线目标。
+- highlights：2-5 个优化亮点，说明美化了哪些方面。`,
+      userPrompt: `核心创意：${input.mainIdea}
+题材类型：${input.genre}
+目标读者：${input.targetAudience}${ctxBlock}
+
+用户手写的主线目标草稿：
+${input.goal}
+
+请美化这个主线目标，输出 enhanced 和 highlights。`,
+      temperature: 0.75,
     });
   }
 
@@ -1578,6 +1633,16 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
             state.qualityMetricsHistory.push(qm);
           }
 
+          // 章节级自校准 — 将审阅发现的问题反哺到规则系统
+          try {
+            const cal = await this.calibrationService.calibrate(state, result.review, chapterNumber);
+            state = cal.state;
+            if (cal.events.length) {
+              await this.persistArtifact(bookId, chapterNumber, 'calibration_events', cal.events);
+              this.logger.log(`[Book ${bookId}] 章节校准完成 | 事件数: ${cal.events.length}`);
+            }
+          } catch (e) { this.logPreStepWarn(bookId, chapterNumber, 'chapterCalibration', e); }
+
           // Apply retroactive foreshadowing seeds to past chapters.
           try {
             state = await this.applyPendingForeshadowing(state, chapterNumber);
@@ -2478,6 +2543,10 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
         (c) => c.status === 'active' || (state.chapterCursor - (c.resolvedAtChapter ?? 0)) < 5,
       ),
       recentDistinctivePhrases: (state.recentDistinctivePhrases ?? []).slice(-30),
+      recentIssuePatterns: (state.recentIssuePatterns ?? [])
+        .filter((p) => p.status === 'active')
+        .sort((a, b) => b.occurrences - a.occurrences)
+        .slice(0, 20),
     };
   }
 

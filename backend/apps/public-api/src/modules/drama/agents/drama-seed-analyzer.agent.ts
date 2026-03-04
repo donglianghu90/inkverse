@@ -7,6 +7,7 @@ import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
 import { dramaSeedSchema, DramaSeed } from '../schemas/drama-state.schemas';
 import { buildSeedAnalyzerSystemPrompt } from '../prompting/drama-playbook';
+import { DramaSeedHints } from '../entities/drama-genre-template.entity';
 
 export interface DramaSeedInput {
   mainIdea: string;
@@ -19,6 +20,7 @@ export interface DramaSeedInput {
   mainStoryGoal?: string;
   targetEpisodeDurationSec?: number;
   plannedTotalEpisodes?: { min: number; max: number };
+  seedHints?: DramaSeedHints; // 来自题材模板的定制提示
 }
 
 const seedOutputSchema = z.object({ seed: dramaSeedSchema });

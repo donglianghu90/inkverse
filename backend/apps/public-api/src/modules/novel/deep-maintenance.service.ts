@@ -23,6 +23,8 @@ import { BookPromptTemplateService } from './book-prompt-template.service';
 import { VolumeDirectorAgent } from './agents/volume-director.agent';
 import { BookStrategyAgent } from './agents/book-strategy.agent';
 import { RetrospectiveLearnerAgent } from './agents/retrospective-learner.agent';
+import { ChapterCalibrationService } from './chapter-calibration.service';
+import { GenreCalibrationService } from './genre-calibration.service';
 import { MemoryRetrieverService } from './memory-retriever.service';
 import { ChapterEntity } from './entities/chapter.entity';
 import {
@@ -69,6 +71,8 @@ export class DeepMaintenanceService {
     private readonly volumeDirector: VolumeDirectorAgent,
     private readonly bookStrategyAgent: BookStrategyAgent,
     private readonly retrospectiveLearner: RetrospectiveLearnerAgent,
+    private readonly calibrationService: ChapterCalibrationService,
+    private readonly genreCalibration: GenreCalibrationService,
     private readonly memoryRetriever: MemoryRetrieverService,
     @InjectRepository(ChapterEntity)
     private readonly chapterRepo: Repository<ChapterEntity>,
@@ -631,11 +635,23 @@ ${JSON.stringify(state.chapterSummaries.slice(-10), null, 2)}
       await Promise.all([
         this.generateArcSummary(state, currentArc, chapterNumber).catch((e) =>
           this.logger.warn(`[Maintenance] 弧摘要生成失败: ${e instanceof Error ? e.message : String(e)}`)),
-        this.runRetrospectiveLearning(state, currentArc).then((lessons) => {
+        this.runRetrospectiveLearning(state, currentArc).then(async (lessons) => {
           if (lessons.length > 0) {
             state = { ...state, writingLessons: [...(state.writingLessons ?? []), ...lessons] };
             this.logger.log(`[Maintenance] 回顾学习：提炼${lessons.length}条写作教训`);
           }
+          try {
+            const promo = await this.calibrationService.promoteLessons(state, chapterNumber);
+            state = promo.state;
+            if (promo.events.length) this.logger.log(`[Maintenance] Lesson升格：${promo.events.length}条`);
+          } catch (e) { this.logger.warn(`[Maintenance] Lesson升格失败: ${e instanceof Error ? e.message : String(e)}`); }
+          try {
+            const genreKey = state.seed?.genre;
+            if (genreKey) {
+              const gEvents = await this.genreCalibration.evolveGenreTemplate(genreKey);
+              if (gEvents.length) this.logger.log(`[Maintenance] 题材模板进化 ${genreKey}：${gEvents.length}条`);
+            }
+          } catch (e) { this.logger.warn(`[Maintenance] 题材模板进化失败: ${e instanceof Error ? e.message : String(e)}`); }
         }).catch((e) => this.logger.warn(`[Maintenance] 回顾学习失败: ${e instanceof Error ? e.message : String(e)}`)),
       ]);
     }
@@ -679,9 +695,9 @@ ${sec['agent:arc-planner:pacing'] ?? '- 爽感循环：每卷至少2个完整"�
 ${sec['agent:arc-planner:emotion_theme'] ?? '每卷必须有一个情感主题——角色内心成长的维度，和剧情主线平行但更深入：\n- 例：第一卷剧情是"在宗门站稳脚跟"，情感主题是"孤独者找到归属"\n- 例：第二卷剧情是"应对势力阴谋"，情感主题是"信任被背叛后如何重建"\n- 卷的高潮不只是战力高潮，也应该是情感高潮。'}
 
 === chapterBeats ===
-role（结构分类）：setup/escalation/twist/climax/aftermath/transition
+role（结构分类）：setup/escalation/twist/climax/aftermath/transition/introspective/fragmentary/atmospheric
 technique（叙事技法，中文自由填写）：描述本章的具体叙事手法，如"打脸逆转""突破蜕变""暗线揭晓""奇遇机缘""权谋布局""日常温馨""悬崖勾引""连锁爆发"等，不受固定枚举约束。
-tensionLevel 参考：setup 3-5, escalation 5-7, twist 7-9, climax 9-10, aftermath 2-4, transition 3-5
+tensionLevel 参考：setup 3-5, escalation 5-7, twist 7-9, climax 9-10, aftermath 2-4, transition 3-5, introspective 2-5, fragmentary 4-7, atmospheric 2-4
 
 === satisfactionType ===
 ${sec['agent:arc-planner:satisfaction'] ?? '- none: 普通推进\n- minor_payoff: 小爽点（打脸、小升级）\n- major_payoff: 大爽点（boss战、重大揭露）\n- emotional_peak: 情感高潮（告白/离别/重逢/醒悟）\n- relief: 喘息（日常/搞笑/温馨）\n至少包含 1 个 major_payoff 和 1 个 relief。'}

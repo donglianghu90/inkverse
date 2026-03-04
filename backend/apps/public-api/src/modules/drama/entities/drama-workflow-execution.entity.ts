@@ -6,36 +6,36 @@ export class DramaWorkflowExecutionEntity {
   id: string;
 
   @Index()
-  @Column('uuid')
+  @Column({ name: 'drama_id', type: 'uuid' })
   dramaId: string;
 
-  @Column({ type: 'int' })
+  @Column({ name: 'episode_number', type: 'int' })
   episodeNumber: number;
 
-  @Column({ type: 'enum', enum: ['running', 'completed', 'failed', 'interrupted'], default: 'running' })
+  @Column({ name: 'status', type: 'varchar', length: 20, default: 'running' })
   status: 'running' | 'completed' | 'failed' | 'interrupted';
 
-  @Column({ default: '' })
+  @Column({ name: 'owner_instance_id', type: 'varchar', length: 120, default: '' })
   ownerInstanceId: string;
 
-  @Column({ type: 'timestamptz', nullable: true })
+  @Column({ name: 'heartbeat_at', type: 'timestamptz', nullable: true })
   heartbeatAt: Date | null;
 
-  @Column({ default: '' })
+  @Column({ name: 'last_checkpoint', type: 'varchar', length: 80, default: '' })
   lastCheckpoint: string;
 
-  @Column({ type: 'jsonb', default: {} })
+  @Column({ name: 'step_outputs', type: 'jsonb', default: '{}' })
   stepOutputs: Record<string, unknown>;
 
-  @Column({ type: 'jsonb', nullable: true })
+  @Column({ name: 'summary', type: 'jsonb', nullable: true })
   summary: Record<string, unknown> | null;
 
-  @Column({ type: 'text', default: '' })
+  @Column({ name: 'error_message', type: 'text', default: '' })
   errorMessage: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 }

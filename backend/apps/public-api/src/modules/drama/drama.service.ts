@@ -6,12 +6,14 @@
 import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, LessThan } from 'typeorm';
+import { z } from 'zod';
 import { DramaEntity } from './entities/drama.entity';
 import { EpisodeEntity } from './entities/episode.entity';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
 import { VisualAssetEntity } from './entities/visual-asset.entity';
 import { CreateDramaDto } from './dto/create-drama.dto';
 import { DramaState } from './schemas/drama-state.schemas';
+import { LlmService } from '../novel/llm/llm.service';
 import { DramaSeedAnalyzerAgent } from './agents/drama-seed-analyzer.agent';
 import { SeriesDirectorAgent } from './agents/series-director.agent';
 import { VisualAssetDesignerAgent } from './agents/visual-asset-designer.agent';
@@ -21,6 +23,7 @@ import { EpisodeWorkflowService } from './episode-workflow.service';
 import { MediaOrchestratorService } from './media-orchestrator.service';
 import { DramaProgressService } from './drama-progress.service';
 import { MediaService } from '../media/media.service';
+import { DramaGenreTemplateService } from './drama-genre-template.service';
 
 interface CreateDramaOptions { userId?: string; progressDramaId?: string; }
 
@@ -45,6 +48,8 @@ export class DramaService implements OnModuleInit {
     private readonly mediaOrchestrator: MediaOrchestratorService,
     private readonly progressService: DramaProgressService,
     private readonly mediaService: MediaService,
+    private readonly genreTemplateService: DramaGenreTemplateService,
+    private readonly llm: LlmService,
   ) {}
 
   async onModuleInit() { // 恢复卡在 creating 状态超过5分钟的创建流程
@@ -110,6 +115,10 @@ export class DramaService implements OnModuleInit {
 
     try {
       if (resumeFrom <= 0) {
+        const seedHints = dto.genreTemplateId
+          ? (await this.genreTemplateService.getById(dto.genreTemplateId)).seedHints
+          : this.genreTemplateService.findBestMatch(dto.genre);
+        this.logger.log(`[create] 题材模板匹配: ${dto.genreTemplateId ? 'ID指定' : seedHints ? '自动匹配' : '无匹配'}`);
         emitCreate(0, '种子分析...');
         const { seed } = await this.seedAnalyzer.analyze({
           mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
@@ -118,6 +127,7 @@ export class DramaService implements OnModuleInit {
           targetEpisodeDurationSec: dto.targetEpisodeDurationSec,
           plannedTotalEpisodes: dto.plannedMinEpisodes || dto.plannedMaxEpisodes
             ? { min: dto.plannedMinEpisodes ?? 60, max: dto.plannedMaxEpisodes ?? 100 } : undefined,
+          seedHints: seedHints ?? undefined,
         });
         out.seed = seed;
         emitCreate(0, '种子分析完成', true);
@@ -359,5 +369,43 @@ export class DramaService implements OnModuleInit {
     await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
       while (idx < tasks.length) { const i = idx++; await tasks[i](); }
     }));
+  }
+
+  async enhanceIdea(rawIdea: string, genre?: string) {
+    return this.llm.generateStructured({
+      taskName: 'drama-idea-enhancer',
+      schema: z.object({ enhanced: z.string(), highlights: z.array(z.string()).min(2).max(5) }),
+      tags: ['setup', 'drama-idea'],
+      systemPrompt: `你是一位顶尖短剧策划编辑，擅长把粗糙的短剧灵感打磨成让观众一眼上头的故事概念。
+
+美化原则：
+1. 忠于原意：保留用户创意的核心方向和情感基调。
+2. 冲突前置：在描述中自然埋入核心矛盾和身份反差，让人产生"接下来会怎样"的好奇。
+3. 视觉化：短剧是视觉媒介，描述要有画面感——能想象出具体的场景和表情。
+4. 爽点明确：突出打脸/逆袭/甜蜜暴击等爽点，让人想追看。
+5. 角色立体化：赋予主角一个有趣的困境或身份反差。
+6. 文案质感：像短剧宣传片的旁白——简短有力、节奏紧凑，控制在100-200字。
+7. 适度原则：如果原始创意已足够精彩，润色即可。`,
+      userPrompt: `原始创意：\n${rawIdea}${genre ? `\n题材方向：${genre}` : ''}\n\n请输出美化后的创意和核心卖点。`,
+      temperature: 0.75,
+    });
+  }
+
+  async generateStoryGoal(input: { mainIdea: string; genre: string; targetAudience: string }) {
+    return this.llm.generateStructured({
+      taskName: 'drama-goal-generator',
+      schema: z.object({ goal: z.string(), alternatives: z.array(z.string()).min(2).max(3) }),
+      tags: ['setup', 'drama-goal'],
+      systemPrompt: `你是一位资深短剧策划，擅长从核心创意中提炼出让观众欲罢不能的主线冲突目标。
+
+生成原则：
+1. 主线目标必须从核心创意中自然延伸，聚焦核心冲突。
+2. 目标要有视觉冲击力——观众能直接"看到"冲突（打脸/揭露/反转）。
+3. 目标要有足够的延展性——能支撑 60-100 集的叙事。
+4. 语言简洁有力，20-60 字，要有悬念感和爽感。
+5. 同时给出 2-3 个备选目标，风格/方向不同。`,
+      userPrompt: `核心创意：${input.mainIdea}\n题材：${input.genre}\n目标观众：${input.targetAudience}\n\n请生成一个最佳主线目标和 2-3 个备选方案。`,
+      temperature: 0.8,
+    });
   }
 }

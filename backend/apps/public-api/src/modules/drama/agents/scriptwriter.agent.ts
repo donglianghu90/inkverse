@@ -76,7 +76,7 @@ ${intent.locationIds.map(id => {
 }).join('\n')}
 
 ${weakDims ? `=== 质量警告（前几集弱项，本集务必加强） ===\n${weakDims}` : ''}
-
+${this.buildCalibrationHint(state)}
 === 创作铁律（违反即不合格） ===
 1. 每句台词不超过15个中文字（关键独白除外）
 2. 第一场必须是 hook_opening，最后一场必须是 cliffhanger
@@ -89,6 +89,15 @@ ${weakDims ? `=== 质量警告（前几集弱项，本集务必加强） ===\n${
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
     const script = typeof root.script === 'object' && root.script ? root.script : root;
     return episodeScriptSchema.parse(script);
+  }
+
+  private buildCalibrationHint(state: DramaState): string {
+    const patterns = (state.recentIssuePatterns ?? []).filter(p => p.status === 'active' && p.occurrences >= 2);
+    if (!patterns.length) return '';
+    const sorted = [...patterns].sort((a, b) => b.occurrences - a.occurrences).slice(0, 5);
+    const lines = ['=== 自校准警示（近期高频问题）==='];
+    for (const p of sorted) lines.push(`⚠ [${p.dimension}] ${p.pattern.split(':').slice(1).join(':')}（已出现${p.occurrences}次）`);
+    return lines.join('\n');
   }
 
   /** 从最近KPI中提取持续低分维度，生成改进指令 */

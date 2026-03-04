@@ -9,8 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DramaEntity } from './entities/drama.entity';
 import { EpisodeEntity } from './entities/episode.entity';
-import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
-import { DramaState, EpisodeSynopsis } from './schemas/drama-state.schemas';
+import { DramaState } from './schemas/drama-state.schemas';
 import { ArcDirectorAgent } from './agents/arc-director.agent';
 import { EpisodeDirectorAgent } from './agents/episode-director.agent';
 import { ContinuityGuardAgent } from './agents/continuity-guard.agent';
@@ -26,6 +25,8 @@ import { EpisodeRecorderAgent } from './agents/episode-recorder.agent';
 import { DramaDeterministicCheckerService } from './validators/deterministic-checker.service';
 import { DramaProgressService } from './drama-progress.service';
 import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
+import { DramaWorkflowExecutionService } from './drama-workflow-execution.service';
+import { DramaCalibrationService } from './drama-calibration.service';
 import { DramaWorkflowParams, DEFAULT_DRAMA_WORKFLOW_PARAMS } from './entities/drama-agent-pipeline.entity';
 
 const STEP_ORDER = [ // 步骤顺序定义（用于断点续跑）
@@ -45,7 +46,7 @@ export class EpisodeWorkflowService {
   constructor(
     @InjectRepository(DramaEntity) private readonly dramaRepo: Repository<DramaEntity>,
     @InjectRepository(EpisodeEntity) private readonly episodeRepo: Repository<EpisodeEntity>,
-    @InjectRepository(DramaWorkflowExecutionEntity) private readonly wfRepo: Repository<DramaWorkflowExecutionEntity>,
+    private readonly executionService: DramaWorkflowExecutionService,
     private readonly arcDirector: ArcDirectorAgent,
     private readonly episodeDirector: EpisodeDirectorAgent,
     private readonly continuityGuard: ContinuityGuardAgent,
@@ -61,6 +62,7 @@ export class EpisodeWorkflowService {
     private readonly deterministicChecker: DramaDeterministicCheckerService,
     private readonly progressService: DramaProgressService,
     private readonly pipelineService: DramaAgentPipelineService,
+    private readonly calibrationService: DramaCalibrationService,
   ) {}
 
   async generateEpisode(dramaId: string, episodeNumber: number): Promise<void> {
@@ -77,21 +79,62 @@ export class EpisodeWorkflowService {
     let synopsis = state.seriesOutline?.episodes?.[episodeNumber - 1];
     if (!synopsis) throw new Error(`大纲中不存在第 ${episodeNumber} 集`);
 
-    const existingWf = await this.wfRepo.findOne({ // 查找可恢复的断点
-      where: { dramaId, episodeNumber, status: 'running' as any },
-      order: { heartbeatAt: 'DESC' },
-    });
-    const wf = existingWf ?? await this.wfRepo.save(this.wfRepo.create({
-      dramaId, episodeNumber, status: 'running', lastCheckpoint: 'init',
-      ownerInstanceId: `worker_${Date.now()}`, heartbeatAt: new Date(),
-    }));
-    const resumeFrom = existingWf ? this.getResumeStep(existingWf.lastCheckpoint) : -1;
-    if (resumeFrom > 0) this.logger.log(`E${episodeNumber} 断点续跑: 从 ${existingWf!.lastCheckpoint} 恢复`);
+    // ── 断点续传：检测可恢复的中断运行 ──
+    let runId: string;
+    let cached: Record<string, unknown> = {};
+    let resumed = false;
+    let resumeCheckpoint = '';
+    try {
+      const resumable = await this.executionService.findResumableRun(dramaId, episodeNumber);
+      if (resumable) {
+        const reopened = await this.executionService.reopenRun(resumable.id);
+        if (reopened) {
+          runId = resumable.id;
+          cached = resumable.stepOutputs ?? {};
+          resumeCheckpoint = resumable.lastCheckpoint ?? '';
+          resumed = true;
+          this.logger.log(
+            `[E${episodeNumber}] ========== 断点续传 ==========\n` +
+            `  runId: ${runId} | 已缓存: [${Object.keys(cached).join(', ')}] | checkpoint: ${resumable.lastCheckpoint}`,
+          );
+        } else {
+          this.logger.warn(`[E${episodeNumber}] 断点续传抢占失败，降级为新建运行`);
+        }
+      }
+    } catch (e) {
+      this.logger.warn(`[E${episodeNumber}] 断点续传检测失败，降级为新建: ${(e as Error).message}`);
+    }
+    if (!resumed) {
+      runId = await this.executionService.createRun(dramaId, episodeNumber);
+      cached = {};
+      this.logger.log(
+        `[E${episodeNumber}] ========== 工作流开始 ==========\n` +
+        `  dramaId: ${dramaId} | runId: ${runId}`,
+      );
+    }
+    const resumeFrom = resumeCheckpoint ? this.getResumeStep(resumeCheckpoint) : -1;
 
+    // ── 所有权断言 & 检查点闭包 ──
+    let ownershipLost = false;
+    const assertOwnership = async (): Promise<void> => {
+      if (ownershipLost) throw new Error(`[E${episodeNumber}] 运行所有权已丢失，中止执行`);
+      const ok = await this.executionService.assertOwnership(runId);
+      if (!ok) { ownershipLost = true; throw new Error(`[E${episodeNumber}] 运行所有权已失效，中止执行`); }
+    };
+    const checkpoint = async (step: string): Promise<void> => {
+      const ok = await this.executionService.saveCheckpoint(runId, step);
+      if (!ok) throw new Error(`[E${episodeNumber}] checkpoint写入失败 step=${step}`);
+    };
+    const saveStep = async (step: string, output: unknown): Promise<void> => {
+      const ok = await this.executionService.saveStepOutput(runId, step, output);
+      if (!ok) throw new Error(`[E${episodeNumber}] stepOutput写入失败 step=${step}`);
+    };
+
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
     const emitEp = (stepIndex: number, message: string, done = false) =>
       this.progressService.emit({ dramaId, phase: 'episode', episodeNumber, step: `ep_${stepIndex}`, stepIndex, totalSteps: 13, message, done });
 
-    const outputs = (wf.stepOutputs ?? {}) as Record<string, Record<string, unknown>>;
+    const outputs = (cached ?? {}) as Record<string, Record<string, unknown>>;
     let arcSegment = outputs.arc_planned?.arcSegment as any;
     let intent = outputs.intent_ready?.intent as any;
     let continuity = outputs.continuity_checked?.continuity as any;
@@ -122,14 +165,14 @@ export class EpisodeWorkflowService {
             synopsis = state.seriesOutline!.episodes[episodeNumber - 1];
           }
         }
-        await this.checkpoint(wf, 'arc_planned', { arcSegment });
+        await saveStep('arc_planned', { arcSegment }); await checkpoint('arc_planned');
         emitEp(0, '段落规划完成', true);
       }
 
       if (resumeFrom < 1) { // Step 1: 集导演规划
         emitEp(1, '集导演规划...');
         intent = await this.episodeDirector.direct(state, synopsis);
-        await this.checkpoint(wf, 'intent_ready', { intent });
+        await saveStep('intent_ready', { intent }); await checkpoint('intent_ready');
         emitEp(1, '集导演完成', true);
       }
 
@@ -146,14 +189,14 @@ export class EpisodeWorkflowService {
             if (!continuity.warnings.some((w: any) => w.severity === 'block')) break;
           }
         }
-        await this.checkpoint(wf, 'continuity_checked', { continuity });
+        await saveStep('continuity_checked', { continuity }); await checkpoint('continuity_checked');
         emitEp(2, '连续性检查完成', true);
       }
 
       if (resumeFrom < 3) { // Step 3: 编剧创作
         emitEp(3, '编剧创作...');
         script = await this.scriptwriter.write(state, intent, continuity);
-        await this.checkpoint(wf, 'script_drafted', { script });
+        await saveStep('script_drafted', { script }); await checkpoint('script_drafted');
         emitEp(3, '编剧创作完成', true);
       }
 
@@ -163,21 +206,21 @@ export class EpisodeWorkflowService {
           try { script = await this.dialogueCoach.polish(script, state.characters, state.promptProfile, state.dramaId, state); }
           catch (err) { this.logger.warn(`E${episodeNumber} 台词润色降级: ${(err as Error).message}`); }
         } else { this.logger.log(`E${episodeNumber} 台词润色已跳过(配置关闭)`); }
-        await this.checkpoint(wf, 'dialogue_polished', { script });
+        await saveStep('dialogue_polished', { script }); await checkpoint('dialogue_polished');
         emitEp(4, '台词润色完成', true);
       }
 
       if (resumeFrom < 5) { // Step 5: 分镜生成（按场景分步）
         emitEp(5, '分镜生成...');
         storyboard = await this.storyboardDirector.direct(state, script);
-        await this.checkpoint(wf, 'storyboard_drafted', { storyboard });
+        await saveStep('storyboard_drafted', { storyboard }); await checkpoint('storyboard_drafted');
         emitEp(5, '分镜生成完成', true);
       }
 
       if (resumeFrom < 6) { // Step 6: 音频设计
         emitEp(6, '音频设计...');
         storyboard = await this.audioDirector.enhance(state, storyboard);
-        await this.checkpoint(wf, 'audio_designed', { storyboard });
+        await saveStep('audio_designed', { storyboard }); await checkpoint('audio_designed');
         emitEp(6, '音频设计完成', true);
       }
 
@@ -190,14 +233,14 @@ export class EpisodeWorkflowService {
           throw new Error(msg);
         }
         if (!detCheck.pass) this.logger.warn(`E${episodeNumber} 软规则警告: ${detCheck.failedChecks.filter(f => !detCheck.hardFails.some(h => h.rule === f.rule)).map(f => f.rule).join(', ')}`);
-        await this.checkpoint(wf, 'deterministic_checked', { detCheck });
+        await saveStep('deterministic_checked', { detCheck }); await checkpoint('deterministic_checked');
         emitEp(7, '硬规则校验完成', true);
       }
 
       if (resumeFrom < 8) { // Step 8: 质量审核
         emitEp(8, '质量审核...');
         review = await this.reviewer.review(state, script, storyboard);
-        await this.checkpoint(wf, 'reviewed', { review });
+        await saveStep('reviewed', { review }); await checkpoint('reviewed');
         emitEp(8, '质量审核完成', true);
       }
 
@@ -207,7 +250,7 @@ export class EpisodeWorkflowService {
           const criticalIssues = review.issuesFound?.filter((i: any) => i.severity === 'critical') ?? [];
           storyboard = await this.editor.fix(state, storyboard, review, criticalIssues);
           review = await this.reviewer.review(state, script, storyboard);
-          await this.checkpoint(wf, 'edited', { storyboard, review, round: round + 1 });
+          await saveStep('edited', { storyboard, review, round: round + 1 }); await checkpoint('edited');
         }
         emitEp(9, '精修完成', true);
       }
@@ -218,7 +261,7 @@ export class EpisodeWorkflowService {
           try { pacing = await this.pacingAnalyzer.analyze(state, storyboard); }
           catch (err) { this.logger.warn(`E${episodeNumber} 节奏分析降级: ${(err as Error).message}`); }
         } else { this.logger.log(`E${episodeNumber} 节奏分析已跳过(配置关闭)`); }
-        await this.checkpoint(wf, 'pacing_analyzed', { pacing });
+        await saveStep('pacing_analyzed', { pacing }); await checkpoint('pacing_analyzed');
         emitEp(10, '节奏分析完成', true);
       }
 
@@ -240,14 +283,14 @@ export class EpisodeWorkflowService {
             }
           } catch (err) { this.logger.warn(`E${episodeNumber} 悬念设计降级: ${(err as Error).message}`); }
         } else { this.logger.log(`E${episodeNumber} 悬念设计已跳过(配置关闭)`); }
-        await this.checkpoint(wf, 'hook_crafted', { hookResult });
+        await saveStep('hook_crafted', { hookResult }); await checkpoint('hook_crafted');
         emitEp(11, '悬念设计完成', true);
       }
 
       if (resumeFrom < 12) { // Step 12: 知识记录 + 持久化
         emitEp(12, '知识记录...');
         const loreRecord = await this.episodeRecorder.record(state, script, storyboard, hookResult?.cliffhangerSummary ?? '');
-        await this.checkpoint(wf, 'recorded', { loreRecord });
+        await saveStep('recorded', { loreRecord }); await checkpoint('recorded');
 
         const episode = this.episodeRepo.create({
           dramaId: drama.id, episodeNumber, title: synopsis.title,
@@ -262,22 +305,31 @@ export class EpisodeWorkflowService {
         await this.episodeRepo.save(episode);
 
         this.updateDramaState(state, episodeNumber, hookResult ?? {}, loreRecord, review);
+
+        // 集级自校准 — 将审阅发现的问题反哺到配置
+        try {
+          const cal = this.calibrationService.calibrate(state, review, episodeNumber);
+          if (cal.events.length) this.logger.log(`[E${episodeNumber}] 校准完成 | 事件数: ${cal.events.length}`);
+        } catch (e) { this.logger.warn(`[E${episodeNumber}] 校准失败: ${(e as Error).message}`); }
+
         drama.state = state as unknown as Record<string, unknown>;
         drama.episodesGenerated = episodeNumber;
         drama.latestOverallScore = review.overallScore;
         await this.dramaRepo.save(drama);
 
-        wf.status = 'completed';
-        wf.summary = { overallScore: review.overallScore, shotCount: storyboard.shots.length, duration: storyboard.totalEstimatedDurationSec };
-        await this.wfRepo.save(wf);
+        await this.executionService.completeRun(runId!, {
+          overallScore: review.overallScore, shotCount: storyboard.shots.length,
+          duration: storyboard.totalEstimatedDurationSec, totalDurationMs: 0, editRounds: 0,
+        });
         emitEp(12, `E${episodeNumber} 生成完成`, true);
         this.logger.log(`E${episodeNumber} 完成 — 评分:${review.overallScore} Shot:${storyboard.shots.length} 时长:${storyboard.totalEstimatedDurationSec}s`);
       }
     } catch (err) {
-      wf.status = 'failed';
-      wf.errorMessage = err instanceof Error ? err.message : String(err);
-      await this.wfRepo.save(wf);
+      const failed = await this.executionService.failRun(runId, (err as Error).message?.slice(0, 500) ?? String(err));
+      if (!failed) this.logger.warn(`[E${episodeNumber}] failRun被拒绝 runId=${runId}`);
       throw err;
+    } finally {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
     }
   }
 
@@ -333,10 +385,7 @@ export class EpisodeWorkflowService {
     state.updatedAt = new Date().toISOString();
   }
 
-  private async checkpoint(wf: DramaWorkflowExecutionEntity, name: string, data: Record<string, unknown>): Promise<void> {
-    wf.lastCheckpoint = name;
-    wf.stepOutputs = { ...wf.stepOutputs, [name]: data };
-    wf.heartbeatAt = new Date();
-    await this.wfRepo.save(wf);
+  private log(runId: string, step: number, name: string): void {
+    this.logger.log(`[${runId.slice(0, 8)}] Step ${step}/13: ${name}`);
   }
 }

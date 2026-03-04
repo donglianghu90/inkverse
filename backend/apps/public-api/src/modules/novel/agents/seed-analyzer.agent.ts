@@ -3,7 +3,7 @@
  * 从用户的核心创意中提取故事种子 + 粗大纲。
  * 这是开书时唯一的 LLM 调用——极轻量。
  */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../llm/llm.service';
 import { z } from 'zod';
 import {
@@ -61,6 +61,7 @@ type OutlinePhase = 'opening' | 'development' | 'climax' | 'resolution';
 
 @Injectable()
 export class SeedAnalyzerAgent {
+  private readonly logger = new Logger(SeedAnalyzerAgent.name);
   constructor(private readonly llm: LlmService) {}
 
   async analyze(input: SeedAnalysisInput): Promise<SeedAnalysisOutput> {
@@ -492,8 +493,16 @@ ${input.mainStoryGoal ? `长期主线目标：${input.mainStoryGoal}` : ''}
         abilityNames: this.normalizeStringArray(defaultExamples.abilityNames ?? examplesRaw.abilityNames ?? raw.abilityNameExamples, []),
         factionNames: this.normalizeStringArray(defaultExamples.factionNames ?? examplesRaw.factionNames ?? raw.factionNameExamples, []),
       },
-      taboos: this.normalizeStringArray(defaults.taboos ?? raw.taboos, []),
+      taboos: this.clampTaboos(this.normalizeStringArray(defaults.taboos ?? raw.taboos, []), genre),
     };
+  }
+
+  private clampTaboos(raw: string[], genre: string): string[] { // 防止LLM生成失控的taboos列表（如整个元素周期表）
+    const MAX_TABOOS = 15;
+    const dedup = [...new Set(raw.map((t) => t.trim()).filter((t) => t.length >= 2 && t.length <= 50))];
+    if (dedup.length <= MAX_TABOOS) return dedup;
+    this.logger.warn(`[seed-analyzer] taboos ${raw.length}条超限，裁剪至${MAX_TABOOS}条 (genre=${genre})`);
+    return dedup.slice(0, MAX_TABOOS);
   }
 
   private genreNamingFallback(genre: string): {

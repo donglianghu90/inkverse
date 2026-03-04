@@ -63,12 +63,56 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 - **断点续传**：`shotMediaMap` 中已 `completed` 的 Shot 会被跳过
 - **任务恢复**：服务重启时自动扫描未完成的媒体任务
 
+### 任务队列系统（BullMQ）
+- **四队列分治**：`drama:text`（文本/LLM任务，并发3）、`drama:image`（图片生成，并发5）、`drama:video`（视频生成，并发2）、`drama:voice`（语音合成，并发5）
+- **分布式替代内存锁**：替代原 `Set<string>` 内存并发控制，服务重启不丢任务，支持横向扩展
+- **任务生命周期**：`withTaskLifecycle` 统一包装 Worker 执行，含心跳检测（10秒）、乐观锁状态流转、错误归一化、自动重试决策
+- **指数退避重试**：`BullMQ backoff: exponential(2000ms)`，可配 `maxAttempts`，错误归一化后自动判断 `retryable`
+- **去重（幂等）**：`dedupeKey` 唯一约束，同一任务不会重复入队
+- **僵死检测**：`DramaTaskService.findStuckTasks()` 检测心跳超时的 processing 任务
+- **任务提交**：`TaskSubmitterService.submit()` 一站式创建记录+入队
+
+### 步骤级事件追踪（Graph Run/Step/Event）
+- **三表设计**：`drama_graph_runs`（Run根对象）、`drama_graph_steps`（步骤投影）、`drama_graph_events`（事件日志）
+- **有序事件**：事务内 `lastSeq` 单调递增，保证事件有序不重不漏
+- **增量回放**：`GET /api/drama/:dramaId/runs/:runId/events?afterSeq=N` 支持断线重连后补拉事件
+- **事件类型**：`run.start / step.start / step.chunk / step.complete / step.error / run.complete / run.error / run.canceled`
+- **投影同步**：事件追加时同事务内更新 Run/Step 投影状态，保证一致性
+
+### 统一错误归一化
+- **16 种错误码**：client类（INVALID_PARAMS/NOT_FOUND/UNAUTHORIZED/FORBIDDEN/CONFLICT）、provider类（RATE_LIMIT/GENERATION_FAILED/GENERATION_TIMEOUT/SENSITIVE_CONTENT/EXTERNAL_ERROR/NETWORK_ERROR）、system类（INTERNAL_ERROR/DB_ERROR/QUEUE_ERROR/TASK_TERMINATED/OWNERSHIP_LOST）、billing类（INSUFFICIENT_BALANCE/BILLING_FAILED）
+- **多策略推断**：已知错误码直通→HTTP状态码映射→消息关键词推断→上下文降级
+- **每个错误**包含：`code/message/httpStatus/retryable/category/details/provider`
+- Worker 据此自动判断是否重试，前端据此展示分类错误信息
+
+### 计费系统（冻结→结算→回滚）
+- **三阶段事务**：预冻结（`freeze`）→执行→成功结算（`settle`）/失败回滚（`rollback`）
+- **三种模式**：`OFF`（不计费，默认）、`SHADOW`（记录不扣费）、`ENFORCE`（强制扣费）
+- **悲观锁保证**：余额操作使用 `pessimistic_write` 锁，并发安全
+- **幂等冻结**：`idempotencyKey` 唯一约束防重复冻结
+- **精确结算**：实际扣费不超过冻结额，差额自动退还
+- 实体：`drama_user_balances`（余额）、`drama_balance_freezes`（冻结记录）、`drama_balance_transactions`（流水）
+
+### 全局资产中心（Asset Hub）
+- **跨剧复用**：角色/场景/风格模板从单剧绑定升级为全局资产库
+- **实体**：`drama_global_asset_folders`（文件夹）、`drama_global_characters`（角色）、`drama_global_locations`（场景）、`drama_global_styles`（风格）
+- **双向同步**：`copyCharacterToDrama()`（全局→剧集）、`extractFromDrama()`（剧集→全局），资产溯源通过 `sourceGlobalCharacterId` 追踪
+- **文件夹管理**：一层扁平目录，按用户隔离
+
+### Orchestrator 纯函数编排
+- **核心逻辑与 IO 解耦**：`creation-orchestrator.ts` 和 `episode-orchestrator.ts` 为纯函数，通过 `runStep` 回调注入 LLM 执行
+- **Agent 退化为薄包装**：各 Agent 仅负责组装 prompt + 调用 Orchestrator，不再承担编排逻辑
+- **内置重试**：`runWithRetry()` 指数退避 + 可配重试次数，JSON 解析容错
+- **并行优化**：编剧手册和策略生成并行执行
+- **可测试性**：纯函数可直接单元测试，mock `runStep` 即可
+
 ### SSE 实时进度
 - **创建阶段**：`GET /api/drama/:dramaId/create-sse` — 订阅 6 步创建流程进度（种子分析→大纲→视觉设计→参考图生成→编剧手册+策略→完成）
 - **逐集生成**：`GET /api/drama/:dramaId/episodes/generate-sse?count=N` — 触发生成并推送 13 步 Pipeline 进度，完成后返回结果
 - **媒体生成**：`GET /api/drama/:dramaId/episodes/:episodeNumber/generate-media-sse` — 触发单集媒体生成并推送 `phase: 'media'` 进度，完成后返回结果
 - **纯监听**：`GET /api/drama/:dramaId/episodes/progress-sse` — 只监听不触发，用于多端观察
 - `DramaProgressService`：EventEmitter 驱动，支持 `create`/`episode`/`media` 三种 phase，15 秒心跳保活
+- **增量回放**：结合 `DramaRunService.getEventsSince()` 支持断线后补拉持久化事件，不再依赖纯内存 SSE
 - 前端 CreateDrama 页面在第 5 步展示实时进度条和步骤状态
 - 前端 DramaWorkbench 生成时展示进度条和当前步骤
 
@@ -110,6 +154,7 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 
 ### 架构设计
 - **策略模式 + Provider 注册表**：`ProviderRegistryService` 在启动时根据配置自动初始化并注册所有可用 Provider，业务层通过 `MediaService` 门面调用，完全不感知底层实现
+- **Provider 工厂 + 能力查询**：`ProviderFactory` 按 providerKey/modelId 动态解析，`findByCapability()` 查询具备指定能力的 Provider 列表（如支持 `i2v` 的视频 Provider）
 - **配置驱动切换**：`media.defaultImageProvider` / `media.defaultVideoProvider` 控制默认 Provider，无需改代码
 - **异步任务轮询**：视频生成为异步任务（提交→轮询），`MediaJobService` 自动轮询（8秒间隔），结果持久化至 `media_jobs` 表，支持断线续查
 - **事件驱动**：任务完成时通过 `EventEmitter` 发出 `completed` 事件，`MediaOrchestrator` 监听事件而非自身轮询
@@ -175,6 +220,77 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 - **伏笔唤醒期 (Foreshadowing Reminder Phase)**：在计划回收伏笔的前 1-3 章，通过卷级导演下发指令，安排微弱的视觉或记忆唤醒，为正式回收做心理铺垫。
 - **并发场景生成 (Parallel Scene Generation)**：在章节工作流中，识别并并发生成平行视角（Parallel POV）的场景，大幅提升单章生成速度。
 - **命名哲学与阶段激活 (Naming Philosophy & Stage Activation)**：开书阶段按题材生成 `namingConvention` 与主角 `nameGrowthArc`；每章仅注入轻量命名风格约束，主角名字的象征重量仅在卷级 `entry/climax` 阶段低频激活，避免过度提示影响写作自然度。
+
+## 双层自迭代校准系统
+
+引擎具备章节级 + 题材级两层自学习闭环，实现"写得越多、越写越好"。
+
+### 第一层：章节级自校准（ChapterCalibrationService）
+每章完成审阅后自动执行四条路径：
+- **路径A 重复问题→规则**：`recentIssuePatterns` 追踪近期 moderate/critical 问题，同一模式出现≥2次自动生成 `auto_calibration` RuleAtom，注入 creative-writer/reviewer
+- **路径B 维度偏移→权重微调**：滑动窗口（默认5章）检测评审维度均分，低于阈值时自动上调 `reviewerCalibration.dimensionWeights` 对应维度权重
+- **路径C 新套话→clichePatterns**：`ai_smell` 类问题自动录入 `bookPromptProfile.clichePatterns`，后续审阅自动检测
+- **过期清理**：超过 `autoRuleExpiryChapters`（默认30章）的自动规则自动移除，避免规则膨胀
+
+### 第二层：题材模板进化（GenreCalibrationService）
+弧结束时触发，跨同题材多本书聚合反哺系统级 `GenreProfileTemplate`：
+- **高频规则提升**：多本书（≥3）共同验证的 `auto_calibration` 规则升格为题材模板默认规则
+- **维度权重融合**：聚合同题材所有书的校准后权重，保守融合（60%原值+40%聚合值）到模板
+- **套话模式共享**：多本书共同发现的 AI 味模式同步到题材模板 `clichePatterns`
+
+### Lesson 升格机制
+弧结束的回顾学习后，`strong` 级 WritingLesson 自动升格为永久 `lesson_promoted` RuleAtom，不再作为临时 lesson 重复注入。
+
+### 短剧集级自校准（DramaCalibrationService）
+短剧引擎复用相同校准配置（`calibration.*`），每集完成审阅后自动执行：
+- **问题模式追踪**：`DramaState.recentIssuePatterns` 追踪 moderate/critical 级 issue，按 `category:description` 签名去重累计
+- **维度权重微调**：当某维度评分低于 `dimensionShiftThreshold` 且窗口内未调整过，自动上调 `reviewerCalibration.dimensionWeights` 对应权重
+- **校准提示注入**：`scriptwriter`/`episode-director`/`script-reviewer` 三个核心 Agent 注入高频问题警示，引导创作和审阅重点关注
+- **滑动窗口裁剪**：活跃模式保留上限 `maxActivePatterns`（默认20），按出现频次排序
+
+### 配置项（`backend/config/public.properties`）
+| 配置键 | 说明 | 默认值 |
+|--------|------|--------|
+| `calibration.issueRepeatThreshold` | 问题重复几次触发规则生成 | `2` |
+| `calibration.maxActivePatterns` | 活跃问题模式最大保留条数 | `20` |
+| `calibration.autoRuleExpiryChapters` | 自动规则过期章数 | `30` |
+| `calibration.dimensionShiftWindow` | 维度偏移检测窗口 | `5` |
+| `calibration.dimensionShiftThreshold` | 维度均分低于此值触发微调 | `1.5` |
+| `calibration.weightAdjustStep` | 单次权重微调步长 | `0.1` |
+| `calibration.lessonPromoteMinConfidence` | Lesson 升格所需最低置信度 | `strong` |
+| `calibration.genreAggregateMinBooks` | 题材聚合最低书籍数 | `3` |
+
+### 日志与追踪
+- 校准事件通过 `persistArtifact('calibration_events', ...)` 持久化，可在 artifact 中回溯每章的校准操作
+- 所有校准操作通过 `Logger` 输出结构化日志，包括规则生成/权重微调/过期清理/Lesson升格/题材进化
+
+## 章型规则动态注入（新）
+
+- 章节工作流在编译规则前统一章型口径：`setup/escalation/twist/climax/aftermath/transition` 会映射到标准章型 `setup/rising/climax/relief/...`。
+- 新增章型专属规则键：
+  - `CHAPTER_TYPE_WRITING_PLAYBOOK`（写作层）
+  - `CHAPTER_TYPE_SCENE_PLAN_PLAYBOOK`（场景规划层）
+  - `CHAPTER_TYPE_SCENE_PURPOSE_PLAYBOOK`（场景 purpose 组合层）
+  - `CHAPTER_TYPE_INTENT_PLAYBOOK`（意图层）
+  - `CHAPTER_TYPE_REVIEWER_PLAYBOOK`（审阅层）
+- `scene-planner` 不再整包注入所有章型的场景数量指南，而是仅注入“当前章型”；例如 `setup` 章只看到 `setup` 规则。
+- `creative-writer` 优先使用 `CHAPTER_TYPE_WRITING_PLAYBOOK`，仅在缺失时回退到 `chapterTypeTemplates`，减少跨章型规则污染。
+- 章节运行时会记录每个 agent 的规则编译结果（章型上下文、命中 `ruleAtom` ID、输出键），用于在 trace 中排查是否串包。
+
+### Dry-run 验证清单（防串包）
+
+1) 先跑一章真实生成（建议 `setup` 章）并产生日志。  
+2) 在 trace 中检索以下事件：  
+   - `rule-compile:chapter-intent`  
+   - `rule-compile:scene-planner`  
+   - `rule-compile:creative-writer`  
+   - `rule-compile:chapter-reviewer`  
+3) 对每条 `rule-compile:*` 检查：  
+   - `meta.context.chapterType` 是否等于本章目标章型（如 `setup`）。  
+   - `meta.outputKeys` 是否包含对应章型键（如 `CHAPTER_TYPE_*_PLAYBOOK`）。  
+   - `meta.matchedRuleAtomIds` 是否只命中当前章型 + 通用兜底规则（不应出现其他章型专属 atom）。  
+4) 若发现 `setup` 章命中了 `rising/climax` 专属 atom，说明仍有串包，需要回查该 agent 的 compile context 与条件规则。  
+5) 无 beat 的章节应看到 `chapterType=general`，并命中 `general` 兜底 atom（而不是空规则）。
 
 ## 写作模式（writingMode）
 

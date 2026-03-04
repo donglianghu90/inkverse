@@ -207,7 +207,10 @@ ${sec['agent:volume-foreshadowing:window_rules'] ?? `- plantWindow: 越早越好
 - hintGuidance：如何在正式出场前埋暗示（背影/传闻/遗物等）
 - formalIntroChapter：预计正式出场章节
 
-depositId格式：fsd_vol${volume.volumeNumber}_序号`,
+depositId格式：fsd_vol${volume.volumeNumber}_序号
+
+=== 语言硬约束 ===
+所有输出必须使用简体中文（label、description、embeddingGuidance、payoffDescription、pendingCharacterHint等所有文本字段）。禁止使用英文描述。`,
       userPrompt: `卷规划：
 - 标题：${volume.title}
 - 核心冲突：${volume.coreConflict}

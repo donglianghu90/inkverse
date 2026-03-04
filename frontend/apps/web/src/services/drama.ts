@@ -18,6 +18,7 @@ export interface CreateDramaParams {
   targetEpisodeDurationSec?: number;
   plannedMinEpisodes?: number;
   plannedMaxEpisodes?: number;
+  genreTemplateId?: string;
 }
 
 export interface DramaListItem {
@@ -55,6 +56,14 @@ export interface VisualAssetItem {
 
 export async function createDrama(data: CreateDramaParams): Promise<{ dramaId: string }> {
   return request(BASE, { method: 'POST', data });
+}
+
+export async function enhanceDramaIdea(idea: string, genre?: string): Promise<{ enhanced: string; highlights: string[] }> {
+  return request(`${BASE}/idea/enhance`, { method: 'POST', data: { idea, genre } });
+}
+
+export async function generateDramaGoal(mainIdea: string, genre: string, targetAudience: string): Promise<{ goal: string; alternatives: string[] }> {
+  return request(`${BASE}/idea/generate-goal`, { method: 'POST', data: { mainIdea, genre, targetAudience } });
 }
 
 export async function listDramas(): Promise<{ dramas: DramaListItem[] }> {
@@ -139,4 +148,16 @@ export async function deleteDramaGenreTemplate(id: string): Promise<{ success: b
 
 export async function cloneDramaGenreTemplate(id: string): Promise<DramaGenreTemplate> {
   return request(`${BASE}/genre-templates/${id}/clone`, { method: 'POST' });
+}
+
+export interface AiGenerateDramaTemplateParams {
+  genreName: string;
+  styleDescription?: string;
+  referenceWorks?: string[];
+  targetAudience?: string;
+  platformTarget?: string;
+}
+
+export async function aiGenerateDramaTemplate(data: AiGenerateDramaTemplateParams): Promise<DramaGenreTemplate> {
+  return request(`${BASE}/genre-templates/ai-generate`, { method: 'POST', data });
 }

@@ -1078,6 +1078,9 @@ const ROLE_LABEL_ARC: Record<string, string> = {
   climax: '高潮',
   aftermath: '善后',
   transition: '过渡',
+  introspective: '内省',
+  fragmentary: '碎片',
+  atmospheric: '氛围',
 };
 
 const SATISFACTION_LABEL: Record<string, string> = {
@@ -1360,22 +1363,33 @@ export function buildKpiTrendHints(state: StoryState): string[] {
   return hints;
 }
 
-/** 从累积写作教训中构建写作指导片段 — 优先注入高置信度+与当前场景相关的教训。 */
+/** 从累积写作教训中构建写作指导片段 — 过滤已升格为 RuleAtom 的，优先注入高置信度教训。 */
 export function buildWritingLessonsHint(lessons: WritingLesson[], relevantCategories?: string[]): string {
-  if (!lessons.length) return '';
-  const sorted = [...lessons].sort((a, b) => {
+  const active = lessons.filter((l) => !l.promotedToRuleAtomId);
+  if (!active.length) return '';
+  const sorted = [...active].sort((a, b) => {
     const conf = { strong: 3, confirmed: 2, tentative: 1 };
     return (conf[b.confidence] ?? 0) - (conf[a.confidence] ?? 0);
   });
-  const filtered = relevantCategories
-    ? sorted.filter((l) => relevantCategories.includes(l.category))
-    : sorted;
+  const filtered = relevantCategories ? sorted.filter((l) => relevantCategories.includes(l.category)) : sorted;
   const top = filtered.slice(0, 8);
   if (!top.length) return '';
   const lines = ['=== 写作教训（从历史数据中学到的）==='];
   for (const l of top) {
     const tag = l.confidence === 'strong' ? '★' : l.confidence === 'confirmed' ? '●' : '○';
     lines.push(`${tag} [${l.category}] ${l.actionable}`);
+  }
+  return lines.join('\n');
+}
+
+/** 从 recentIssuePatterns 构建校准提示 — 提醒 agent 规避高频问题模式。 */
+export function buildCalibrationHint(state: StoryState): string {
+  const patterns = (state.recentIssuePatterns ?? []).filter((p) => p.status === 'active' && p.occurrences >= 2);
+  if (!patterns.length) return '';
+  const sorted = [...patterns].sort((a, b) => b.occurrences - a.occurrences).slice(0, 5);
+  const lines = ['=== 自校准警示（近期高频问题）==='];
+  for (const p of sorted) {
+    lines.push(`⚠ [${p.dimension}] ${p.pattern.split(':').slice(1).join(':')}（已出现${p.occurrences}次）`);
   }
   return lines.join('\n');
 }

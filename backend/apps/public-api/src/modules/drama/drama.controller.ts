@@ -6,8 +6,8 @@ import { CreateDramaDto } from './dto/create-drama.dto';
 import { DramaProgressService } from './drama-progress.service';
 import { DramaGenreTemplateService } from './drama-genre-template.service';
 import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
-import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
 import { DramaAgentNodeConfig, DramaWorkflowParams } from './entities/drama-agent-pipeline.entity';
+import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto, AiGenerateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
 
 @Controller('drama')
 export class DramaController {
@@ -23,6 +23,23 @@ export class DramaController {
   @Get('genre-templates/list')
   async listGenreTemplates(@Req() req: any) {
     return this.genreTemplateService.list(req.user?.userId);
+  }
+
+  @Post('genre-templates/ai-generate')
+  async aiGenerateGenreTemplate(@Body() dto: AiGenerateDramaGenreTemplateDto, @Req() req: any) {
+    const result = await this.genreTemplateService.aiGenerate(dto);
+    return this.genreTemplateService.create(req.user?.userId ?? 'anonymous', {
+      genreKey: dto.genreName.toLowerCase().replace(/\s+/g, '-'),
+      displayName: result.displayName,
+      description: result.description,
+      genreKeywords: result.genreKeywords,
+      profileJson: result.profileJson,
+      seedHints: result.seedHints as any,
+      audienceTags: result.audienceTags,
+      protagonistFocusTags: result.protagonistFocusTags,
+      toneTags: result.toneTags,
+      platformTags: result.platformTags,
+    });
   }
 
   @Get('genre-templates/:id')
@@ -70,6 +87,18 @@ export class DramaController {
 
   @Get(':dramaId/pipeline/topology')
   async getPipelineTopology(@Param('dramaId') dramaId: string) { return this.pipelineService.getTopology(dramaId); }
+
+  /* ─── 创意辅助（静态路由） ─── */
+
+  @Post('idea/enhance')
+  async enhanceIdea(@Body() body: { idea: string; genre?: string }) {
+    return this.dramaService.enhanceIdea(body.idea, body.genre);
+  }
+
+  @Post('idea/generate-goal')
+  async generateGoal(@Body() body: { mainIdea: string; genre: string; targetAudience: string }) {
+    return this.dramaService.generateStoryGoal(body);
+  }
 
   /* ─── CRUD ─── */
 

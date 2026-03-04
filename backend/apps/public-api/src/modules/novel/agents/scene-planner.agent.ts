@@ -14,14 +14,97 @@ import {
   buildKpiTrendHints,
   UNIFIED_AGENT_MAX_CHARACTERS,
 } from '../prompting/novel-playbook';
+import { mapBeatRoleToChapterType } from '../prompting/chapter-type.utils';
 import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 
 @Injectable()
 export class ScenePlannerAgent {
   private readonly logger = new Logger(ScenePlannerAgent.name);
   private static readonly DEFAULT_FOCUS_MOMENT_HINT = '在关键动作或对话里暴露该角色当下真实立场与代价感';
+  private static readonly COMMERCIAL_SCENE_COUNT_GUIDE: Record<string, string> = {
+    setup: '- setup（铺垫章）：3-4场景，信息密度均匀，最后场景必须抛出悬念',
+    rising: '- rising（升温章）：3-4场景，均匀分配，每场景推进一层冲突',
+    climax: '- climax（高潮章）：4-5场景，铺垫15%→升温25%→爆发35%→余波15%→钩子10%',
+    relief: '- relief（缓冲章）：2-3场景即可，场景更长更沉浸，侧重角色深度和日常质感',
+    general: '- general（通用章）：3-4场景，灵活分配',
+  };
+  private static readonly LITERARY_SCENE_COUNT_GUIDE: Record<string, string> = {
+    setup: '- setup：3-4场景，铺垫信息与情绪暗流并行',
+    rising: '- rising：3-4场景，逐层升压，冲突或心理张力递进',
+    climax: '- climax：4-5场景，爆发后保留余韵与代价',
+    relief: '- relief：2-3场景，慢节奏恢复与关系深化',
+    introspective: '- introspective（内省章）：1-3场景，允许整章单场景聚焦内心世界',
+    fragmentary: '- fragmentary（碎片章）：4-8个短场景（碎片），每个200-500字',
+    atmospheric: '- atmospheric（氛围章）：2-3场景，节奏极慢，感官密度高',
+    general: '- general：2-4场景，灵活分配',
+  };
+  private static readonly CHAPTER_PURPOSE_GUIDE: Record<string, string> = {
+    setup: '推荐 purpose 组合：hook_opening → revelation/dialogue_driven → emotional/transition → cliffhanger。\n重点是建立问题与预期，不急于兑现终局答案。',
+    rising: '推荐 purpose 组合：hook_opening → conflict/action → revelation/emotional → climax/cliffhanger。\n每个场景都要有冲突增量或代价增量。',
+    climax: '推荐 purpose 组合：hook_opening(短) → conflict/action → climax（核心爆发）→ emotional/revelation（余波）→ cliffhanger。\n核心是正面碰撞与后果落地。',
+    relief: '推荐 purpose 组合：transition/emotional → dialogue_driven/revelation → cliffhanger（轻钩子）。\n重点是修复情绪、深化关系、暗线前推。',
+    introspective: '推荐 purpose 组合：introspection/emotional 为主，可少量 transition。\n核心是内在冲突与认知变化，不强制外部大事件。',
+    fragmentary: '推荐 purpose 组合：fragmentary 短场景串联，可混合 revelation/emotional。\n每个碎片必须提供一块拼图。',
+    atmospheric: '推荐 purpose 组合：atmospheric + emotional，少量 thematic。\n氛围与感官是叙事主体，动作推进从属于情绪波纹。',
+    general: '推荐 purpose 组合：hook_opening → conflict/revelation → emotional/transition → cliffhanger。',
+  };
 
   constructor(private readonly llm: LlmService) {}
+
+  private resolveChapterType(state: StoryState, intent: ChapterIntent): string {
+    const beatRole = state.currentArc?.chapterBeats?.find((b) => b.chapterNumber === intent.chapterNumber)?.role;
+    return mapBeatRoleToChapterType(beatRole) ?? 'general';
+  }
+
+  private buildSceneCountGuide(
+    chapterType: string,
+    writingMode: StoryState['seed']['writingMode'],
+    rawGuide?: string,
+  ): string {
+    const source = (rawGuide ?? '').trim();
+    if (source.length > 0) {
+      const aliasMap: Record<string, string[]> = {
+        setup: ['setup'],
+        rising: ['rising', 'escalation'],
+        climax: ['climax', 'twist'],
+        relief: ['relief', 'aftermath', 'transition'],
+        introspective: ['introspective', 'introspection'],
+        fragmentary: ['fragmentary'],
+        atmospheric: ['atmospheric'],
+        general: ['general'],
+      };
+      const aliases = aliasMap[chapterType] ?? [chapterType];
+      const lines = source.split('\n');
+      const intro: string[] = [];
+      const selected: string[] = [];
+      let sawBullet = false;
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed.startsWith('-')) {
+          sawBullet = true;
+          const lower = trimmed.toLowerCase();
+          if (aliases.some((a) => lower.includes(a.toLowerCase()))) selected.push(line);
+        } else if (!sawBullet) {
+          intro.push(line);
+        }
+      }
+      if (selected.length > 0) return [...intro, ...selected].join('\n');
+    }
+    const table = writingMode === 'literary'
+      ? ScenePlannerAgent.LITERARY_SCENE_COUNT_GUIDE
+      : ScenePlannerAgent.COMMERCIAL_SCENE_COUNT_GUIDE;
+    return [
+      '根据当前章节类型动态调整（只执行当前章型）：',
+      table[chapterType] ?? table.general,
+    ].join('\n');
+  }
+
+  private buildPurposeGuide(chapterType: string, rawGuide?: string): string {
+    const source = (rawGuide ?? '').trim();
+    if (source.length > 0) return source;
+    return ScenePlannerAgent.CHAPTER_PURPOSE_GUIDE[chapterType] ?? ScenePlannerAgent.CHAPTER_PURPOSE_GUIDE.general;
+  }
 
   async plan(
     state: StoryState,
@@ -40,6 +123,11 @@ export class ScenePlannerAgent {
     const totalWords = intent.wordCountRange.max;
     const kpiHints = buildKpiTrendHints(state);
     const profile = state.bookPromptProfile;
+    const chapterType = this.resolveChapterType(state, intent);
+    const sceneCountGuide = playbooks?.['CHAPTER_TYPE_SCENE_PLAN_PLAYBOOK']?.trim()
+      || this.buildSceneCountGuide(chapterType, state.seed.writingMode, playbooks?.['agent:scene-planner:scene_count_guide']);
+    const purposeGuide = playbooks?.['CHAPTER_TYPE_SCENE_PURPOSE_PLAYBOOK']?.trim()
+      || this.buildPurposeGuide(chapterType, playbooks?.['agent:scene-planner:purpose_guide']);
 
     const voiceHints = state.characters
       .filter((c) => intent.characterAvailability.activeCharacterIds.includes(c.id) && c.voice?.speechPattern)
@@ -56,7 +144,7 @@ export class ScenePlannerAgent {
       taskName: 'scene-planner',
       schema: chapterScenePlanSchema,
       tags: ['workflow', 'chapter', 'scene-plan'],
-      metadata: { bookId: state.bookId, chapterNumber: intent.chapterNumber },
+      metadata: { bookId: state.bookId, chapterNumber: intent.chapterNumber, chapterType },
       systemPrompt: `${playbooks?.['agent:scene-planner:role'] ?? (state.seed.writingMode === 'literary'
         ? '你是一位兼具文学敏感度与场景感的导演。你的任务是把"章节意图"拆成场景，每个场景有明确的叙事/情感/主题任务——可以是外部冲突，也可以是内在探索。'
         : '你是一位擅长场景拆分的网文导演。你的任务是把"章节意图"拆成独立场景，每个场景有明确的叙事任务。')}
@@ -64,10 +152,11 @@ export class ScenePlannerAgent {
 === 核心原则 ===
 ${playbooks?.['agent:scene-planner:principles'] ?? '1. 每个场景是一个"微型故事"——有自己的入口情绪、冲突、转折、出口情绪。\n2. 场景之间的情绪变化构成章内弧线——不能平坦，要有起伏。\n3. 第一场景必须承接上章钩子+建立本章张力。最后一场景必须制造下章驱动力。\n4. 视角(POV)切换要有意义——切到另一个角色是为了利用信息差或展示不同立场。'}
 
+=== 当前章节类型 ===
+${chapterType}
+
 === 场景数量指南 ===
-${playbooks?.['agent:scene-planner:scene_count_guide'] ?? (state.seed.writingMode === 'literary'
-  ? '根据章节类型动态调整：\n- climax：4-5场景\n- rising/setup：3-4场景\n- relief：2-3场景\n- introspective（内省章）：1-3场景，允许整章只有1个长场景（纯内心世界）\n- fragmentary（碎片章）：4-8个短场景（碎片），每个200-500字\n- atmospheric（氛围章）：2-3场景，节奏极慢，感官密度高\n- general：2-4场景，灵活分配'
-  : '根据章节类型动态调整场景数量和字数配比：\n- climax（高潮章）：4-5场景，铺垫15%→升温25%→爆发35%→余波15%→钩子10%\n- rising（升温章）：3-4场景，均匀分配，每场景推进一层冲突\n- setup（铺垫章）：3-4场景，信息密度均匀，最后场景必须抛出悬念\n- relief（缓冲章）：2-3场景即可，场景更长更沉浸，侧重角色深度和日常质感\n- general（通用章）：3-4场景，灵活分配')}
+${sceneCountGuide}
 
 === 场景分配策略（字数硬约束）===
 - 全章总字数硬上限 ${totalWords}字，所有场景 estimatedWords 之和必须 ≤ ${totalWords}
@@ -78,9 +167,7 @@ ${playbooks?.['agent:scene-planner:scene_count_guide'] ?? (state.seed.writingMod
 - 高潮章可以有1个"战斗/动作"场景，用 breakneck 节奏
 
 === purpose 选择指南 ===
-${playbooks?.['agent:scene-planner:purpose_guide'] ?? (state.seed.writingMode === 'literary'
-  ? 'hook_opening: 承接上章+建立本章调性。\nconflict/action: 推进主线冲突。\nrevelation: 揭露新信息/真相。\nemotional: 角色内心戏/关系深化。\ndialogue_driven: 对话推进+角色塑造。\ntransition: 时空转换/暗线推进。\nclimax: 本章高潮。\ncliffhanger: 最后场景（不强制）。\nintrospection: 角色内省/独白/意识流——外部事件极少，聚焦内在世界。\natmospheric: 氛围描写为主体——环境/感官/意象构成叙事。\nthematic: 主题探索——通过隐喻/对照/意象回应核心命题。'
-  : 'hook_opening: 仅第一场景。承接上章+建立悬念。\nconflict/action: 推进主线冲突。\nrevelation: 揭露新信息/真相。\nemotional: 角色内心戏/关系深化。\ndialogue_driven: 对话推进+角色塑造。\ntransition: 时空转换/暗线推进。\nclimax: 本章高潮。\ncliffhanger: 仅最后场景。')}
+${purposeGuide}
 
 === transitionHint ===
 ${playbooks?.['agent:scene-planner:transition_hint'] ?? '好的过渡：用环境描写做视角切换、因果链、时间推移自然嵌入行动。\n坏的过渡：硬切，读者感觉被强行拖走。'}

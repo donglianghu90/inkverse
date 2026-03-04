@@ -46,6 +46,7 @@ import {
 } from './schemas/novel-state.schemas';
 import { ChapterDraft, LoreRecord } from './schemas/novel.schemas';
 import { MEMORY_ACTIVATION_CHAPTER } from './prompting/novel-playbook';
+import { mapBeatRoleToArcStage, mapBeatRoleToChapterType } from './prompting/chapter-type.utils';
 
 import { DEFAULT_WORKFLOW_PARAMS } from './entities/book-agent-pipeline.entity';
 const DEFAULT_QUALITY_PASS_SCORE = DEFAULT_WORKFLOW_PARAMS.qualityPassScore;
@@ -230,12 +231,34 @@ export class ChapterWorkflowService {
     }
     const beatRole = state.currentArc?.chapterBeats?.find((b) => b.chapterNumber === chapterNumber)?.role
       ?? state.currentArc?.chapterBeats?.[chapterNumber - (state.currentArc?.startChapter ?? 1)]?.role;
-    const arcStage = beatRole === 'setup' ? 'entry' : beatRole === 'escalation' ? 'build' : beatRole;
+    const chapterType = mapBeatRoleToChapterType(beatRole) ?? 'general';
+    const arcStage = mapBeatRoleToArcStage(beatRole);
     const baseCtx: Omit<CompileContext, 'agentId'> = {
-      chapterNumber, chapterType: beatRole, arcStage, isFirstThreeChapters: chapterNumber <= 3,
+      chapterNumber, chapterType, arcStage, isFirstThreeChapters: chapterNumber <= 3,
     };
+    const compiledRuleLogged = new Set<string>();
     const compileForAgent = (agentId: string, extra?: Partial<CompileContext>): Record<string, string> => ({
-      ...this.ruleCompiler.compile(tpl.ruleAtoms, { agentId, ...baseCtx, ...extra }),
+      ...(() => {
+        const ctx = { agentId, ...baseCtx, ...extra };
+        const compiled = this.ruleCompiler.compileWithMeta(tpl.ruleAtoms, ctx);
+        const logKey = `${agentId}|${ctx.chapterType ?? 'na'}|${ctx.arcStage ?? 'na'}|${ctx.scenePurpose ?? 'na'}`;
+        if (!compiledRuleLogged.has(logKey)) {
+          this.traceLogger.logWorkflowEvent({
+            bookId: state.bookId,
+            chapterNumber,
+            step: `rule-compile:${agentId}`,
+            status: 'ok',
+            meta: {
+              context: ctx,
+              outputKeys: Object.keys(compiled.compiled),
+              matchedRuleAtomIds: compiled.matchedAtoms.map((a) => a.id),
+              matchedRuleAtomTitles: compiled.matchedAtoms.slice(0, 30).map((a) => a.title),
+            },
+          });
+          compiledRuleLogged.add(logKey);
+        }
+        return compiled.compiled;
+      })(),
       ...agentSectionDict,
       __bookStrategy: buildBookStrategyPromptBlock(state.bookStrategy),
       __policySlice: buildPolicySliceBlock(state.bookStrategy),
@@ -361,6 +384,22 @@ export class ChapterWorkflowService {
     }
     this.emitProgress(state.bookId, chapterNumber, 'continuity-check', 2, '预检完成');
     await checkpoint('continuity-check');
+
+    // ── Step 3.5: 伏笔银行注入 — 将到期伏笔传递给写作层 ──
+    const bank = state.foreshadowingBank ?? { deposits: [] };
+    const dueToPlant = bank.deposits.filter((d) => d.status === 'pending' && d.plantWindow.earliestChapter <= chapterNumber && d.plantWindow.latestChapter >= chapterNumber);
+    const urgentPlant = dueToPlant.filter((d) => d.priority === 'must_plant' || (d.plantWindow.latestChapter - chapterNumber) <= 3);
+    const duePayoff = bank.deposits.filter((d) => d.status === 'planted' && d.payoffWindow.earliestChapter <= chapterNumber && d.payoffWindow.latestChapter >= chapterNumber);
+    if (urgentPlant.length > 0) {
+      continuityInjections.push(`【伏笔埋设指令】本章必须自然嵌入以下伏笔：\n${urgentPlant.map((d) => `- ${d.label}(${d.category})：${d.embeddingGuidance}`).join('\n')}`);
+      this.logger.log(`[Chapter ${chapterNumber}] 伏笔注入：${urgentPlant.length}条紧急埋设`);
+    } else if (dueToPlant.length > 0) {
+      continuityInjections.push(`【伏笔埋设建议】可在本章自然嵌入：${dueToPlant.map((d) => `${d.label}-"${d.embeddingGuidance.slice(0, 40)}"`).join('；')}`);
+    }
+    if (duePayoff.length > 0) {
+      continuityInjections.push(`【伏笔回收窗口】以下伏笔可在本章回收：${duePayoff.map((d) => `${d.label}-"${d.payoffDescription.slice(0, 40)}"`).join('；')}`);
+      this.logger.log(`[Chapter ${chapterNumber}] 伏笔注入：${duePayoff.length}条可回收`);
+    }
 
     // ── Step 4: Scene Pipeline + Multi-attempt Writing Loop ──
     await assertOwnership();
@@ -632,7 +671,9 @@ export class ChapterWorkflowService {
         if (!bestAttempt || weightedScore > bestAttempt.weightedScore) bestAttempt = attemptResult;
 
         const hasCriticalIssues = review.issuesFound.some((i) => i.severity === 'critical');
-        const passed = weightedScore >= qualityPassScore && !hasCriticalIssues && loopDetCheck.pass;
+        const hasModerateIssues = review.issuesFound.filter((i) => i.severity === 'moderate').length >= 3;
+        const verdictBlocks = review.overallVerdict === 'major_issues';
+        const passed = weightedScore >= qualityPassScore && !hasCriticalIssues && !verdictBlocks && !hasModerateIssues && loopDetCheck.pass;
         const isLastAttempt = attempt >= maxAttempts;
         const bestIdx = bestAttempt ? attempts.indexOf(bestAttempt) : 0;
         await saveStep('quality-loop', {
@@ -652,9 +693,14 @@ export class ChapterWorkflowService {
           break;
         }
         if (attempt < maxAttempts) {
-          this.logger.log(
-            `[Chapter ${chapterNumber}] 质量门控未通过（${weightedScore} < ${qualityPassScore}${!loopDetCheck.pass ? ' + 硬规则失败' : ''}），准备第${attempt + 1}轮重写`,
-          );
+          const reasons = [
+            weightedScore < qualityPassScore ? `分数${weightedScore}<${qualityPassScore}` : '',
+            hasCriticalIssues ? 'critical问题' : '',
+            verdictBlocks ? `裁决=${review.overallVerdict}` : '',
+            hasModerateIssues ? `moderate问题≥3` : '',
+            !loopDetCheck.pass ? '硬规则失败' : '',
+          ].filter(Boolean).join('+');
+          this.logger.log(`[Chapter ${chapterNumber}] 质量门控未通过（${reasons}），准备第${attempt + 1}轮重写`);
         }
       }
     }

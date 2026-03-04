@@ -140,12 +140,25 @@ const Workbench: React.FC = () => {
     const STALE_MS = 600_000;
     let staleTimer: ReturnType<typeof setTimeout>;
 
+    const loadTokenUsageWithRetry = async (preferChapterNumber?: number): Promise<BookTokenUsage | null> => {
+      let usage = await getBookTokenUsage(bookIdVal).catch(() => null);
+      if (!preferChapterNumber) return usage;
+      const hasPreferred = !!usage?.chapters?.some((c) => c.chapterNumber === preferChapterNumber);
+      if (hasPreferred) return usage;
+      for (let i = 0; i < 4; i += 1) {
+        await new Promise((r) => setTimeout(r, 600));
+        usage = await getBookTokenUsage(bookIdVal).catch(() => usage);
+        if (usage?.chapters?.some((c) => c.chapterNumber === preferChapterNumber)) return usage;
+      }
+      return usage;
+    };
+
     const syncLatestData = async (preferChapterNumber?: number) => {
-      const [bookInfo, chaptersRes, usage] = await Promise.all([
+      const [bookInfo, chaptersRes] = await Promise.all([
         getBook(bookIdVal),
         listChapters(bookIdVal),
-        getBookTokenUsage(bookIdVal).catch(() => null),
       ]);
+      const usage = await loadTokenUsageWithRetry(preferChapterNumber);
       setBook(bookInfo);
       setTokenUsage(usage);
       const sorted = [...chaptersRes.chapters].sort((a, b) => a.chapterNumber - b.chapterNumber);

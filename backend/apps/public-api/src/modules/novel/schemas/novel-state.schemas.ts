@@ -201,14 +201,17 @@ export const bookPromptProfileSchema = z.object({
       consistency: z.number().min(0.5).max(2.0).default(1.0),
       proseQuality: z.number().min(0.5).max(2.0).default(1.0),
       characterDepth: z.number().min(0.5).max(2.0).default(1.0),
-      originality: z.number().min(0).max(2.0).default(0), // 文学探索模式下启用，commercial 模式下为 0 不参与计算
+      originality: z.number().min(0).max(2.0).default(0),
     }),
     genreSpecificChecks: z.array(z.string()).min(2),
-    scoringAnchors: z.object({
-      high: z.string(),
-      mid: z.string(),
-      low: z.string(),
-    }),
+    scoringAnchors: z.object({ high: z.string(), mid: z.string(), low: z.string() }),
+    calibrationHistory: z.array(z.object({ // 维度权重微调历史
+      chapter: z.number().int().min(1),
+      dimension: z.string(),
+      oldWeight: z.number(),
+      newWeight: z.number(),
+      reason: z.string(),
+    })).default([]),
   }),
 
   worldProfile: z.object({
@@ -356,6 +359,9 @@ export const miniArcChapterBeatSchema = z.object({
     'climax',        // 高潮/对决
     'aftermath',     // 善后/缓冲
     'transition',    // 过渡/衔接
+    'introspective', // 内省/心理探索（文学实验）
+    'fragmentary',   // 碎片叙事（文学实验）
+    'atmospheric',   // 氛围意象（文学实验）
   ]),
   technique: z.string().default(''), // AI自由输出的中文叙事技法标签（如"打脸逆转""突破蜕变""暗线揭晓"），用于创作指导和前端展示
   tensionLevel: z.number().int().min(1).max(10),
@@ -1138,14 +1144,26 @@ export const storyStateSchema = z.object({
 
   // Retrospective writing lessons — accumulated wisdom from past arcs.
   writingLessons: z.array(z.object({
-    id: z.string(), // 如 "lesson_arc_1_1"
-    sourceArcId: z.string(), // 从哪个弧总结的
+    id: z.string(),
+    sourceArcId: z.string(),
     category: z.enum(['pacing', 'dialogue', 'character', 'worldbuilding', 'hook', 'prose', 'structure', 'emotion']),
-    insight: z.string(), // 教训（如"群戏场景角色超过4人时声音辨识度下降"）
-    actionable: z.string(), // 可执行建议（如"群戏限制同时说话角色≤3人"）
-    confidence: z.enum(['tentative', 'confirmed', 'strong']).default('tentative'), // 多次验证后提升
-    sourceEvidence: z.string(), // 依据（如"arc_2 第45-50章 characterDepth 平均5.2"）
+    insight: z.string(),
+    actionable: z.string(),
+    confidence: z.enum(['tentative', 'confirmed', 'strong']).default('tentative'),
+    sourceEvidence: z.string(),
     createdAtChapter: z.number().int().min(1),
+    promotedToRuleAtomId: z.string().optional(), // strong 级 lesson 升格为 RuleAtom 后记录其 id
+  })).default([]),
+
+  // 章节校准追踪 — 近期重复问题模式（滑动窗口）
+  recentIssuePatterns: z.array(z.object({
+    pattern: z.string(), // 问题模式描述
+    dimension: z.string(), // 归属评审维度（engagement/pacing/...）
+    occurrences: z.number().int().min(1), // 出现次数
+    firstSeenChapter: z.number().int().min(1),
+    lastSeenChapter: z.number().int().min(1),
+    generatedRuleAtomId: z.string().optional(), // 已生成对应 RuleAtom 时记录
+    status: z.enum(['active', 'resolved', 'expired']).default('active'),
   })).default([]),
 
   // Agent sections generation status — 'generated' or 'pending' (fallback to defaults, retry on first chapter)

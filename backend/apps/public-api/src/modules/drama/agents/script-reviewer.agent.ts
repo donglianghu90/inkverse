@@ -39,7 +39,7 @@ export class ScriptReviewerAgent {
 Hook策略：${script.hookStrategy}
 情绪弧：${script.overallEmotionalArc}
 最近KPI：${state.kpiHistory.slice(-3).map(k => `E${k.episodeNumber}=${k.overallScore}`).join(', ') || '（无历史）'}
-
+${this.buildCalibrationHint(state)}
 === 剧本实际内容（审核台词自然度/情感冲击力/节奏） ===
 ${scriptDetail}
 
@@ -52,7 +52,21 @@ ${shotDetail}
 
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
     const review = typeof root.review === 'object' && root.review ? root.review : root;
-    return episodeReviewSchema.parse(review);
+    const result = episodeReviewSchema.parse(review);
+    const hasCritical = result.issuesFound.some(i => i.severity === 'critical');
+    if (result.overallScore < 5.5 || hasCritical) result.overallVerdict = 'major_issues';
+    else if (result.overallScore >= 7.5 && !hasCritical && !result.issuesFound.some(i => i.severity === 'moderate')) result.overallVerdict = 'good';
+    else result.overallVerdict = 'needs_edit';
+    return result;
+  }
+
+  private buildCalibrationHint(state: DramaState): string {
+    const patterns = (state.recentIssuePatterns ?? []).filter(p => p.status === 'active' && p.occurrences >= 2);
+    if (!patterns.length) return '';
+    const sorted = [...patterns].sort((a, b) => b.occurrences - a.occurrences).slice(0, 5);
+    const lines = ['=== 自校准警示（近期高频问题，审核时重点关注）==='];
+    for (const p of sorted) lines.push(`⚠ [${p.dimension}] ${p.pattern.split(':').slice(1).join(':')}（已出现${p.occurrences}次）`);
+    return lines.join('\n');
   }
 
   /** 构建剧本详情：每场戏的purpose + 完整台词 + 关键动作（限制token量） */

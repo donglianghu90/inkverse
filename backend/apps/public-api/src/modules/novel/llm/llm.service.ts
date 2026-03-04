@@ -44,32 +44,36 @@ interface ProviderConfig {
 export interface TaskRoute { provider: LlmProvider; tier: ModelTier; }
 
 /**
- * 任务→模型路由表（Gemini + OpenAI 双引擎，Claude仅haiku可用作fallback）
- * Gemini Creative: 终稿文学创作（gemini-3.1-pro，中文写作品质高，$2/$12性价比最优）
- * OpenAI Creative: 初稿写作+场景构建（gpt-5.2，多样性好，$3/$15）
- * OpenAI Standard: 多视角审阅/质量把关（gpt-5.1，$2/$10比Gemini更便宜）
- * Gemini Standard: 规划/架构/结构化分析（Schema遵从最好，大上下文窗口）
- * Gemini Flash: 结构化提取/轻量检查（速度最快）
- * Claude(haiku): 仅作fallback，代理opus/sonnet均不可用(E015)
+ * 任务→模型路由表：Gemini(创作/规划/轻量) + Claude(审阅) + OpenAI(可选)
+ * Gemini Creative: 终稿文学创作；Standard: 规划/架构；Flash: 轻量提取
+ * Claude Sonnet 4.6: 审阅/质量把关（多视角、避免自审同质化）；Opus 4.6: creative 备用
  */
 const TASK_ROUTES: Record<string, TaskRoute> = {
-  // ═══ Gemini Creative — 终稿文学创作（读者直面内容，中文品质最优） ═══
+  // ═══ Gemini Creative — 终稿文学创作 ═══
   'creative-writer':    { provider: 'gemini', tier: 'creative' },
   'hook-crafter':       { provider: 'gemini', tier: 'creative' },
   'chapter-editor':     { provider: 'gemini', tier: 'creative' },
   'character-voice-coach': { provider: 'gemini', tier: 'creative' },
-  // ═══ OpenAI Creative — 初稿写作+场景构建（多样性、不同风格） ═══
-  'scene-writer':       { provider: 'openai', tier: 'creative' },
-  'draft-writer':       { provider: 'openai', tier: 'creative' },
-  'scene-stitcher':     { provider: 'openai', tier: 'creative' },
-  'patch-rewriter':     { provider: 'openai', tier: 'creative' },
-  // ═══ OpenAI Standard — 多视角审阅+质量把关（$2/$10，避免写手自审同质化） ═══
-  'reader-jury':        { provider: 'openai', tier: 'standard' },
-  'chapter-reviewer':   { provider: 'openai', tier: 'standard' },
-  'editor-in-chief':    { provider: 'openai', tier: 'standard' },
-  'consistency-audit':  { provider: 'openai', tier: 'standard' },
-  'retrospective-learner': { provider: 'openai', tier: 'standard' },
+  'scene-writer':       { provider: 'gemini', tier: 'creative' },
+  'draft-writer':       { provider: 'gemini', tier: 'creative' },
+  'scene-stitcher':     { provider: 'gemini', tier: 'creative' },
+  'patch-rewriter':     { provider: 'gemini', tier: 'creative' },
+  // ═══ Claude Standard — 审阅/质量把关（多视角，避免写手自审同质化） ═══
+  'reader-jury':        { provider: 'claude', tier: 'standard' },
+  'chapter-reviewer':   { provider: 'claude', tier: 'standard' },
+  'editor-in-chief':    { provider: 'claude', tier: 'standard' },
+  'consistency-audit':  { provider: 'claude', tier: 'standard' },
+  'retrospective-learner': { provider: 'claude', tier: 'standard' },
   // ═══ Gemini Standard — 规划/架构/结构化分析 ═══
+  'idea-enhancer':      { provider: 'gemini', tier: 'standard' },
+  'story-goal-generator': { provider: 'gemini', tier: 'standard' },
+  'genre-portrait':     { provider: 'gemini', tier: 'standard' },
+  'genre-profile-ai-generate': { provider: 'gemini', tier: 'standard' },
+  'genre-playbook-generate': { provider: 'gemini', tier: 'standard' },
+  'book-strategy-init': { provider: 'gemini', tier: 'standard' },
+  'book-strategy-refresh-policies': { provider: 'gemini', tier: 'standard' },
+  'arc-summary-pyramid': { provider: 'gemini', tier: 'standard' },
+  'volume-summary-pyramid': { provider: 'gemini', tier: 'standard' },
   'arc-director':       { provider: 'gemini', tier: 'standard' },
   'chapter-intent':     { provider: 'gemini', tier: 'standard' },
   'scene-planner':      { provider: 'gemini', tier: 'standard' },
@@ -104,7 +108,13 @@ const TASK_ROUTES: Record<string, TaskRoute> = {
   'plot-economy-planner': { provider: 'gemini', tier: 'lightweight' },
   'lore-recorder':      { provider: 'gemini', tier: 'lightweight' },
   'character-canon-arbiter': { provider: 'gemini', tier: 'lightweight' },
+  'voice-evolution-extract': { provider: 'gemini', tier: 'lightweight' },
   // ═══ Drama — 短剧引擎 ═══
+  'drama-idea-enhancer': { provider: 'gemini', tier: 'standard' },
+  'drama-goal-generator': { provider: 'gemini', tier: 'standard' },
+  'drama-genre-portrait': { provider: 'gemini', tier: 'standard' },
+  'drama-genre-seed-hints': { provider: 'gemini', tier: 'standard' },
+  'drama-genre-profile-ai-generate': { provider: 'gemini', tier: 'standard' },
   'drama-scriptwriter':       { provider: 'gemini', tier: 'creative' },
   'drama-dialogue-coach':     { provider: 'gemini', tier: 'creative' },
   'drama-script-editor':      { provider: 'gemini', tier: 'creative' },
@@ -177,7 +187,7 @@ export class LlmService {
           models: {
             creative: String(claudeTiers.creative || 'claude-opus-4-6'),
             standard: String(claudeTiers.standard || 'claude-sonnet-4-6'),
-            lightweight: String(claudeTiers.lightweight || 'claude-haiku-4-5-20251001'),
+            lightweight: String(claudeTiers.lightweight || 'claude-sonnet-4-6'),
           },
           costRates: LlmService.parseTierCostRates(costClaude, { inputRateUsdPer1M: 5, outputRateUsdPer1M: 25 }),
           enabled: Boolean(claudeCfg.apiKey),
@@ -473,11 +483,18 @@ export class LlmService {
   private extractUsageFromError(error: unknown): { prompt: number; completion: number; total: number; source: string } | null {
     const e = error as Record<string, unknown> | undefined;
     if (!e) return null;
-    const resp = this.toRecord(e.response) ?? this.toRecord(e.error) ?? this.toRecord((e.rawError as Record<string, unknown>)?.response);
-    const usage = resp ? (this.toRecord(resp.usage) ?? this.toRecord(resp.usage_metadata)) : null;
-    if (!usage) return null;
-    const p = this.toInt(usage.input_tokens) || this.toInt(usage.prompt_tokens);
-    const c = this.toInt(usage.output_tokens) || this.toInt(usage.completion_tokens);
-    return p + c > 0 ? { prompt: p, completion: c, total: p + c, source: 'error_response' } : null;
+    const candidates = [
+      this.toRecord(e.response), this.toRecord(e.error), this.toRecord(e.data),
+      this.toRecord((e.rawError as Record<string, unknown>)?.response),
+      this.toRecord((e.cause as Record<string, unknown>)?.response),
+    ].filter(Boolean) as Record<string, unknown>[];
+    for (const resp of candidates) {
+      const usage = this.toRecord(resp.usage) ?? this.toRecord(resp.usage_metadata) ?? this.toRecord(resp.tokenUsage);
+      if (!usage) continue;
+      const p = this.toInt(usage.input_tokens) || this.toInt(usage.prompt_tokens) || this.toInt(usage.promptTokens);
+      const c = this.toInt(usage.output_tokens) || this.toInt(usage.completion_tokens) || this.toInt(usage.completionTokens);
+      if (p + c > 0) return { prompt: p, completion: c, total: p + c, source: 'error_response' };
+    }
+    return null;
   }
 }

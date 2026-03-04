@@ -47,7 +47,7 @@ ${state.currentArcSegment ? `当前段落：${state.currentArcSegment.segmentTit
 ${state.strategy?.coreNarrativeContract ? `叙事契约：${state.strategy.coreNarrativeContract}` : ''}
 
 ${qualityFeedback ? `=== 质量反馈（前几集弱项，规划意图时务必针对性加强） ===\n${qualityFeedback}` : ''}
-
+${this.buildCalibrationHint(state)}
 可用角色：\n${chars}
 可用场景：${state.locations.map(l => `${l.locationId}(${l.name})`).join('、')}
 ${contextInjections?.length ? `\n连续性约束（必须遵守）：\n${contextInjections.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : ''}
@@ -59,6 +59,15 @@ ${contextInjections?.length ? `\n连续性约束（必须遵守）：\n${context
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
     const intent = typeof root.intent === 'object' && root.intent ? root.intent : root;
     return episodeIntentSchema.parse(intent);
+  }
+
+  private buildCalibrationHint(state: DramaState): string {
+    const patterns = (state.recentIssuePatterns ?? []).filter(p => p.status === 'active' && p.occurrences >= 2);
+    if (!patterns.length) return '';
+    const sorted = [...patterns].sort((a, b) => b.occurrences - a.occurrences).slice(0, 5);
+    const lines = ['=== 自校准警示（近期高频问题）==='];
+    for (const p of sorted) lines.push(`⚠ [${p.dimension}] ${p.pattern.split(':').slice(1).join(':')}（已出现${p.occurrences}次）`);
+    return lines.join('\n');
   }
 
   /** 从最近KPI中提取持续弱项维度，生成集导演级改进指令 */

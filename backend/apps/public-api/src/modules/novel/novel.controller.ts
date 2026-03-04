@@ -40,7 +40,7 @@ import { CreateBookSessionService } from './create-book-session.service';
 import { BookCreationSseService } from './book-creation-sse.service';
 import { GenreProfileTemplateService } from './genre-profile-template.service';
 import { CreateGenreProfileTemplateDto, UpdateGenreProfileTemplateDto, AiGenerateProfileDto } from './dto/genre-profile-template.dto';
-import { EnhanceIdeaDto, GenerateStoryGoalDto } from './dto/idea.dto';
+import { EnhanceIdeaDto, GenerateStoryGoalDto, EnhanceGoalDto } from './dto/idea.dto';
 
 @ApiTags('Novel - 小说生成')
 @ApiBearerAuth('Authorization')
@@ -87,6 +87,13 @@ export class NovelController {
     @Body() body: GenerateStoryGoalDto,
   ): Promise<unknown> {
     return this.novelService.generateStoryGoal(body);
+  }
+
+  @Post('idea/enhance-goal')
+  @ApiOperation({ summary: '美化主线目标', description: '用 AI 润色用户手写的主线目标，结合创意、题材和受众信息' })
+  @ApiResponse({ status: 200, description: '返回美化后的主线目标和优化亮点' })
+  async enhanceGoal(@Body() body: EnhanceGoalDto): Promise<unknown> {
+    return this.novelService.enhanceGoal(body);
   }
 
   @Post('books')

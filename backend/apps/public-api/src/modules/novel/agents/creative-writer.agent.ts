@@ -25,10 +25,12 @@ import {
   buildStyleDNA,
   buildCharacterVoiceMatrix,
   buildWritingLessonsHint,
+  buildCalibrationHint,
   buildWritingSoulPlaybook,
   getChapterTypeTemplates,
   UNIFIED_AGENT_MAX_CHARACTERS,
 } from '../prompting/novel-playbook';
+import { mapBeatRoleToChapterType } from '../prompting/chapter-type.utils';
 import { buildAudiencePromptBlock } from '../prompting/audience-directive';
 import { MiniArcChapterBeat } from '../schemas/novel-state.schemas';
 import { DetailContextService } from '../detail-context.service';
@@ -48,12 +50,7 @@ export class CreativeWriterAgent {
     const tempBoost = isLiterary ? 0.05 : 0; // literary 模式整体温度上浮
     const beat = this.findCurrentBeat(intent, state);
     if (beat) {
-      const typeMap: Record<string, string> = {
-        setup: 'setup', escalation: 'rising', twist: 'climax',
-        climax: 'climax', aftermath: 'relief', transition: 'relief',
-        introspective: 'introspective', fragmentary: 'fragmentary', atmospheric: 'atmospheric',
-      };
-      const type = typeMap[beat.role] ?? 'general';
+      const type = mapBeatRoleToChapterType(beat.role) ?? 'general';
       const temperature = Math.min(0.98, 0.75 + beat.tensionLevel * 0.02 + tempBoost);
       return { type, temperature };
     }
@@ -142,10 +139,13 @@ export class CreativeWriterAgent {
     blocks.push(soul.join('\n'));
 
     // ── 第三层：本章技法（优先 Profile 动态字段，fallback 硬编码通用模板） ──
+    const chapterTypePlaybook = playbooks?.['CHAPTER_TYPE_WRITING_PLAYBOOK']?.trim();
     const allTypeTemplates = getChapterTypeTemplates(state.seed.writingMode);
     const dynamicTemplate = profile.chapterTypeTemplates?.[chapterType];
     const template = dynamicTemplate || allTypeTemplates[chapterType];
-    if (template) blocks.push(template);
+    if (chapterTypePlaybook) blocks.push(`=== 本章类型专属规则（${chapterType}）===\n${chapterTypePlaybook}`);
+    if (dynamicTemplate) blocks.push(dynamicTemplate);
+    else if (!chapterTypePlaybook && template) blocks.push(template);
     if (intent.chapterNumber <= 3) {
       const dynamicFirst = profile.firstChaptersStrategy;
       blocks.push(dynamicFirst || buildFirstChaptersPlaybook(profile.worldProfile?.goldenFingerApplicable));
@@ -173,6 +173,9 @@ export class CreativeWriterAgent {
 
     const lessonsHint = buildWritingLessonsHint(state.writingLessons ?? [], ['prose', 'dialogue', 'character', 'emotion']);
     if (lessonsHint) blocks.push(lessonsHint);
+
+    const calHint = buildCalibrationHint(state);
+    if (calHint) blocks.push(calHint);
 
     return blocks.join('\n\n');
   }
