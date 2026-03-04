@@ -354,6 +354,20 @@ export class NovelController {
     return this.novelService.updateChapter(bookId, chapterNumber, body);
   }
 
+  @Delete('books/:bookId/chapters/:chapterNumber')
+  @ApiOperation({ summary: '删除章节', description: '永久删除指定章节及其关联数据（artifacts、workflow、memory、summary 等）' })
+  @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
+  @ApiParam({ name: 'chapterNumber', description: '章节序号' })
+  @ApiResponse({ status: 200, description: '删除成功' })
+  async deleteChapter(
+    @Param('bookId') bookId: string,
+    @Param('chapterNumber', ParseIntPipe) chapterNumber: number,
+    @CurrentUser('id') userId: string,
+  ): Promise<unknown> {
+    await this.guard(bookId, userId);
+    return this.novelService.deleteChapter(bookId, chapterNumber);
+  }
+
   @Get('books/:bookId/chapter-resync-jobs/:jobId')
   @ApiOperation({ summary: '查询章节回灌任务', description: '查询异步章节回灌任务的状态和进度' })
   @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })

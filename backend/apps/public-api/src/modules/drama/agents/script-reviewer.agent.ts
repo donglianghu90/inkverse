@@ -35,7 +35,7 @@ export class ScriptReviewerAgent {
       userPrompt: `审核第 ${script.episodeNumber} 集：
 
 === 基本信息 ===
-场景数：${script.scenes.length} | Shot数：${storyboard.shots.length} | 总时长：${storyboard.totalEstimatedDurationSec}秒
+场景数：${script.scenes.length} | Shot数：${storyboard?.shots?.length ?? 0} | 总时长：${storyboard?.totalEstimatedDurationSec ?? 0}秒
 Hook策略：${script.hookStrategy}
 情绪弧：${script.overallEmotionalArc}
 最近KPI：${state.kpiHistory.slice(-3).map(k => `E${k.episodeNumber}=${k.overallScore}`).join(', ') || '（无历史）'}
@@ -85,7 +85,7 @@ ${shotDetail}
 
   /** 构建Shot详情：首场+高潮场+末场的完整描述 + 中间场的关键Shot */
   private buildShotDetail(storyboard: EpisodeStoryboard): string {
-    const shots = storyboard.shots.filter((s: any) => !s.isPreview && !s.isFlashback);
+    const shots = (storyboard?.shots ?? []).filter((s: any) => !s.isPreview && !s.isFlashback);
     if (shots.length <= 8) {
       return shots.map((s: any) => this.formatShot(s)).join('\n');
     }

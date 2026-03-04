@@ -20,6 +20,8 @@ export class AudioDirectorAgent {
   constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
   async enhance(state: DramaState, storyboard: EpisodeStoryboard): Promise<EpisodeStoryboard> {
+    const shotsArr = storyboard?.shots ?? [];
+    if (!shotsArr.length) throw new Error('分镜数据缺失，无法进行音频设计');
     const profile = state.promptProfile;
     const audioGuide = profile?.audioStyleGuide;
     const charVoices = state.characters.map(c =>
@@ -28,7 +30,7 @@ export class AudioDirectorAgent {
     const locAmbience = state.locations.map(l => `${l.locationId}: ${l.ambientSoundDefault}`).join('\n');
     const sysPrompt = await this.promptService.buildPrompt(state.dramaId, 'audio-director', buildAudioDirectorSystemPrompt({ audioGuide }));
 
-    const shots = [...storyboard.shots];
+    const shots = [...shotsArr];
     const allBgm: any[] = [], allSilence: any[] = [];
 
     for (let off = 0; off < shots.length; off += MAX_SHOTS_PER_BATCH) {

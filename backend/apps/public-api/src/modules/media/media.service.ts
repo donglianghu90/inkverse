@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ProviderRegistryService } from './providers/provider-registry.service';
 import { MediaJobService } from './media-job.service';
+import { MediaTraceLoggerService } from './media-trace-logger.service';
 import { ImageGenerationRequest, ImageGenerationResult, VideoGenerationRequest, VideoTaskResult, TtsRequest, TtsResult, MediaProviderMeta } from './interfaces/media-provider.interface';
 
 export interface GenerateImageOptions extends ImageGenerationRequest {
@@ -29,6 +30,7 @@ export class MediaService {
   constructor(
     private readonly registry: ProviderRegistryService,
     private readonly jobService: MediaJobService,
+    private readonly traceLogger: MediaTraceLoggerService,
   ) {}
 
   // ═══ 图片生成（同步） ═══
@@ -36,17 +38,33 @@ export class MediaService {
   async generateImage(opts: GenerateImageOptions): Promise<ImageGenerationResult & { jobId: string }> {
     const provider = this.registry.getImageProvider(opts.provider);
     const t0 = Date.now();
-    const result = await provider.generate(opts);
-
-    const job = await this.jobService.createJob({
-      jobType: 'image', provider: provider.name, providerTaskId: '',
-      dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId,
-      request: { prompt: opts.prompt, size: opts.size, count: opts.count },
-      userId: opts.userId,
-    });
-    await this.jobService.markCompleted(job.id, { images: result.images } as any, Date.now() - t0);
-    this.logger.log(`图片生成完成: jobId=${job.id} provider=${provider.name} ${result.images.length}张 (${result.durationMs}ms)`);
-    return { ...result, jobId: job.id };
+    try {
+      const result = await provider.generate(opts);
+      const job = await this.jobService.createJob({
+        jobType: 'image', provider: provider.name, providerTaskId: '',
+        dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId,
+        request: { prompt: opts.prompt, size: opts.size, count: opts.count },
+        userId: opts.userId,
+      });
+      await this.jobService.markCompleted(job.id, { images: result.images } as any, Date.now() - t0);
+      this.logger.log(`图片生成完成: jobId=${job.id} provider=${provider.name} ${result.images.length}张 (${result.durationMs}ms)`);
+      this.traceLogger.logT2i({
+        provider: provider.name, model: result.model, durationMs: result.durationMs,
+        dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId,
+        input: { prompt: opts.prompt, size: opts.size, count: opts.count ?? 1, referenceImages: opts.referenceImages?.length },
+        output: { imageUrls: result.images.map(i => i.url) },
+        status: 'success', jobId: job.id,
+      });
+      return { ...result, jobId: job.id };
+    } catch (err) {
+      this.traceLogger.logT2i({
+        provider: provider.name, model: 'unknown', durationMs: Date.now() - t0,
+        dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId,
+        input: { prompt: opts.prompt, size: opts.size, count: opts.count ?? 1, referenceImages: opts.referenceImages?.length },
+        output: {}, status: 'error', error: (err as Error).message,
+      });
+      throw err;
+    }
   }
 
   // ═══ 视频生成（异步提交，轮询由 MediaJobService 自动处理） ═══

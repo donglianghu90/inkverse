@@ -102,15 +102,6 @@ const BookCard: React.FC<{
         </div>
       )}
 
-      {/* Delete button — hover only */}
-      <button
-        className="absolute top-2 left-4 z-30 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md bg-red-500/80 hover:bg-red-600 text-white"
-        onClick={(e) => { e.stopPropagation(); onDelete(book); }}
-        title="删除书籍"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
-
       <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/70 via-black/30 to-transparent z-10">
         <h3 className="text-sm font-bold text-white leading-snug line-clamp-2">{book.title}</h3>
       </div>
@@ -119,20 +110,29 @@ const BookCard: React.FC<{
     </div>
 
     <div className="mt-2 px-0.5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-1">
         <span className="text-xs text-muted-foreground">{book.chaptersGenerated} 章</span>
-        {book.latestKpi && (
-          <span className={cn(
-            'text-xs font-semibold tabular-nums',
-            book.latestKpi.overallScore >= 8
-              ? 'text-emerald-600 dark:text-emerald-400'
-              : book.latestKpi.overallScore >= 7
-                ? 'text-amber-600 dark:text-amber-400'
-                : 'text-red-500',
-          )}>
-            ★ {book.latestKpi.overallScore.toFixed(1)}
-          </span>
-        )}
+        <div className="flex items-center gap-1">
+          {book.latestKpi && (
+            <span className={cn(
+              'text-xs font-semibold tabular-nums',
+              book.latestKpi.overallScore >= 8
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : book.latestKpi.overallScore >= 7
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : 'text-red-500',
+            )}>
+              ★ {book.latestKpi.overallScore.toFixed(1)}
+            </span>
+          )}
+          <button
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+            onClick={(e) => { e.stopPropagation(); onDelete(book); }}
+            title="删除书籍"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
       </div>
       <p className="text-[11px] text-muted-foreground/60 mt-0.5 truncate">
         {formatRelativeTime(book.updatedAt)}

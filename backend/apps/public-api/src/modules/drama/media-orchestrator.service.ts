@@ -88,7 +88,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
     const state = drama.state as unknown as DramaState;
     const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
-    const shots: Shot[] = storyboard.shots ?? [];
+    const shots: Shot[] = storyboard?.shots ?? [];
     const charImageMap = await this.buildCharacterImageMap(dramaId);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
     const flashbackVideoMap = await this.buildFlashbackVideoMap(dramaId, shots);

@@ -135,7 +135,7 @@ export function buildProfilerSystemPrompt(): string {
    - voiceActingStyle：配音风格（如"自然偏克制，高潮时才允许夸张"）
 
 4. reviewerCalibration：审核维度权重
-   - dimensionWeights：各维度权重（视觉冲击力/台词自然度/节奏/悬念/连续性/情感冲击）
+   - dimensionWeights：各维度权重（0.5-2.0，必填）visualImpact/dialogueNaturalness/pacing/hookStrength/consistency/emotionalImpact
    - genreSpecificChecks：题材专项检查（如霸总类："是否有身份反差的戏剧性揭露"）
 
 ${DRAMA_ZH_RULE}`;

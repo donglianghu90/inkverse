@@ -386,6 +386,10 @@ export async function updateChapter(
   });
 }
 
+export async function deleteChapter(bookId: string, chapterNumber: number): Promise<{ deleted: true; bookId: string; chapterNumber: number }> {
+  return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}`, { method: 'DELETE' });
+}
+
 export async function configureAutoSerialization(
   bookId: string,
   data: AutoSerializationConfig,

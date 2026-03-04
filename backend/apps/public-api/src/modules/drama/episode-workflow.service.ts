@@ -28,6 +28,7 @@ import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
 import { DramaWorkflowExecutionService } from './drama-workflow-execution.service';
 import { DramaCalibrationService } from './drama-calibration.service';
 import { DramaWorkflowParams, DEFAULT_DRAMA_WORKFLOW_PARAMS } from './entities/drama-agent-pipeline.entity';
+import { LlmTraceLoggerService } from '../novel/llm/llm-trace-logger.service';
 
 const STEP_ORDER = [ // 步骤顺序定义（用于断点续跑）
   'arc_planned', 'intent_ready', 'continuity_checked', 'script_drafted',
@@ -63,6 +64,7 @@ export class EpisodeWorkflowService {
     private readonly progressService: DramaProgressService,
     private readonly pipelineService: DramaAgentPipelineService,
     private readonly calibrationService: DramaCalibrationService,
+    private readonly traceLogger: LlmTraceLoggerService,
   ) {}
 
   async generateEpisode(dramaId: string, episodeNumber: number): Promise<void> {
@@ -133,6 +135,9 @@ export class EpisodeWorkflowService {
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
     const emitEp = (stepIndex: number, message: string, done = false) =>
       this.progressService.emit({ dramaId, phase: 'episode', episodeNumber, step: `ep_${stepIndex}`, stepIndex, totalSteps: 13, message, done });
+    const logDrama = (step: string, status: 'ok' | 'error', message?: string, meta?: Record<string, unknown>) =>
+      this.traceLogger.logDramaWorkflowEvent({ dramaId, phase: 'episode', step, status, episodeNumber, message, ...meta });
+    logDrama('episode_start', 'ok', `E${episodeNumber} 工作流开始`, { runId, resumeFrom, resumed });
 
     const outputs = (cached ?? {}) as Record<string, Record<string, unknown>>;
     let arcSegment = outputs.arc_planned?.arcSegment as any;
@@ -146,6 +151,7 @@ export class EpisodeWorkflowService {
 
     try {
       if (resumeFrom < 0) { // Step 0: 段落规划 + 骨架集展开
+        logDrama('arc_plan_start', 'ok', '段落规划');
         emitEp(0, '段落规划...');
         arcSegment = await this.arcDirector.planOrRefresh(state, episodeNumber);
         if (!state.currentArcSegment || state.currentArcSegment.segmentId !== arcSegment.segmentId) {
@@ -166,17 +172,21 @@ export class EpisodeWorkflowService {
           }
         }
         await saveStep('arc_planned', { arcSegment }); await checkpoint('arc_planned');
+        logDrama('arc_plan_done', 'ok', '段落规划完成', { segmentId: arcSegment?.segmentId });
         emitEp(0, '段落规划完成', true);
       }
 
       if (resumeFrom < 1) { // Step 1: 集导演规划
+        logDrama('intent_start', 'ok', '集导演规划');
         emitEp(1, '集导演规划...');
         intent = await this.episodeDirector.direct(state, synopsis);
         await saveStep('intent_ready', { intent }); await checkpoint('intent_ready');
+        logDrama('intent_done', 'ok', '集导演完成');
         emitEp(1, '集导演完成', true);
       }
 
       if (resumeFrom < 2) { // Step 2: 连续性检查（阻断时回退重试）
+        logDrama('continuity_start', 'ok', '连续性检查');
         emitEp(2, '连续性检查...');
         continuity = await this.continuityGuard.verify(state, intent);
         const blocks = continuity.warnings.filter((w: any) => w.severity === 'block');
@@ -190,41 +200,60 @@ export class EpisodeWorkflowService {
           }
         }
         await saveStep('continuity_checked', { continuity }); await checkpoint('continuity_checked');
+        logDrama('continuity_done', 'ok', '连续性检查完成');
         emitEp(2, '连续性检查完成', true);
       }
 
       if (resumeFrom < 3) { // Step 3: 编剧创作
+        logDrama('script_start', 'ok', '编剧创作');
         emitEp(3, '编剧创作...');
         script = await this.scriptwriter.write(state, intent, continuity);
         await saveStep('script_drafted', { script }); await checkpoint('script_drafted');
+        logDrama('script_done', 'ok', '编剧创作完成');
         emitEp(3, '编剧创作完成', true);
       }
 
       if (resumeFrom < 4) { // Step 4: 台词润色（可配置开关）
+        logDrama('dialogue_start', 'ok', '台词润色');
         emitEp(4, '台词润色...');
         if (wp.enableDialogueCoach) {
           try { script = await this.dialogueCoach.polish(script, state.characters, state.promptProfile, state.dramaId, state); }
           catch (err) { this.logger.warn(`E${episodeNumber} 台词润色降级: ${(err as Error).message}`); }
         } else { this.logger.log(`E${episodeNumber} 台词润色已跳过(配置关闭)`); }
         await saveStep('dialogue_polished', { script }); await checkpoint('dialogue_polished');
+        logDrama('dialogue_done', 'ok', '台词润色完成');
         emitEp(4, '台词润色完成', true);
       }
 
       if (resumeFrom < 5) { // Step 5: 分镜生成（按场景分步）
+        logDrama('storyboard_start', 'ok', '分镜生成');
         emitEp(5, '分镜生成...');
         storyboard = await this.storyboardDirector.direct(state, script);
         await saveStep('storyboard_drafted', { storyboard }); await checkpoint('storyboard_drafted');
+        logDrama('storyboard_done', 'ok', '分镜生成完成', { shotCount: storyboard?.shots?.length });
         emitEp(5, '分镜生成完成', true);
       }
 
       if (resumeFrom < 6) { // Step 6: 音频设计
+        if (!storyboard?.shots?.length) {
+          if (!script?.scenes?.length) throw new Error('剧本数据缺失，无法重新生成分镜');
+          this.logger.warn(`[E${episodeNumber}] 分镜数据缺失，回退重新生成分镜`);
+          emitEp(5, '分镜数据缺失，重新生成分镜...');
+          storyboard = await this.storyboardDirector.direct(state, script);
+          await saveStep('storyboard_drafted', { storyboard }); await checkpoint('storyboard_drafted');
+          emitEp(5, '分镜重新生成完成', true);
+        }
+        logDrama('audio_start', 'ok', '音频设计');
         emitEp(6, '音频设计...');
         storyboard = await this.audioDirector.enhance(state, storyboard);
         await saveStep('audio_designed', { storyboard }); await checkpoint('audio_designed');
+        logDrama('audio_done', 'ok', '音频设计完成');
         emitEp(6, '音频设计完成', true);
       }
 
       if (resumeFrom < 7) { // Step 7: 硬规则校验
+        if (!storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行硬规则校验');
+        logDrama('deterministic_start', 'ok', '硬规则校验');
         emitEp(7, '硬规则校验...');
         const detCheck = this.deterministicChecker.check(state, script, storyboard);
         if (detCheck.hardFails?.length) {
@@ -234,17 +263,22 @@ export class EpisodeWorkflowService {
         }
         if (!detCheck.pass) this.logger.warn(`E${episodeNumber} 软规则警告: ${detCheck.failedChecks.filter(f => !detCheck.hardFails.some(h => h.rule === f.rule)).map(f => f.rule).join(', ')}`);
         await saveStep('deterministic_checked', { detCheck }); await checkpoint('deterministic_checked');
+        logDrama('deterministic_done', 'ok', '硬规则校验完成');
         emitEp(7, '硬规则校验完成', true);
       }
 
       if (resumeFrom < 8) { // Step 8: 质量审核
+        if (!storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行质量审核');
+        logDrama('review_start', 'ok', '质量审核');
         emitEp(8, '质量审核...');
         review = await this.reviewer.review(state, script, storyboard);
         await saveStep('reviewed', { review }); await checkpoint('reviewed');
+        logDrama('review_done', 'ok', '质量审核完成', { verdict: review?.overallVerdict });
         emitEp(8, '质量审核完成', true);
       }
 
       if (resumeFrom < 9) { // Step 9: 精修（定向修复特定Shot）
+        logDrama('edit_start', 'ok', '精修');
         for (let round = 0; round < wp.maxEditRounds && review.overallVerdict === 'needs_edit'; round++) {
           emitEp(9, `精修第${round + 1}轮...`);
           const criticalIssues = review.issuesFound?.filter((i: any) => i.severity === 'critical') ?? [];
@@ -252,46 +286,58 @@ export class EpisodeWorkflowService {
           review = await this.reviewer.review(state, script, storyboard);
           await saveStep('edited', { storyboard, review, round: round + 1 }); await checkpoint('edited');
         }
+        logDrama('edit_done', 'ok', '精修完成');
         emitEp(9, '精修完成', true);
       }
 
       if (resumeFrom < 10) { // Step 10: 节奏分析（可配置开关）
+        if (wp.enablePacingAnalyzer && !storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行节奏分析');
+        logDrama('pacing_start', 'ok', '节奏分析');
         emitEp(10, '节奏分析...');
         if (wp.enablePacingAnalyzer) {
           try { pacing = await this.pacingAnalyzer.analyze(state, storyboard); }
           catch (err) { this.logger.warn(`E${episodeNumber} 节奏分析降级: ${(err as Error).message}`); }
         } else { this.logger.log(`E${episodeNumber} 节奏分析已跳过(配置关闭)`); }
         await saveStep('pacing_analyzed', { pacing }); await checkpoint('pacing_analyzed');
+        logDrama('pacing_done', 'ok', '节奏分析完成');
         emitEp(10, '节奏分析完成', true);
       }
 
       if (resumeFrom < 11) { // Step 11: 悬念设计（可配置开关）
+        if (!storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行悬念设计');
+        logDrama('hook_start', 'ok', '悬念设计');
         emitEp(11, '悬念设计...');
         hookResult = { previewShots: [] };
         if (wp.enableHookCrafter) {
           try {
             hookResult = await this.hookCrafter.craft(state, storyboard);
             if (hookResult.previewShots?.length) {
-              const baseIdx = storyboard.shots.length; // 修复：重算索引 + 强制标记 isPreview
+              const sbShots = storyboard?.shots ?? [];
+              const baseIdx = sbShots.length;
               hookResult.previewShots.forEach((ps: any, i: number) => {
                 ps.shotIndex = baseIdx + i;
                 ps.sceneId = ps.sceneId || `ep${episodeNumber}_preview`;
                 ps.isPreview = true;
               });
-              storyboard.shots.push(...hookResult.previewShots);
-              storyboard.totalEstimatedDurationSec = Math.round(storyboard.shots.reduce((s: number, sh: any) => s + sh.estimatedDurationSec, 0) * 10) / 10;
+              sbShots.push(...hookResult.previewShots);
+              storyboard!.shots = sbShots;
+              storyboard!.totalEstimatedDurationSec = Math.round(sbShots.reduce((s: number, sh: any) => s + (sh.estimatedDurationSec ?? 0), 0) * 10) / 10;
             }
           } catch (err) { this.logger.warn(`E${episodeNumber} 悬念设计降级: ${(err as Error).message}`); }
         } else { this.logger.log(`E${episodeNumber} 悬念设计已跳过(配置关闭)`); }
         await saveStep('hook_crafted', { hookResult }); await checkpoint('hook_crafted');
+        logDrama('hook_done', 'ok', '悬念设计完成');
         emitEp(11, '悬念设计完成', true);
       }
 
       if (resumeFrom < 12) { // Step 12: 知识记录 + 持久化
+        if (!storyboard?.shots?.length) throw new Error('分镜数据缺失，无法完成知识记录');
+        logDrama('record_start', 'ok', '知识记录+持久化');
         emitEp(12, '知识记录...');
         const loreRecord = await this.episodeRecorder.record(state, script, storyboard, hookResult?.cliffhangerSummary ?? '');
         await saveStep('recorded', { loreRecord }); await checkpoint('recorded');
 
+        const sbShots = storyboard?.shots ?? [];
         const episode = this.episodeRepo.create({
           dramaId: drama.id, episodeNumber, title: synopsis.title,
           script: script as unknown as Record<string, unknown>,
@@ -299,8 +345,8 @@ export class EpisodeWorkflowService {
           review: review as unknown as Record<string, unknown>,
           loreRecord: loreRecord as unknown as Record<string, unknown>,
           overallScore: review.overallScore,
-          totalDurationSec: Math.round(storyboard.totalEstimatedDurationSec),
-          shotCount: storyboard.shots.length,
+          totalDurationSec: Math.round(storyboard?.totalEstimatedDurationSec ?? 0),
+          shotCount: sbShots.length,
         });
         await this.episodeRepo.save(episode);
 
@@ -318,13 +364,15 @@ export class EpisodeWorkflowService {
         await this.dramaRepo.save(drama);
 
         await this.executionService.completeRun(runId!, {
-          overallScore: review.overallScore, shotCount: storyboard.shots.length,
-          duration: storyboard.totalEstimatedDurationSec, totalDurationMs: 0, editRounds: 0,
+          overallScore: review.overallScore, shotCount: sbShots.length,
+          duration: storyboard?.totalEstimatedDurationSec ?? 0, totalDurationMs: 0, editRounds: 0,
         });
+        logDrama('episode_done', 'ok', `E${episodeNumber} 生成完成`, { score: review.overallScore, shotCount: sbShots.length, durationSec: storyboard?.totalEstimatedDurationSec });
         emitEp(12, `E${episodeNumber} 生成完成`, true);
-        this.logger.log(`E${episodeNumber} 完成 — 评分:${review.overallScore} Shot:${storyboard.shots.length} 时长:${storyboard.totalEstimatedDurationSec}s`);
+        this.logger.log(`E${episodeNumber} 完成 — 评分:${review.overallScore} Shot:${sbShots.length} 时长:${storyboard?.totalEstimatedDurationSec}s`);
       }
     } catch (err) {
+      logDrama('episode_failed', 'error', (err as Error).message, { error: (err as Error).message });
       const failed = await this.executionService.failRun(runId, (err as Error).message?.slice(0, 500) ?? String(err));
       if (!failed) this.logger.warn(`[E${episodeNumber}] failRun被拒绝 runId=${runId}`);
       throw err;

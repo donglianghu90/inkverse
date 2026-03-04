@@ -14,6 +14,7 @@ import { VisualAssetEntity } from './entities/visual-asset.entity';
 import { CreateDramaDto } from './dto/create-drama.dto';
 import { DramaState } from './schemas/drama-state.schemas';
 import { LlmService } from '../novel/llm/llm.service';
+import { LlmTraceLoggerService } from '../novel/llm/llm-trace-logger.service';
 import { DramaSeedAnalyzerAgent } from './agents/drama-seed-analyzer.agent';
 import { SeriesDirectorAgent } from './agents/series-director.agent';
 import { VisualAssetDesignerAgent } from './agents/visual-asset-designer.agent';
@@ -50,6 +51,7 @@ export class DramaService implements OnModuleInit {
     private readonly mediaService: MediaService,
     private readonly genreTemplateService: DramaGenreTemplateService,
     private readonly llm: LlmService,
+    private readonly traceLogger: LlmTraceLoggerService,
   ) {}
 
   async onModuleInit() { // 恢复卡在 creating 状态超过5分钟的创建流程
@@ -75,6 +77,19 @@ export class DramaService implements OnModuleInit {
     }
   }
 
+  /** 重试失败的创建流程，从上次 checkpoint 继续（需有 failed 的 execution 且 stepOutputs._dto 或 seed 存在） */
+  async retryCreation(dramaId: string): Promise<void> {
+    const wfExec = await this.wfExecRepo.findOne({ where: { dramaId, episodeNumber: 0, status: 'failed' }, order: { createdAt: 'DESC' } });
+    let dto: CreateDramaDto;
+    if (wfExec?.stepOutputs?._dto) dto = wfExec.stepOutputs._dto as CreateDramaDto;
+    else if (wfExec?.stepOutputs?.seed) {
+      const seed = wfExec.stepOutputs.seed as { logline?: string; title?: string; genre?: string; targetAudience?: string; coreConflict?: string };
+      const mainIdea = (seed.logline?.length ?? 0) >= 10 ? seed.logline! : `${seed.title ?? ''} - ${seed.coreConflict ?? ''}`.slice(0, 200) || '短剧创意';
+      dto = { mainIdea: mainIdea.length >= 10 ? mainIdea : mainIdea + '（续写）', genre: seed.genre ?? '霸总', targetAudience: seed.targetAudience ?? '短剧观众' };
+    } else throw new Error('无可恢复的创建记录，请重新创建');
+    await this.runCreationPipeline(dramaId, dto);
+  }
+
   async createDrama(dto: CreateDramaDto, opts: CreateDramaOptions = {}): Promise<{ dramaId: string }> {
     this.logger.log(`创建短剧 — 题材: ${dto.genre} | 创意: ${dto.mainIdea.slice(0, 50)}...`);
     const entity = this.dramaRepo.create({
@@ -95,16 +110,18 @@ export class DramaService implements OnModuleInit {
     const TOTAL_STEPS = 6;
     const emitCreate = (stepIndex: number, msg: string, done = false) =>
       this.progressService.emit({ dramaId, phase: 'create', step: `create_${stepIndex}`, stepIndex, totalSteps: TOTAL_STEPS, message: msg, done });
+    const logDrama = (step: string, status: 'ok' | 'error', message?: string, meta?: Record<string, unknown>) =>
+      this.traceLogger.logDramaWorkflowEvent({ dramaId, phase: 'create', step, status, message, ...meta });
 
-    // 断点续跑: 查找可恢复的 workflow execution
-    let wfExec = await this.wfExecRepo.findOne({ where: { dramaId, episodeNumber: 0, status: In(['running', 'interrupted'] as const) }, order: { createdAt: 'DESC' } });
+    // 断点续跑: 查找可恢复的 workflow execution（含 failed，支持重试从上次 checkpoint 继续）
+    let wfExec = await this.wfExecRepo.findOne({ where: { dramaId, episodeNumber: 0, status: In(['running', 'interrupted', 'failed'] as const) }, order: { createdAt: 'DESC' } });
     let resumeFrom = 0;
     const out: Record<string, any> = {};
     if (wfExec?.lastCheckpoint) {
       resumeFrom = CREATION_CHECKPOINTS.indexOf(wfExec.lastCheckpoint as any) + 1;
       Object.assign(out, wfExec.stepOutputs ?? {});
-      this.logger.log(`恢复创建流程 dramaId=${dramaId} from=${wfExec.lastCheckpoint} step=${resumeFrom}`);
-      await this.wfExecRepo.update(wfExec.id, { status: 'running' });
+      this.logger.log(`恢复创建流程 dramaId=${dramaId} from=${wfExec.lastCheckpoint} step=${resumeFrom} (原status=${wfExec.status})`);
+      await this.wfExecRepo.update(wfExec.id, { status: 'running', errorMessage: '' });
     } else if (!wfExec) {
       wfExec = await this.wfExecRepo.save(this.wfExecRepo.create({ dramaId, episodeNumber: 0, status: 'running', stepOutputs: { _dto: dto } }));
     }
@@ -114,11 +131,13 @@ export class DramaService implements OnModuleInit {
     };
 
     try {
+      logDrama('pipeline_start', 'ok', '创建流程开始', { resumeFrom, genre: dto.genre, mainIdea: dto.mainIdea?.slice(0, 80) });
       if (resumeFrom <= 0) {
         const seedHints = dto.genreTemplateId
           ? (await this.genreTemplateService.getById(dto.genreTemplateId)).seedHints
           : this.genreTemplateService.findBestMatch(dto.genre);
         this.logger.log(`[create] 题材模板匹配: ${dto.genreTemplateId ? 'ID指定' : seedHints ? '自动匹配' : '无匹配'}`);
+        logDrama('seed_analyze_start', 'ok', '种子分析开始');
         emitCreate(0, '种子分析...');
         const { seed } = await this.seedAnalyzer.analyze({
           mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
@@ -130,44 +149,54 @@ export class DramaService implements OnModuleInit {
           seedHints: seedHints ?? undefined,
         });
         out.seed = seed;
+        logDrama('seed_analyze_done', 'ok', '种子分析完成', { seedTitle: seed?.title });
         emitCreate(0, '种子分析完成', true);
         await saveCP('seed_analyzed', { seed });
       }
 
       if (resumeFrom <= 1) {
+        logDrama('outline_plan_start', 'ok', '总导演规划全剧大纲');
         emitCreate(1, '总导演规划全剧大纲...');
         out.outline = await this.seriesDirector.plan(out.seed);
+        logDrama('outline_plan_done', 'ok', '全剧大纲完成', { totalEpisodes: out.outline?.totalPlannedEpisodes });
         emitCreate(1, '全剧大纲完成', true);
         await saveCP('outline_planned', { outline: out.outline });
       }
 
       if (resumeFrom <= 2) {
+        logDrama('visual_design_start', 'ok', '视觉资产设计');
         emitCreate(2, '视觉资产设计...');
         const { characters, locations, visualStyle } = await this.visualDesigner.design(out.seed, out.outline);
         Object.assign(out, { characters, locations, visualStyle });
+        logDrama('visual_design_done', 'ok', '视觉资产设计完成', { charCount: out.characters?.length, locCount: out.locations?.length });
         emitCreate(2, '视觉资产设计完成', true);
         await saveCP('visual_designed', { characters, locations, visualStyle });
       }
 
       if (resumeFrom <= 3) {
+        logDrama('assets_generate_start', 'ok', '生成角色定妆照+场景参考图');
         emitCreate(3, '生成角色定妆照 + 场景参考图...');
         const assetEntities = await this.persistVisualAssets(dramaId, out.characters, out.locations, out.visualStyle);
         await this.generateReferenceImages(dramaId, assetEntities, out.characters, out.locations);
+        logDrama('assets_generate_done', 'ok', '参考图生成完成');
         emitCreate(3, '参考图生成完成', true);
         await saveCP('assets_generated', {});
       }
 
       if (resumeFrom <= 4) {
+        logDrama('profile_strategy_start', 'ok', '编剧手册+策略生成');
         emitCreate(4, '编剧手册 + 策略...');
         const [promptProfile, strategy] = await Promise.all([
           this.profiler.generate(out.seed, out.visualStyle),
           this.strategist.generate(out.seed, out.outline),
         ]);
         Object.assign(out, { promptProfile, strategy });
+        logDrama('profile_strategy_done', 'ok', '编剧手册完成');
         emitCreate(4, '编剧手册完成', true);
         await saveCP('profile_ready', { promptProfile, strategy });
       }
 
+      logDrama('state_assembly_start', 'ok', '最终状态组装');
       const now = new Date().toISOString(); // Step 5: 最终状态组装
       const state: Partial<DramaState> = {
         dramaId, createdAt: now, updatedAt: now, version: 1, seed: out.seed,
@@ -188,10 +217,11 @@ export class DramaService implements OnModuleInit {
       drama.state = state as Record<string, unknown>;
       await this.dramaRepo.save(drama);
       await this.wfExecRepo.update(wfExec!.id, { status: 'completed', lastCheckpoint: 'creation_done' });
-
+      logDrama('creation_done', 'ok', '短剧创建完成', { title: out.seed?.title, totalEpisodes: out.outline?.totalPlannedEpisodes });
       emitCreate(5, '短剧创建完成', true);
       this.logger.log(`短剧创建完成 — dramaId: ${dramaId} | 标题: ${out.seed.title} | ${out.outline.totalPlannedEpisodes}集`);
     } catch (err: any) {
+      logDrama('creation_failed', 'error', err.message, { error: err.message });
       await this.wfExecRepo.update(wfExec!.id, { status: 'failed', errorMessage: err.message ?? '' });
       this.progressService.emit({ dramaId, phase: 'create', step: 'error', stepIndex: -1, totalSteps: 5, message: err.message ?? '创建失败', done: true, error: err.message });
       throw err;
@@ -315,17 +345,36 @@ export class DramaService implements OnModuleInit {
 
   /** 异步启动逐集生成（含并发互斥），立即返回任务信息 */
   async generateEpisodes(dramaId: string, count: number): Promise<{ message: string; startEp: number; endEp: number }> {
-    if (this.generatingDramas.has(dramaId)) throw new Error('该短剧正在生成中，请勿重复提交');
-    const drama = await this.getDrama(dramaId);
-    const state = drama.state as unknown as DramaState;
-    const startEp = state.episodeCursor;
-    const endEp = Math.min(startEp + count - 1, state.seriesOutline?.totalPlannedEpisodes ?? startEp + count - 1);
-    this.logger.log(`开始生成 E${startEp}-E${endEp} — dramaId: ${dramaId}`);
-    this.generatingDramas.add(dramaId);
+    const { startEp, endEp } = await this.prepareGenerateEpisodes(dramaId, count);
     this.runEpisodePipeline(dramaId, startEp, endEp).catch(err =>
       this.logger.error(`逐集生成失败 dramaId=${dramaId} E${startEp}-E${endEp}: ${err.message}`),
     ).finally(() => this.generatingDramas.delete(dramaId));
     return { message: `已启动 ${endEp - startEp + 1} 集生成（E${startEp}-E${endEp}）`, startEp, endEp };
+  }
+
+  /** 逐集生成并等待完成（供 SSE 使用，可推送进度） */
+  async generateEpisodesAndWait(dramaId: string, count: number): Promise<{ message: string; startEp: number; endEp: number }> {
+    const { startEp, endEp } = await this.prepareGenerateEpisodes(dramaId, count);
+    try {
+      await this.runEpisodePipeline(dramaId, startEp, endEp);
+      return { message: `E${startEp}-E${endEp} 全部完成`, startEp, endEp };
+    } finally {
+      this.generatingDramas.delete(dramaId);
+    }
+  }
+
+  private async prepareGenerateEpisodes(dramaId: string, count: number): Promise<{ startEp: number; endEp: number }> {
+    if (this.generatingDramas.has(dramaId)) throw new Error('该短剧正在生成中，请勿重复提交');
+    const drama = await this.getDrama(dramaId);
+    const state = drama.state as unknown as DramaState;
+    if ((state as any)?._status === 'creating') throw new Error('短剧仍在创建中，请等待创建完成后再生成集数');
+    const rawCursor = state?.episodeCursor;
+    const startEp = Number.isFinite(rawCursor) && rawCursor >= 1 ? rawCursor : Math.max(1, (drama.episodesGenerated ?? 0) + 1);
+    const totalPlanned = Number.isFinite(state?.seriesOutline?.totalPlannedEpisodes) ? state.seriesOutline!.totalPlannedEpisodes! : 999;
+    const endEp = Math.min(startEp + count - 1, totalPlanned);
+    this.logger.log(`开始生成 E${startEp}-E${endEp} — dramaId: ${dramaId}`);
+    this.generatingDramas.add(dramaId);
+    return { startEp, endEp };
   }
 
   /** 后台逐集串行执行（确保上下文正确传递） */
@@ -340,7 +389,7 @@ export class DramaService implements OnModuleInit {
     const episodes = await this.episodeRepo.find({
       where: { dramaId },
       order: { episodeNumber: 'ASC' },
-      select: ['id', 'dramaId', 'episodeNumber', 'title', 'overallScore', 'totalDurationSec', 'shotCount', 'createdAt'],
+      select: ['id', 'dramaId', 'episodeNumber', 'title', 'overallScore', 'totalDurationSec', 'shotCount', 'mediaStatus', 'videoUrl', 'createdAt'],
     });
     return { episodes };
   }
@@ -388,6 +437,33 @@ export class DramaService implements OnModuleInit {
 7. 适度原则：如果原始创意已足够精彩，润色即可。`,
       userPrompt: `原始创意：\n${rawIdea}${genre ? `\n题材方向：${genre}` : ''}\n\n请输出美化后的创意和核心卖点。`,
       temperature: 0.75,
+    });
+  }
+
+  async recommendGenreAndAudience(mainIdea: string) {
+    const GENRE_OPTS = ['霸总', '甜宠', '战神', '穿越', '宫斗', '复仇', '重生', '悬疑', '都市', '古装'] as const;
+    const PLATFORM_OPTS = ['douyin', 'kuaishou', 'reelshort', 'dramabox', 'generic'] as const;
+    const AUDIENCE_OPTS = ['18-30 岁女性', '18-30 岁男性', '25-40 岁女性', '全年龄'] as const;
+    const FOCUS_OPTS = ['female_lead', 'male_lead', 'dual_lead', 'ensemble'] as const;
+    return this.llm.generateStructured({
+      taskName: 'drama-genre-audience-recommender',
+      schema: z.object({
+        genreDisplayName: z.enum(GENRE_OPTS),
+        platformTarget: z.enum(PLATFORM_OPTS),
+        targetAudience: z.enum(AUDIENCE_OPTS),
+        protagonistFocus: z.enum(FOCUS_OPTS),
+        reason: z.string().optional(),
+      }),
+      tags: ['setup', 'drama-recommend'],
+      systemPrompt: `你是一位资深短剧策划，根据用户的核心创意推荐最匹配的题材、平台、受众和叙事聚焦。
+
+可选题材：${GENRE_OPTS.join('、')}。选与创意最贴合的（豪门逆袭→都市/霸总，宫斗权谋→宫斗，复仇打脸→复仇/霸总）。
+平台：douyin/快手节奏快，reelshort/dramabox偏海外，generic通用。
+受众：女性向偏情感打脸选18-30岁女性或25-40岁女性，男性向偏权谋战力选18-30岁男性，全年龄选全年龄。
+叙事聚焦：女主为主→female_lead，男主为主→male_lead，男女均衡→dual_lead，多角色→ensemble。
+输出必须严格匹配上述枚举值。`,
+      userPrompt: `核心创意：\n${mainIdea}\n\n请推荐最匹配的题材、平台、受众和叙事聚焦，输出 JSON。`,
+      temperature: 0.3,
     });
   }
 

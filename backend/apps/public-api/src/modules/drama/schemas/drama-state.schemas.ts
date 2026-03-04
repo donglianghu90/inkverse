@@ -53,6 +53,7 @@ export const dramaSeedSchema = z.object({
 // ---------------------------------------------------------------------------
 // Phase 1.5: 编剧手册 (Drama Prompt Profile)
 // ---------------------------------------------------------------------------
+const weightClamp = (v: number, def: number) => { const n = Number(v); return isNaN(n) ? def : Math.max(0.5, Math.min(2.0, n)); };
 
 export const dramaPromptProfileSchema = z.object({
   generatedForGenre: z.string(),
@@ -79,12 +80,12 @@ export const dramaPromptProfileSchema = z.object({
   }),
   reviewerCalibration: z.object({
     dimensionWeights: z.object({
-      visualImpact: z.number().min(0.5).max(2.0).default(1.2),
-      dialogueNaturalness: z.number().min(0.5).max(2.0).default(1.2),
-      pacing: z.number().min(0.5).max(2.0).default(1.0),
-      hookStrength: z.number().min(0.5).max(2.0).default(1.3),
-      consistency: z.number().min(0.5).max(2.0).default(1.0),
-      emotionalImpact: z.number().min(0.5).max(2.0).default(1.0),
+      visualImpact: z.number().transform(v => weightClamp(v, 1.2)).default(1.2),
+      dialogueNaturalness: z.number().transform(v => weightClamp(v, 1.2)).default(1.2),
+      pacing: z.number().transform(v => weightClamp(v, 1.0)).default(1.0),
+      hookStrength: z.number().transform(v => weightClamp(v, 1.3)).default(1.3),
+      consistency: z.number().transform(v => weightClamp(v, 1.0)).default(1.0),
+      emotionalImpact: z.number().transform(v => weightClamp(v, 1.0)).default(1.0),
     }),
     genreSpecificChecks: z.array(z.string()).min(2),
     calibrationHistory: z.array(z.object({ // 维度权重微调历史
@@ -106,7 +107,7 @@ export const characterVariationSchema = z.object({ // 角色外观变体（换�
   name: z.string(), // "正式西装" / "受伤状态" / "伪装造型"
   costume: z.string(), // 服饰描述
   visualPromptOverride: z.string(), // 覆盖 defaultCostume 的英文T2I提示词
-  referenceImageUrl: z.string().default(''), // 变体参考图URL
+  referenceImageUrl: z.union([z.string(), z.null()]).transform(v => v ?? ''), // LLM 可能返回 null，统一转为空串
 });
 
 export const characterIdentitySchema = z.object({
@@ -209,7 +210,7 @@ export const episodeIntentSchema = z.object({
   carryoverFromLastEpisode: z.string(),
   activeCharacters: z.array(z.object({
     characterId: z.string(),
-    costumeOverride: z.string().default(''), // 本集服饰（空=使用默认）
+    costumeOverride: z.string().nullish().transform(v => v ?? ''), // AI 可能输出 null
     emotionalState: z.string(), // 本集情绪基调
     role: z.string(), // 本集角色定位（如"被揭穿者""复仇者""旁观者"）
   })),
@@ -283,7 +284,7 @@ export const shotCharacterSchema = z.object({
   action: z.string(), // 角色动作（如"缓缓放下文件，嘴角微扬"）
   emotion: z.string(), // 表情/情绪
   position: z.enum(['left', 'center', 'right', 'background', 'foreground']).default('center'),
-  costumeOverride: z.string().default(''), // 本Shot服饰覆盖
+  costumeOverride: z.string().nullish().transform(v => v ?? ''), // AI 可能输出 null
 });
 
 export const shotDialogueSchema = z.object({
@@ -310,30 +311,31 @@ export const shotAudioSchema = z.object({
   ambience: z.string().default(''), // 环境音（如 office_quiet / rain_heavy / crowd_murmur）
 });
 
+const shotSubtitleSchema = z.object({
+  text: z.string(),
+  style: z.enum(['normal', 'emphasis', 'whisper', 'scream', 'narrator', 'time_skip']).default('normal'),
+});
 export const shotSchema = z.object({
   shotIndex: z.number().int().nonnegative(),
   shotId: z.string(),
   sceneId: z.string(), // 关联的剧本场景ID
   camera: shotCameraSchema,
   characters: z.array(shotCharacterSchema).default([]),
-  dialogue: shotDialogueSchema.optional(),
-  audio: shotAudioSchema.default({}),
+  dialogue: shotDialogueSchema.nullish(), // AI 可能输出 null
+  audio: shotAudioSchema.nullish().transform(v => v ?? {}),
   visualPrompt: z.string(), // T2V 视觉提示词（英文，含风格/光影/构图/角色参考）
-  subtitle: z.object({
-    text: z.string(),
-    style: z.enum(['normal', 'emphasis', 'whisper', 'scream', 'narrator', 'time_skip']).default('normal'),
-  }).optional(),
+  subtitle: shotSubtitleSchema.nullish(),
   estimatedDurationSec: z.number().min(0.5).max(30),
   transitionToNext: z.enum(['cut', 'fade_black', 'fade_white', 'dissolve', 'wipe_left', 'wipe_right', 'flash', 'match_cut']).default('cut'),
   isFlashback: z.boolean().default(false), // 是否为闪回镜头
-  flashbackSourceEpisode: z.number().int().min(1).optional(), // 闪回引用的原始集号
-  flashbackSourceShotId: z.string().optional(), // 闪回引用的原始ShotID
+  flashbackSourceEpisode: z.number().int().min(1).nullish(), // AI 可能输出 null
+  flashbackSourceShotId: z.string().nullish(),
   isPreview: z.boolean().default(false), // 是否为"下集预告"Shot
-  firstFramePrompt: z.string().optional(), // T2I 首帧提示词（比 visualPrompt 更精确的静帧描述）
-  lastFramePrompt: z.string().optional(), // T2I 尾帧提示词（用于关键帧插值模式）
-  firstFrameImageUrl: z.string().optional(), // T2I 生成的首帧图 URL
-  lastFrameImageUrl: z.string().optional(), // T2I 生成的尾帧图 URL（关键帧插值）
-  characterVariationIds: z.record(z.string(), z.string()).optional(), // characterId → variationId 映射
+  firstFramePrompt: z.string().nullish(),
+  lastFramePrompt: z.string().nullish(),
+  firstFrameImageUrl: z.string().nullish(), // T2I 生成前为 null
+  lastFrameImageUrl: z.string().nullish(),
+  characterVariationIds: z.record(z.string(), z.string()).nullish(), // characterId → variationId 映射
 });
 
 export const episodeStoryboardSchema = z.object({
@@ -454,7 +456,7 @@ export const dramaStrategySchema = z.object({
     maxPresentPerEpisode: z.number().int().min(2).max(8).default(4),
     maxNewPerSegment: z.number().int().min(1).max(5).default(2),
   }),
-  lastRefreshedAtEpisode: z.number().int().min(1).default(1),
+  lastRefreshedAtEpisode: z.number().int().min(0).default(1), // 0=未刷新，LLM 可能返回 0
 });
 
 // ---------------------------------------------------------------------------

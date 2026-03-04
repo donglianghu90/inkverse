@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import {
-  getDrama, listEpisodes, getEpisode, getGenerateEpisodeSseUrl,
+  getDrama, listEpisodes, getEpisode, getGenerateEpisodeSseUrl, getGenerateMediaSseUrl,
   type EpisodeListItem,
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
@@ -26,11 +26,15 @@ const DramaWorkbench: React.FC = () => {
   const [generating, setGenerating] = useState(false);
   const [genProgress, setGenProgress] = useState(0);
   const [genStep, setGenStep] = useState('');
+  const [lastError, setLastError] = useState<string | null>(null); // 失败时可重试，后端会从断点续跑
   const abortRef = useRef<AbortController | null>(null);
   const [previewEp, setPreviewEp] = useState<Record<string, unknown> | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [mediaGenEp, setMediaGenEp] = useState<number | null>(null);
+  const [mediaGenProgress, setMediaGenProgress] = useState(0);
+  const mediaAbortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => () => { abortRef.current?.abort(); }, []);
+  useEffect(() => () => { abortRef.current?.abort(); mediaAbortRef.current?.abort(); }, []);
 
   const fetchData = useCallback(async () => {
     if (!dramaId) return;
@@ -53,6 +57,7 @@ const DramaWorkbench: React.FC = () => {
     setGenerating(true);
     setGenProgress(0);
     setGenStep('');
+    setLastError(null);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -83,7 +88,7 @@ const DramaWorkbench: React.FC = () => {
             const payload = JSON.parse(line.slice(5).trim());
             if (payload._type === 'heartbeat') continue;
             if (payload._type === 'result') { message.success(payload.message); break; }
-            if (payload.error) { message.error(payload.error); break; }
+            if (payload.error) { setLastError(payload.error); message.error(payload.error); break; }
 
             if (payload.totalSteps > 0) {
               const p = Math.round(((payload.stepIndex + (payload.done ? 1 : 0.5)) / payload.totalSteps) * 100);
@@ -113,6 +118,51 @@ const DramaWorkbench: React.FC = () => {
       message.error('加载集详情失败');
     } finally {
       setPreviewLoading(false);
+    }
+  };
+
+  const handleGenerateMedia = async (episodeNumber: number) => {
+    if (!dramaId) return;
+    setMediaGenEp(episodeNumber);
+    setMediaGenProgress(0);
+    const controller = new AbortController();
+    mediaAbortRef.current = controller;
+    try {
+      const res = await fetch(getGenerateMediaSseUrl(dramaId, episodeNumber), {
+        headers: { Accept: 'text/event-stream', Authorization: `Bearer ${getToken()}` },
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) throw new Error('连接失败');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          try {
+            const p = JSON.parse(line.slice(5).trim());
+            if (p._type === 'heartbeat') continue;
+            if (p._type === 'result') { message.success('媒体生成完成'); break; }
+            if (p.error) { message.error(p.error); break; }
+            if (p.totalSteps > 0) setMediaGenProgress(Math.round(((p.stepIndex ?? 0) + (p.done ? 1 : 0.5)) / p.totalSteps * 100));
+          } catch { /* skip */ }
+        }
+      }
+      if (previewEp && (previewEp as any).episodeNumber === episodeNumber) {
+        const full = await getEpisode(dramaId, episodeNumber);
+        setPreviewEp(full);
+      }
+      await fetchData();
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') message.error(e?.message ?? '媒体生成失败');
+    } finally {
+      setMediaGenEp(null);
+      setMediaGenProgress(0);
     }
   };
 
@@ -184,6 +234,21 @@ const DramaWorkbench: React.FC = () => {
         </Card>
       )}
 
+      {/* 失败重试：后端会从上次断点续跑 */}
+      {lastError && !generating && (
+        <Card className="mb-6 border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10">
+          <CardContent className="p-4 flex items-center justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">生成失败</p>
+              <p className="text-xs text-amber-700 dark:text-amber-300 truncate mt-0.5">{lastError}</p>
+            </div>
+            <Button variant="outline" size="sm" className="shrink-0" onClick={() => { setLastError(null); handleGenerate(1); }}>
+              从断点重试
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Episode list */}
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">分集列表</h2>
@@ -202,16 +267,21 @@ const DramaWorkbench: React.FC = () => {
                     <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
                       <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" />{ep.totalDurationSec}s</span>
                       <span className="inline-flex items-center gap-1"><Camera className="h-3 w-3" />{ep.shotCount} shots</span>
+                      {ep.mediaStatus === 'completed' && <Badge variant="secondary" className="text-[10px]">有视频</Badge>}
                     </div>
                   </div>
-                  {ep.overallScore != null && (
-                    <span className={cn(
-                      'text-sm font-semibold tabular-nums',
-                      ep.overallScore >= 8 ? 'text-emerald-600' : ep.overallScore >= 7 ? 'text-amber-600' : 'text-red-500',
-                    )}>
-                      <Star className="h-3.5 w-3.5 inline mr-0.5" />{ep.overallScore.toFixed(1)}
-                    </span>
-                  )}
+                  {ep.overallScore != null && (() => {
+                    const score = Number(ep.overallScore);
+                    if (!Number.isFinite(score)) return null;
+                    return (
+                      <span className={cn(
+                        'text-sm font-semibold tabular-nums',
+                        score >= 8 ? 'text-emerald-600' : score >= 7 ? 'text-amber-600' : 'text-red-500',
+                      )}>
+                        <Star className="h-3.5 w-3.5 inline mr-0.5" />{score.toFixed(1)}
+                      </span>
+                    );
+                  })()}
                   <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary transition-colors" />
                 </CardContent>
               </Card>
@@ -259,13 +329,42 @@ const DramaWorkbench: React.FC = () => {
                   </div>
                 )}
 
-                {/* Shot count + duration */}
+                {/* Shot count + duration + 生成媒体 */}
                 {(previewEp as any).storyboard && (
                   <div>
-                    <h3 className="font-semibold mb-2 flex items-center gap-2"><Camera className="h-4 w-4" />分镜概览</h3>
-                    <p className="text-xs text-muted-foreground">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="font-semibold flex items-center gap-2"><Camera className="h-4 w-4" />分镜概览</h3>
+                      {(previewEp as any).mediaStatus !== 'completed' && (
+                        <Button size="sm" variant="outline" disabled={mediaGenEp !== null} onClick={() => handleGenerateMedia((previewEp as any).episodeNumber)}>
+                          {mediaGenEp === (previewEp as any).episodeNumber ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />{mediaGenProgress}%</> : <><Film className="h-3 w-3 mr-1" />生成媒体</>}
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
                       共 {(previewEp as any).storyboard.shots?.length ?? 0} 个镜头 · 预估时长 {(previewEp as any).storyboard.totalEstimatedDurationSec}s
+                      {(previewEp as any).mediaStatus && <span className="ml-2">· 媒体状态: {(previewEp as any).mediaStatus}</span>}
                     </p>
+                    {/* 视频播放 */}
+                    {(previewEp as any).videoUrl && (
+                      <div className="mb-3 rounded-lg overflow-hidden bg-black">
+                        <video src={(previewEp as any).videoUrl} controls className="w-full max-h-64" />
+                      </div>
+                    )}
+                    {/* 分镜图片 */}
+                    {((previewEp as any).shotMediaMap || (previewEp as any).storyboard?.shots) && (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {((previewEp as any).storyboard?.shots ?? []).map((shot: any, i: number) => {
+                          const media = (previewEp as any).shotMediaMap?.[shot.shotId];
+                          const imgUrl = media?.imageUrl ?? shot.firstFrameImageUrl ?? shot.lastFrameImageUrl;
+                          return (
+                            <div key={shot.shotId ?? i} className="rounded border overflow-hidden bg-muted/30">
+                              {imgUrl ? <img src={imgUrl} alt={`shot${i}`} className="w-full aspect-video object-cover" /> : <div className="aspect-video flex items-center justify-center text-xs text-muted-foreground">尚未生成</div>}
+                              <div className="p-1.5 text-[10px] truncate">{shot.visualPrompt ? `${shot.visualPrompt.slice(0, 40)}...` : `Shot ${i + 1}`}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
 

@@ -40,6 +40,8 @@ export interface EpisodeListItem {
   overallScore: number | null;
   totalDurationSec: number;
   shotCount: number;
+  mediaStatus?: string;
+  videoUrl?: string;
   createdAt: string;
 }
 
@@ -58,12 +60,21 @@ export async function createDrama(data: CreateDramaParams): Promise<{ dramaId: s
   return request(BASE, { method: 'POST', data });
 }
 
+/** 重试失败的创建流程，从上次 checkpoint 继续 */
+export async function retryCreateDrama(dramaId: string): Promise<{ dramaId: string }> {
+  return request(`${BASE}/${dramaId}/retry-create`, { method: 'POST' });
+}
+
 export async function enhanceDramaIdea(idea: string, genre?: string): Promise<{ enhanced: string; highlights: string[] }> {
   return request(`${BASE}/idea/enhance`, { method: 'POST', data: { idea, genre } });
 }
 
 export async function generateDramaGoal(mainIdea: string, genre: string, targetAudience: string): Promise<{ goal: string; alternatives: string[] }> {
   return request(`${BASE}/idea/generate-goal`, { method: 'POST', data: { mainIdea, genre, targetAudience } });
+}
+
+export async function recommendGenreAndAudience(mainIdea: string): Promise<{ genreDisplayName: string; platformTarget: string; targetAudience: string; protagonistFocus: string; reason?: string }> {
+  return request(`${BASE}/idea/recommend-genre-audience`, { method: 'POST', data: { mainIdea } });
 }
 
 export async function listDramas(): Promise<{ dramas: DramaListItem[] }> {
@@ -100,6 +111,19 @@ export function getCreateDramaSseUrl(dramaId: string): string {
 export function getGenerateEpisodeSseUrl(dramaId: string, count = 1): string {
   const token = getToken();
   return `${BASE}/${dramaId}/episodes/generate-sse?count=${count}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+}
+
+export async function generateEpisodeMedia(dramaId: string, episodeNumber: number): Promise<{ mediaStatus: string; videoUrl?: string }> {
+  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/generate-media`, { method: 'POST' });
+}
+
+export async function getEpisodeMediaStatus(dramaId: string, episodeNumber: number): Promise<{ mediaStatus: string; videoUrl?: string; shotMediaMap?: Record<string, unknown> }> {
+  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/media-status`);
+}
+
+export function getGenerateMediaSseUrl(dramaId: string, episodeNumber: number): string {
+  const token = getToken();
+  return `${BASE}/${dramaId}/episodes/${episodeNumber}/generate-media-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 export function getEpisodeProgressSseUrl(dramaId: string): string {

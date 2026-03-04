@@ -112,6 +112,7 @@ const TASK_ROUTES: Record<string, TaskRoute> = {
   // ═══ Drama — 短剧引擎 ═══
   'drama-idea-enhancer': { provider: 'gemini', tier: 'standard' },
   'drama-goal-generator': { provider: 'gemini', tier: 'standard' },
+  'drama-genre-audience-recommender': { provider: 'gemini', tier: 'standard' },
   'drama-genre-portrait': { provider: 'gemini', tier: 'standard' },
   'drama-genre-seed-hints': { provider: 'gemini', tier: 'standard' },
   'drama-genre-profile-ai-generate': { provider: 'gemini', tier: 'standard' },

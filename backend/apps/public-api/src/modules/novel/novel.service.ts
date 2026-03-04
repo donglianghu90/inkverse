@@ -44,6 +44,8 @@ import {
   ChapterResyncJobEntity,
   ChapterResyncJobStatus,
 } from './entities/chapter-resync-job.entity';
+import { ChapterMemoryEntity } from './entities/chapter-memory.entity';
+import { BookChapterSummaryEntity } from './entities/book-state-entities';
 import { CHAPTER_RESYNC_QUEUE, ChapterResyncJobPayload } from './chapter-resync.queue';
 import { AUTO_SERIALIZATION_QUEUE, AutoSerializationJobPayload } from './auto-serialization.queue';
 import { CreateBookCoreDto } from './dto/create-book-core.dto';
@@ -1301,6 +1303,29 @@ ${input.goal}
         stateResync,
       };
     });
+  }
+
+  async deleteChapter(bookId: string, chapterNumber: number): Promise<{ deleted: true; bookId: string; chapterNumber: number }> {
+    const chapter = await this.chapterRepo.findOneBy({ bookId, chapterNumber });
+    if (!chapter) throw new NotFoundException(`Chapter not found: ${bookId}#${chapterNumber}`);
+    await this.dataSource.transaction(async (em) => {
+      await em.delete(ChapterEntity, { bookId, chapterNumber });
+      await em.delete(ArtifactEntity, { bookId, chapterNumber });
+      await em.delete(WorkflowExecutionEntity, { bookId, chapterNumber });
+      await em.delete(ChapterMemoryEntity, { bookId, chapterNumber });
+      await em.delete(BookChapterSummaryEntity, { bookId, chapterNumber });
+    });
+    await this.memoryRetriever.removeChapterMemory(bookId, chapterNumber);
+    await this.detailStore.removeChapterContributions(bookId, chapterNumber);
+    const state = await this.loadBookState(bookId);
+    const idx = chapterNumber - 1;
+    if (idx >= 0 && idx < state.kpiHistory.length) {
+      state.kpiHistory.splice(idx, 1);
+      if (state.chapterCursor === chapterNumber + 1) state.chapterCursor = chapterNumber;
+      await this.bookStateRepo.save(state);
+    }
+    this.logger.log(`[deleteChapter] bookId=${bookId} ch${chapterNumber} 已删除（含关联数据）`);
+    return { deleted: true, bookId, chapterNumber };
   }
 
   async getChapterResyncJob(bookId: string, jobId: string): Promise<unknown> {

@@ -28,8 +28,10 @@ export class PacingAnalyzerAgent {
   constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
   async analyze(state: DramaState, storyboard: EpisodeStoryboard): Promise<PacingResult> {
-    const shotSummary = storyboard.shots.map(s =>
-      `shot${s.shotIndex}: ${s.estimatedDurationSec}s ${s.camera.angle}/${s.camera.movement} ${s.dialogue ? '🗣' : '🔇'} ${s.audio.bgm?.mood ?? 'no_bgm'}(${s.audio.bgm?.intensity ?? 0})`
+    const shots = storyboard?.shots ?? [];
+    if (!shots.length) return { overallPacing: 'good', score: 7, segments: [], emotionalCurve: '无数据', recommendations: [] };
+    const shotSummary = shots.map(s =>
+      `shot${s.shotIndex}: ${s.estimatedDurationSec}s ${s.camera?.angle}/${s.camera?.movement} ${s.dialogue ? '🗣' : '🔇'} ${s.audio?.bgm?.mood ?? 'no_bgm'}(${s.audio?.bgm?.intensity ?? 0})`
     ).join('\n');
 
     const raw = await this.llm.generateStructured({
@@ -40,7 +42,7 @@ export class PacingAnalyzerAgent {
       userPrompt: `分析第 ${storyboard.episodeNumber} 集节奏：
 
 总时长：${storyboard.totalEstimatedDurationSec}秒
-Shot数：${storyboard.shots.length}
+Shot数：${shots.length}
 
 逐Shot摘要：
 ${shotSummary}

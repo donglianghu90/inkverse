@@ -16,12 +16,14 @@ export class StoryboardDirectorAgent {
   constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
   async direct(state: DramaState, script: EpisodeScript): Promise<EpisodeStoryboard> {
+    const scenes = script?.scenes ?? [];
+    if (!scenes.length) throw new Error('剧本场景为空，无法生成分镜');
     const allShots: z.infer<typeof shotSchema>[] = [];
     let globalIdx = 0;
-    for (let si = 0; si < script.scenes.length; si++) {
-      const scene = script.scenes[si];
+    for (let si = 0; si < scenes.length; si++) {
+      const scene = scenes[si];
       if (si > 0) await new Promise(r => setTimeout(r, 800));
-      this.logger.log(`E${script.episodeNumber} 场景 ${si + 1}/${script.scenes.length}: ${scene.sceneHeading}`);
+      this.logger.log(`E${script?.episodeNumber ?? 1} 场景 ${si + 1}/${scenes.length}: ${scene?.sceneHeading ?? ''}`);
       const shots = await this.directScene(state, script, scene, globalIdx);
       allShots.push(...shots);
       globalIdx += shots.length;
@@ -30,7 +32,7 @@ export class StoryboardDirectorAgent {
     this.enforceFaceLock(allShots, state);
     const totalDur = allShots.reduce((s, sh) => s + sh.estimatedDurationSec, 0);
     return episodeStoryboardSchema.parse({
-      episodeNumber: script.episodeNumber, shots: allShots,
+      episodeNumber: script?.episodeNumber ?? 1, shots: allShots,
       totalEstimatedDurationSec: Math.round(totalDur * 10) / 10,
       audioTimeline: { bgmSegments: [], silencePoints: [] },
     });
@@ -70,7 +72,7 @@ ${locDesc}
     });
 
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
-    const parsed = Array.isArray(root.shots) ? root.shots : (Array.isArray(root) ? root : []);
+    const parsed = Array.isArray(root?.shots) ? root.shots : (Array.isArray(root) ? root : []);
     return parsed.map((s: any, i: number) => {
       const idx = startIdx + i;
       return shotSchema.parse({ ...s, shotIndex: idx, shotId: s.shotId || `ep${epNum}_shot${idx}`, sceneId: scene.sceneId });

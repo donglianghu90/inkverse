@@ -32,19 +32,28 @@ export class VolcengineImageProvider implements ImageProvider {
     };
     if (req.negativePrompt) payload.negative_prompt = req.negativePrompt;
     if (req.seed !== undefined) payload.seed = req.seed;
-    if (req.referenceImages?.length) { // I2I / 多图融合，传递 weight 给 API
-      payload.image = req.referenceImages.map(img => {
-        const entry: Record<string, unknown> = {};
-        if (img.url) entry.url = img.url;
-        else if (img.base64) entry.b64 = img.base64;
-        if (img.weight !== undefined) entry.strength = Math.min(Math.max(img.weight, 0), 1);
-        return entry;
-      }).filter(e => e.url || e.b64);
+    // 火山引擎 image: 单张用字符串，多张用数组；仅 http(s) URL 或 base64，最多2张
+    if (req.referenceImages?.length) {
+      const valid = req.referenceImages
+        .map(img => (img.url && /^https?:\/\//.test(img.url) ? img.url : img.base64 ? (img.base64.startsWith('data:') ? img.base64 : `data:image/png;base64,${img.base64}`) : ''))
+        .filter(Boolean)
+        .slice(0, 2);
+      if (valid.length) payload.image = valid.length === 1 ? valid[0] : valid;
     }
     if (req.extra) Object.assign(payload, req.extra);
 
     this.logger.log(`生成图片: model=${this.config.model} size=${payload.size} count=${payload.num_images}`);
-    const res = await this.client.post<ArkImageResponse>('/images/generations', payload);
+    let res: ArkImageResponse;
+    try {
+      res = await this.client.post<ArkImageResponse>('/images/generations', payload);
+    } catch (err: any) {
+      const msg = String(err?.response?.data?.error?.message ?? err?.message ?? '');
+      if (payload.image && /image.*not valid|invalid.*image/i.test(msg)) {
+        this.logger.warn(`参考图无效，降级为纯 T2I: ${msg.slice(0, 80)}`);
+        const fallback = { ...payload }; delete fallback.image;
+        res = await this.client.post<ArkImageResponse>('/images/generations', fallback);
+      } else throw err;
+    }
     const images = (res.data ?? []).map(d => ({ url: d.url ?? '', revisedPrompt: d.revised_prompt }));
     const durationMs = Date.now() - t0;
     this.logger.log(`图片生成完成: ${images.length}张 (${durationMs}ms)`);

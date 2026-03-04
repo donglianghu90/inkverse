@@ -31,8 +31,8 @@ export class EpisodeRecorderAgent {
 本集剧本场景：
 ${script.scenes.map(s => `[${s.purpose}] ${s.objective} — 角色:${s.presentCharacterIds.join(',')} 情绪:${s.emotionalEntry}→${s.emotionalExit}`).join('\n')}
 
-本集分镜数：${storyboard.shots.length}
-本集总时长：${storyboard.totalEstimatedDurationSec}秒
+本集分镜数：${storyboard?.shots?.length ?? 0}
+本集总时长：${storyboard?.totalEstimatedDurationSec ?? 0}秒
 
 本集悬念：${cliffhangerSummary}
 上集悬念：${state.lastCliffhanger || '无'}

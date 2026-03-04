@@ -18,7 +18,8 @@ export class DramaDeterministicCheckerService {
 
   check(state: DramaState, script: EpisodeScript, storyboard: EpisodeStoryboard): DramaDeterministicCheck & { hardFails: FailedCheck[] } {
     const fails: FailedCheck[] = [];
-    const { shots, totalEstimatedDurationSec } = storyboard;
+    const shots = storyboard?.shots ?? [];
+    const totalEstimatedDurationSec = storyboard?.totalEstimatedDurationSec ?? 0;
     const target = state.seed.targetEpisodeDurationSec;
     const sev = (rule: string): CheckSeverity => HARD_RULES.has(rule) ? 'hard' : 'soft';
 

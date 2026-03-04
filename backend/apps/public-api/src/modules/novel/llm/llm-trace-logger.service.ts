@@ -37,6 +37,7 @@ export class LlmTraceLoggerService implements OnModuleDestroy {
   private seq = 0;
   private stream: fs.WriteStream | null = null;
   private streamDate = '';
+  private dramaStream: fs.WriteStream | null = null; // 短剧专用日志流 → logs/llm-drama.jsonl
 
   constructor(private readonly configService: ConfigService) {
     const llm = (this.configService.get('llm') ?? {}) as Record<string, unknown>;
@@ -49,7 +50,7 @@ export class LlmTraceLoggerService implements OnModuleDestroy {
     };
     if (this.cfg.enabled) {
       fs.mkdirSync(this.cfg.logDir, { recursive: true });
-      this.logger.log(`LLM追踪日志已启用 → ${this.cfg.logDir}/llm-trace-*.jsonl`);
+      this.logger.log(`LLM追踪日志已启用 → ${this.cfg.logDir}/llm-trace-*.jsonl | 短剧日志 → ${this.cfg.logDir}/llm-drama.jsonl`);
     }
   }
 
@@ -63,6 +64,17 @@ export class LlmTraceLoggerService implements OnModuleDestroy {
     return this.stream;
   }
 
+  private getDramaStream(): fs.WriteStream {
+    if (this.dramaStream) return this.dramaStream;
+    this.dramaStream = fs.createWriteStream(path.join(this.cfg.logDir, 'llm-drama.jsonl'), { flags: 'a' });
+    this.dramaStream.on('error', (e) => this.logger.error(`短剧日志写入流异常: ${e.message}`));
+    return this.dramaStream;
+  }
+
+  private isDramaTrace(entry: { taskName: string; tags?: string[] }): boolean {
+    return entry.taskName.includes('drama') || (entry.tags ?? []).some(t => t.includes('drama'));
+  }
+
   logTrace(entry: Omit<LlmTraceEntry, 'traceId' | 'timestamp'>): void {
     if (!this.cfg.enabled) return;
     const full: LlmTraceEntry = {
@@ -73,6 +85,7 @@ export class LlmTraceLoggerService implements OnModuleDestroy {
       output: this.clipOutput(entry.output, this.cfg.maxOutputChars),
     };
     this.getStream().write(JSON.stringify(full) + '\n');
+    if (this.isDramaTrace(entry)) this.getDramaStream().write(JSON.stringify(full) + '\n');
   }
 
   /** 记录被跳过的工作流步骤，便于排查"未执行"与"失败"的区别 */
@@ -105,8 +118,24 @@ export class LlmTraceLoggerService implements OnModuleDestroy {
     this.getStream().write(JSON.stringify(entry) + '\n');
   }
 
+  /** 短剧专用：记录创建/逐集流程的每一步（含非LLM步骤），输出到 logs/llm-drama.jsonl */
+  logDramaWorkflowEvent(evt: { dramaId: string; phase: 'create' | 'episode'; step: string; status: 'ok' | 'error'; episodeNumber?: number; message?: string; error?: string; meta?: Record<string, unknown> }): void {
+    if (!this.cfg.enabled) return;
+    const entry: LlmTraceEntry = {
+      traceId: `${Date.now()}-${++this.seq}`, timestamp: new Date().toISOString(),
+      workflowId: evt.dramaId, metadata: { dramaId: evt.dramaId, phase: evt.phase, step: evt.step, episodeNumber: evt.episodeNumber, message: evt.message, ...evt.meta },
+      taskName: `drama:${evt.phase}:${evt.step}`, provider: 'system', model: 'none', tier: 'none', temperature: 0, durationMs: 0,
+      tokens: { prompt: 0, completion: 0, total: 0, source: 'system' },
+      cost: { usd: 0, inputRatePer1M: 0, outputRatePer1M: 0 },
+      input: { system: '', user: '' }, output: evt.meta ?? null,
+      tags: ['drama-workflow', evt.phase, evt.step], status: evt.status === 'ok' ? 'success' : 'error', error: evt.error, retries: 0,
+    };
+    this.getDramaStream().write(JSON.stringify(entry) + '\n');
+  }
+
   onModuleDestroy(): void {
     if (this.stream) { this.stream.end(); this.stream = null; }
+    if (this.dramaStream) { this.dramaStream.end(); this.dramaStream = null; }
   }
 
   private dateTag(): string { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }

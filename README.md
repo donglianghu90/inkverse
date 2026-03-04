@@ -12,7 +12,11 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 ### 逐集生成 Pipeline（13步，支持断点续跑+可配置参数）
 `ArcDirector`（段落规划） → `EpisodeDirector`（集级意图） → `ContinuityGuard`（连续性预检，**阻断性问题自动回退EpisodeDirector重试**） → `Scriptwriter`（剧本） → `DialogueCoach`（台词润色，可关闭） → `StoryboardDirector`（**按场景分步生成**Shot+首尾帧提示词） → `AudioDirector`（BGM/SFX/环境音/TTS标注） → `DeterministicChecker`（硬规则阻断/软规则警告） → `ScriptReviewer`（质量审核） → `ScriptEditor`（**定向精修**，传入critical issues，轮数可配） → `PacingAnalyzer`（节奏分析，可关闭） → `HookCrafter`（集末悬念+下集预告，可关闭） → `EpisodeRecorder`（知识记录+闪回标注）
 
-- **断点续跑**：逐集和创建流程（6步）每步完成后写入checkpoint，中断后自动从上次中断处恢复，跳过已完成步骤，节省LLM调用
+- **断点续跑**：逐集和创建流程（6步）每步完成后写入checkpoint，中断后自动从上次中断处恢复，跳过已完成步骤，节省LLM调用；创建失败后点击「重试」从上次 checkpoint 继续（`POST /drama/:dramaId/retry-create`），不会重新创建短剧；**逐集生成失败**时再次点击「生成下一集」或「从断点重试」，会从失败节点续跑（`findResumableRun` 查找 failed 运行，`reopenRun` 恢复后跳过已完成步骤）
+- **短剧调试日志**：创建+逐集全流程日志输出到 `logs/llm-drama.jsonl`（JSONL 格式），含 LLM 调用 trace 与 workflow 步骤事件，便于排查问题；需 `llm.trace.enabled=true`（默认开启）
+- **T2I 追踪日志**：图片生成（角色定妆照/变体/场景）每次调用追加到 `logs/llm-drama.jsonl`，含 prompt/model/durationMs/输出 URL；需 `media.trace.enabled=true`（默认开启）
+- **T2I 404 排查**：火山引擎文生图若返回 404，请检查 `media.volcengine.image.model` 是否为控制台创建的推理接入点 ID（格式如 `ep-xxxxxxxx` 或 `doubao-seedream-5-0-lite-t2i-250901`）；参考图生成失败不会阻断创建流程，可设置 `media.pipeline.skipImageGeneration=true` 跳过图片生成
+- **T2I image 参数无效**：若返回 `The parameter 'image' specified in the request is not valid`，Provider 已做两项修复：(1) 按火山 API 规范将 `image` 改为 URL/base64 字符串或字符串数组；(2) 参考图无效时自动降级为纯 T2I 重试，保证生成可继续
 - **启动恢复**：服务重启时自动扫描超过5分钟仍处于 `running` 的创建流程，有checkpoint数据的尝试恢复，无数据的标记失败
 - **WorkflowParams可配置**：精修轮数(`maxEditRounds`)、连续性重试次数(`maxContinuityRetries`)、质量通过分数(`qualityPassScore`)、台词润色/节奏分析/悬念设计开关均通过 Pipeline 配置动态读取
 
@@ -145,8 +149,12 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 
 ### 前端页面
 - 书架页 Tab 切换（小说/短剧）
+  - **小说删除**：删除按钮移至卡片内部（章节数/评分行右侧），悬停显示，点击后弹窗确认
+  - **章节删除**：工作台（`/novel/book/:bookId`）章节列表每项悬停显示删除图标，删除时同步清理 artifacts/workflow/memory/summary 等关联数据
 - 创建短剧页（`/novel/create-drama`）：4步向导（创意→题材模板选择&平台→主线&剧名→规模配置）+ SSE 实时进度
-- 短剧工作台（`/novel/drama/:dramaId`）：基本信息+SSE实时进度+分集列表+集详情弹窗（剧本场景/分镜概览/质量审核）
+  - **操作指引**：每步含「这一步做什么」「如何选择」说明卡片。核心创意建议包含人物身份、核心冲突、爽点反转；类型与受众：题材选与创意最贴合的，平台影响节奏，观众决定爽点侧重，叙事聚焦决定主角视角。
+  - **AI 智能推荐**：在「类型与受众」步骤点击「AI 智能推荐」，可根据核心创意自动推荐题材、平台、观众、叙事聚焦，用户可接受或修改。
+- 短剧工作台（`/novel/drama/:dramaId`）：基本信息+SSE实时进度+分集列表+集详情弹窗（剧本场景/分镜概览/质量审核）；点击集可预览，未生成媒体时显示「生成媒体」按钮，生成后可展示分镜图片和合成视频
 
 ## 媒体生成模块（Media Module）
 

@@ -14,8 +14,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import {
-  createDrama, getDrama, getCreateDramaSseUrl, listDramaGenreTemplates,
-  enhanceDramaIdea, generateDramaGoal,
+  createDrama, retryCreateDrama, getDrama, getCreateDramaSseUrl, listDramaGenreTemplates,
+  enhanceDramaIdea, generateDramaGoal, recommendGenreAndAudience,
   type CreateDramaParams, type DramaGenreTemplate,
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
@@ -82,6 +82,7 @@ const CreateDrama: React.FC = () => {
   const [genProgress, setGenProgress] = useState(0);
   const [genSteps, setGenSteps] = useState(GEN_STEPS.map(s => ({ ...s, done: false })));
   const [genError, setGenError] = useState<string | null>(null);
+  const failedDramaIdRef = useRef<string | null>(null); // 失败时保存 dramaId，重试时从 checkpoint 继续
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
@@ -90,6 +91,7 @@ const CreateDrama: React.FC = () => {
   const [originalIdea, setOriginalIdea] = useState('');
   const [generatingGoal, setGeneratingGoal] = useState(false);
   const [goalAlternatives, setGoalAlternatives] = useState<string[]>([]);
+  const [recommending, setRecommending] = useState(false);
 
   const [templates, setTemplates] = useState<DramaGenreTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
@@ -146,11 +148,30 @@ const CreateDrama: React.FC = () => {
     finally { setGeneratingGoal(false); }
   };
 
+  const handleRecommendGenreAudience = async () => {
+    if (!(form.mainIdea ?? '').trim()) return;
+    setRecommending(true);
+    try {
+      const r = await recommendGenreAndAudience(form.mainIdea);
+      const tpl = templates.find(t => t.displayName === r.genreDisplayName);
+      const audienceTags = AUDIENCE_PRESETS.find(a => a.label === r.targetAudience)?.tags ?? [];
+      setForm(prev => ({
+        ...prev, genre: r.genreDisplayName, genreTemplateId: tpl?.id ?? prev.genreTemplateId,
+        platformTarget: r.platformTarget as FormState['platformTarget'],
+        targetAudience: r.targetAudience, audienceTags,
+        protagonistFocus: r.protagonistFocus as FormState['protagonistFocus'],
+      }));
+      message.success('已根据创意智能推荐');
+    } catch { message.error('推荐失败'); }
+    finally { setRecommending(false); }
+  };
+
   const handleSubmit = async () => {
+    const isRetry = !!(genError && failedDramaIdRef.current);
     setStep(4);
     setLoading(true);
     setGenProgress(0);
-    setGenError(null);
+    if (!isRetry) setGenError(null);
     setGenSteps(GEN_STEPS.map(s => ({ ...s, done: false })));
 
     const params: CreateDramaParams = {
@@ -166,13 +187,21 @@ const CreateDrama: React.FC = () => {
 
     const STALE_MS = 600_000;
     let staleTimer!: ReturnType<typeof setTimeout>;
+    let dramaId: string | undefined;
     const controller = new AbortController();
     abortRef.current = controller;
     const touchStale = () => { clearTimeout(staleTimer); staleTimer = setTimeout(() => controller.abort(), STALE_MS); };
 
     try {
-      const res = await createDrama(params);
-      const dramaId = res.dramaId;
+      if (isRetry) {
+        dramaId = failedDramaIdRef.current!;
+        await retryCreateDrama(dramaId);
+        setGenError(null);
+      } else {
+        failedDramaIdRef.current = null;
+        const res = await createDrama(params);
+        dramaId = res.dramaId;
+      }
       touchStale();
 
       const response = await fetch(getCreateDramaSseUrl(dramaId), {
@@ -197,6 +226,7 @@ const CreateDrama: React.FC = () => {
               }
             } catch { /* retry */ }
           }
+          failedDramaIdRef.current = dramaId ?? null;
           setGenError('创建超时');
           setLoading(false);
         };
@@ -221,7 +251,7 @@ const CreateDrama: React.FC = () => {
           try {
             const payload = JSON.parse(line.slice(5).trim());
             if (payload._type === 'heartbeat') continue;
-            if (payload.error) { clearTimeout(staleTimer); setGenError(payload.message ?? '创建失败'); setLoading(false); return; }
+            if (payload.error) { clearTimeout(staleTimer); failedDramaIdRef.current = dramaId; setGenError(payload.message ?? '创建失败'); setLoading(false); return; }
 
             const idx = payload.stepIndex ?? -1;
             const progress = payload.totalSteps > 0 ? Math.round(((idx + (payload.done ? 1 : 0.5)) / payload.totalSteps) * 100) : 0;
@@ -237,6 +267,7 @@ const CreateDrama: React.FC = () => {
 
             if (payload.done && payload.step === 'create_4') {
               clearTimeout(staleTimer);
+              failedDramaIdRef.current = null;
               setGenProgress(100);
               message.success('短剧创建成功');
               setTimeout(() => history.push(`/novel/drama/${dramaId}`), 600);
@@ -247,12 +278,14 @@ const CreateDrama: React.FC = () => {
       }
 
       clearTimeout(staleTimer);
+      failedDramaIdRef.current = null;
       setGenProgress(100);
       setGenSteps(prev => prev.map(s => ({ ...s, done: true })));
       message.success('短剧创建成功');
       setTimeout(() => history.push(`/novel/drama/${dramaId}`), 600);
     } catch (error: any) {
       clearTimeout(staleTimer!);
+      if (dramaId) failedDramaIdRef.current = dramaId;
       const errMsg = error?.message || '创建失败';
       message.error(errMsg);
       setGenError(errMsg);
@@ -321,9 +354,14 @@ const CreateDrama: React.FC = () => {
             <h2 className="text-xl sm:text-2xl font-bold">你的短剧灵感是什么？</h2>
             <p className="mt-1.5 text-sm text-muted-foreground">越具体越好：人物背景、核心冲突、身份反差。AI 会基于此构建完整的短剧世界。</p>
           </div>
+          <Card className="border-primary/15 bg-primary/5">
+            <CardContent className="p-4 text-sm">
+              <div className="flex items-start gap-2"><Sparkles className="h-4 w-4 text-primary shrink-0 mt-0.5" /><div><p className="font-medium text-foreground">这一步做什么？</p><p className="mt-1 text-muted-foreground">用一段话描述你的短剧故事梗概，AI 会据此生成世界观、角色和剧情。建议包含：<strong>人物身份</strong>（如隐藏身份）、<strong>核心冲突</strong>（如被羞辱/背叛）、<strong>爽点反转</strong>（如身份揭晓、打脸复仇）。</p></div></div>
+            </CardContent>
+          </Card>
           <div className="space-y-2">
             <Label>核心创意</Label>
-            <Textarea placeholder="例如：女主被豪门婆婆羞辱扫地出门，三年后带着亿万身家和双胞胎华丽回归..." className="min-h-[140px] text-sm resize-none" disabled={enhancing} value={form.mainIdea} onChange={(e) => { setForm({ ...form, mainIdea: e.target.value }); if (highlights.length > 0) { setHighlights([]); setOriginalIdea(''); } }} />
+            <Textarea placeholder="例如：隐瞒首富独女身份下嫁三年做牛做马，被婆婆羞辱净身出户。暴雨夜她登上劳斯莱斯，老管家：大小姐玩够了吗？老爷喊您回家继承千亿集团。归来后她令前夫家族高攀不起..." className="min-h-[140px] text-sm resize-none" disabled={enhancing} value={form.mainIdea} onChange={(e) => { setForm({ ...form, mainIdea: e.target.value }); if (highlights.length > 0) { setHighlights([]); setOriginalIdea(''); } }} />
             <div className="flex items-center justify-between gap-2">
               <p className="text-xs text-muted-foreground">{(form.mainIdea ?? '').length} 字 · 建议至少 20 字</p>
               <div className="flex items-center gap-1.5 shrink-0">
@@ -361,12 +399,20 @@ const CreateDrama: React.FC = () => {
       {/* Step 2: Genre & Audience */}
       {step === 1 && (
         <div className="animate-fade-in space-y-5">
-          <h2 className="text-xl sm:text-2xl font-bold">选择题材与目标观众</h2>
+          <div>
+            <h2 className="text-xl sm:text-2xl font-bold">选择题材与目标观众</h2>
+            <p className="mt-1.5 text-sm text-muted-foreground">根据上一步的创意，选择最匹配的题材和受众，AI 会据此调整爽点设计、节奏和风格。</p>
+          </div>
+          <Card className="border-primary/15 bg-primary/5">
+            <CardContent className="p-4 text-sm">
+              <div className="flex items-start gap-2"><Users className="h-4 w-4 text-primary shrink-0 mt-0.5" /><div><p className="font-medium text-foreground">如何选择？</p><p className="mt-1 text-muted-foreground"><strong>题材</strong>：选与创意最贴合的（如豪门逆袭→都市/霸总，宫斗权谋→宫斗）。<strong>平台</strong>：抖音/快手节奏更快，ReelShort 偏海外。<strong>观众</strong>：决定爽点侧重（女性向偏情感打脸，男性向偏权谋战力）。<strong>叙事聚焦</strong>：女主向=以女主视角为主，双主角=男女戏份均衡。</p><Button variant="outline" size="sm" className="mt-3 gap-1.5 border-primary/30 text-primary hover:bg-primary/5" disabled={!(form.mainIdea ?? '').trim() || recommending} onClick={handleRecommendGenreAudience}>{recommending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}{recommending ? 'AI 推荐中...' : 'AI 智能推荐'}</Button></div></div>
+            </CardContent>
+          </Card>
 
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <Label>短剧题材</Label>
-              <button type="button" className="text-xs text-primary hover:underline" onClick={() => history.push('/novel/templates')}>管理题材模板</button>
+              <div><Label>短剧题材</Label><p className="text-xs text-muted-foreground mt-0.5">选与创意最匹配的，点击卡片即可</p></div>
+              <button type="button" className="text-xs text-primary hover:underline shrink-0" onClick={() => history.push('/novel/templates')}>管理题材模板</button>
             </div>
             {templatesLoading ? (
               <div className="flex items-center justify-center py-6 text-sm text-muted-foreground"><Loader2 className="w-4 h-4 mr-2 animate-spin" />加载题材模板...</div>
@@ -392,7 +438,7 @@ const CreateDrama: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            <Label>目标平台</Label>
+            <div><Label>目标平台</Label><p className="text-xs text-muted-foreground mt-0.5">不同平台用户偏好不同，影响节奏和风格</p></div>
             <div className="flex flex-wrap gap-2">
               {PLATFORM_PRESETS.map(p => (
                 <Badge key={p.value} variant={form.platformTarget === p.value ? 'default' : 'outline'}
@@ -404,7 +450,7 @@ const CreateDrama: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            <Label>目标观众</Label>
+            <div><Label>目标观众</Label><p className="text-xs text-muted-foreground mt-0.5">决定剧情走向和爽点设计，选主受众即可</p></div>
             <div className="flex flex-wrap gap-2">
               {AUDIENCE_PRESETS.map(a => (
                 <Badge key={a.label} variant={form.targetAudience === a.label ? 'default' : 'outline'}
@@ -416,7 +462,7 @@ const CreateDrama: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            <Label>叙事聚焦</Label>
+            <div><Label>叙事聚焦</Label><p className="text-xs text-muted-foreground mt-0.5">决定主角视角和叙事重心</p></div>
             <div className="grid grid-cols-4 gap-2">
               {PROTAGONIST_FOCUS.map(opt => (
                 <button key={opt.value} type="button" className={cn(

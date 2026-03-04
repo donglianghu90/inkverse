@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Put, Delete, Param, Body, Query, Req, Sse, MessageEvent } from '@nestjs/common';
+import { Controller, Post, Get, Put, Delete, Param, Body, Query, Req, Sse, MessageEvent, NotFoundException } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
 import { finalize } from 'rxjs/operators';
 import { DramaService } from './drama.service';
@@ -100,6 +100,11 @@ export class DramaController {
     return this.dramaService.generateStoryGoal(body);
   }
 
+  @Post('idea/recommend-genre-audience')
+  async recommendGenreAndAudience(@Body() body: { mainIdea: string }) {
+    return this.dramaService.recommendGenreAndAudience(body.mainIdea);
+  }
+
   /* ─── CRUD ─── */
 
   @Post()
@@ -117,9 +122,16 @@ export class DramaController {
     return this.dramaService.getDrama(dramaId);
   }
 
+  @Post(':dramaId/retry-create')
+  async retryCreation(@Param('dramaId') dramaId: string) {
+    await this.dramaService.retryCreation(dramaId);
+    return { dramaId };
+  }
+
   @Post(':dramaId/episodes/generate')
   async generateEpisode(@Param('dramaId') dramaId: string, @Query('count') count?: string) {
-    return this.dramaService.generateEpisodes(dramaId, parseInt(count || '1', 10)); // 异步启动，立即返回
+    const n = Math.max(1, Math.min(10, parseInt(count || '1', 10) || 1));
+    return this.dramaService.generateEpisodes(dramaId, n); // 异步启动，立即返回
   }
 
   @Get(':dramaId/episodes')
@@ -127,9 +139,42 @@ export class DramaController {
     return this.dramaService.listEpisodes(dramaId);
   }
 
+  @Sse(':dramaId/episodes/generate-sse')
+  async generateEpisodeSse(
+    @Param('dramaId') dramaId: string,
+    @Query('count') count?: string,
+  ): Promise<Observable<MessageEvent>> {
+    const subject = new Subject<MessageEvent>();
+    const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
+    const n = Math.max(1, Math.min(10, parseInt(count || '1', 10) || 1));
+    const key = `${dramaId}:generate`;
+    const alreadyRunning = !this.progressService.markGenerating(key);
+    const unsub = this.progressService.subscribe(dramaId, (event) => { subject.next({ data: event } as MessageEvent); });
+    if (alreadyRunning) {
+      subject.next({ data: { reconnected: true, message: '已重连到正在进行的生成任务' } } as MessageEvent);
+      return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
+    }
+    setTimeout(async () => {
+      try {
+        const result = await this.dramaService.generateEpisodesAndWait(dramaId, n); // 等待完成，期间 progress 会通过 subscribe 推送
+        subject.next({ data: { _type: 'result', ...result } } as MessageEvent);
+      } catch (err: any) {
+        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
+      } finally {
+        this.progressService.clearGenerating(key);
+        clearInterval(heartbeat);
+        unsub();
+        setTimeout(() => subject.complete(), 200);
+      }
+    }, 0);
+    return subject.asObservable();
+  }
+
   @Get(':dramaId/episodes/:episodeNumber')
   async getEpisode(@Param('dramaId') dramaId: string, @Param('episodeNumber') episodeNumber: string) {
-    return this.dramaService.getEpisode(dramaId, parseInt(episodeNumber, 10));
+    const ep = parseInt(episodeNumber, 10);
+    if (!Number.isFinite(ep) || ep < 1) throw new NotFoundException(`无效的集数: ${episodeNumber}`);
+    return this.dramaService.getEpisode(dramaId, ep);
   }
 
   @Get(':dramaId/visual-assets')
@@ -163,45 +208,6 @@ export class DramaController {
       if (event.done && (event.step === 'create_5' || event.error)) { clearInterval(heartbeat); setTimeout(() => subject.complete(), 200); }
     });
     return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
-  }
-
-  /* ─── SSE: 逐集生成进度 ─── */
-
-  @Sse(':dramaId/episodes/generate-sse')
-  async generateEpisodeSse(
-    @Param('dramaId') dramaId: string,
-    @Query('count') count?: string,
-  ): Promise<Observable<MessageEvent>> {
-    const subject = new Subject<MessageEvent>();
-    const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
-    const n = parseInt(count || '1', 10);
-    const key = `${dramaId}:generate`;
-
-    const alreadyRunning = !this.progressService.markGenerating(key);
-    const unsub = this.progressService.subscribe(dramaId, (event) => {
-      subject.next({ data: event } as MessageEvent);
-    });
-
-    if (alreadyRunning) {
-      subject.next({ data: { reconnected: true, message: '已重连到正在进行的生成任务' } } as MessageEvent);
-      return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
-    }
-
-    setTimeout(async () => {
-      try {
-        const result = await this.dramaService.generateEpisodes(dramaId, n);
-        subject.next({ data: { _type: 'result', ...result } } as MessageEvent);
-      } catch (err: any) {
-        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
-      } finally {
-        this.progressService.clearGenerating(key);
-        clearInterval(heartbeat);
-        unsub();
-        setTimeout(() => subject.complete(), 200);
-      }
-    }, 0);
-
-    return subject.asObservable();
   }
 
   /* ─── SSE: 媒体生成进度（触发 + 推送） ─── */

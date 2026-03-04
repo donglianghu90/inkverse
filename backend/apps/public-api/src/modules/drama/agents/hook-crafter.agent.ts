@@ -23,10 +23,11 @@ export class HookCrafterAgent {
   constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
   async craft(state: DramaState, storyboard: EpisodeStoryboard): Promise<HookCrafterOutput> {
-    const epNum = storyboard.episodeNumber;
+    const shots = storyboard?.shots ?? [];
+    const epNum = storyboard?.episodeNumber ?? 1;
     const recentHooks = state.recentHookTypes.slice(-5).map(h => `E${h.episodeNumber}: ${h.hookType}`).join('、');
     const strategy = state.strategy?.hookCadencePolicy;
-    const lastShots = storyboard.shots.slice(-3);
+    const lastShots = shots.slice(-3);
 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-hook-crafter',
@@ -36,7 +37,7 @@ export class HookCrafterAgent {
       userPrompt: `为第 ${epNum} 集设计悬念钩子：
 
 本集最后3个Shot概要：
-${lastShots.map(s => `shot${s.shotIndex}: ${s.camera.angle} — ${s.characters.map(c => `${c.characterId}(${c.emotion})`).join(',')} ${s.dialogue?.text ?? '无台词'}`).join('\n')}
+${lastShots.map(s => `shot${s.shotIndex}: ${s.camera?.angle} — ${(s.characters ?? []).map((c: any) => `${c.characterId}(${c.emotion})`).join(',')} ${s.dialogue?.text ?? '无台词'}`).join('\n')}
 
 最近悬念记录：${recentHooks || '无（第一集）'}
 是否付费集：${state.seriesOutline?.paywallEpisodes?.includes(epNum) ? '是' : '否'}

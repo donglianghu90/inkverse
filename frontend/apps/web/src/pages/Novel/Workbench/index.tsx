@@ -19,6 +19,7 @@ import {
   Pencil,
   Save,
   X,
+  Trash2,
 } from 'lucide-react';
 import emptyBookshelfImg from '@/assets/illustrations/empty-bookshelf.png';
 import { Button } from '@/components/ui/button';
@@ -26,6 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import {
   getBook,
@@ -35,6 +37,7 @@ import {
   getGenerationStatus,
   getGenerateSSEUrl,
   updateChapter,
+  deleteChapter,
   type BookInfo,
   type BookTokenUsage,
   type ChapterItem,
@@ -117,6 +120,8 @@ const Workbench: React.FC = () => {
   } | null>(null);
   const [interventionMarkerChapters, setInterventionMarkerChapters] = useState<number[]>([]);
   const [tokenUsage, setTokenUsage] = useState<BookTokenUsage | null>(null);
+  const [deleteChapterTarget, setDeleteChapterTarget] = useState<ChapterItem | null>(null);
+  const [deletingChapter, setDeletingChapter] = useState(false);
   const articleRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const workbenchPath = bookId ? `/novel/book/${bookId}` : '';
@@ -407,6 +412,26 @@ const Workbench: React.FC = () => {
     [isEditing, editTitle, selectedChapter],
   );
 
+  const handleDeleteChapter = useCallback(async () => {
+    if (!bookId || !deleteChapterTarget) return;
+    setDeletingChapter(true);
+    try {
+      await deleteChapter(bookId, deleteChapterTarget.chapterNumber);
+      setChapters((prev) => prev.filter((c) => c.chapterNumber !== deleteChapterTarget.chapterNumber));
+      if (selectedChapter?.chapterNumber === deleteChapterTarget.chapterNumber) {
+        const rest = chapters.filter((c) => c.chapterNumber !== deleteChapterTarget.chapterNumber);
+        setSelectedChapter(rest.length > 0 ? rest[rest.length - 1] : null);
+      }
+      setDeleteChapterTarget(null);
+      fetchData();
+      message.success('章节已删除');
+    } catch (e: any) {
+      message.error(e?.message ?? '删除失败');
+    } finally {
+      setDeletingChapter(false);
+    }
+  }, [bookId, deleteChapterTarget, selectedChapter, chapters, fetchData]);
+
   const articleHtml = useMemo(
     () => (selectedChapter ? contentToHtml(selectedChapter.content) : ''),
     [selectedChapter?.content, selectedChapter?.chapterNumber, contentVersion],
@@ -565,10 +590,19 @@ const Workbench: React.FC = () => {
                             </>}
                           </div>
                         </div>
-                        <ChevronRight className={cn(
-                          'h-3.5 w-3.5 shrink-0 transition-all',
-                          isActive ? 'text-primary/60' : 'text-muted-foreground/20 group-hover:text-muted-foreground/50',
-                        )} />
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <button
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                            onClick={(e) => { e.stopPropagation(); setDeleteChapterTarget(ch); }}
+                            title="删除章节"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                          <ChevronRight className={cn(
+                            'h-3.5 w-3.5 transition-all',
+                            isActive ? 'text-primary/60' : 'text-muted-foreground/20 group-hover:text-muted-foreground/50',
+                          )} />
+                        </div>
                       </button>
                     );
                   })
@@ -791,6 +825,23 @@ const Workbench: React.FC = () => {
         onOpenChange={setShowAutoPanel}
         bookId={bookId!}
       />
+      <Dialog open={!!deleteChapterTarget} onOpenChange={(o) => { if (!o) setDeleteChapterTarget(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>确认删除章节</DialogTitle>
+            <DialogDescription>
+              即将永久删除第{deleteChapterTarget?.chapterNumber}章《{deleteChapterTarget?.title.replace(/^第\d+章\s*/, '')}》及其关联数据（artifacts、workflow、memory 等），此操作不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setDeleteChapterTarget(null)} disabled={deletingChapter}>取消</Button>
+            <Button variant="destructive" onClick={handleDeleteChapter} disabled={deletingChapter}>
+              {deletingChapter ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              {deletingChapter ? '删除中…' : '确认删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
