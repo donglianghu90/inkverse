@@ -5,7 +5,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
-import { seriesOutlineSchema, SeriesOutline, DramaSeed, episodeSynopsisSchema } from '../schemas/drama-state.schemas';
+import { seriesOutlineSchema, SeriesOutline, DramaSeed, episodeSynopsisSchema, ContentMode } from '../schemas/drama-state.schemas';
 import { buildSeriesDirectorSystemPrompt } from '../prompting/drama-playbook';
 
 const DETAIL_SEGMENT = 15; // 首段详细规划集数
@@ -23,7 +23,7 @@ export class SeriesDirectorAgent {
   private readonly logger = new Logger(SeriesDirectorAgent.name);
   constructor(private readonly llm: LlmService) {}
 
-  async plan(seed: DramaSeed): Promise<SeriesOutline> {
+  async plan(seed: DramaSeed, contentMode: ContentMode = 'drama'): Promise<SeriesOutline> {
     const epMin = seed.plannedTotalEpisodes.min;
     const epMax = seed.plannedTotalEpisodes.max;
     const targetEp = Math.round((epMin + epMax) / 2);
@@ -32,25 +32,25 @@ export class SeriesDirectorAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-series-director',
       schema: segmentedOutputSchema,
-      systemPrompt: buildSeriesDirectorSystemPrompt({ targetEp, epMin, epMax, durSec }),
-      userPrompt: `请根据以下短剧种子规划全剧大纲：
+      systemPrompt: buildSeriesDirectorSystemPrompt({ targetEp, epMin, epMax, durSec, contentMode }),
+      userPrompt: `请根据以下内容种子规划全剧大纲：
 
 剧名：${seed.title}
 题材：${seed.genre}
 梗概：${seed.logline}
-核心矛盾：${seed.coreConflict}
-爽点类型：${seed.catharsisType}
-主角：${seed.protagonistConcept.name} — ${seed.protagonistConcept.situation}（性格：${seed.protagonistConcept.personality}，致命弱点：${seed.protagonistConcept.fatalFlaw}）
-${seed.antagonistConcept ? `反派：${seed.antagonistConcept.name} — ${seed.antagonistConcept.motivation}（与主角关系：${seed.antagonistConcept.relationship}）` : ''}
+核心主题：${seed.coreConflict}
+核心体验：${seed.catharsisType}
+主角：${seed.protagonistConcept.name} — ${seed.protagonistConcept.situation}（性格：${seed.protagonistConcept.personality}，${contentMode === 'knowledge' ? '历史局限' : '致命弱点'}：${seed.protagonistConcept.fatalFlaw}）
+${seed.antagonistConcept ? `${contentMode === 'knowledge' ? '命运对手' : '反派'}：${seed.antagonistConcept.name} — ${seed.antagonistConcept.motivation}（与主角关系：${seed.antagonistConcept.relationship}）` : ''}
 调性：${seed.tone}
 底线：${seed.redLines.join('；')}
 
 === 分段式规划 ===
 1. arcOverview：全剧分4-6个段落（含 segmentTitle/startEp/endEp/coreConflict/paywallEpisodes）
 2. detailedEpisodes：仅输出前 ${DETAIL_SEGMENT} 集的详细概要（后续段落由段落导演按需展开）
-3. paywallEpisodes：全剧付费卡点集号列表
+3. paywallEpisodes：${contentMode === 'knowledge' ? '知识模式设为空数组 []' : '全剧付费卡点集号列表'}
 4. mainStoryGoal + endingDirection
-5. 确保前3集足够抓人，首段节奏紧凑，付费卡点设计致命`,
+5. 确保前3集足够抓人，首段节奏紧凑${contentMode === 'knowledge' ? '' : '，付费卡点设计致命'}`,
       temperature: 0.5,
     });
 
@@ -62,17 +62,29 @@ ${seed.antagonistConcept ? `反派：${seed.antagonistConcept.name} — ${seed.a
     const detailed = (Array.isArray(root.detailedEpisodes) ? root.detailedEpisodes : Array.isArray(root.episodes) ? root.episodes : []) as any[];
     const arcOverview = (Array.isArray(root.arcOverview) ? root.arcOverview : []) as any[];
 
+    // 为每个段落生成稳定的 ID（arc_1, arc_2...），避免用中文标题作为查找键
+    const segIdMap = new Map<any, string>(arcOverview.map((seg: any, idx: number) => [seg, `arc_${idx + 1}`]));
+    // 也支持通过 segmentTitle 字符串反查 ID（LLM 在 detailedEpisodes 的 arcSegmentId 字段里填的是 title）
+    const titleToSegIdMap = new Map<string, string>(arcOverview.map((seg: any, idx: number) => [this.str(seg.segmentTitle), `arc_${idx + 1}`]));
+    const resolveSegId = (rawId: string, epNum: number): string => {
+      if (titleToSegIdMap.has(rawId)) return titleToSegIdMap.get(rawId)!;
+      const seg = arcOverview.find((s: any) => epNum >= (s.startEp ?? 0) && epNum <= (s.endEp ?? 999));
+      return seg ? (segIdMap.get(seg) ?? '') : '';
+    };
+
     const episodes = detailed.slice(0, DETAIL_SEGMENT).map((ep: any, idx: number) => {
       const e = this.obj(ep);
+      const epNum = typeof e.episodeNumber === 'number' ? e.episodeNumber : idx + 1;
       return {
-        episodeNumber: typeof e.episodeNumber === 'number' ? e.episodeNumber : idx + 1,
+        episodeNumber: epNum,
         title: this.str(e.title) || `第${idx + 1}集`,
         coreConflict: this.str(e.coreConflict) || `第${idx + 1}集核心冲突`,
         cliffhanger: this.str(e.cliffhanger) || '',
         emotionalArc: this.str(e.emotionalArc) || '',
         keyCharacterIds: Array.isArray(e.keyCharacterIds) ? e.keyCharacterIds.map(String) : [],
         estimatedDurationSec: typeof e.estimatedDurationSec === 'number' ? e.estimatedDurationSec : seed.targetEpisodeDurationSec,
-        isPaywall: !!e.isPaywall, paywallReason: this.str(e.paywallReason), arcSegmentId: this.str(e.arcSegmentId),
+        isPaywall: !!e.isPaywall, paywallReason: this.str(e.paywallReason),
+        arcSegmentId: resolveSegId(this.str(e.arcSegmentId), epNum),
       };
     });
 
@@ -86,7 +98,7 @@ ${seed.antagonistConcept ? `反派：${seed.antagonistConcept.name} — ${seed.a
         episodeNumber: n, title: seg ? `${this.str(seg.segmentTitle)}-${n}` : `第${n}集`,
         coreConflict: '待展开', cliffhanger: '', emotionalArc: '',
         keyCharacterIds: [], estimatedDurationSec: seed.targetEpisodeDurationSec,
-        isPaywall: allPw.has(n), paywallReason: '', arcSegmentId: this.str(seg?.segmentTitle ?? ''),
+        isPaywall: allPw.has(n), paywallReason: '', arcSegmentId: seg ? (segIdMap.get(seg) ?? '') : '',
       });
     }
 

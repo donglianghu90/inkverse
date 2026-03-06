@@ -22,6 +22,7 @@ interface StructuredGenerationInput<T extends ZodTypeAny> {
   temperature?: number;
   tags?: string[];
   metadata?: Record<string, unknown>;
+  imageUrls?: string[];
 }
 
 interface TokenUsageExtraction {
@@ -305,7 +306,18 @@ export class LlmService {
     const chatModel = this.createChatModel(provider, providerCfg, modelName, temperature);
     const schema = provider === 'gemini' ? LlmService.sanitizeSchemaForGemini(toJsonSchema(input.schema as any)) : input.schema;
     const structuredModel = (chatModel as any).withStructuredOutput(schema, { includeRaw: true });
-    const messages = [new SystemMessage(input.systemPrompt), new HumanMessage(input.userPrompt)];
+    const humanContent: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
+      { type: 'text', text: input.userPrompt },
+    ];
+    if (input.imageUrls?.length) {
+      for (const url of input.imageUrls) {
+        humanContent.push({ type: 'image_url', image_url: { url } });
+      }
+    }
+    const humanMsg = input.imageUrls?.length
+      ? new HumanMessage({ content: humanContent as any })
+      : new HumanMessage(input.userPrompt);
+    const messages = [new SystemMessage(input.systemPrompt), humanMsg];
     const wCtx = this.usageTracker.getWorkflowContext();
     const traceBase = { taskName: input.taskName, provider, model: modelName, tier, temperature, tags, metadata: input.metadata ?? {}, input: { system: input.systemPrompt, user: input.userPrompt }, ...(wCtx ? { workflowId: wCtx.workflowId, bookId: wCtx.bookId, chapterNumber: wCtx.chapterNumber, callSequence: wCtx.callSequence + 1 } : {}) };
 

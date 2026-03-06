@@ -84,6 +84,34 @@ const SYSTEM_TEMPLATES: Array<{
     platformTags: ['douyin', 'kuaishou'],
     seedHints: { catharsisPresets: ['虐后团圆', '身世真相', '逆袭封后'], conflictPatterns: ['家族仇恨', '朝堂争斗', '身份错认'], paywallStrategyHints: '男女主情感考验最高潮处设卡' },
   },
+  {
+    genreKey: 'history_edu', displayName: '历史教育', description: '历史人物/事件+知识传递+故事化叙事',
+    genreKeywords: ['历史', '朝代', '历史人物', '历史事件', '历史故事'], audienceTags: ['全年龄', '知识向'],
+    protagonistFocusTags: ['ensemble'], toneTags: ['知性', '厚重', '趣味'],
+    platformTags: ['douyin', 'kuaishou', 'generic'],
+    seedHints: { catharsisPresets: ['知识震撼', '历史感悟', '文化共鸣', '命运唏嘘'], conflictPatterns: ['理想与现实', '时代变迁', '命运抉择', '文化碰撞'], paywallStrategyHints: '在关键历史转折点或人物命运转变前设置悬念衔接，引导观众继续观看' },
+  },
+  {
+    genreKey: 'biography', displayName: '人物传记', description: '真实人物+生平故事+时代画卷',
+    genreKeywords: ['传记', '人物', '生平', '名人', '伟人'], audienceTags: ['全年龄', '知识向'],
+    protagonistFocusTags: ['male_lead', 'female_lead'], toneTags: ['感人', '励志', '厚重'],
+    platformTags: ['douyin', 'kuaishou', 'generic'],
+    seedHints: { catharsisPresets: ['人生感悟', '成就震撼', '命运共情', '精神传承'], conflictPatterns: ['逆境成长', '时代洪流', '理想坚守', '人性抉择'], paywallStrategyHints: '在人物命运重大转折前设置悬念，如成名前的最后考验、人生低谷的关键抉择' },
+  },
+  {
+    genreKey: 'mythology', displayName: '神话传说', description: '神话故事+奇幻想象+文化传承',
+    genreKeywords: ['神话', '传说', '民间故事', '神仙', '上古'], audienceTags: ['全年龄'],
+    protagonistFocusTags: ['male_lead', 'female_lead', 'ensemble'], toneTags: ['奇幻', '壮丽', '感人'],
+    platformTags: ['douyin', 'kuaishou', 'generic'],
+    seedHints: { catharsisPresets: ['奇幻震撼', '英雄壮举', '情感动人', '文化共鸣'], conflictPatterns: ['善恶对抗', '天命抗争', '人神冲突', '守护牺牲'], paywallStrategyHints: '在重大战斗前、真相揭示前、命运抉择前设置悬念' },
+  },
+  {
+    genreKey: 'science', displayName: '科普知识', description: '知识解说+趣味叙事+视觉化演绎',
+    genreKeywords: ['科普', '知识', '科学', '百科', '解说'], audienceTags: ['全年龄', '知识向'],
+    protagonistFocusTags: ['ensemble'], toneTags: ['趣味', '烧脑', '震撼'],
+    platformTags: ['douyin', 'kuaishou', 'generic'],
+    seedHints: { catharsisPresets: ['知识震撼', '认知颠覆', '恍然大悟', '视觉奇观'], conflictPatterns: ['常识挑战', '未解之谜', '科学探索', '思维实验'], paywallStrategyHints: '在关键知识揭示前设置悬念，用"你知道为什么吗？"式的问题引导继续观看' },
+  },
 ];
 
 @Injectable()

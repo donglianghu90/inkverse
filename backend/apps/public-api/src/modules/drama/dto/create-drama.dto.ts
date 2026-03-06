@@ -42,4 +42,7 @@ export class CreateDramaDto {
 
   @IsOptional() @IsString()
   genreTemplateId?: string; // 指定题材模板 ID
+
+  @IsOptional() @IsString()
+  visualStyleHint?: string; // 视觉风格提示（如"真人影视""2D 动漫""水墨古风"），传给视觉资产设计师
 }

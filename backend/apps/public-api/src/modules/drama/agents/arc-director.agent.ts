@@ -27,7 +27,7 @@ export class ArcDirectorAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-arc-director',
       schema: arcOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcDirectorSystemPrompt()),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcDirectorSystemPrompt({ contentMode: state.contentMode })),
       userPrompt: `当前状态：
 全剧标题：${state.seed.title}
 已生成集数：${episodeNumber - 1}
@@ -65,7 +65,7 @@ ${state.storySoFar ? `全局剧情概要：\n${state.storySoFar.slice(0, 800)}` 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-arc-director',
       schema: expansionOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcExpansionSystemPrompt()),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcExpansionSystemPrompt({ contentMode: state.contentMode })),
       userPrompt: `请为以下骨架集补充详细概要：
 
 全剧：${state.seed.title}（${state.seed.genre}）

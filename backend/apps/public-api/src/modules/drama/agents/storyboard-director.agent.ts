@@ -3,28 +3,35 @@ import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
 import {
-  shotSchema, episodeStoryboardSchema, EpisodeStoryboard, EpisodeScript, DramaState, ScriptScene, CharacterIdentity,
+  shotSchema, episodeStoryboardSchema, EpisodeStoryboard, EpisodeScript, EpisodeIntent,
+  DramaState, ScriptScene, CharacterIdentity,
 } from '../schemas/drama-state.schemas';
 import { buildStoryboardDirectorSystemPrompt } from '../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../prompting/drama-prompt-template.service';
 
 const sceneShotsOutputSchema = z.object({ shots: z.array(shotSchema) });
 
+// 黄金场景类型：需要更密集的镜头和专属摄影语言
+const GOLDEN_PURPOSES = new Set(['climax', 'confrontation', 'revelation', 'cliffhanger']);
+// 过场类型：精简镜头
+const FILLER_PURPOSES = new Set(['transition']);
+
 @Injectable()
 export class StoryboardDirectorAgent {
   private readonly logger = new Logger(StoryboardDirectorAgent.name);
   constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
-  async direct(state: DramaState, script: EpisodeScript): Promise<EpisodeStoryboard> {
+  async direct(state: DramaState, script: EpisodeScript, intent?: EpisodeIntent): Promise<EpisodeStoryboard> {
     const scenes = script?.scenes ?? [];
     if (!scenes.length) throw new Error('剧本场景为空，无法生成分镜');
     const allShots: z.infer<typeof shotSchema>[] = [];
     let globalIdx = 0;
     for (let si = 0; si < scenes.length; si++) {
       const scene = scenes[si];
+      const isLastScene = si === scenes.length - 1;
       if (si > 0) await new Promise(r => setTimeout(r, 800));
-      this.logger.log(`E${script?.episodeNumber ?? 1} 场景 ${si + 1}/${scenes.length}: ${scene?.sceneHeading ?? ''}`);
-      const shots = await this.directScene(state, script, scene, globalIdx);
+      this.logger.log(`E${script?.episodeNumber ?? 1} 场景 ${si + 1}/${scenes.length} [${scene?.purpose ?? ''}]: ${scene?.sceneHeading ?? ''}`);
+      const shots = await this.directScene(state, script, scene, globalIdx, isLastScene, intent);
       allShots.push(...shots);
       globalIdx += shots.length;
     }
@@ -38,10 +45,15 @@ export class StoryboardDirectorAgent {
     });
   }
 
-  private async directScene(state: DramaState, script: EpisodeScript, scene: ScriptScene, startIdx: number) {
+  private async directScene(
+    state: DramaState, script: EpisodeScript, scene: ScriptScene,
+    startIdx: number, isLastScene: boolean, intent?: EpisodeIntent,
+  ) {
     const profile = state.promptProfile;
     const camGuide = profile?.cameraStyleGuide;
     const epNum = script.episodeNumber;
+    const scenePurpose = scene.purpose;
+
     // 完整角色外貌描述（不再截断到50字符）
     const chars = state.characters.map(c =>
       `${c.characterId}(${c.name}): face="${c.faceReferencePrompt}" body=${c.bodyType} hair=${c.hairStyle} costume=${c.defaultCostume}` +
@@ -49,48 +61,77 @@ export class StoryboardDirectorAgent {
     ).join('\n');
     const loc = state.locations.find(l => l.locationId === scene.locationId);
     const locDesc = loc ? `${loc.locationId}(${loc.name}): "${loc.visualPrompt}" lighting=${loc.lightingDefault}` : scene.sceneHeading;
+
+    // 黄金场景：提高镜头密度；过场：减少镜头数量
+    // 知识模式下 exposition/narrative 也算标准场景（非filler）
+    const effectiveGolden = state.contentMode === 'knowledge'
+      ? new Set([...GOLDEN_PURPOSES, 'exposition', 'narrative'])
+      : GOLDEN_PURPOSES;
     const targetDur = scene.estimatedDurationSec;
-    const maxShots = Math.min(Math.max(Math.ceil(targetDur / 3), 3), 8);
+    const isGolden = effectiveGolden.has(scenePurpose);
+    const isFiller = FILLER_PURPOSES.has(scenePurpose);
+    const shotDensitySec = isGolden ? 2.5 : isFiller ? 5 : 3.5;
+    const maxShots = isGolden
+      ? Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 4), 10)
+      : isFiller
+        ? Math.min(Math.ceil(targetDur / shotDensitySec), 3)
+        : Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 3), 7);
 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-storyboard-director',
       schema: sceneShotsOutputSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'storyboard-director', buildStoryboardDirectorSystemPrompt({
-        camGuide, visualStyle: state.visualStyle, epNum, startIdx, maxShots, targetDur,
+        camGuide,
+        visualStyle: state.visualStyle,
+        epNum, startIdx, maxShots, targetDur,
+        scenePurpose,
+        isLastScene,
+        intentEmotionDirection: intent?.emotionDirection,
+        hookDirection: isLastScene ? intent?.hookDirection : undefined,
       })),
-      userPrompt: `场景 ${scene.sceneIndex + 1}:
+      userPrompt: `场景 ${scene.sceneIndex + 1}【${scenePurpose}${isGolden ? ' ⭐黄金场景' : ''}${isLastScene ? ' 🎬全集结尾' : ''}】:
 ${JSON.stringify(scene, null, 0)}
 
-角色档案（每个Shot的visualPrompt/firstFramePrompt必须包含出场角色的完整face描述）：
+角色档案（firstFramePrompt/lastFramePrompt中必须包含出场角色的完整face描述，visualPrompt中禁止包含face描述）：
 ${chars}
 
 场景视觉：
 ${locDesc}
 
-要求：shots数组，每个Shot必须包含firstFramePrompt和lastFramePrompt，且visualPrompt中必须嵌入角色face描述确保跨Shot人脸一致`,
+要求：shots数组，每个Shot必须包含firstFramePrompt、lastFramePrompt 和 qualityTier。visualPrompt专注描述运动/动作（禁止face描述），firstFramePrompt/lastFramePrompt专注描述静态画面（必须含face描述）`,
       temperature: 0.5,
     });
 
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
     const parsed = Array.isArray(root?.shots) ? root.shots : (Array.isArray(root) ? root : []);
+
+    // 对过场场景的 qualityTier 做后处理保底（防止LLM忘记设置）
+    const defaultTier = isGolden ? 'golden' : isFiller ? 'filler' : 'standard';
     return parsed.map((s: any, i: number) => {
       const idx = startIdx + i;
-      return shotSchema.parse({ ...s, shotIndex: idx, shotId: s.shotId || `ep${epNum}_shot${idx}`, sceneId: scene.sceneId });
+      return shotSchema.parse({
+        ...s,
+        qualityTier: s.qualityTier ?? defaultTier,
+        shotIndex: idx,
+        shotId: s.shotId || `ep${epNum}_shot${idx}`,
+        sceneId: scene.sceneId,
+      });
     });
   }
 
-  /** 后处理：确保每个Shot的visualPrompt/firstFramePrompt/lastFramePrompt包含角色face描述 */
+  /** 后处理：确保首尾帧T2I prompt包含角色face描述（visualPrompt用于T2V，不注入face以节省token） */
   private enforceFaceLock(shots: z.infer<typeof shotSchema>[], state: DramaState): void {
     const charMap = new Map(state.characters.map(c => [c.characterId, c]));
-    const stylePrefix = state.visualStyle ? `${state.visualStyle}, ` : '';
+    const stylePrefix = state.visualStyle?.overallAesthetic
+      ? `${state.visualStyle.overallAesthetic}, `
+      : '';
     shots.forEach(shot => {
       const faceFragments = this.buildFaceFragments(shot.characters.map(c => c.characterId), charMap, shot.characterVariationIds);
       if (!faceFragments) return;
-      shot.visualPrompt = this.injectFaceLock(shot.visualPrompt, faceFragments, stylePrefix);
       if (shot.firstFramePrompt) shot.firstFramePrompt = this.injectFaceLock(shot.firstFramePrompt, faceFragments, stylePrefix);
       if (shot.lastFramePrompt) shot.lastFramePrompt = this.injectFaceLock(shot.lastFramePrompt, faceFragments, stylePrefix);
     });
-    this.logger.log(`锁脸后处理完成：${shots.length} shots`);
+    this.logger.log(`锁脸后处理完成：${shots.length} shots（仅首尾帧T2I prompt）`);
   }
 
   /** 构建角色face描述片段（支持变体覆盖） */

@@ -44,7 +44,12 @@ ${state.storySoFar ? `\n全局概要：${state.storySoFar.slice(0, 400)}` : ''}
 上集悬念：${state.lastCliffhanger || '无'}
 
 角色身份档案：
-${state.characters.map(c => `${c.characterId}(${c.name}): 面部=${c.faceDescription.slice(0, 30)}... 默认服饰=${c.defaultCostume}`).join('\n')}
+${state.characters.map(c => `${c.characterId}(${c.name}): 面部=${c.faceDescription} 默认服饰=${c.defaultCostume}${c.variations?.length ? ` 变体=[${c.variations.map(v => v.variationId).join(',')}]` : ''}`).join('\n')}
+
+角色命名约束：
+- 现有角色名：${state.characters.map(c => c.name).join('、') || '（无）'}
+- 检查错名/改名未交代、称呼无因漂移、以及新旧角色重名或近似名混淆
+- 角色命名应简短好记，不要在同一阶段引入发音或字形高度相似的人名
 
 请检查并返回结果。`,
       temperature: 0.2,

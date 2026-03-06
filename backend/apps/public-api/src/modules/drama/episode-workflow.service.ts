@@ -1,8 +1,15 @@
 /**
  * 逐集 Pipeline 编排 — 支持断点续跑、连续性阻断回退、审阅精修定向修复。
  * 流程：ArcDirector → EpisodeDirector → ContinuityGuard → Scriptwriter → DialogueCoach
- *       → StoryboardDirector → AudioDirector → DeterministicChecker → ScriptReviewer
- *       → (if needs_edit) ScriptEditor → PacingAnalyzer → HookCrafter → EpisodeRecorder
+ *       → StoryboardDirector(+intent情绪地图+场景类型摄影语言) → AudioDirector
+ *       → DeterministicChecker → ScriptReviewer
+ *       → (if needs_edit) [分镜回炉 if visualImpact<6] ScriptEditor → PacingAnalyzer → HookCrafter → EpisodeRecorder
+ *
+ * 质量优化链：
+ * - VisualStyle → Scriptwriter 台词风格（动漫/真人/古装各异）
+ * - intent.emotionDirection + scenePurpose → StoryboardDirector（黄金场景密集镜头+专属摄影语言）
+ * - 分镜回炉通道：视觉维度低分时跳过ScriptEditor，直接重生成分镜
+ * - Shot.qualityTier（golden/standard/filler）驱动媒体生产优先级
  */
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -132,7 +139,11 @@ export class EpisodeWorkflowService {
       if (!ok) throw new Error(`[E${episodeNumber}] stepOutput写入失败 step=${step}`);
     };
 
-    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    // 心跳保活：每 20s 续命一次，防止长 LLM 调用期间被 stale recovery 抢占
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = setInterval(async () => {
+      const ok = await this.executionService.touchHeartbeat(runId).catch(() => false);
+      if (!ok) { ownershipLost = true; this.logger.warn(`[E${episodeNumber}] 心跳续命失败，标记所有权丢失`); }
+    }, 20_000);
     const emitEp = (stepIndex: number, message: string, done = false) =>
       this.progressService.emit({ dramaId, phase: 'episode', episodeNumber, step: `ep_${stepIndex}`, stepIndex, totalSteps: 13, message, done });
     const logDrama = (step: string, status: 'ok' | 'error', message?: string, meta?: Record<string, unknown>) =>
@@ -225,10 +236,10 @@ export class EpisodeWorkflowService {
         emitEp(4, '台词润色完成', true);
       }
 
-      if (resumeFrom < 5) { // Step 5: 分镜生成（按场景分步）
+      if (resumeFrom < 5) { // Step 5: 分镜生成（按场景分步，传入 intent 以注入情绪地图）
         logDrama('storyboard_start', 'ok', '分镜生成');
         emitEp(5, '分镜生成...');
-        storyboard = await this.storyboardDirector.direct(state, script);
+        storyboard = await this.storyboardDirector.direct(state, script, intent);
         await saveStep('storyboard_drafted', { storyboard }); await checkpoint('storyboard_drafted');
         logDrama('storyboard_done', 'ok', '分镜生成完成', { shotCount: storyboard?.shots?.length });
         emitEp(5, '分镜生成完成', true);
@@ -239,7 +250,7 @@ export class EpisodeWorkflowService {
           if (!script?.scenes?.length) throw new Error('剧本数据缺失，无法重新生成分镜');
           this.logger.warn(`[E${episodeNumber}] 分镜数据缺失，回退重新生成分镜`);
           emitEp(5, '分镜数据缺失，重新生成分镜...');
-          storyboard = await this.storyboardDirector.direct(state, script);
+          storyboard = await this.storyboardDirector.direct(state, script, intent);
           await saveStep('storyboard_drafted', { storyboard }); await checkpoint('storyboard_drafted');
           emitEp(5, '分镜重新生成完成', true);
         }
@@ -277,13 +288,28 @@ export class EpisodeWorkflowService {
         emitEp(8, '质量审核完成', true);
       }
 
-      if (resumeFrom < 9) { // Step 9: 精修（定向修复特定Shot）
+      if (resumeFrom < 9) { // Step 9: 精修（定向修复 + 分镜回炉通道）
         logDrama('edit_start', 'ok', '精修');
         for (let round = 0; round < wp.maxEditRounds && review.overallVerdict === 'needs_edit'; round++) {
           emitEp(9, `精修第${round + 1}轮...`);
           const criticalIssues = review.issuesFound?.filter((i: any) => i.severity === 'critical') ?? [];
-          storyboard = await this.editor.fix(state, storyboard, review, criticalIssues);
-          review = await this.reviewer.review(state, script, storyboard);
+
+          // 分镜回炉通道：若视觉维度低分（<6），且尚未触发过回炉，重新生成分镜
+          const dims = (review.dimensions ?? {}) as Record<string, number>;
+          const visualIssueScore = Math.min(dims.visualImpact ?? 10, dims.pacing ?? 10);
+          const storyboardRebakeTriggered = (round === 0) && (visualIssueScore < 6) && !!intent;
+          if (storyboardRebakeTriggered) {
+            this.logger.warn(`[E${episodeNumber}] 分镜回炉触发：visualImpact=${dims.visualImpact} pacing=${dims.pacing}，重新生成分镜`);
+            emitEp(9, `视觉质量低（${visualIssueScore.toFixed(1)}分），重新生成分镜...`);
+            storyboard = await this.storyboardDirector.direct(state, script, intent);
+            // 补音频设计
+            try { storyboard = await this.audioDirector.enhance(state, storyboard); } catch {}
+            review = await this.reviewer.review(state, script, storyboard);
+            logDrama('storyboard_rebake', 'ok', '分镜回炉完成', { newScore: review.overallScore });
+          } else {
+            storyboard = await this.editor.fix(state, storyboard, review, criticalIssues);
+            review = await this.reviewer.review(state, script, storyboard);
+          }
           await saveStep('edited', { storyboard, review, round: round + 1 }); await checkpoint('edited');
         }
         logDrama('edit_done', 'ok', '精修完成');
@@ -318,6 +344,7 @@ export class EpisodeWorkflowService {
                 ps.shotIndex = baseIdx + i;
                 ps.sceneId = ps.sceneId || `ep${episodeNumber}_preview`;
                 ps.isPreview = true;
+                ps.qualityTier = 'golden'; // 预告Shot都是高优先级
               });
               sbShots.push(...hookResult.previewShots);
               storyboard!.shots = sbShots;
@@ -381,10 +408,16 @@ export class EpisodeWorkflowService {
     }
   }
 
-  /** 根据checkpoint名称计算恢复步骤索引 */
+  /** 根据checkpoint名称计算恢复步骤索引
+   *  返回值 = 最后已完成步骤的索引（-1=未开始）
+   *  步骤 N 的条件写作 `if (resumeFrom < N)`，因此：
+   *    resumeFrom=-1 → 所有步骤都运行（全新流程）
+   *    resumeFrom=0  → 跳过步骤0（arc_planned），从步骤1开始
+   *    resumeFrom=1  → 跳过步骤0-1，从步骤2开始，以此类推
+   */
   private getResumeStep(checkpoint: string): number {
     const idx = STEP_ORDER.indexOf(checkpoint as StepName);
-    return idx >= 0 ? idx + 1 : -1; // 从下一步开始
+    return idx; // idx 就是最后完成的步骤号，-1 表示未找到/未开始
   }
 
   private updateDramaState(
@@ -410,18 +443,22 @@ export class EpisodeWorkflowService {
     (loreRecord.flashbackCandidates ?? []).forEach(fc => {
       state.flashbackBank.push({ shotId: fc.shotId ?? '', reason: fc.reason ?? '', emotionalWeight: fc.emotionalWeight ?? 'low', episodeNumber: epNum, visualPromptSnapshot: '' });
     });
-    const intensity = score >= 8.5 ? 'climactic' : score >= 7 ? 'major' : score >= 5.5 ? 'medium' : 'minor';
-    state.dopamineSchedule.history.push({ type: hookResult.hookType ?? 'cliffhanger', intensity, deliveredAtEpisode: epNum, description: hookResult.cliffhangerSummary ?? '' });
+    const isKnowledge = state.contentMode === 'knowledge';
+    const intensity = isKnowledge
+      ? (score >= 8 ? 'major' : score >= 6 ? 'medium' : 'minor')
+      : (score >= 8.5 ? 'climactic' : score >= 7 ? 'major' : score >= 5.5 ? 'medium' : 'minor');
+    state.dopamineSchedule.history.push({ type: hookResult.hookType ?? (isKnowledge ? 'knowledge_hook' : 'cliffhanger'), intensity, deliveredAtEpisode: epNum, description: hookResult.cliffhangerSummary ?? '' });
     state.dopamineSchedule.episodesSinceMinor = intensity === 'minor' ? 0 : state.dopamineSchedule.episodesSinceMinor + 1;
     state.dopamineSchedule.episodesSinceMajor = (intensity === 'major' || intensity === 'climactic') ? 0 : state.dopamineSchedule.episodesSinceMajor + 1;
 
     // 滚动更新 storySoFar（最近 30 集摘要压缩为全局概要）
+    // 近15集保留完整摘要；更早的保留80字（足够捕捉关键情节，避免切断语义）
     const recentN = state.episodeSummaries.slice(-30);
-    state.storySoFar = recentN.length <= 10
+    state.storySoFar = recentN.length <= 15
       ? recentN.map(s => `E${s.episodeNumber}:${s.summary}`).join('\n')
       : [
-          ...recentN.slice(0, -10).map(s => `E${s.episodeNumber}:${s.summary.slice(0, 40)}`),
-          ...recentN.slice(-10).map(s => `E${s.episodeNumber}:${s.summary}`),
+          ...recentN.slice(0, -15).map(s => `E${s.episodeNumber}:${s.summary.slice(0, 80)}`),
+          ...recentN.slice(-15).map(s => `E${s.episodeNumber}:${s.summary}`),
         ].join('\n');
 
     // DramaState 裁剪（防止无限膨胀）
@@ -433,7 +470,4 @@ export class EpisodeWorkflowService {
     state.updatedAt = new Date().toISOString();
   }
 
-  private log(runId: string, step: number, name: string): void {
-    this.logger.log(`[${runId.slice(0, 8)}] Step ${step}/13: ${name}`);
-  }
 }

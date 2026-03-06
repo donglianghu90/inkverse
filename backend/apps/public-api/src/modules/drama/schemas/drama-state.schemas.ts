@@ -4,18 +4,31 @@
  */
 import { z } from 'zod';
 
+/**
+ * null 安全数组工厂 — AI 大模型有时对"空列表"返回 null 而非 []。
+ * 所有 LLM 直接输出的数组字段统一用此函数定义，避免 Zod invalid_type 报错。
+ */
+const na = <T extends z.ZodTypeAny>(schema: T, defaultVal: z.infer<T>[] = []) =>
+  z.preprocess((v) => v ?? defaultVal, z.array(schema));
+
+/**
+ * null 安全字符串工厂 — AI 大模型有时对可选字符串字段返回 null 而非 "" 或 undefined。
+ * 所有 LLM 直接输出的字符串字段统一用此函数定义。
+ */
+const ns = (def = '') => z.union([z.string(), z.null()]).transform(v => v ?? def).default(def);
+
 // ---------------------------------------------------------------------------
 // Phase 0: 短剧题材与受众
 // ---------------------------------------------------------------------------
 
 export const dramaAudienceDirectiveSchema = z.object({
-  audienceTags: z.array(z.string()).default([]),
+  audienceTags: na(z.string()),
   protagonistFocus: z.enum(['female_lead', 'male_lead', 'dual_lead', 'ensemble']).default('female_lead'),
-  tonePreference: z.string().default(''),
+  tonePreference: ns(),
   platformTarget: z.enum(['douyin', 'kuaishou', 'reelshort', 'dramabox', 'generic']).default('generic'),
   aspectRatio: z.enum(['9:16', '16:9']).default('9:16'),
-  hardConstraints: z.array(z.string()).default([]),
-  softPreferences: z.array(z.string()).default([]),
+  hardConstraints: na(z.string()),
+  softPreferences: na(z.string()),
 });
 
 // ---------------------------------------------------------------------------
@@ -24,7 +37,7 @@ export const dramaAudienceDirectiveSchema = z.object({
 
 export const dramaSeedSchema = z.object({
   title: z.string(),
-  genre: z.string(), // 霸总/甜宠/战神/穿越/宫斗/复仇/重生 等
+  genre: z.string(), // 题材类型：霸总/甜宠/战神/穿越/宫斗/复仇/重生/历史教育/人物传记/神话传说/科普知识 等
   targetAudience: z.string(),
   logline: z.string(), // 一句话概括
   protagonistConcept: z.object({
@@ -32,7 +45,7 @@ export const dramaSeedSchema = z.object({
     situation: z.string(), // 初始处境
     coreDesire: z.string(), // 核心欲望
     personality: z.string(),
-    fatalFlaw: z.string().default(''), // 致命弱点（驱动冲突）
+    fatalFlaw: ns(), // 致命弱点（驱动冲突）
   }),
   antagonistConcept: z.object({
     name: z.string(),
@@ -40,9 +53,9 @@ export const dramaSeedSchema = z.object({
     relationship: z.string(), // 与主角的关系
   }).optional(),
   tone: z.string(), // 风格调性
-  coreConflict: z.string(), // 核心矛盾
-  catharsisType: z.string(), // 核心爽点类型（打脸/逆袭/真相揭露/甜蜜反转）
-  redLines: z.array(z.string()).default([]), // 绝对不可触碰的底线
+  coreConflict: z.string(), // 核心矛盾/核心主题（知识类：核心叙事主线）
+  catharsisType: z.string(), // 核心体验类型（商业：打脸/逆袭/真相揭露；知识：知识震撼/认知颠覆/情感共鸣）
+  redLines: na(z.string()), // 绝对不可触碰的底线
   targetEpisodeDurationSec: z.number().int().min(30).max(600).default(180), // 每集目标时长（秒）
   plannedTotalEpisodes: z.object({
     min: z.number().int().min(20).default(60),
@@ -60,23 +73,23 @@ export const dramaPromptProfileSchema = z.object({
   generatedForAudience: z.string(),
   scriptwriterGuide: z.object({
     coreIdentity: z.string(), // "你是一位擅长霸总甜宠的编剧..."
-    genreRules: z.array(z.string()).min(3),
+    genreRules: na(z.string()),
     dialogueGuide: z.string(), // 台词风格指南
     pacingGuide: z.string(), // 节奏指南
     visualNarrativeGuide: z.string(), // 视觉叙事指南（如何用画面代替文字叙述）
-    forbiddenPatterns: z.array(z.string()).default([]), // 禁止的叙事模式
+    forbiddenPatterns: na(z.string()), // 禁止的叙事模式
   }),
   cameraStyleGuide: z.object({
-    preferredAngles: z.array(z.string()).default([]), // 偏好镜头角度
-    signatureTechniques: z.array(z.string()).default([]), // 标志性镜头手法
-    transitionStyle: z.string().default(''), // 转场风格偏好
-    colorPalette: z.string().default(''), // 色彩基调
+    preferredAngles: na(z.string()), // 偏好镜头角度
+    signatureTechniques: na(z.string()), // 标志性镜头手法
+    transitionStyle: ns(), // 转场风格偏好
+    colorPalette: ns(), // 色彩基调
   }),
   audioStyleGuide: z.object({
-    bgmMoodPreferences: z.array(z.string()).default([]),
+    bgmMoodPreferences: na(z.string()),
     sfxDensity: z.enum(['sparse', 'moderate', 'rich']).default('moderate'),
-    silenceUsage: z.string().default(''), // 静默使用策略
-    voiceActingStyle: z.string().default(''), // 配音风格（夸张/克制/自然）
+    silenceUsage: ns(), // 静默使用策略
+    voiceActingStyle: ns(), // 配音风格（夸张/克制/自然）
   }),
   reviewerCalibration: z.object({
     dimensionWeights: z.object({
@@ -87,14 +100,17 @@ export const dramaPromptProfileSchema = z.object({
       consistency: z.number().transform(v => weightClamp(v, 1.0)).default(1.0),
       emotionalImpact: z.number().transform(v => weightClamp(v, 1.0)).default(1.0),
     }),
-    genreSpecificChecks: z.array(z.string()).min(2),
-    calibrationHistory: z.array(z.object({ // 维度权重微调历史
-      episode: z.number().int().min(1),
-      dimension: z.string(),
-      oldWeight: z.number(),
-      newWeight: z.number(),
-      reason: z.string(),
-    })).default([]),
+    genreSpecificChecks: na(z.string()),
+    calibrationHistory: z.union([
+      z.array(z.object({ // 维度权重微调历史
+        episode: z.number().int().min(1),
+        dimension: z.string(),
+        oldWeight: z.number(),
+        newWeight: z.number(),
+        reason: z.string(),
+      })),
+      z.null(),
+    ]).transform(v => v ?? []).default([]),
   }),
 });
 
@@ -113,7 +129,7 @@ export const characterVariationSchema = z.object({ // 角色外观变体（换�
 export const characterIdentitySchema = z.object({
   characterId: z.string(),
   name: z.string(),
-  role: z.enum(['protagonist', 'antagonist', 'supporting', 'minor']),
+  role: z.enum(['protagonist', 'antagonist', 'supporting', 'minor', 'narrator', 'historical_figure']),
   faceDescription: z.string(), // 面部描述（锁脸用，全剧恒定）
   bodyType: z.string(),
   hairStyle: z.string(),
@@ -122,15 +138,15 @@ export const characterIdentitySchema = z.object({
   age: z.string(),
   faceReferencePrompt: z.string(), // T2I 面部参考提示词（英文）
   voiceProfile: z.object({
-    ttsVoiceId: z.string().default(''),
+    ttsVoiceId: ns(),
     pitch: z.enum(['low', 'medium', 'high']).default('medium'),
     speed: z.enum(['slow', 'normal', 'fast']).default('normal'),
     timbre: z.string(),
     speakingStyle: z.string(),
-    catchphrase: z.string().default(''),
+    catchphrase: ns(),
   }),
   defaultCostume: z.string(),
-  variations: z.array(characterVariationSchema).default([]), // 角色外观变体列表
+  variations: na(characterVariationSchema), // 角色外观变体列表
 });
 
 export const sceneLocationSchema = z.object({
@@ -141,7 +157,7 @@ export const sceneLocationSchema = z.object({
   lightingDefault: z.string(), // 默认光线
   ambientSoundDefault: z.string(), // 默认环境音
   colorTone: z.string(), // 色调
-  keyProps: z.array(z.string()).default([]), // 标志性道具（如"落地窗""红木书桌"）
+  keyProps: na(z.string()), // 标志性道具（如"落地窗""红木书桌"）
   isRecurring: z.boolean().default(false), // 是否为反复出现的场景
 });
 
@@ -149,7 +165,7 @@ export const visualStyleGuideSchema = z.object({
   overallAesthetic: z.string(), // 整体美学风格（如"电影质感""韩剧滤镜""高饱和度"）
   colorGrading: z.string(), // 调色风格
   lightingStyle: z.string(), // 光影风格
-  era: z.string().default('contemporary'), // 时代背景
+  era: ns('contemporary'), // 时代背景
 });
 
 // ---------------------------------------------------------------------------
@@ -159,22 +175,22 @@ export const visualStyleGuideSchema = z.object({
 export const episodeSynopsisSchema = z.object({
   episodeNumber: z.number().int().min(1),
   title: z.string(),
-  coreConflict: z.string(), // 本集核心冲突
-  cliffhanger: z.string(), // 集末悬念
+  coreConflict: z.string(), // 本集核心冲突/核心知识主题
+  cliffhanger: z.string(), // 集末悬念/知识衔接点
   emotionalArc: z.string(), // 情绪弧线（如"平静→震惊→愤怒→决意"）
-  keyCharacterIds: z.array(z.string()).default([]),
+  keyCharacterIds: na(z.string()),
   estimatedDurationSec: z.number().int().min(30).default(180),
-  isPaywall: z.boolean().default(false), // 是否为付费卡点集
-  paywallReason: z.string().default(''), // 为什么在这里设卡点
-  arcSegmentId: z.string().default(''), // 所属段落ID
+  isPaywall: z.boolean().default(false), // 是否为付费卡点集（知识模式下统一为 false）
+  paywallReason: ns(), // 卡点原因（知识模式下为空）
+  arcSegmentId: ns(), // 所属段落ID
 });
 
 export const seriesOutlineSchema = z.object({
   totalPlannedEpisodes: z.number().int().min(20),
   mainStoryGoal: z.string(),
   endingDirection: z.string(),
-  episodes: z.array(episodeSynopsisSchema),
-  paywallEpisodes: z.array(z.number().int()), // 付费卡点集号列表
+  episodes: na(episodeSynopsisSchema),
+  paywallEpisodes: na(z.number().int()), // 付费卡点集号列表
 });
 
 // ---------------------------------------------------------------------------
@@ -186,15 +202,15 @@ export const arcSegmentSchema = z.object({
   segmentTitle: z.string(),
   startEpisode: z.number().int().min(1),
   endEpisode: z.number().int().min(1),
-  coreConflict: z.string(), // 本段落核心矛盾
+  coreConflict: z.string(), // 本段落核心矛盾/核心知识主题
   emotionalTheme: z.string(),
   climaxEpisode: z.number().int().min(1),
-  characterGoals: z.array(z.object({
+  characterGoals: na(z.object({
     characterId: z.string(),
     startState: z.string(),
     endState: z.string(),
-    keyMoments: z.array(z.string()).default([]),
-  })).default([]),
+    keyMoments: na(z.string()),
+  })),
   status: z.enum(['planning', 'active', 'completed']).default('planning'),
 });
 
@@ -204,17 +220,17 @@ export const arcSegmentSchema = z.object({
 
 export const episodeIntentSchema = z.object({
   episodeNumber: z.number().int().min(1),
-  goals: z.array(z.string()).min(1).max(5),
+  goals: na(z.string()),
   emotionDirection: z.string(),
   hookDirection: z.string(),
   carryoverFromLastEpisode: z.string(),
-  activeCharacters: z.array(z.object({
+  activeCharacters: na(z.object({
     characterId: z.string(),
     costumeOverride: z.string().nullish().transform(v => v ?? ''), // AI 可能输出 null
     emotionalState: z.string(), // 本集情绪基调
     role: z.string(), // 本集角色定位（如"被揭穿者""复仇者""旁观者"）
   })),
-  locationIds: z.array(z.string()).default([]), // 本集使用的场景
+  locationIds: na(z.string()), // 本集使用的场景
   durationTargetSec: z.number().int().min(30),
   isPaywallEpisode: z.boolean().default(false),
 });
@@ -227,24 +243,25 @@ export const scriptSceneSchema = z.object({
   sceneIndex: z.number().int().nonnegative(),
   sceneId: z.string(),
   sceneHeading: z.string(), // "内 - 总裁办公室 - 日"
-  locationId: z.string().default(''),
+  locationId: ns(),
   purpose: z.enum([
     'hook_opening', 'conflict', 'revelation', 'emotional',
     'action', 'confrontation', 'romantic', 'transition', 'climax', 'cliffhanger',
+    'exposition', 'narrative', 'montage',
   ]),
   objective: z.string(),
   turningPoint: z.string(),
-  presentCharacterIds: z.array(z.string()),
+  presentCharacterIds: na(z.string()),
   emotionalEntry: z.string(),
   emotionalExit: z.string(),
-  dialogues: z.array(z.object({
-    characterId: z.string(),
+  dialogues: na(z.object({
+    characterId: z.string().nullish().transform(v => v ?? ''),
     text: z.string(),
-    parenthetical: z.string().default(''), // 括号注释（如"冷笑""压低声音"）
+    parenthetical: z.string().nullish().transform(v => v ?? ''), // 括号注释（如"冷笑""压低声音"）
   })),
-  actions: z.array(z.object({
+  actions: na(z.object({
     description: z.string(), // 动作描写
-    characterId: z.string().default(''), // 空=环境动作
+    characterId: z.string().nullish().transform(v => v ?? ''), // null/undefined → '' 表示环境动作
   })),
   estimatedDurationSec: z.number().int().min(1),
 });
@@ -303,24 +320,43 @@ export const shotAudioSchema = z.object({
     intensity: z.number().min(0).max(1).default(0.5),
     action: z.enum(['continue', 'fade_in', 'fade_out', 'cut', 'swell', 'drop_to_silence']).default('continue'),
   }).optional(),
-  sfx: z.array(z.object({
+  sfx: na(z.object({
     trigger: z.string(), // 触发描述（如"摔门""玻璃碎裂"）
     sound: z.string(), // 音效标识
     timing: z.enum(['on_action', 'before_dialogue', 'after_dialogue', 'ambient']).default('on_action'),
-  })).default([]),
-  ambience: z.string().default(''), // 环境音（如 office_quiet / rain_heavy / crowd_murmur）
+  })),
+  ambience: z.union([z.string(), z.null()]).transform(v => v ?? '').default(''), // 环境音（如 office_quiet / rain_heavy / crowd_murmur）
 });
 
 const shotSubtitleSchema = z.object({
   text: z.string(),
   style: z.enum(['normal', 'emphasis', 'whisper', 'scream', 'narrator', 'time_skip']).default('normal'),
 });
+/**
+ * 特殊拍摄手法枚举 — AI 生成时注入 T2V prompt，用户可手动覆盖。
+ * 与 camera.movement 正交：movement 描述镜头物理运动，specialTechnique 描述光学/时态效果。
+ */
+export const SPECIAL_TECHNIQUES = [
+  'dolly_zoom',    // 希区柯克变焦
+  'time_lapse',    // 延时摄影
+  'fast_push',     // 急推镜头
+  'fast_pull',     // 急拉镜头
+  'bullet_time',   // 子弹时间
+  'fpv',           // FPV 穿梭
+  'macro',         // 微距特写
+  'slow_motion',   // 慢镜头
+  'probe_lens',    // 探针镜头
+  'dutch_tilt',    // 旋转倾斜
+] as const;
+
+export type SpecialTechnique = typeof SPECIAL_TECHNIQUES[number];
+
 export const shotSchema = z.object({
   shotIndex: z.number().int().nonnegative(),
   shotId: z.string(),
   sceneId: z.string(), // 关联的剧本场景ID
   camera: shotCameraSchema,
-  characters: z.array(shotCharacterSchema).default([]),
+  characters: na(shotCharacterSchema),
   dialogue: shotDialogueSchema.nullish(), // AI 可能输出 null
   audio: shotAudioSchema.nullish().transform(v => v ?? {}),
   visualPrompt: z.string(), // T2V 视觉提示词（英文，含风格/光影/构图/角色参考）
@@ -336,6 +372,18 @@ export const shotSchema = z.object({
   firstFrameImageUrl: z.string().nullish(), // T2I 生成前为 null
   lastFrameImageUrl: z.string().nullish(),
   characterVariationIds: z.record(z.string(), z.string()).nullish(), // characterId → variationId 映射
+
+  // ─── 质量分级（基于场景类型自动标记，影响媒体生产优先级）──────────────────
+  qualityTier: z.enum(['golden', 'standard', 'filler']).default('standard'),
+  // golden: climax/cliffhanger/revelation/confrontation → 优先生成，可多版本选优
+  // standard: conflict/romantic/emotional/action → 正常处理
+  // filler: transition/hook_opening → 可使用静帧+缩放代替完整视频
+
+  // ─── 人工干预字段 ───────────────────────────────────────────────────────────
+  specialTechnique: z.enum(SPECIAL_TECHNIQUES).nullish(), // 特殊拍摄手法（可选），AI 重跑时如已设定则保留
+  isHumanEdited: z.boolean().default(false), // true = 人工已修改，AI 重跑时跳过此 Shot
+  humanEditedAt: z.string().nullish(),       // ISO 时间戳，记录最近人工修改时间
+  humanEditNote: z.string().nullish(),       // 人工修改备注（可选）
 });
 
 export const episodeStoryboardSchema = z.object({
@@ -343,17 +391,17 @@ export const episodeStoryboardSchema = z.object({
   shots: z.array(shotSchema).min(1),
   totalEstimatedDurationSec: z.number(),
   audioTimeline: z.object({
-    bgmSegments: z.array(z.object({
+    bgmSegments: na(z.object({
       mood: z.string(),
       startShotIndex: z.number().int().nonnegative(),
       endShotIndex: z.number().int().nonnegative(),
-      intensityCurve: z.array(z.number()).default([]), // 强度曲线采样点
-    })).default([]),
-    silencePoints: z.array(z.object({
+      intensityCurve: na(z.number()), // 强度曲线采样点
+    })),
+    silencePoints: na(z.object({
       afterShotIndex: z.number().int().nonnegative(),
       durationSec: z.number().min(0.5).max(5),
       purpose: z.string(), // 静默目的（如"震惊留白""悬念停顿"）
-    })).default([]),
+    })),
   }),
 });
 
@@ -372,7 +420,7 @@ export const episodeReviewSchema = z.object({
     consistency: z.number().min(0).max(10), // 连续性
     emotionalImpact: z.number().min(0).max(10), // 情感冲击力
   }),
-  issuesFound: z.array(z.object({
+  issuesFound: na(z.object({
     category: z.enum([
       'visual_continuity', 'dialogue', 'pacing', 'hook',
       'character_consistency', 'emotional_logic', 'duration',
@@ -382,7 +430,7 @@ export const episodeReviewSchema = z.object({
     description: z.string(),
     suggestedFix: z.string(),
   })),
-  strengths: z.array(z.string()),
+  strengths: na(z.string()),
 });
 
 // ---------------------------------------------------------------------------
@@ -392,26 +440,26 @@ export const episodeReviewSchema = z.object({
 export const episodeLoreRecordSchema = z.object({
   episodeNumber: z.number().int().min(1),
   summary: z.string(),
-  characterStateDeltas: z.array(z.object({
+  characterStateDeltas: na(z.object({
     characterId: z.string(),
     emotionalShift: z.string(),
-    relationshipChanges: z.array(z.string()).default([]),
-    newKnowledge: z.array(z.string()).default([]),
-    costumeUsed: z.string().default(''),
-  })).default([]),
-  plotAdvances: z.array(z.string()).default([]),
-  newSecrets: z.array(z.object({
+    relationshipChanges: na(z.string()),
+    newKnowledge: na(z.string()),
+    costumeUsed: ns(),
+  })),
+  plotAdvances: na(z.string()),
+  newSecrets: na(z.object({
     secret: z.string(),
-    knownBy: z.array(z.string()),
-    hiddenFrom: z.array(z.string()),
-  })).default([]),
-  flashbackCandidates: z.array(z.object({
+    knownBy: na(z.string()),
+    hiddenFrom: na(z.string()),
+  })),
+  flashbackCandidates: na(z.object({
     shotId: z.string(),
     reason: z.string(), // 为什么这个镜头适合被后续引用为闪回
     emotionalWeight: z.enum(['low', 'medium', 'high', 'iconic']),
-  })).default([]),
-  cliffhangerResolution: z.string().default(''), // 上集悬念的解决方式
-  newCliffhanger: z.string().default(''), // 本集留下的新悬念
+  })),
+  cliffhangerResolution: ns(), // 上集悬念的解决方式
+  newCliffhanger: ns(), // 本集留下的新悬念
 });
 
 // ---------------------------------------------------------------------------
@@ -420,17 +468,18 @@ export const episodeLoreRecordSchema = z.object({
 
 export const dramaContinuityCheckSchema = z.object({
   pass: z.boolean(),
-  warnings: z.array(z.object({
+  warnings: na(z.object({
     type: z.enum([
       'character_appearance_mismatch', 'location_continuity_break',
       'costume_inconsistency', 'emotion_jump', 'timeline_violation',
       'secret_leak', 'dead_character_active', 'relationship_contradiction',
+      'character_name_inconsistency', 'addressing_inconsistency', 'duplicate_name_confusion',
     ]),
     description: z.string(),
     severity: z.enum(['warning', 'block']),
-    affectedEntityId: z.string().default(''),
+    affectedEntityId: ns(),
   })),
-  contextInjections: z.array(z.string()),
+  contextInjections: na(z.string()),
 });
 
 // ---------------------------------------------------------------------------
@@ -439,7 +488,7 @@ export const dramaContinuityCheckSchema = z.object({
 
 export const dramaStrategySchema = z.object({
   coreNarrativeContract: z.string(), // 本剧叙事契约
-  toneGuardrails: z.array(z.string()).default([]),
+  toneGuardrails: na(z.string()),
   paywallStrategy: z.object({
     firstPaywallEpisode: z.number().int().min(5).default(10),
     paywallInterval: z.number().int().min(3).default(5),
@@ -448,7 +497,7 @@ export const dramaStrategySchema = z.object({
   }),
   first3EpisodesStrategy: z.string(), // 前3集生死线策略
   hookCadencePolicy: z.object({
-    preferredTypes: z.array(z.string()).default([]),
+    preferredTypes: na(z.string()),
     avoidRecentRepeatWindow: z.number().int().min(1).default(3),
     urgencyBias: z.enum(['conservative', 'balanced', 'aggressive']).default('aggressive'),
   }),
@@ -464,12 +513,12 @@ export const dramaStrategySchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const dramaDopamineScheduleSchema = z.object({
-  history: z.array(z.object({
+  history: na(z.object({
     type: z.string(),
     intensity: z.enum(['minor', 'medium', 'major', 'climactic']),
     deliveredAtEpisode: z.number().int().min(1),
     description: z.string(),
-  })).default([]),
+  })),
   episodesSinceMinor: z.number().int().nonnegative().default(0),
   episodesSinceMajor: z.number().int().nonnegative().default(0),
 });
@@ -480,26 +529,29 @@ export const dramaDopamineScheduleSchema = z.object({
 
 export const dramaDeterministicCheckSchema = z.object({
   pass: z.boolean(),
-  failedChecks: z.array(z.object({
+  failedChecks: na(z.object({
     rule: z.string(),
     detail: z.string(),
   })),
-  hardFails: z.array(z.object({
+  hardFails: na(z.object({
     rule: z.string(),
     detail: z.string(),
     severity: z.enum(['hard', 'soft']),
-  })).default([]),
+  })),
 });
 
 // ---------------------------------------------------------------------------
 // Story State (顶层聚合)
 // ---------------------------------------------------------------------------
 
+export type ContentMode = 'drama' | 'knowledge';
+
 export const dramaStateSchema = z.object({
   dramaId: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
   version: z.literal(1).default(1),
+  contentMode: z.enum(['drama', 'knowledge']).default('drama'),
 
   seed: dramaSeedSchema,
   audienceDirective: dramaAudienceDirectiveSchema.optional(),
@@ -507,61 +559,61 @@ export const dramaStateSchema = z.object({
   strategy: dramaStrategySchema.optional(),
 
   visualStyle: visualStyleGuideSchema.optional(),
-  characters: z.array(characterIdentitySchema).default([]),
-  locations: z.array(sceneLocationSchema).default([]),
+  characters: na(characterIdentitySchema),
+  locations: na(sceneLocationSchema),
 
   seriesOutline: seriesOutlineSchema.optional(),
-  arcSegments: z.array(arcSegmentSchema).default([]),
+  arcSegments: na(arcSegmentSchema),
   currentArcSegment: arcSegmentSchema.optional(),
 
   dopamineSchedule: dramaDopamineScheduleSchema.default({ history: [], episodesSinceMinor: 0, episodesSinceMajor: 0 }),
 
   episodeCursor: z.number().int().min(1).default(1),
-  episodeSummaries: z.array(z.object({
+  episodeSummaries: na(z.object({
     episodeNumber: z.number().int().min(1),
     summary: z.string(),
-  })).default([]),
-  lastCliffhanger: z.string().default(''),
-  recentHookTypes: z.array(z.object({
+  })),
+  lastCliffhanger: ns(),
+  recentHookTypes: na(z.object({
     episodeNumber: z.number().int().min(1),
     hookType: z.string(),
-  })).default([]),
+  })),
 
-  secretLedger: z.array(z.object({
+  secretLedger: na(z.object({
     id: z.string(),
     secret: z.string(),
-    knownBy: z.array(z.string()),
-    hiddenFrom: z.array(z.string()),
+    knownBy: na(z.string()),
+    hiddenFrom: na(z.string()),
     seededAtEpisode: z.number().int().min(1),
     resolved: z.boolean().default(false),
-  })).default([]),
+  })),
 
-  flashbackBank: z.array(z.object({
+  flashbackBank: na(z.object({
     shotId: z.string(),
     episodeNumber: z.number().int().min(1),
     reason: z.string(),
     emotionalWeight: z.enum(['low', 'medium', 'high', 'iconic']),
     visualPromptSnapshot: z.string(), // 存储当时的视觉提示词以供复用
-  })).default([]),
+  })),
 
-  kpiHistory: z.array(z.object({
+  kpiHistory: na(z.object({
     episodeNumber: z.number().int().min(1),
     overallScore: z.number().min(0).max(10),
     dimensions: z.record(z.string(), z.number()),
     generatedAt: z.string(),
-  })).default([]),
+  })),
 
-  storySoFar: z.string().default(''), // 滚动压缩的全局剧情摘要，供长程上下文引用
+  storySoFar: ns(), // 滚动压缩的全局剧情摘要，供长程上下文引用
 
   // 集级校准追踪 — 近期重复问题模式（滑动窗口）
-  recentIssuePatterns: z.array(z.object({
+  recentIssuePatterns: na(z.object({
     pattern: z.string(), // 问题模式描述
     dimension: z.string(), // 归属审阅维度
     occurrences: z.number().int().min(1),
     firstSeenEpisode: z.number().int().min(1),
     lastSeenEpisode: z.number().int().min(1),
     status: z.enum(['active', 'resolved', 'expired']).default('active'),
-  })).default([]),
+  })),
 });
 
 // ---------------------------------------------------------------------------

@@ -144,4 +144,55 @@ export class DramaWorkflowExecutionService {
   async listRuns(dramaId: string, limit = 20): Promise<DramaWorkflowExecutionEntity[]> {
     return this.repo.find({ where: { dramaId }, order: { createdAt: 'DESC' }, take: limit });
   }
+
+  /** 查询此剧所有「进行中」或「最近中断」的执行记录（用于前端页面重入时恢复进度显示） */
+  async findRunningForDrama(dramaId: string): Promise<Array<{
+    episodeNumber: number; lastCheckpoint: string; isActive: boolean;
+    heartbeatAgeMs: number; startedAt: string; progressPct: number;
+    stepLabel: string;
+  }>> {
+    const runs = await this.repo.find({
+      where: { dramaId, status: 'running' as DramaExecStatus },
+      order: { createdAt: 'DESC' },
+      take: 20,
+      select: ['id', 'episodeNumber', 'lastCheckpoint', 'heartbeatAt', 'createdAt'],
+    });
+    const now = Date.now();
+    return runs.map(r => {
+      const hbTime = (r.heartbeatAt ?? r.createdAt).getTime();
+      const cp = r.lastCheckpoint ?? '';
+      const { pct, label } = checkpointToProgress(cp);
+      return {
+        episodeNumber: r.episodeNumber,
+        lastCheckpoint: cp,
+        isActive: now - hbTime < STALE_THRESHOLD_MS,
+        heartbeatAgeMs: now - hbTime,
+        startedAt: r.createdAt.toISOString(),
+        progressPct: pct,
+        stepLabel: label,
+      };
+    });
+  }
+}
+
+// 将 checkpoint 名称转为 0-100 进度和可读标签
+const CHECKPOINT_MAP: Record<string, { pct: number; label: string }> = {
+  '':                   { pct: 5,  label: '准备中...' },
+  arc_planned:          { pct: 10, label: '段落规划完成' },
+  intent_ready:         { pct: 20, label: '集导演完成' },
+  continuity_checked:   { pct: 28, label: '连续性检查完成' },
+  script_drafted:       { pct: 40, label: '剧本完成' },
+  dialogue_polished:    { pct: 50, label: '台词润色完成' },
+  storyboard_drafted:   { pct: 65, label: '分镜生成完成' },
+  audio_designed:       { pct: 72, label: '音频设计完成' },
+  deterministic_checked:{ pct: 78, label: '规则校验完成' },
+  reviewed:             { pct: 83, label: '质量审核完成' },
+  edited:               { pct: 88, label: '精修完成' },
+  pacing_analyzed:      { pct: 92, label: '节奏分析完成' },
+  hook_crafted:         { pct: 96, label: '悬念设计完成' },
+  recorded:             { pct: 100, label: '已完成' },
+};
+
+function checkpointToProgress(cp: string): { pct: number; label: string } {
+  return CHECKPOINT_MAP[cp] ?? { pct: 5, label: '生成中...' };
 }

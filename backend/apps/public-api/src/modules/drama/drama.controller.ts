@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Put, Delete, Param, Body, Query, Req, Sse, MessageEvent, NotFoundException } from '@nestjs/common';
+import { Controller, Post, Get, Put, Patch, Delete, Param, Body, Query, Req, Sse, MessageEvent, NotFoundException } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
 import { finalize } from 'rxjs/operators';
 import { DramaService } from './drama.service';
@@ -6,8 +6,10 @@ import { CreateDramaDto } from './dto/create-drama.dto';
 import { DramaProgressService } from './drama-progress.service';
 import { DramaGenreTemplateService } from './drama-genre-template.service';
 import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
+import { DramaWorkflowExecutionService } from './drama-workflow-execution.service';
 import { DramaAgentNodeConfig, DramaWorkflowParams } from './entities/drama-agent-pipeline.entity';
 import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto, AiGenerateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
+import { DramaUsageService } from './drama-usage.service';
 
 @Controller('drama')
 export class DramaController {
@@ -16,6 +18,8 @@ export class DramaController {
     private readonly progressService: DramaProgressService,
     private readonly genreTemplateService: DramaGenreTemplateService,
     private readonly pipelineService: DramaAgentPipelineService,
+    private readonly executionService: DramaWorkflowExecutionService,
+    private readonly usageService: DramaUsageService,
   ) {}
 
   /* ─── 题材模板（静态路由优先于 :dramaId 参数路由） ─── */
@@ -122,6 +126,11 @@ export class DramaController {
     return this.dramaService.getDrama(dramaId);
   }
 
+  @Get(':dramaId/usage')
+  async getDramaUsage(@Param('dramaId') dramaId: string) {
+    return this.usageService.getDramaUsage(dramaId);
+  }
+
   @Post(':dramaId/retry-create')
   async retryCreation(@Param('dramaId') dramaId: string) {
     await this.dramaService.retryCreation(dramaId);
@@ -131,7 +140,19 @@ export class DramaController {
   @Post(':dramaId/episodes/generate')
   async generateEpisode(@Param('dramaId') dramaId: string, @Query('count') count?: string) {
     const n = Math.max(1, Math.min(10, parseInt(count || '1', 10) || 1));
-    return this.dramaService.generateEpisodes(dramaId, n); // 异步启动，立即返回
+    return this.dramaService.generateEpisodes(dramaId, n);
+  }
+
+  @Post(':dramaId/episodes/pause')
+  async pauseGeneration(@Param('dramaId') dramaId: string) {
+    const ok = this.dramaService.pauseGeneration(dramaId);
+    return { paused: ok, message: ok ? '暂停请求已发送，当前集完成后将暂停' : '该短剧当前没有正在进行的生成任务' };
+  }
+
+  @Post(':dramaId/episodes/resume')
+  async resumeGeneration(@Param('dramaId') dramaId: string) {
+    this.dramaService.resumeGeneration(dramaId);
+    return { message: '暂停标记已清除，可重新启动生成' };
   }
 
   @Get(':dramaId/episodes')
@@ -156,8 +177,8 @@ export class DramaController {
     }
     setTimeout(async () => {
       try {
-        const result = await this.dramaService.generateEpisodesAndWait(dramaId, n); // 等待完成，期间 progress 会通过 subscribe 推送
-        subject.next({ data: { _type: 'result', ...result } } as MessageEvent);
+        const result = await this.dramaService.generateEpisodesAndWait(dramaId, n);
+        if (!result.paused) subject.next({ data: { _type: 'result', ...result } } as MessageEvent);
       } catch (err: any) {
         subject.next({ data: { done: true, error: err.message } } as MessageEvent);
       } finally {
@@ -187,6 +208,22 @@ export class DramaController {
     return this.dramaService.regenerateAssetImage(dramaId, assetId);
   }
 
+  /**
+   * 人工编辑单个 Shot — 支持局部 patch，标记 isHumanEdited=true 防止 AI 重跑覆盖。
+   * 前端可编辑：visualPrompt / camera / specialTechnique / firstFrameImageUrl 等安全字段。
+   */
+  @Patch(':dramaId/episodes/:episodeNumber/shots/:shotId')
+  async updateShot(
+    @Param('dramaId') dramaId: string,
+    @Param('episodeNumber') ep: string,
+    @Param('shotId') shotId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const episodeNumber = parseInt(ep, 10);
+    if (!Number.isFinite(episodeNumber) || episodeNumber < 1) throw new NotFoundException(`无效集数: ${ep}`);
+    return this.dramaService.updateShot(dramaId, episodeNumber, shotId, body);
+  }
+
   @Post(':dramaId/episodes/:episodeNumber/generate-media')
   async generateEpisodeMedia(@Param('dramaId') dramaId: string, @Param('episodeNumber') ep: string) {
     return this.dramaService.generateEpisodeMedia(dramaId, parseInt(ep, 10));
@@ -195,6 +232,31 @@ export class DramaController {
   @Get(':dramaId/episodes/:episodeNumber/media-status')
   async getEpisodeMediaStatus(@Param('dramaId') dramaId: string, @Param('episodeNumber') ep: string) {
     return this.dramaService.getEpisodeMediaStatus(dramaId, parseInt(ep, 10));
+  }
+
+  /* ─── 生成状态查询（用于页面重进时判断是否需要重连 SSE）─── */
+
+  @Get(':dramaId/generation-status')
+  async getGenerationStatus(@Param('dramaId') dramaId: string) {
+    const episode = this.progressService.isGenerating(`${dramaId}:generate`);
+    const paused = this.dramaService.isGenerationPaused(dramaId);
+    const dbRunning = await this.executionService.findRunningForDrama(dramaId);
+    return { episode: { ...episode, paused }, dbRunning };
+  }
+
+  /* ─── SSE: 集生成进度订阅（仅接收，不触发，用于页面刷新后的安全重连）─── */
+
+  @Sse(':dramaId/episodes/progress-sse')
+  async episodeProgressSse(@Param('dramaId') dramaId: string): Promise<Observable<MessageEvent>> {
+    const subject = new Subject<MessageEvent>();
+    const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
+    const unsub = this.progressService.subscribe(dramaId, (event) => {
+      if (event.phase === 'episode') {
+        subject.next({ data: event } as MessageEvent);
+        if (event.done) { clearInterval(heartbeat); setTimeout(() => subject.complete(), 300); }
+      }
+    });
+    return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
   }
 
   /* ─── SSE: 创建进度 ─── */
@@ -249,13 +311,54 @@ export class DramaController {
     return subject.asObservable();
   }
 
-  @Sse(':dramaId/episodes/progress-sse')
-  async progressSse(@Param('dramaId') dramaId: string): Promise<Observable<MessageEvent>> {
+  /** 批量生成单集全部分镜图（仅 T2I Phase 0，不生成视频），SSE 流式推送进度 */
+  @Sse(':dramaId/episodes/:episodeNumber/generate-images-sse')
+  async generateImagesSse(
+    @Param('dramaId') dramaId: string,
+    @Param('episodeNumber') ep: string,
+  ): Promise<Observable<MessageEvent>> {
     const subject = new Subject<MessageEvent>();
-    subject.next({ data: { connected: true, dramaId } } as MessageEvent);
+    const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
+    const episodeNumber = parseInt(ep, 10);
+    const key = `${dramaId}:images:${episodeNumber}`;
+
+    const alreadyRunning = !this.progressService.markGenerating(key);
     const unsub = this.progressService.subscribe(dramaId, (event) => {
-      subject.next({ data: event } as MessageEvent);
+      if (event.phase === 'images' && event.episodeNumber === episodeNumber) subject.next({ data: event } as MessageEvent);
     });
-    return subject.asObservable().pipe(finalize(() => unsub()));
+
+    if (alreadyRunning) {
+      subject.next({ data: { reconnected: true, message: '已重连到正在进行的图片生成任务' } } as MessageEvent);
+      return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
+    }
+
+    setTimeout(async () => {
+      try {
+        await this.dramaService.generateEpisodeImages(dramaId, episodeNumber);
+        subject.next({ data: { _type: 'result', done: true, message: '图片生成完成' } } as MessageEvent);
+      } catch (err: any) {
+        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
+      } finally {
+        this.progressService.clearGenerating(key);
+        clearInterval(heartbeat);
+        unsub();
+        setTimeout(() => subject.complete(), 200);
+      }
+    }, 0);
+
+    return subject.asObservable();
   }
+
+  /** 单镜图片生成（同步 HTTP，适合制作台逐 Shot 手动触发） */
+  @Post(':dramaId/episodes/:episodeNumber/shots/:shotId/generate-image')
+  async generateShotImage(
+    @Param('dramaId') dramaId: string,
+    @Param('episodeNumber') ep: string,
+    @Param('shotId') shotId: string,
+  ) {
+    const episodeNumber = parseInt(ep, 10);
+    if (isNaN(episodeNumber)) throw new NotFoundException('episodeNumber 无效');
+    return this.dramaService.generateShotImage(dramaId, episodeNumber, shotId);
+  }
+
 }

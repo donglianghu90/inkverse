@@ -1,4 +1,4 @@
-/** FFmpeg 视频合成 — Shot视频 + 转场 + TTS + BGM(分段action) + SFX + 环境音 + 字幕 → 完整单集视频 */
+/** FFmpeg 视频合成 — Shot视频 + 后处理 + 转场 + TTS + BGM(分段action) + SFX + 环境音 + 字幕 → 完整单集视频 */
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -6,21 +6,23 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { LocalStorageService } from './local-storage.service';
+import { VideoPostProcessorService, PostProcessOptions } from './video-post-processor.service';
 
 const execFileAsync = promisify(execFile);
 
 export interface ComposeShotInput {
   shotId: string;
-  videoPath: string; // 本地文件路径或 URL
-  ttsAudioPath?: string; // TTS 语音文件
+  videoPath: string;
+  ttsAudioPath?: string;
   durationSec: number;
-  transition: string; // cut / fade_black / fade_white / dissolve / wipe_left / wipe_right / flash / match_cut
+  transition: string;
   subtitle?: { text: string; style: string };
   bgmPath?: string;
-  bgmIntensity?: number; // 0-1
-  bgmAction?: string; // continue / fade_in / fade_out / swell / drop_to_silence / cut
+  bgmIntensity?: number;
+  bgmAction?: string;
   sfxPaths?: string[];
   ambiencePath?: string;
+  postProcess?: PostProcessOptions;
 }
 
 export interface ComposeEpisodeInput {
@@ -52,7 +54,10 @@ export class VideoComposerService implements OnModuleInit {
   private ffmpegAvailable = false;
   private tmpDir = '';
 
-  constructor(@Optional() private readonly storage?: LocalStorageService) {}
+  constructor(
+    @Optional() private readonly storage?: LocalStorageService,
+    @Optional() private readonly postProcessor?: VideoPostProcessorService,
+  ) {}
 
   onModuleInit() {
     this.tmpDir = this.storage ? this.storage.resolve('tmp') : path.join(os.tmpdir(), 'inkverse-compose');
@@ -84,7 +89,8 @@ export class VideoComposerService implements OnModuleInit {
 
     try {
       const localShots = await this.ensureLocalFiles(shots, workDir);
-      const concatPath = await this.concatWithTransitions(localShots, workDir); // V1: 含转场
+      const processedShots = await this.postProcessShots(localShots, workDir);
+      const concatPath = await this.concatWithTransitions(processedShots, workDir);
       const withAudioPath = await this.mixAllAudio(concatPath, localShots, workDir); // V2+V3: TTS+BGM分段+SFX+环境音
       const finalPath = await this.addSubtitles(withAudioPath, localShots, workDir, outputPath, input.aspectRatio); // V7: 适配竖屏
       const stat = fs.statSync(finalPath);
@@ -108,6 +114,33 @@ export class VideoComposerService implements OnModuleInit {
         videoPath = localPath;
       }
       result.push({ ...shot, videoPath });
+    }
+    return result;
+  }
+
+  // ═══ Step 1.5: Per-shot 后处理（调色/特效/速度/稳定化） ═══
+
+  private async postProcessShots(shots: ComposeShotInput[], workDir: string): Promise<ComposeShotInput[]> {
+    if (!this.postProcessor?.isAvailable()) return shots;
+
+    const result: ComposeShotInput[] = [];
+    for (const shot of shots) {
+      if (shot.postProcess && this.postProcessor.needsProcessing(shot.postProcess)) {
+        try {
+          const outPath = path.join(workDir, `pp_${shot.shotId}.mp4`);
+          const ppResult = await this.postProcessor.processShot(shot.videoPath, outPath, {
+            ...shot.postProcess,
+            durationSec: shot.durationSec,
+          });
+          result.push({ ...shot, videoPath: ppResult.outputPath, durationSec: ppResult.durationSec || shot.durationSec });
+          this.logger.debug(`Shot ${shot.shotId} 后处理完成: ${shot.postProcess.colorGrade ?? '-'} | speed=${shot.postProcess.speedFactor ?? 1}`);
+        } catch (err) {
+          this.logger.warn(`Shot ${shot.shotId} 后处理失败，使用原始视频: ${(err as Error).message}`);
+          result.push(shot);
+        }
+      } else {
+        result.push(shot);
+      }
     }
     return result;
   }

@@ -5,7 +5,7 @@
 import { Injectable } from '@nestjs/common';
 import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
-import { dramaStrategySchema, DramaStrategy, DramaSeed, SeriesOutline } from '../schemas/drama-state.schemas';
+import { dramaStrategySchema, DramaStrategy, DramaSeed, SeriesOutline, ContentMode } from '../schemas/drama-state.schemas';
 import { buildStrategySystemPrompt } from '../prompting/drama-playbook';
 
 const strategyOutputSchema = z.object({ strategy: dramaStrategySchema });
@@ -14,11 +14,12 @@ const strategyOutputSchema = z.object({ strategy: dramaStrategySchema });
 export class DramaStrategyAgent {
   constructor(private readonly llm: LlmService) {}
 
-  async generate(seed: DramaSeed, outline: SeriesOutline): Promise<DramaStrategy> {
+  async generate(seed: DramaSeed, outline: SeriesOutline, contentMode: ContentMode = 'drama'): Promise<DramaStrategy> {
+
     const raw = await this.llm.generateStructured({
       taskName: 'drama-strategy',
       schema: strategyOutputSchema,
-      systemPrompt: buildStrategySystemPrompt(),
+      systemPrompt: buildStrategySystemPrompt({ contentMode }),
 
       userPrompt: `请为以下短剧制定策略：
 

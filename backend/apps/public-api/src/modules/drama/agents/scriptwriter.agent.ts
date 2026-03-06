@@ -42,7 +42,7 @@ export class ScriptwriterAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-scriptwriter',
       schema: scriptOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'scriptwriter', buildScriptwriterSystemPrompt({ guide })),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'scriptwriter', buildScriptwriterSystemPrompt({ guide, visualStyle: state.visualStyle, contentMode: state.contentMode })),
       userPrompt: `第 ${epNum} 集剧本创作：
 
 === 集级意图 ===
@@ -79,7 +79,7 @@ ${weakDims ? `=== 质量警告（前几集弱项，本集务必加强） ===\n${
 ${this.buildCalibrationHint(state)}
 === 创作铁律（违反即不合格） ===
 1. 每句台词不超过15个中文字（关键独白除外）
-2. 第一场必须是 hook_opening，最后一场必须是 cliffhanger
+2. ${state.contentMode === 'knowledge' ? '场景purpose类型灵活选择（exposition/narrative/montage/emotional/revelation/climax/transition），结尾场景建议设置知识悬念衔接下集' : '第一场必须是 hook_opening，最后一场必须是 cliffhanger'}
 3. 知道秘密的角色说话要有"知情者的优越感"，不知道的要有"被蒙在鼓里的天真"
 4. 每场戏必须有信息增量（推进剧情/揭露线索/反转/情绪爆发），禁止无意义过场
 5. sceneId 格式：ep${epNum}_sc1, ep${epNum}_sc2...`,

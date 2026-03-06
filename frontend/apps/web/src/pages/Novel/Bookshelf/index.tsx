@@ -179,7 +179,7 @@ const DramaCard: React.FC<{ drama: DramaListItem }> = ({ drama }) => {
               drama.latestOverallScore >= 8 ? 'text-emerald-600 dark:text-emerald-400'
                 : drama.latestOverallScore >= 7 ? 'text-amber-600 dark:text-amber-400' : 'text-red-500',
             )}>
-              ★ {drama.latestOverallScore.toFixed(1)}
+              ★ {Number(drama.latestOverallScore).toFixed(1)}
             </span>
           )}
         </div>

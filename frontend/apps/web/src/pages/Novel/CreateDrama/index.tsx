@@ -20,9 +20,41 @@ import {
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
 
+// ─── 视觉风格预设 ──────────────────────────────────────────────────────────────
+// aiHint 会直接注入 VisualAssetDesigner 的 prompt
+const VISUAL_STYLES = [
+  { value: 'live_action',    label: '真人影视',  desc: '高清写实', emoji: '🎬',
+    aiHint: '真人影视风格：高清写实摄影质感，电影级光影，演员面部细节丰富，适合都市/现代题材' },
+  { value: 'period_live',    label: '真人古装',  desc: '古典历史', emoji: '🏯',
+    aiHint: '真人古装风格：中国古典历史质感，古风服饰，柔和暖调光影，水墨晕染般的自然美感' },
+  { value: 'anime_2d',       label: '2D 动漫',   desc: '日系手绘', emoji: '✨',
+    aiHint: '2D 日系动漫风格：手绘线条，明亮饱和色彩，大眼角色设计，清新治愈或热血风格' },
+  { value: 'anime_3d',       label: '3D 动漫',   desc: '立体动漫', emoji: '🌟',
+    aiHint: '3D 动漫风格：NPR（非写实渲染）赛璐璐着色，立体卡通人物，电影级 3D 动画质感' },
+  { value: 'realistic_3d',   label: '写实 3D',   desc: '超写实渲染', emoji: '💎',
+    aiHint: '写实 3D 风格：超写实 CG 渲染，皮肤毛孔级细节，PBR 材质，电影特效级别视觉效果' },
+  { value: 'chinese_ink',    label: '水墨古风',  desc: '国画意境', emoji: '🖌️',
+    aiHint: '水墨古风风格：中国传统水墨画质感，意境深远，笔墨晕染，文人画的淡雅氛围' },
+  { value: 'chinese_style',  label: '国风插画',  desc: '敦煌华美', emoji: '🏮',
+    aiHint: '国风插画风格：中国传统工笔彩绘，敦煌壁画美感，华丽色彩，精致装饰纹样' },
+  { value: 'cyberpunk',      label: '赛博朋克',  desc: '霓虹未来', emoji: '🤖',
+    aiHint: '赛博朋克风格：霓虹灯光，高科技低生活，暗紫蓝青色调，未来都市夜景，机械改造美学' },
+  { value: 'western_film',   label: '欧美大片',  desc: '好莱坞风', emoji: '🎥',
+    aiHint: '欧美好莱坞大片风格：高对比度调色，宽画幅电影构图，戏剧性光影，商业片视觉语言' },
+  { value: 'ghibli',         label: '吉卜力',    desc: '温暖童话', emoji: '🌿',
+    aiHint: '吉卜力风格：温暖自然的手绘动画，柔和光线，自然系色彩，充满生命力的场景细节' },
+  { value: 'comic_style',    label: '漫画风格',  desc: '波普彩色', emoji: '📖',
+    aiHint: '漫画风格：粗黑描边线条，高饱和波普色彩，夸张表情，动感张力构图' },
+  { value: 'pixel_art',      label: '像素风格',  desc: '复古游戏', emoji: '🎮',
+    aiHint: '像素艺术风格：8-bit/16-bit 复古游戏美学，格子化像素色块，复古游戏色盘' },
+] as const;
+
+type VisualStyleValue = typeof VISUAL_STYLES[number]['value'] | '';
+
 const GENRE_ICONS: Record<string, string> = {
   boss: '💼', sweet: '🍬', warrior: '⚔️', timetravel: '🌀', palace: '👑',
   revenge: '🔥', rebirth: '🔄', suspense: '🔍', urban: '🏙️', ancient: '🏮',
+  history_edu: '📜', biography: '👤', mythology: '🐉', science: '🔬',
 };
 
 const PLATFORM_PRESETS = [
@@ -60,9 +92,9 @@ const PROTAGONIST_FOCUS = [
 ];
 
 const STEPS = [
-  { title: '核心创意', icon: Sparkles, desc: '描述你的短剧灵感' },
+  { title: '核心创意', icon: Sparkles, desc: '描述你的创作灵感' },
   { title: '类型与受众', icon: Users, desc: '选择题材、平台与受众' },
-  { title: '主线与剧名', icon: Target, desc: '定义核心冲突和剧名' },
+  { title: '主线与标题', icon: Target, desc: '定义叙事主线和标题' },
   { title: '规模配置', icon: Settings2, desc: '集数和时长设置' },
 ];
 
@@ -74,7 +106,7 @@ const GEN_STEPS = [
   { label: '完成', step: 'create_4' },
 ];
 
-interface FormState extends CreateDramaParams { customAudience: string; useCustomAudience: boolean; }
+interface FormState extends CreateDramaParams { customAudience: string; useCustomAudience: boolean; selectedVisualStyle: VisualStyleValue; }
 
 const CreateDrama: React.FC = () => {
   const [step, setStep] = useState(0);
@@ -105,7 +137,7 @@ const CreateDrama: React.FC = () => {
     tonePreference: '', audienceTags: [], titleHint: '', mainStoryGoal: '',
     platformTarget: 'generic', aspectRatio: '9:16',
     targetEpisodeDurationSec: 180, plannedMinEpisodes: 60, plannedMaxEpisodes: 100,
-    customAudience: '', useCustomAudience: false,
+    customAudience: '', useCustomAudience: false, selectedVisualStyle: '' as VisualStyleValue,
   });
 
   const effectiveAudience = form.useCustomAudience ? form.customAudience : form.targetAudience;
@@ -183,6 +215,9 @@ const CreateDrama: React.FC = () => {
       targetEpisodeDurationSec: form.targetEpisodeDurationSec,
       plannedMinEpisodes: form.plannedMinEpisodes, plannedMaxEpisodes: form.plannedMaxEpisodes,
       genreTemplateId: form.genreTemplateId || undefined,
+      visualStyleHint: form.selectedVisualStyle
+        ? VISUAL_STYLES.find(s => s.value === form.selectedVisualStyle)?.aiHint || undefined
+        : undefined,
     };
 
     const STALE_MS = 600_000;
@@ -351,17 +386,17 @@ const CreateDrama: React.FC = () => {
       {step === 0 && (
         <div className="animate-fade-in space-y-5">
           <div>
-            <h2 className="text-xl sm:text-2xl font-bold">你的短剧灵感是什么？</h2>
-            <p className="mt-1.5 text-sm text-muted-foreground">越具体越好：人物背景、核心冲突、身份反差。AI 会基于此构建完整的短剧世界。</p>
+            <h2 className="text-xl sm:text-2xl font-bold">你的创作灵感是什么？</h2>
+            <p className="mt-1.5 text-sm text-muted-foreground">越具体越好——可以是短剧故事、历史人物介绍、科普知识、神话传说等任何内容。AI 会据此构建完整的内容世界。</p>
           </div>
           <Card className="border-primary/15 bg-primary/5">
             <CardContent className="p-4 text-sm">
-              <div className="flex items-start gap-2"><Sparkles className="h-4 w-4 text-primary shrink-0 mt-0.5" /><div><p className="font-medium text-foreground">这一步做什么？</p><p className="mt-1 text-muted-foreground">用一段话描述你的短剧故事梗概，AI 会据此生成世界观、角色和剧情。建议包含：<strong>人物身份</strong>（如隐藏身份）、<strong>核心冲突</strong>（如被羞辱/背叛）、<strong>爽点反转</strong>（如身份揭晓、打脸复仇）。</p></div></div>
+              <div className="flex items-start gap-2"><Sparkles className="h-4 w-4 text-primary shrink-0 mt-0.5" /><div><p className="font-medium text-foreground">这一步做什么？</p><p className="mt-1 text-muted-foreground">用一段话描述你想做的内容，AI 会据此生成世界观、角色和剧情。例如：<strong>短剧故事</strong>（人物身份、核心冲突、反转爽点）、<strong>历史人物</strong>（如李白的一生）、<strong>科普知识</strong>（如宇宙大爆炸）、<strong>神话传说</strong>（如哪吒闹海）。</p></div></div>
             </CardContent>
           </Card>
           <div className="space-y-2">
             <Label>核心创意</Label>
-            <Textarea placeholder="例如：隐瞒首富独女身份下嫁三年做牛做马，被婆婆羞辱净身出户。暴雨夜她登上劳斯莱斯，老管家：大小姐玩够了吗？老爷喊您回家继承千亿集团。归来后她令前夫家族高攀不起..." className="min-h-[140px] text-sm resize-none" disabled={enhancing} value={form.mainIdea} onChange={(e) => { setForm({ ...form, mainIdea: e.target.value }); if (highlights.length > 0) { setHighlights([]); setOriginalIdea(''); } }} />
+            <Textarea placeholder={"例如：\n• 短剧：隐瞒首富独女身份下嫁三年，被婆婆羞辱净身出户，暴雨夜登上劳斯莱斯归来继承千亿集团...\n• 历史：介绍诗仙李白的一生，从蜀中少年到赐金放还，展现盛唐诗人的命运与才华...\n• 科普：揭秘人类大脑的奥秘，用趣味故事讲解记忆、梦境和意识的科学原理..."} className="min-h-[140px] text-sm resize-none" disabled={enhancing} value={form.mainIdea} onChange={(e) => { setForm({ ...form, mainIdea: e.target.value }); if (highlights.length > 0) { setHighlights([]); setOriginalIdea(''); } }} />
             <div className="flex items-center justify-between gap-2">
               <p className="text-xs text-muted-foreground">{(form.mainIdea ?? '').length} 字 · 建议至少 20 字</p>
               <div className="flex items-center gap-1.5 shrink-0">
@@ -401,17 +436,17 @@ const CreateDrama: React.FC = () => {
         <div className="animate-fade-in space-y-5">
           <div>
             <h2 className="text-xl sm:text-2xl font-bold">选择题材与目标观众</h2>
-            <p className="mt-1.5 text-sm text-muted-foreground">根据上一步的创意，选择最匹配的题材和受众，AI 会据此调整爽点设计、节奏和风格。</p>
+            <p className="mt-1.5 text-sm text-muted-foreground">根据上一步的创意，选择最匹配的题材和受众，AI 会据此调整内容风格和节奏。</p>
           </div>
           <Card className="border-primary/15 bg-primary/5">
             <CardContent className="p-4 text-sm">
-              <div className="flex items-start gap-2"><Users className="h-4 w-4 text-primary shrink-0 mt-0.5" /><div><p className="font-medium text-foreground">如何选择？</p><p className="mt-1 text-muted-foreground"><strong>题材</strong>：选与创意最贴合的（如豪门逆袭→都市/霸总，宫斗权谋→宫斗）。<strong>平台</strong>：抖音/快手节奏更快，ReelShort 偏海外。<strong>观众</strong>：决定爽点侧重（女性向偏情感打脸，男性向偏权谋战力）。<strong>叙事聚焦</strong>：女主向=以女主视角为主，双主角=男女戏份均衡。</p><Button variant="outline" size="sm" className="mt-3 gap-1.5 border-primary/30 text-primary hover:bg-primary/5" disabled={!(form.mainIdea ?? '').trim() || recommending} onClick={handleRecommendGenreAudience}>{recommending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}{recommending ? 'AI 推荐中...' : 'AI 智能推荐'}</Button></div></div>
+              <div className="flex items-start gap-2"><Users className="h-4 w-4 text-primary shrink-0 mt-0.5" /><div><p className="font-medium text-foreground">如何选择？</p><p className="mt-1 text-muted-foreground"><strong>题材</strong>：选与创意最贴合的（短剧故事→霸总/都市等，历史内容→历史教育/人物传记，科普→科普知识）。<strong>平台</strong>：抖音/快手节奏更快，ReelShort 偏海外。<strong>观众</strong>：短剧按性别/年龄选择，知识/教育类通常选全年龄。<strong>叙事聚焦</strong>：女主向=以女主视角为主，群像=多角色/知识类。</p><Button variant="outline" size="sm" className="mt-3 gap-1.5 border-primary/30 text-primary hover:bg-primary/5" disabled={!(form.mainIdea ?? '').trim() || recommending} onClick={handleRecommendGenreAudience}>{recommending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}{recommending ? 'AI 推荐中...' : 'AI 智能推荐'}</Button></div></div>
             </CardContent>
           </Card>
 
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <div><Label>短剧题材</Label><p className="text-xs text-muted-foreground mt-0.5">选与创意最匹配的，点击卡片即可</p></div>
+              <div><Label>内容题材</Label><p className="text-xs text-muted-foreground mt-0.5">选与创意最匹配的，点击卡片即可</p></div>
               <button type="button" className="text-xs text-primary hover:underline shrink-0" onClick={() => history.push('/novel/templates')}>管理题材模板</button>
             </div>
             {templatesLoading ? (
@@ -434,6 +469,50 @@ const CreateDrama: React.FC = () => {
               <div className="text-center py-6 text-sm text-muted-foreground">
                 <p>暂无题材模板，请先去<button type="button" className="text-primary hover:underline mx-1" onClick={() => history.push('/novel/templates')}>题材模板管理</button>添加</p>
               </div>
+            )}
+          </div>
+
+          {/* ── 视觉风格 ── */}
+          <div className="space-y-3">
+            <div>
+              <Label>视觉风格</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                决定整部剧的美学基调，AI 会据此生成角色设定和场景描述
+                {form.selectedVisualStyle && (
+                  <button
+                    type="button"
+                    className="ml-2 text-primary hover:underline"
+                    onClick={() => setForm({ ...form, selectedVisualStyle: '' as VisualStyleValue })}
+                  >
+                    清除
+                  </button>
+                )}
+              </p>
+            </div>
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
+              {VISUAL_STYLES.map(style => (
+                <button
+                  key={style.value}
+                  type="button"
+                  onClick={() => setForm({ ...form, selectedVisualStyle: style.value as VisualStyleValue })}
+                  className={cn(
+                    'flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 text-center transition-all hover:scale-105 active:scale-100',
+                    form.selectedVisualStyle === style.value
+                      ? 'border-primary bg-primary/8 shadow-sm shadow-primary/20 ring-1 ring-primary/30'
+                      : 'border-border hover:border-primary/30 bg-card',
+                  )}
+                >
+                  <span className="text-2xl">{style.emoji}</span>
+                  <span className="text-xs font-semibold leading-tight">{style.label}</span>
+                  <span className="text-[10px] text-muted-foreground">{style.desc}</span>
+                  {form.selectedVisualStyle === style.value && (
+                    <span className="text-[9px] text-primary font-bold">✓ 已选</span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {!form.selectedVisualStyle && (
+              <p className="text-xs text-muted-foreground/70 italic">不选择则由 AI 根据题材自动决定</p>
             )}
           </div>
 
@@ -481,13 +560,13 @@ const CreateDrama: React.FC = () => {
           <div>
             <div className="flex items-center gap-3 mb-2">
               <Target className="h-6 w-6 text-primary shrink-0" />
-              <h2 className="text-xl sm:text-2xl font-bold">主线目标与剧名</h2>
+              <h2 className="text-xl sm:text-2xl font-bold">叙事主线与标题</h2>
             </div>
-            <p className="mt-1.5 text-sm text-muted-foreground pl-9">核心冲突是贯穿全剧的驱动力，可以自己写，也可以让 AI 根据前面的信息帮你生成。</p>
+            <p className="mt-1.5 text-sm text-muted-foreground pl-9">贯穿全剧的叙事主线——短剧是核心冲突，教育/科普类是叙事脉络。可以自己写，也可以让 AI 帮你生成。</p>
           </div>
           <div className="space-y-2">
-            <Label>核心冲突（可选）</Label>
-            <Textarea placeholder="例如：女主揭露豪门家族的真相..." className="min-h-[100px] text-sm resize-none" value={form.mainStoryGoal} onChange={(e) => { setForm({ ...form, mainStoryGoal: e.target.value }); if (goalAlternatives.length > 0) setGoalAlternatives([]); }} />
+            <Label>叙事主线（可选）</Label>
+            <Textarea placeholder={"例如：\n• 短剧：女主揭露豪门家族的真相...\n• 历史：从少年蜀中到赐金放还，展现李白在盛唐的诗意人生...\n• 科普：从微观粒子到宇宙尽头，揭示物质世界的终极奥秘..."} className="min-h-[100px] text-sm resize-none" value={form.mainStoryGoal} onChange={(e) => { setForm({ ...form, mainStoryGoal: e.target.value }); if (goalAlternatives.length > 0) setGoalAlternatives([]); }} />
             <div className="flex justify-end">
               <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5 border-primary/30 text-primary hover:bg-primary/5" disabled={generatingGoal} onClick={handleGenerateGoal}>
                 {generatingGoal ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
@@ -510,12 +589,12 @@ const CreateDrama: React.FC = () => {
           )}
 
           <div className="space-y-2">
-            <Label>剧名灵感（可选）</Label>
-            <Input placeholder="如「闪婚后，陆总每天求复合」" value={form.titleHint} onChange={(e) => setForm({ ...form, titleHint: e.target.value })} />
+            <Label>标题灵感（可选）</Label>
+            <Input placeholder="如「闪婚后，陆总每天求复合」或「诗仙李白」" value={form.titleHint} onChange={(e) => setForm({ ...form, titleHint: e.target.value })} />
           </div>
           <div className="space-y-2">
             <Label>调性偏好（可选）</Label>
-            <Input placeholder="如：爽快反转、虐中带甜" value={form.tonePreference ?? ''} onChange={(e) => setForm({ ...form, tonePreference: e.target.value })} />
+            <Input placeholder="如：爽快反转、虐中带甜、知性厚重、趣味科普" value={form.tonePreference ?? ''} onChange={(e) => setForm({ ...form, tonePreference: e.target.value })} />
           </div>
         </div>
       )}
@@ -524,6 +603,38 @@ const CreateDrama: React.FC = () => {
       {step === 3 && (
         <div className="animate-fade-in space-y-5">
           <h2 className="text-xl sm:text-2xl font-bold">规模配置</h2>
+
+          {/* Aspect Ratio */}
+          <div className="space-y-3">
+            <div><Label>画面比例</Label><p className="text-xs text-muted-foreground mt-0.5">决定视频的显示方向，影响构图风格</p></div>
+            <div className="grid grid-cols-2 gap-3">
+              {([
+                { value: '9:16' as const, label: '竖屏', desc: '短视频 · 抖音 / 快手', shape: { w: 36, h: 64 } },
+                { value: '16:9' as const, label: '横屏', desc: '影视感 · 宽屏叙事', shape: { w: 64, h: 36 } },
+              ] as const).map(opt => (
+                <button key={opt.value} type="button"
+                  className={cn(
+                    'flex flex-col items-center gap-2.5 rounded-xl border p-4 text-center transition-all hover:border-primary/50',
+                    form.aspectRatio === opt.value ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : 'border-border',
+                  )}
+                  onClick={() => setForm({ ...form, aspectRatio: opt.value })}
+                >
+                  <div
+                    className={cn(
+                      'rounded border-2 transition-colors',
+                      form.aspectRatio === opt.value ? 'border-primary bg-primary/15' : 'border-muted-foreground/30 bg-muted/40',
+                    )}
+                    style={{ width: opt.shape.w / 5, height: opt.shape.h / 5 }}
+                  />
+                  <div>
+                    <p className="text-sm font-semibold">{opt.label}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">{opt.value} · {opt.desc}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="space-y-3">
             <Label>每集目标时长</Label>
             <div className="grid grid-cols-3 gap-2">
@@ -558,6 +669,7 @@ const CreateDrama: React.FC = () => {
               {[
                 { label: '创意', value: form.mainIdea.slice(0, 60) + (form.mainIdea.length > 60 ? '...' : ''), clamp: true },
                 { label: '题材', value: form.genre || '—' },
+                { label: '风格', value: VISUAL_STYLES.find(s => s.value === form.selectedVisualStyle)?.label || 'AI 自动' },
                 { label: '平台', value: PLATFORM_PRESETS.find(p => p.value === form.platformTarget)?.label || '通用' },
                 { label: '观众', value: effectiveAudience || '—' },
                 { label: '冲突', value: form.mainStoryGoal || '—', clamp: true },

@@ -31,7 +31,7 @@ export class ScriptReviewerAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-script-reviewer',
       schema: reviewOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'script-reviewer', buildScriptReviewerSystemPrompt({ weights, genreChecks })),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'script-reviewer', buildScriptReviewerSystemPrompt({ weights, genreChecks, contentMode: state.contentMode })),
       userPrompt: `审核第 ${script.episodeNumber} 集：
 
 === 基本信息 ===

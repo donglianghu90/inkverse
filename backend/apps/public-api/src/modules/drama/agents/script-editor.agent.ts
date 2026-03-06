@@ -28,7 +28,7 @@ export class ScriptEditorAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-script-editor',
       schema: editorOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'script-editor', buildScriptEditorSystemPrompt()),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'script-editor', buildScriptEditorSystemPrompt({ contentMode: state.contentMode })),
 
       userPrompt: `修复第 ${storyboard.episodeNumber} 集分镜板：
 

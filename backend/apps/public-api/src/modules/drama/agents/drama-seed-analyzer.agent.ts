@@ -5,7 +5,7 @@
 import { Injectable } from '@nestjs/common';
 import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
-import { dramaSeedSchema, DramaSeed } from '../schemas/drama-state.schemas';
+import { dramaSeedSchema, DramaSeed, ContentMode } from '../schemas/drama-state.schemas';
 import { buildSeedAnalyzerSystemPrompt } from '../prompting/drama-playbook';
 import { DramaSeedHints } from '../entities/drama-genre-template.entity';
 
@@ -20,7 +20,8 @@ export interface DramaSeedInput {
   mainStoryGoal?: string;
   targetEpisodeDurationSec?: number;
   plannedTotalEpisodes?: { min: number; max: number };
-  seedHints?: DramaSeedHints; // 来自题材模板的定制提示
+  seedHints?: DramaSeedHints;
+  contentMode?: ContentMode;
 }
 
 const seedOutputSchema = z.object({ seed: dramaSeedSchema });
@@ -35,12 +36,37 @@ export class DramaSeedAnalyzerAgent {
     const epMax = input.plannedTotalEpisodes?.max ?? 100;
     const durSec = input.targetEpisodeDurationSec ?? 180;
 
+    const contentMode: ContentMode = input.contentMode ?? 'drama';
+
     const raw = await this.llm.generateStructured({
       taskName: 'drama-seed-analyzer',
       schema: seedOutputSchema,
-      systemPrompt: buildSeedAnalyzerSystemPrompt({ epMin, epMax, durSec }),
+      systemPrompt: buildSeedAnalyzerSystemPrompt({ epMin, epMax, durSec, contentMode }),
 
-      userPrompt: `请分析这个创意并生成短剧种子：
+      userPrompt: contentMode === 'knowledge'
+        ? `请分析这个创意并生成内容种子：
+
+核心创意：${input.mainIdea}
+题材：${input.genre}
+目标观众：${input.targetAudience}
+${input.protagonistFocus ? `叙事聚焦：${input.protagonistFocus}` : ''}
+${input.tonePreference ? `调性偏好：${input.tonePreference}` : ''}
+${input.audienceTags?.length ? `受众标签：${input.audienceTags.join('、')}` : ''}
+${input.titleHint ? `标题灵感：${input.titleHint}` : ''}
+${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
+规模：每集约 ${durSec} 秒，计划 ${epMin}-${epMax} 集
+
+要求：
+1. seed.title — 简短有力的标题（2-8个字，如"大唐谪仙""海底两万里"）
+2. seed.logline — 一句话梗概，体现叙事主线和知识价值
+3. seed.protagonistConcept — 核心人物/知识主体，展现真实性格和人性面
+4. seed.antagonistConcept — 可选。若有，填写"命运对手"（时代困境/自然规律等），不要编造虚假反派
+5. seed.coreConflict — 核心叙事主线（不要强行编造对立冲突）
+6. seed.catharsisType — 知识类核心体验（知识震撼/历史感悟/文化共鸣/认知颠覆）
+7. seed.redLines — 3-5条底线（必须包含"禁止编造不存在的历史/知识事实"）
+8. seed.targetEpisodeDurationSec = ${durSec}
+9. seed.plannedTotalEpisodes = { min: ${epMin}, max: ${epMax} }`
+        : `请分析这个创意并生成短剧种子：
 
 核心创意：${input.mainIdea}
 题材：${input.genre}
@@ -65,10 +91,10 @@ ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
       temperature: 0.6,
     });
 
-    return this.normalize(raw as Record<string, unknown>, input);
+    return this.normalize(raw as Record<string, unknown>, input, contentMode);
   }
 
-  private normalize(raw: Record<string, unknown>, input: DramaSeedInput): DramaSeedOutput {
+  private normalize(raw: Record<string, unknown>, input: DramaSeedInput, contentMode: ContentMode): DramaSeedOutput {
     const root = typeof raw === 'object' && raw ? raw : {};
     const seedRaw = (typeof root.seed === 'object' && root.seed ? root.seed : root) as Record<string, unknown>;
     const protag = this.obj(seedRaw.protagonistConcept);
@@ -94,8 +120,10 @@ ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
         } : undefined,
         tone: this.str(seedRaw.tone) || input.tonePreference || '紧张、反转、爽快',
         coreConflict: this.str(seedRaw.coreConflict) || input.mainStoryGoal || '在不公命运中绝地反击',
-        catharsisType: this.str(seedRaw.catharsisType) || '打脸逆袭',
-        redLines: this.strArr(seedRaw.redLines, ['禁止低俗色情', '禁止虐主超过3集不反击', '禁止逻辑硬伤']),
+        catharsisType: this.str(seedRaw.catharsisType) || (contentMode === 'knowledge' ? '知识震撼' : '打脸逆袭'),
+        redLines: this.strArr(seedRaw.redLines, contentMode === 'knowledge'
+          ? ['禁止低俗色情', '禁止编造历史/知识细节', '禁止逻辑硬伤']
+          : ['禁止低俗色情', '禁止虐主超过3集不反击', '禁止逻辑硬伤']),
         targetEpisodeDurationSec: input.targetEpisodeDurationSec ?? 180,
         plannedTotalEpisodes: {
           min: input.plannedTotalEpisodes?.min ?? 60,

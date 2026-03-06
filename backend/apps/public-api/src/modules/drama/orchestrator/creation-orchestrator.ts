@@ -52,10 +52,12 @@ export async function runCreationOrchestrator(input: CreationOrchestratorInput):
   onProgress?.(meta(4), '编剧手册完成', true);
   onProgress?.(meta(5), '策略生成完成', true);
 
+  const visual = safeParseJson(visualResult.text);
   return { // 返回纯数据，由调用方持久化
     seed: safeParseJson(seedResult.text), outline: safeParseJson(outlineResult.text),
-    characters: [], locations: [], // 从 visual 提取
-    visualStyle: safeParseJson(visualResult.text),
+    characters: Array.isArray(visual.characters) ? visual.characters as Record<string, unknown>[] : [],
+    locations: Array.isArray(visual.locations) ? visual.locations as Record<string, unknown>[] : [],
+    visualStyle: (visual.visualStyle as Record<string, unknown>) ?? visual,
     promptProfile: safeParseJson(profileResult.text), strategy: safeParseJson(strategyResult.text),
   };
 }

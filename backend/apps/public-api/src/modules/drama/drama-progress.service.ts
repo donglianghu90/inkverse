@@ -4,7 +4,7 @@ import { EventEmitter } from 'events';
 
 export interface DramaProgressEvent {
   dramaId: string;
-  phase: 'create' | 'episode' | 'media'; // 创建 / 逐集生成 / 媒体生成
+  phase: 'create' | 'episode' | 'media' | 'images'; // 创建 / 逐集生成 / 媒体生成 / 分镜图批量生成
   episodeNumber?: number;
   step: string;
   stepIndex: number;

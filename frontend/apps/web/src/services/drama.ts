@@ -19,6 +19,7 @@ export interface CreateDramaParams {
   plannedMinEpisodes?: number;
   plannedMaxEpisodes?: number;
   genreTemplateId?: string;
+  visualStyleHint?: string; // 视觉风格提示（如"真人影视""2D 动漫""水墨古风"）
 }
 
 export interface DramaListItem {
@@ -53,7 +54,39 @@ export interface VisualAssetItem {
   name: string;
   data: Record<string, unknown>;
   referenceImageUrl: string;
+  referenceImages?: Array<{ viewAngle: string; imageUrl: string }>;
   createdAt: string;
+}
+
+export interface DramaUsageBucket {
+  llmCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  llmCostUsd: number;
+  imageCalls: number;
+  imageCostUsd: number;
+  videoCalls: number;
+  videoCostUsd: number;
+  apiSuccessCalls: number;
+  apiFailedCalls: number;
+}
+
+export interface DramaUsageStep extends DramaUsageBucket {
+  step: string;
+}
+
+export interface DramaEpisodeUsage extends DramaUsageBucket {
+  episodeNumber: number;
+  steps: DramaUsageStep[];
+}
+
+export interface DramaUsageSummary {
+  dramaId: string;
+  currency: 'USD';
+  creation: DramaUsageBucket & { steps: DramaUsageStep[] };
+  episodes: DramaEpisodeUsage[];
+  total: DramaUsageBucket;
 }
 
 export async function createDrama(data: CreateDramaParams): Promise<{ dramaId: string }> {
@@ -85,8 +118,39 @@ export async function getDrama(dramaId: string): Promise<Record<string, unknown>
   return request(`${BASE}/${dramaId}`);
 }
 
+export async function getDramaUsage(dramaId: string): Promise<DramaUsageSummary> {
+  return request(`${BASE}/${dramaId}/usage`);
+}
+
+export interface DbRunningItem {
+  episodeNumber: number;
+  lastCheckpoint: string;
+  isActive: boolean;       // true = 心跳在 60s 内，服务器仍在运行
+  heartbeatAgeMs: number;
+  startedAt: string;
+  progressPct: number;     // 0-100，基于 checkpoint 推算
+  stepLabel: string;       // 中文步骤名
+}
+
+export interface GenerationStatus {
+  episode: { generating: boolean; paused: boolean; startedAt: number | null; lastStep: string | null; progress: number };
+  dbRunning: DbRunningItem[];
+}
+
+export async function getGenerationStatus(dramaId: string): Promise<GenerationStatus> {
+  return request(`${BASE}/${dramaId}/generation-status`);
+}
+
 export async function generateEpisodes(dramaId: string, count = 1): Promise<{ message: string }> {
   return request(`${BASE}/${dramaId}/episodes/generate?count=${count}`, { method: 'POST' });
+}
+
+export async function pauseEpisodeGeneration(dramaId: string): Promise<{ paused: boolean; message: string }> {
+  return request(`${BASE}/${dramaId}/episodes/pause`, { method: 'POST' });
+}
+
+export async function resumeEpisodeGeneration(dramaId: string): Promise<{ message: string }> {
+  return request(`${BASE}/${dramaId}/episodes/resume`, { method: 'POST' });
 }
 
 export async function listEpisodes(dramaId: string): Promise<{ episodes: EpisodeListItem[] }> {
@@ -113,6 +177,34 @@ export function getGenerateEpisodeSseUrl(dramaId: string, count = 1): string {
   return `${BASE}/${dramaId}/episodes/generate-sse?count=${count}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
 }
 
+export interface ShotPatch {
+  visualPrompt?: string;
+  specialTechnique?: string | null;
+  firstFrameImageUrl?: string | null;
+  lastFrameImageUrl?: string | null;
+  firstFramePrompt?: string | null;
+  lastFramePrompt?: string | null;
+  estimatedDurationSec?: number;
+  transitionToNext?: string;
+  humanEditNote?: string;
+  camera?: {
+    angle?: string;
+    movement?: string;
+    composition?: string;
+    depthOfField?: string;
+  };
+}
+
+/** 人工编辑单个 Shot — 标记 isHumanEdited=true，AI 重跑时跳过 */
+export async function updateShot(
+  dramaId: string,
+  episodeNumber: number,
+  shotId: string,
+  patch: ShotPatch,
+): Promise<{ shotId: string; isHumanEdited: true }> {
+  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/shots/${shotId}`, { method: 'PATCH', data: patch });
+}
+
 export async function generateEpisodeMedia(dramaId: string, episodeNumber: number): Promise<{ mediaStatus: string; videoUrl?: string }> {
   return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/generate-media`, { method: 'POST' });
 }
@@ -124,6 +216,17 @@ export async function getEpisodeMediaStatus(dramaId: string, episodeNumber: numb
 export function getGenerateMediaSseUrl(dramaId: string, episodeNumber: number): string {
   const token = getToken();
   return `${BASE}/${dramaId}/episodes/${episodeNumber}/generate-media-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+}
+
+/** 批量生成单集全部分镜图（仅 T2I Phase 0，不生成视频），SSE 流式推送进度 */
+export function getGenerateImagesSseUrl(dramaId: string, episodeNumber: number): string {
+  const token = getToken();
+  return `${BASE}/${dramaId}/episodes/${episodeNumber}/generate-images-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+}
+
+/** 单镜图片生成（同步 HTTP，适合制作台逐 Shot 手动触发） */
+export async function generateShotImage(dramaId: string, episodeNumber: number, shotId: string): Promise<{ imageUrl: string }> {
+  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/generate-image`, { method: 'POST' });
 }
 
 export function getEpisodeProgressSseUrl(dramaId: string): string {

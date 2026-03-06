@@ -22,6 +22,7 @@ export default [
       { path: '/novel/book/:bookId/profile', component: './Novel/ProfilePage' },
       { path: '/novel/book/:bookId/pipeline', component: './Novel/Pipeline' },
       { path: '/novel/drama/:dramaId', component: './Novel/DramaWorkbench' },
+      { path: '/novel/drama/:dramaId/episodes/:episodeNumber', component: './Novel/EpisodeProductionBoard' },
     ],
   },
   {

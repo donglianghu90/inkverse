@@ -22,7 +22,10 @@ export class VisualAssetEntity {
   data: Record<string, unknown>; // CharacterIdentity / SceneLocation / VisualStyleGuide JSON
 
   @Column({ default: '' })
-  referenceImageUrl: string; // 参考图URL（定妆照/场景图）
+  referenceImageUrl: string; // 主参考图URL（face_front 定妆照/场景图）
+
+  @Column({ type: 'jsonb', default: [] })
+  referenceImages: Array<{ viewAngle: string; imageUrl: string }>; // 多角度参考图
 
   @CreateDateColumn()
   createdAt: Date;

@@ -49,6 +49,11 @@ import { EpisodeRecorderAgent } from './agents/episode-recorder.agent';
 import { DramaDeterministicCheckerService } from './validators/deterministic-checker.service';
 import { DramaPromptTemplateService } from './prompting/drama-prompt-template.service';
 import { DramaCalibrationService } from './drama-calibration.service';
+import { DramaUsageService } from './drama-usage.service';
+import { DramaTaskRecoveryService } from './drama-task-recovery.service';
+import { MediaQualityGateService } from './media-quality-gate.service';
+import { ShotCoherenceValidatorService } from './shot-coherence-validator.service';
+import { EmotionMediaMapperService } from './emotion-media-mapper.service';
 import { DRAMA_QUEUE } from './task/types';
 
 @Module({
@@ -83,6 +88,8 @@ import { DRAMA_QUEUE } from './task/types';
     ScriptReviewerAgent, ScriptEditorAgent,
     PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent,
     DramaDeterministicCheckerService, DramaPromptTemplateService, DramaCalibrationService,
+    DramaUsageService, DramaTaskRecoveryService,
+    MediaQualityGateService, ShotCoherenceValidatorService, EmotionMediaMapperService,
   ],
   exports: [DramaTaskService, TaskSubmitterService, DramaRunService, AssetHubService, DramaBillingService],
 })

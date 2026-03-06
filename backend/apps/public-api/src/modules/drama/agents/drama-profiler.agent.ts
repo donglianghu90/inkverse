@@ -7,7 +7,7 @@ import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
 import {
   dramaPromptProfileSchema, DramaPromptProfile,
-  DramaSeed, VisualStyleGuide,
+  DramaSeed, SeriesOutline, VisualStyleGuide, ContentMode,
 } from '../schemas/drama-state.schemas';
 import { buildProfilerSystemPrompt } from '../prompting/drama-playbook';
 
@@ -17,11 +17,19 @@ const profilerOutputSchema = z.object({ profile: dramaPromptProfileSchema });
 export class DramaProfilerAgent {
   constructor(private readonly llm: LlmService) {}
 
-  async generate(seed: DramaSeed, visualStyle?: VisualStyleGuide): Promise<DramaPromptProfile> {
+  async generate(seed: DramaSeed, visualStyle?: VisualStyleGuide, outline?: SeriesOutline, contentMode: ContentMode = 'drama'): Promise<DramaPromptProfile> {
+    const arcSummary = outline?.episodes
+      ? (() => {
+          const paywallEps = outline.paywallEpisodes ?? [];
+          const total = outline.totalPlannedEpisodes;
+          return `总集数：${total} | 付费卡点：第${paywallEps.slice(0, 5).join('/')}集`;
+        })()
+      : '';
+
     const raw = await this.llm.generateStructured({
       taskName: 'drama-profiler',
       schema: profilerOutputSchema,
-      systemPrompt: buildProfilerSystemPrompt(),
+      systemPrompt: buildProfilerSystemPrompt({ contentMode }),
 
       userPrompt: `请为以下短剧生成编剧手册：
 
@@ -33,6 +41,7 @@ export class DramaProfilerAgent {
 爽点类型：${seed.catharsisType}
 ${visualStyle ? `视觉风格：${visualStyle.overallAesthetic} | 调色：${visualStyle.colorGrading} | 光影：${visualStyle.lightingStyle}` : ''}
 底线：${seed.redLines.join('；')}
+${arcSummary ? `\n全剧结构参考：${arcSummary}` : ''}
 
 要求：生成完整且详细的编剧手册。`,
       temperature: 0.4,

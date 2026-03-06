@@ -24,8 +24,8 @@ export class DialogueCoachAgent {
       `${c.characterId}(${c.name}): 音色=${c.voiceProfile.timbre}, 风格=${c.voiceProfile.speakingStyle}, 口癖="${c.voiceProfile.catchphrase}", 语速=${c.voiceProfile.speed}`
     ).join('\n');
     const sysPrompt = dramaId
-      ? await this.promptService.buildPrompt(dramaId, 'dialogue-coach', buildDialogueCoachSystemPrompt({ dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide }))
-      : buildDialogueCoachSystemPrompt({ dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide });
+      ? await this.promptService.buildPrompt(dramaId, 'dialogue-coach', buildDialogueCoachSystemPrompt({ dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide, contentMode: state?.contentMode }))
+      : buildDialogueCoachSystemPrompt({ dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide, contentMode: state?.contentMode });
 
     const activeSecrets = (state?.secretLedger ?? []).filter(s => !s.resolved).map(s => ({
       id: s.id ?? '', secret: s.secret ?? '', knownBy: s.knownBy ?? [], hiddenFrom: s.hiddenFrom ?? [], resolved: !!s.resolved,

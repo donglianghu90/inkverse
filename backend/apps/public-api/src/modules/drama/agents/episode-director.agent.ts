@@ -26,10 +26,33 @@ export class EpisodeDirectorAgent {
     // 质量弱项分析：从最近3集的维度评分中提取具体改进方向
     const qualityFeedback = this.extractQualityFeedback(state.kpiHistory.slice(-3));
 
+    // 多巴胺调度提示：告知导演当前观众"爽感亏欠"程度（知识模式下跳过）
+    const dopa = state.dopamineSchedule;
+    const dopaHint = dopa && state.contentMode !== 'knowledge' ? (() => {
+      const lines: string[] = [];
+      if (dopa.episodesSinceMajor >= 4) lines.push(`⚡ 已连续 ${dopa.episodesSinceMajor} 集无重大爽感释放（打脸/反转/高潮），本集必须安排一个 major 级爽点`);
+      else if (dopa.episodesSinceMajor >= 2) lines.push(`注意：距上次重大爽点已 ${dopa.episodesSinceMajor} 集，本集可积累张力，下1-2集需爆发`);
+      if (dopa.episodesSinceMinor >= 2) lines.push(`⚠ 已连续 ${dopa.episodesSinceMinor} 集无小爽感，本集至少需要 1 个 minor 级满足感`);
+      return lines.length ? `\n=== 观众多巴胺状态 ===\n${lines.join('\n')}` : '';
+    })() : '';
+
+    // 付费前预热提示：让导演知道即将到来的付费卡点，提前积累张力（知识模式下跳过）
+    const paywalls = state.seriesOutline?.paywallEpisodes ?? [];
+    const nextPaywall = paywalls.find(p => p >= epNum);
+    const prePaywallHint = (() => {
+      if (state.contentMode === 'knowledge') return '';
+      if (!nextPaywall) return '';
+      const dist = nextPaywall - epNum;
+      if (dist === 0) return '';
+      if (dist === 1) return `\n🔥 下一集（E${nextPaywall}）是付费卡点：本集必须把张力拉到顶点，让观众在结尾时不得不付费解锁。`;
+      if (dist === 2) return `\n📈 E${nextPaywall} 是付费卡点（还差2集）：本集开始升温，埋入关键矛盾伏笔，让观众感到"事情要爆了"。`;
+      return '';
+    })();
+
     const raw = await this.llm.generateStructured({
       taskName: 'drama-episode-director',
       schema: intentOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-director', buildEpisodeDirectorSystemPrompt({ maxPresentPerEpisode: state.strategy?.characterBudget?.maxPresentPerEpisode })),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-director', buildEpisodeDirectorSystemPrompt({ maxPresentPerEpisode: state.strategy?.characterBudget?.maxPresentPerEpisode, contentMode: state.contentMode })),
       userPrompt: `本集信息：
 第 ${epNum} 集：${synopsis.title}
 核心冲突：${synopsis.coreConflict}
@@ -44,14 +67,14 @@ ${synopsis.isPaywall ? `付费原因：${synopsis.paywallReason}` : ''}
 最近剧情：\n${recentSummaries || '（第一集，无前情）'}
 ${state.storySoFar ? `全局概要：\n${state.storySoFar.slice(0, 600)}` : ''}
 ${state.currentArcSegment ? `当前段落：${state.currentArcSegment.segmentTitle}（矛盾：${state.currentArcSegment.coreConflict}，情感主题：${state.currentArcSegment.emotionalTheme}）` : ''}
-${state.strategy?.coreNarrativeContract ? `叙事契约：${state.strategy.coreNarrativeContract}` : ''}
+${state.strategy?.coreNarrativeContract ? `叙事契约：${state.strategy.coreNarrativeContract}` : ''}${dopaHint}
 
 ${qualityFeedback ? `=== 质量反馈（前几集弱项，规划意图时务必针对性加强） ===\n${qualityFeedback}` : ''}
 ${this.buildCalibrationHint(state)}
 可用角色：\n${chars}
 可用场景：${state.locations.map(l => `${l.locationId}(${l.name})`).join('、')}
 ${contextInjections?.length ? `\n连续性约束（必须遵守）：\n${contextInjections.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : ''}
-
+${prePaywallHint}
 请生成本集的详细意图。activeCharacters 中的 characterId 必须使用上面"可用角色"中的 characterId。`,
       temperature: 0.5,
     });
