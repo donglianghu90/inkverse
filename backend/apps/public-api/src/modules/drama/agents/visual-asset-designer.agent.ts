@@ -44,7 +44,7 @@ ${seed.antagonistConcept ? `${contentMode === 'knowledge' ? '命运对手' : '�
 涉及角色名单：${[...allCharNames].join('、')}
 总集数：${outline.totalPlannedEpisodes}
 ${visualStyleHint ? `\n【用户指定视觉风格】：${visualStyleHint}
-请确保 visualStyle 完全体现此风格（overallAesthetic/colorGrading/lightingStyle 均需贴合），角色 faceReferencePrompt 也须用符合该风格的英文描述。` : ''}
+请确保 visualStyle 完全体现此风格——overallAesthetic/colorGrading/lightingStyle/renderTechnique/textureStyle/referenceStyle 均需贴合，角色 faceReferencePrompt 也须用符合该风格的英文描述。` : ''}
 
 要求：
 1. characters 数组包含所有主要角色（${contentMode === 'knowledge' ? '按主角→旁白者(narrator)→配角排序，必须包含一个 role=narrator 的旁白者角色' : '按主角→反派→配角排序'}）

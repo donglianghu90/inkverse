@@ -83,6 +83,17 @@ export class MediaOrchestratorService implements OnModuleInit {
     return assembleT2iPrompt(raw, this.profile, { cameraHint: buildCameraHint(camera), stylePrefix });
   }
 
+  /** 构建 T2I 风格前缀：融合 overallAesthetic + renderTechnique + colorGrading + lightingStyle */
+  private buildT2iStylePrefix(vs?: DramaState['visualStyle']): string | undefined {
+    if (!vs?.overallAesthetic) return undefined;
+    const parts = [vs.overallAesthetic];
+    if (vs.renderTechnique) parts.push(vs.renderTechnique);
+    if (vs.textureStyle) parts.push(vs.textureStyle);
+    if (vs.colorGrading) parts.push(vs.colorGrading);
+    if (vs.lightingStyle) parts.push(vs.lightingStyle);
+    return parts.join(', ') + ', ';
+  }
+
   /** 按当前模型决定是否使用 negative prompt */
   private get negPrompt(): string | undefined {
     const np = this.profile.negativePrompt;
@@ -104,10 +115,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     const flashbackVideoMap = await this.buildFlashbackVideoMap(dramaId, shots);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
     const imgSize = aspectRatio === '9:16' ? '720x1280' : '1280x720';
-    // 视觉风格前缀：确保 T2I 图片风格与全剧美学一致
-    const t2iStylePrefix = state.visualStyle?.overallAesthetic
-      ? `${state.visualStyle.overallAesthetic}, `
-      : undefined;
+    const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
 
     const raw = episode.shotMediaMap ?? {};
     const shotMediaMap: Record<string, ShotMediaEntry> = Object.fromEntries(
@@ -426,9 +434,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       }
     }
 
-    const t2iStylePrefix = state.visualStyle?.overallAesthetic
-      ? `${state.visualStyle.overallAesthetic}, `
-      : undefined;
+    const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
     const mediaParams = this.emotionMapper.mapShotToMediaParams(shot);
     const rawPrompt = this.assemblePrompt(shot.firstFramePrompt || shot.visualPrompt, shot.camera, t2iStylePrefix);
     const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, this.negPrompt ?? '', {
@@ -471,9 +477,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
     const imgSize = aspectRatio === '9:16' ? '720x1280' : '1280x720';
-    const t2iStylePrefix = state.visualStyle?.overallAesthetic
-      ? `${state.visualStyle.overallAesthetic}, `
-      : undefined;
+    const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
 
     const raw = episode.shotMediaMap ?? {};
     const shotMediaMap: Record<string, ShotMediaEntry> = Object.fromEntries(

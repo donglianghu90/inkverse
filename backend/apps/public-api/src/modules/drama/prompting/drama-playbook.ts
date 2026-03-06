@@ -108,9 +108,12 @@ export function buildVisualAssetDesignerSystemPrompt(ctx?: { contentMode?: Conte
 4. keyProps = 标志性道具，帮助观众快速识别场景
 
 === 视觉风格指南 ===
-1. overallAesthetic = 整体美学（如"电影质感偏暖""韩剧唯美滤镜""高饱和度网感"）
-2. colorGrading = 调色风格（如"暖金调、高对比""冷青调、低饱和"）
-3. lightingStyle = 光影风格（如"柔光为主，逆光用于情绪高潮""硬光强阴影"）
+1. overallAesthetic = 整体美学（如"电影质感偏暖""韩剧唯美滤镜""3D东方玄幻""2D日系动漫"）
+2. colorGrading = 调色风格（如"暖金调、高对比""冷青调、低饱和""霓虹紫蓝"）
+3. lightingStyle = 光影风格（如"柔光为主，逆光用于情绪高潮""硬光强阴影""赛璐璐平涂光影"）
+4. renderTechnique = 渲染技术（如"3D NPR赛璐璐""2D手绘赛璐璐""写实CG""定格动画""粘土模型"），必须体现具体的画面制作方式
+5. textureStyle = 材质质感（如"胶片颗粒""黏土质感""水彩晕染""像素块""毛毡纤维""纸张纹理"）
+6. referenceStyle = 参考风格/作品（如"吉卜力""新海诚""皮克斯""伊藤润二""港片黄金时代""乐高积木"），帮助 T2I 模型理解目标美学
 
 所有中文描述使用简体中文。faceReferencePrompt 和 visualPrompt 使用英文。`;
 }
@@ -297,7 +300,7 @@ contextInjections = 编剧需要知道的上下文信息（如"陆子轩目前�
 // ─── 9. Scriptwriter ───
 export function buildScriptwriterSystemPrompt(ctx: {
   guide?: { coreIdentity?: string; genreRules?: string[]; dialogueGuide?: string; pacingGuide?: string; visualNarrativeGuide?: string; forbiddenPatterns?: string[] };
-  visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string };
+  visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string; renderTechnique?: string; textureStyle?: string; referenceStyle?: string };
   contentMode?: ContentMode;
 }): string {
   if (isK(ctx.contentMode)) return _knowledgeScriptwriter(ctx);
@@ -306,29 +309,50 @@ export function buildScriptwriterSystemPrompt(ctx: {
   // 视觉风格 → 台词风格映射
   const styleDialogueTone = (() => {
     if (!visualStyle?.overallAesthetic) return '';
-    const aesthetic = visualStyle.overallAesthetic.toLowerCase();
-    if (aesthetic.includes('anime') || aesthetic.includes('动漫') || aesthetic.includes('2d')) {
+    const all = [visualStyle.overallAesthetic, visualStyle.renderTechnique ?? '', visualStyle.referenceStyle ?? ''].join(' ').toLowerCase();
+    if (all.includes('anime') || all.includes('动漫') || all.includes('2d') || all.includes('赛璐璐') || all.includes('吉卜力') || all.includes('ghibli')) {
       return `【视觉风格：2D动漫/动画】
 - 台词可以更外放、更有爆发力，允许"中二"式情绪宣泄
 - 角色情绪要"大声说出来"——动漫观众期待明确的情感表达
 - 允许适当夸张的动作描写（"猛地站起来""攥紧双拳发抖"）
 - 招牌台词/名场面：每集至少设计一句有记忆点的"金句"`;
     }
-    if (aesthetic.includes('historical') || aesthetic.includes('古装') || aesthetic.includes('宫廷') || aesthetic.includes('ancient')) {
+    if (all.includes('定格') || all.includes('stop motion') || all.includes('粘土') || all.includes('clay') || all.includes('毛毡') || all.includes('felt') || all.includes('积木') || all.includes('lego')) {
+      return `【视觉风格：定格动画/手工质感】
+- 台词简洁童趣，用短句和拟声词增强手工世界的质感
+- 角色动作描写要配合定格动画的"一帧一帧"节奏——不求流畅求生动
+- 允许夸张的肢体表达和拟人化物体，保持温暖治愈的叙事基调
+- 旁白可以更活泼，像在给朋友讲故事`;
+    }
+    if (all.includes('historical') || all.includes('古装') || all.includes('宫廷') || all.includes('ancient') || all.includes('水墨') || all.includes('工笔')) {
       return `【视觉风格：古装/历史】
 - 台词使用半文半白，禁止现代网络用语（"OK""666""躺平"等）
 - 称谓规范：皇帝自称"朕"，对皇帝称"陛下"，贵族互称"大人/小姐/公子"
 - 情感表达含蓄，用隐喻和诗意意象表达情绪（而非直白抒情）
 - 动作描写：服装/礼仪动作要符合时代（作揖/跪拜/行礼）`;
     }
-    if (aesthetic.includes('live action') || aesthetic.includes('真人') || aesthetic.includes('realistic') || aesthetic.includes('cinematic')) {
+    if (all.includes('3d') || all.includes('npr') || all.includes('皮克斯') || all.includes('pixar') || all.includes('迪士尼') || all.includes('disney')) {
+      return `【视觉风格：3D动画/CG】
+- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张
+- 可以使用幽默和戏剧性的反差（3D动画观众期待"意外笑点"）
+- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势
+- 动作可以有适度的夸张，但保持物理合理性`;
+    }
+    if (all.includes('live action') || all.includes('真人') || all.includes('realistic') || all.includes('cinematic') || all.includes('港片') || all.includes('武侠') || all.includes('好莱坞')) {
       return `【视觉风格：真人影视/写实】
 - 台词克制自然，情绪藏在潜台词里（"不说"比"说"更有力量）
 - 避免过度戏剧化的宣言式台词，用日常语言承载情感重量
 - 肢体语言胜过言语：沉默、回避、停顿是最强表达
 - 对话要有生活质感，允许不完整的句子和思维跳跃`;
     }
-    return `【视觉风格参考：${visualStyle.overallAesthetic}】
+    if (all.includes('pixel') || all.includes('像素') || all.includes('8-bit') || all.includes('16-bit')) {
+      return `【视觉风格：像素/复古游戏】
+- 台词简短有力，模拟游戏对话框风格（单句不超过10个字）
+- 可使用"..."省略号表达沉默和犹豫，增强像素游戏叙事感
+- 允许游戏化表达（"获得了XX""HP-100"等梗），但不滥用
+- 叙事节奏明快，像游戏剧情推进一样高效`;
+    }
+    return `【视觉风格参考：${visualStyle.overallAesthetic}${visualStyle.renderTechnique ? `（${visualStyle.renderTechnique}）` : ''}】
 - 台词风格需与视觉风格协调，保持整体创作基调统一`;
   })();
 
@@ -424,7 +448,7 @@ ${ctx?.dialogueGuide ?? ''}`;
 // ─── 11. Storyboard Director ───
 export function buildStoryboardDirectorSystemPrompt(ctx: {
   camGuide?: { preferredAngles?: string[]; signatureTechniques?: string[]; transitionStyle?: string };
-  visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string };
+  visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string; renderTechnique?: string; textureStyle?: string; referenceStyle?: string };
   epNum: number; startIdx: number; maxShots: number; targetDur: number;
   scenePurpose?: string;   // 当前场景类型，决定镜头密度和拍摄语言
   isLastScene?: boolean;   // 是否为全集最后一场（影响 cliffhanger 视觉处理）
@@ -543,7 +567,7 @@ ${camGuide?.signatureTechniques?.length ? `标志手法：${camGuide.signatureTe
 ${camGuide?.transitionStyle ? `转场偏好：${camGuide.transitionStyle}` : ''}
 
 === 视觉风格 ===
-${visualStyle ? `美学：${visualStyle.overallAesthetic} | 调色：${visualStyle.colorGrading} | 光影：${visualStyle.lightingStyle}` : ''}
+${visualStyle ? `美学：${visualStyle.overallAesthetic} | 调色：${visualStyle.colorGrading} | 光影：${visualStyle.lightingStyle}${visualStyle.renderTechnique ? ` | 渲染：${visualStyle.renderTechnique}` : ''}${visualStyle.textureStyle ? ` | 材质：${visualStyle.textureStyle}` : ''}${visualStyle.referenceStyle ? ` | 参考：${visualStyle.referenceStyle}` : ''}` : ''}
 
 === qualityTier 标注要求（必须为每个Shot标注）===
 - 严格按照上面"场景类型专属指令"中的 qualityTier 设置
@@ -879,10 +903,13 @@ function _knowledgeVisualAssetDesigner(): string {
 3. keyProps = 标志性道具（如"宣纸与毛笔""算盘""星图"）
 
 === 视觉风格指南 ===
-1. overallAesthetic = 根据内容选择最合适的美学（水墨古风/纪录片质感/科幻可视化等）
+1. overallAesthetic = 根据内容选择最合适的美学（水墨古风/纪录片质感/科幻可视化/3D历史重建等）
 2. colorGrading = 符合时代氛围的调色
 3. lightingStyle = 符合叙事氛围的光影
 4. era = 准确的时代背景
+5. renderTechnique = 渲染技术（如"2D水墨手绘""3D历史重建""写实CG""定格动画"）
+6. textureStyle = 材质质感（如"宣纸质感""胶片颗粒""铜版画纹理"）
+7. referenceStyle = 参考风格/作品（如"国家宝藏""河西走廊纪录片""故宫系列"）
 
 所有中文描述使用简体中文。faceReferencePrompt 和 visualPrompt 使用英文。`;
 }
@@ -1000,13 +1027,13 @@ ${DRAMA_ZH_RULE}`;
 
 function _knowledgeScriptwriter(ctx: {
   guide?: { coreIdentity?: string; genreRules?: string[]; dialogueGuide?: string; pacingGuide?: string; visualNarrativeGuide?: string; forbiddenPatterns?: string[] };
-  visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string };
+  visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string; renderTechnique?: string; textureStyle?: string; referenceStyle?: string };
 }): string {
   const { guide, visualStyle } = ctx;
 
   return `${guide?.coreIdentity ?? '你是一位知识类短视频编剧，擅长用故事化手法呈现历史/科普/传记内容。你的每一集都让观众既学到知识又感受到情感共鸣。'}
 
-${visualStyle?.overallAesthetic ? `=== 视觉风格 ===\n美学：${visualStyle.overallAesthetic} | 调色：${visualStyle.colorGrading} | 光影：${visualStyle.lightingStyle}\n` : ''}
+${visualStyle?.overallAesthetic ? `=== 视觉风格 ===\n美学：${visualStyle.overallAesthetic} | 调色：${visualStyle.colorGrading} | 光影：${visualStyle.lightingStyle}${visualStyle.renderTechnique ? ` | 渲染：${visualStyle.renderTechnique}` : ''}${visualStyle.referenceStyle ? ` | 参考：${visualStyle.referenceStyle}` : ''}\n` : ''}
 
 === 编剧铁律（知识类） ===
 ${guide?.genreRules?.map((r, i) => `${i + 1}. ${r}`).join('\n') ?? `1. 知识准确：所有历史事实/科学知识必须有据可查

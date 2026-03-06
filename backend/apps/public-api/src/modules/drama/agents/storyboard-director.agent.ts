@@ -122,8 +122,9 @@ ${locDesc}
   /** 后处理：确保首尾帧T2I prompt包含角色face描述（visualPrompt用于T2V，不注入face以节省token） */
   private enforceFaceLock(shots: z.infer<typeof shotSchema>[], state: DramaState): void {
     const charMap = new Map(state.characters.map(c => [c.characterId, c]));
-    const stylePrefix = state.visualStyle?.overallAesthetic
-      ? `${state.visualStyle.overallAesthetic}, `
+    const vs = state.visualStyle;
+    const stylePrefix = vs?.overallAesthetic
+      ? [vs.overallAesthetic, vs.renderTechnique, vs.textureStyle, vs.colorGrading].filter(Boolean).join(', ') + ', '
       : '';
     shots.forEach(shot => {
       const faceFragments = this.buildFaceFragments(shot.characters.map(c => c.characterId), charMap, shot.characterVariationIds);

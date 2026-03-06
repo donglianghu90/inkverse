@@ -3,7 +3,7 @@ import { history } from '@umijs/max';
 import { message } from 'antd';
 import {
   ArrowLeft, ArrowRight, Sparkles, Loader2, Film, Users, Target,
-  Settings2, Check, AlertTriangle, RotateCcw,
+  Settings2, Check, AlertTriangle, RotateCcw, Palette, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,36 +20,193 @@ import {
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
 
-// ─── 视觉风格预设 ──────────────────────────────────────────────────────────────
-// aiHint 会直接注入 VisualAssetDesigner 的 prompt
-const VISUAL_STYLES = [
-  { value: 'live_action',    label: '真人影视',  desc: '高清写实', emoji: '🎬',
-    aiHint: '真人影视风格：高清写实摄影质感，电影级光影，演员面部细节丰富，适合都市/现代题材' },
-  { value: 'period_live',    label: '真人古装',  desc: '古典历史', emoji: '🏯',
-    aiHint: '真人古装风格：中国古典历史质感，古风服饰，柔和暖调光影，水墨晕染般的自然美感' },
-  { value: 'anime_2d',       label: '2D 动漫',   desc: '日系手绘', emoji: '✨',
-    aiHint: '2D 日系动漫风格：手绘线条，明亮饱和色彩，大眼角色设计，清新治愈或热血风格' },
-  { value: 'anime_3d',       label: '3D 动漫',   desc: '立体动漫', emoji: '🌟',
-    aiHint: '3D 动漫风格：NPR（非写实渲染）赛璐璐着色，立体卡通人物，电影级 3D 动画质感' },
-  { value: 'realistic_3d',   label: '写实 3D',   desc: '超写实渲染', emoji: '💎',
-    aiHint: '写实 3D 风格：超写实 CG 渲染，皮肤毛孔级细节，PBR 材质，电影特效级别视觉效果' },
-  { value: 'chinese_ink',    label: '水墨古风',  desc: '国画意境', emoji: '🖌️',
-    aiHint: '水墨古风风格：中国传统水墨画质感，意境深远，笔墨晕染，文人画的淡雅氛围' },
-  { value: 'chinese_style',  label: '国风插画',  desc: '敦煌华美', emoji: '🏮',
-    aiHint: '国风插画风格：中国传统工笔彩绘，敦煌壁画美感，华丽色彩，精致装饰纹样' },
-  { value: 'cyberpunk',      label: '赛博朋克',  desc: '霓虹未来', emoji: '🤖',
-    aiHint: '赛博朋克风格：霓虹灯光，高科技低生活，暗紫蓝青色调，未来都市夜景，机械改造美学' },
-  { value: 'western_film',   label: '欧美大片',  desc: '好莱坞风', emoji: '🎥',
-    aiHint: '欧美好莱坞大片风格：高对比度调色，宽画幅电影构图，戏剧性光影，商业片视觉语言' },
-  { value: 'ghibli',         label: '吉卜力',    desc: '温暖童话', emoji: '🌿',
-    aiHint: '吉卜力风格：温暖自然的手绘动画，柔和光线，自然系色彩，充满生命力的场景细节' },
-  { value: 'comic_style',    label: '漫画风格',  desc: '波普彩色', emoji: '📖',
-    aiHint: '漫画风格：粗黑描边线条，高饱和波普色彩，夸张表情，动感张力构图' },
-  { value: 'pixel_art',      label: '像素风格',  desc: '复古游戏', emoji: '🎮',
-    aiHint: '像素艺术风格：8-bit/16-bit 复古游戏美学，格子化像素色块，复古游戏色盘' },
-] as const;
+// ─── 视觉风格库（分类 + 缩略渐变色） ────────────────────────────────────────────
+// thumbnailUrl 可选：设置后展示真实预览图，否则用 gradient + emoji 做占位
 
-type VisualStyleValue = typeof VISUAL_STYLES[number]['value'] | '';
+interface StyleOption {
+  value: string;
+  label: string;
+  desc: string;
+  gradient: string;
+  emoji: string;
+  aiHint: string;
+  featured?: boolean;
+  thumbnailUrl?: string;
+}
+
+interface StyleCategory {
+  key: string;
+  label: string;
+  styles: StyleOption[];
+}
+
+const STYLE_CATEGORIES: StyleCategory[] = [
+  {
+    key: '3d', label: '3D 风格',
+    styles: [
+      { value: '3d_fantasy', label: '3D玄幻', desc: '东方玄幻', emoji: '🐉', featured: true,
+        gradient: 'linear-gradient(135deg, #1a0533 0%, #4a1a7a 40%, #7b2ff7 100%)',
+        aiHint: '3D 东方玄幻风格：仙侠修真世界，流光溢彩的法术特效，精致 CG 渲染，磅礴仙境山川，高饱和紫金色调' },
+      { value: '3d_british', label: '3D英式', desc: '英伦复古', emoji: '🏰', featured: true,
+        gradient: 'linear-gradient(135deg, #2d1b0e 0%, #6b4423 40%, #b8860b 100%)',
+        aiHint: '3D 英式复古风格：维多利亚时代建筑质感，暖褐色调，皮革与金属材质，精致绅士美学，皮克斯级渲染品质' },
+      { value: '3d_chibi', label: '3DQ版', desc: '萌系卡通', emoji: '🧸', featured: true,
+        gradient: 'linear-gradient(135deg, #ff9a9e 0%, #fecfef 50%, #ffecd2 100%)',
+        aiHint: '3D Q版卡通风格：大头小身萌系比例，圆润可爱造型，糖果色系，精致卡通渲染，适合全年龄内容' },
+      { value: '3d_realistic', label: '3D写实', desc: '超写实CG', emoji: '💎', featured: true,
+        gradient: 'linear-gradient(135deg, #0c0c0c 0%, #434343 50%, #8e8e8e 100%)',
+        aiHint: '写实 3D 风格：超写实 CG 渲染，皮肤毛孔级细节，PBR 材质，电影特效级别视觉效果，照片级光影' },
+      { value: '3d_voxel', label: '3D方块世界', desc: '体素风格', emoji: '🧱',
+        gradient: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 50%, #4facfe 100%)',
+        aiHint: '3D 方块体素风格：Minecraft 式方块美学，低多边形像素体素组合，明亮清新色彩，轻松游戏风格' },
+      { value: '3d_mobile_game', label: '3D手游', desc: '手游画质', emoji: '📱',
+        gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%)',
+        aiHint: '3D 手游风格：精致 NPR 渲染，偏卡通但细节丰富，鲜艳色彩，现代手机游戏画面质感' },
+      { value: '3d_toon_render', label: '3D漫染2D', desc: '卡通渲染', emoji: '🎨', featured: true,
+        gradient: 'linear-gradient(135deg, #fa709a 0%, #fee140 50%, #a8edea 100%)',
+        aiHint: '3D 卡通渲染风格：3D 建模 + 赛璐璐着色，保留手绘 2D 质感的立体动画，色彩鲜明，线条清晰' },
+      { value: '3d_japanese_npr', label: '日式3D漫染', desc: '日系NPR', emoji: '🌸', featured: true,
+        gradient: 'linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 50%, #c2e9fb 100%)',
+        aiHint: '日式 3D NPR 风格：日本动画公司级 3D 渲染，非写实赛璐璐着色，柔和光影，动漫角色精致立体感' },
+      { value: '3d_cyberpunk', label: '3D赛博', desc: '霓虹未来', emoji: '🤖',
+        gradient: 'linear-gradient(135deg, #0f0c29 0%, #302b63 40%, #24243e 70%, #00d2ff 100%)',
+        aiHint: '3D 赛博朋克风格：霓虹灯光，高科技低生活，暗紫蓝青色调，未来都市夜景，机械改造美学，3D 渲染' },
+      { value: '3d_disney', label: '3D迪士尼', desc: '皮克斯质感', emoji: '✨',
+        gradient: 'linear-gradient(135deg, #a18cd1 0%, #fbc2eb 50%, #ffecd2 100%)',
+        aiHint: '3D 迪士尼/皮克斯风格：圆润柔和角色设计，温暖明亮色彩，电影级 3D 渲染，富有表情的角色动画' },
+    ],
+  },
+  {
+    key: '2d_anime', label: '2D 动漫',
+    styles: [
+      { value: '2d_anime', label: '2D动漫', desc: '日系手绘', emoji: '✨', featured: true,
+        gradient: 'linear-gradient(135deg, #ff6b6b 0%, #ffa07a 40%, #ffd93d 100%)',
+        aiHint: '2D 日系动漫风格：手绘线条，明亮饱和色彩，大眼角色设计，清新治愈或热血风格' },
+      { value: '2d_film', label: '2D电影', desc: '电影感动画', emoji: '🎞️', featured: true,
+        gradient: 'linear-gradient(135deg, #141e30 0%, #243b55 50%, #4b6584 100%)',
+        aiHint: '2D 电影感动画风格：宽画幅电影构图，精致背景美术，细腻光影层次，高级感手绘动画，如新海诚式' },
+      { value: '2d_fantasy_anime', label: '2D奇幻动画', desc: '魔幻冒险', emoji: '🗡️',
+        gradient: 'linear-gradient(135deg, #1d2b64 0%, #f8cdda 50%, #fbab7e 100%)',
+        aiHint: '2D 奇幻动画风格：魔法与冒险主题，华丽特效，鲜艳明快色彩，欧式奇幻与日系动漫的融合' },
+      { value: '2d_retro_anime', label: '2D复古动画', desc: '80/90年代', emoji: '📺', featured: true,
+        gradient: 'linear-gradient(135deg, #e8d5b7 0%, #d4a574 40%, #b8860b 70%, #8b6914 100%)',
+        aiHint: '2D 复古动画风格：80-90年代经典动画质感，胶片颗粒感，暖色调偏黄，怀旧线条，老派赛璐璐着色' },
+      { value: '2d_british_anime', label: '2D英式动画', desc: '英伦风情', emoji: '🫖',
+        gradient: 'linear-gradient(135deg, #355c7d 0%, #6c5b7b 50%, #c06c84 100%)',
+        aiHint: '2D 英式动画风格：优雅含蓄的英伦美学，柔和水彩质感，精致角色设计，温暖淡雅色调' },
+      { value: '2d_ghibli', label: '2D吉卜力', desc: '温暖治愈', emoji: '🌿', featured: true,
+        gradient: 'linear-gradient(135deg, #56ab2f 0%, #a8e063 40%, #f7f8f8 70%, #87ceeb 100%)',
+        aiHint: '吉卜力风格：温暖自然的手绘动画，柔和光线，自然系色彩，充满生命力的场景细节，宫崎骏式' },
+      { value: '2d_korean_anime', label: '2D韩式动画', desc: '韩系唯美', emoji: '🌙',
+        gradient: 'linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 50%, #c2e9fb 100%)',
+        aiHint: '2D 韩式动画风格：柔美唯美画风，粉蓝紫淡雅色调，精致五官细节，韩国 Webtoon 式角色设计' },
+      { value: '2d_action', label: '2D热血动画', desc: '少年漫画', emoji: '🔥', featured: true,
+        gradient: 'linear-gradient(135deg, #ff0844 0%, #ffb199 40%, #f7971e 100%)',
+        aiHint: '2D 热血动画风格：强烈动作线条，高对比度着色，速度线与爆发特效，少年漫画式激燃画面' },
+      { value: '2d_cybercity', label: '2D灵境都市', desc: '赛博都市', emoji: '🌃', featured: true,
+        gradient: 'linear-gradient(135deg, #0f0c29 0%, #302b63 30%, #24243e 60%, #e94560 100%)',
+        aiHint: '2D 赛博都市风格：未来都市夜景，霓虹灯与暗巷，高科技都市背景，暗色调配亮色霓虹点缀，2D 赛璐璐' },
+      { value: '2d_sports', label: '2D篮球高手', desc: '运动漫画', emoji: '🏀',
+        gradient: 'linear-gradient(135deg, #f5af19 0%, #f12711 50%, #e44d26 100%)',
+        aiHint: '2D 运动漫画风格：井上雄彦式写实人体比例，运动动态线，热血竞技氛围，90年代经典运动漫画质感' },
+      { value: '2d_tezuka', label: '2D手冢治虫', desc: '经典大师', emoji: '🎭',
+        gradient: 'linear-gradient(135deg, #f5f5f5 0%, #d4d4d4 40%, #333333 100%)',
+        aiHint: '2D 手冢治虫风格：经典日本漫画之父画风，圆润线条，大眼夸张表情，简洁高效的叙事画面' },
+      { value: '2d_thick_line', label: '2D粗线条', desc: '粗犷有力', emoji: '✏️', featured: true,
+        gradient: 'linear-gradient(135deg, #2c3e50 0%, #4ca1af 50%, #c4e0e5 100%)',
+        aiHint: '2D 粗线条风格：粗黑大胆描边，强烈视觉冲击，简约但有力的角色造型，高对比黑白搭配少量色彩' },
+      { value: '2d_death_note', label: '2D死神', desc: '暗黑悬疑', emoji: '💀',
+        gradient: 'linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 40%, #16213e 70%, #e94560 100%)',
+        aiHint: '2D 暗黑悬疑动漫风格：高对比暗色调，锐利线条，阴影浓重，死亡笔记/死神式暗黑美学，哥特氛围' },
+      { value: '2d_shoujo', label: '2D少女漫画', desc: '浪漫柔美', emoji: '🌹',
+        gradient: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 30%, #ff9a9e 60%, #fecfef 100%)',
+        aiHint: '2D 少女漫画风格：柔美花朵背景，闪亮大眼，纤细优雅线条，粉色系浪漫色调，CLAMP 式华丽' },
+      { value: '2d_horror', label: '2D诡异恐怖', desc: '恐怖惊悚', emoji: '👻',
+        gradient: 'linear-gradient(135deg, #1a1a1a 0%, #2d1f3d 30%, #4a0e0e 60%, #000000 100%)',
+        aiHint: '2D 恐怖漫画风格：阴暗扭曲画面，不安定线条，伊藤润二式恐怖美学，暗红与黑色为主，惊悚氛围' },
+      { value: '2d_chibi', label: '2DQ版', desc: '萌系可爱', emoji: '🍡',
+        gradient: 'linear-gradient(135deg, #f6d5f7 0%, #fbe9d7 40%, #a6c0fe 100%)',
+        aiHint: '2D Q版风格：超可爱大头小身比例，圆润简约线条，糖果般明亮色彩，表情丰富夸张，萌系治愈' },
+    ],
+  },
+  {
+    key: '2d_art', label: '2D 画风',
+    styles: [
+      { value: 'chinese_ink', label: '水墨古风', desc: '国画意境', emoji: '🖌️', featured: true,
+        gradient: 'linear-gradient(135deg, #f5f5f0 0%, #d4cfc4 30%, #8b8680 60%, #2c2c2c 100%)',
+        aiHint: '水墨古风风格：中国传统水墨画质感，意境深远，笔墨晕染，文人画的淡雅氛围，留白构图' },
+      { value: 'chinese_style', label: '国风插画', desc: '敦煌华美', emoji: '🏮', featured: true,
+        gradient: 'linear-gradient(135deg, #bf0a30 0%, #c62828 30%, #e65100 60%, #ffd600 100%)',
+        aiHint: '国风插画风格：中国传统工笔彩绘，敦煌壁画美感，华丽色彩，精致装饰纹样，红金色调' },
+      { value: '2d_gongbi', label: '2D工笔风', desc: '精致工笔', emoji: '🎋', featured: true,
+        gradient: 'linear-gradient(135deg, #f8f4e8 0%, #d4c5a0 30%, #b8860b 60%, #654321 100%)',
+        aiHint: '2D 工笔画风格：中国传统工笔重彩，精致细腻线描，矿物颜料质感，绢本设色，典雅古典' },
+      { value: '2d_watercolor', label: '2D水彩', desc: '清透柔和', emoji: '💧',
+        gradient: 'linear-gradient(135deg, #e0f7fa 0%, #b2ebf2 25%, #f8bbd0 50%, #fff9c4 75%, #e8f5e9 100%)',
+        aiHint: '2D 水彩风格：透明水彩晕染质感，清透柔和色彩，纸张纹理，自然流动的色彩过渡，文艺清新' },
+      { value: '2d_pixel', label: '2D像素', desc: '复古游戏', emoji: '🎮',
+        gradient: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 30%, #0f3460 60%, #e94560 100%)',
+        aiHint: '像素艺术风格：8-bit/16-bit 复古游戏美学，格子化像素色块，复古游戏色盘，怀旧电子游戏感' },
+      { value: '2d_simple', label: '2D简画', desc: '极简风格', emoji: '〰️',
+        gradient: 'linear-gradient(135deg, #ffffff 0%, #f0f0f0 40%, #e0e0e0 100%)',
+        aiHint: '2D 极简简画风格：最少线条勾勒，大面积留白，黑白为主偶有点缀色，简约而不简单的高级感' },
+      { value: '2d_sketch', label: '2D简单线条', desc: '素描手绘', emoji: '✍️',
+        gradient: 'linear-gradient(135deg, #f5f0e8 0%, #e6ddd0 40%, #c4b8a8 70%, #8b7e6e 100%)',
+        aiHint: '2D 素描手绘风格：铅笔手绘质感，纸张纹理，淡雅灰色调，速写式人物，文艺素描风' },
+      { value: '2d_british_comic', label: '2D英式漫画', desc: '波普彩色', emoji: '📖',
+        gradient: 'linear-gradient(135deg, #f7ec13 0%, #ff3366 30%, #00b4d8 60%, #06d6a0 100%)',
+        aiHint: '2D 英式漫画风格：粗黑描边线条，高饱和波普色彩，网点效果，夸张表情，动感张力构图' },
+      { value: '2d_rubber_hose', label: '2D橡皮管', desc: '弹性复古', emoji: '🎪',
+        gradient: 'linear-gradient(135deg, #f9e8c0 0%, #e8c97a 30%, #8b6914 60%, #3c280d 100%)',
+        aiHint: '2D 橡皮管动画风格：1920-30 年代早期动画美学，弯曲弹性四肢，圆形大眼，黑白胶片质感，复古欢快' },
+      { value: '2d_golden', label: '黄金光堂', desc: '华丽光效', emoji: '👑',
+        gradient: 'linear-gradient(135deg, #462523 0%, #cb9b51 22%, #f6e27a 45%, #cb9b51 67%, #462523 100%)',
+        aiHint: '黄金光堂风格：华丽金色光效，奢华宫殿质感，金属光泽渲染，暖金色调，高贵典雅的视觉盛宴' },
+    ],
+  },
+  {
+    key: 'live_action', label: '真人实拍',
+    styles: [
+      { value: 'live_action', label: '真人电影', desc: '高清写实', emoji: '🎬', featured: true,
+        gradient: 'linear-gradient(135deg, #1c1c1c 0%, #363636 40%, #5a5a5a 70%, #0066cc 100%)',
+        aiHint: '真人影视风格：高清写实摄影质感，电影级光影，演员面部细节丰富，适合都市/现代题材' },
+      { value: 'period_live', label: '真人古装', desc: '古典历史', emoji: '🏯', featured: true,
+        gradient: 'linear-gradient(135deg, #3e2723 0%, #795548 30%, #a1887f 60%, #d7ccc8 100%)',
+        aiHint: '真人古装风格：中国古典历史质感，古风服饰，柔和暖调光影，水墨晕染般的自然美感' },
+      { value: 'hk_film', label: '真人香港片', desc: '港风经典', emoji: '🌆',
+        gradient: 'linear-gradient(135deg, #1a1a2e 0%, #e94560 30%, #0f3460 60%, #16213e 100%)',
+        aiHint: '真人香港电影风格：80-90年代港片美学，霓虹街景，胶片质感，高对比度调色，王家卫式迷离光影' },
+      { value: 'retro_wuxia', label: '真人复古武侠', desc: '武侠江湖', emoji: '⚔️',
+        gradient: 'linear-gradient(135deg, #2c1810 0%, #5d4037 30%, #795548 60%, #a1887f 80%, #efebe9 100%)',
+        aiHint: '真人复古武侠风格：经典武侠片美学，胶片暖色调，大漠孤烟/竹林飞瀑场景，武打动作质感，侠客江湖' },
+      { value: 'western_film', label: '欧美大片', desc: '好莱坞风', emoji: '🎥', featured: true,
+        gradient: 'linear-gradient(135deg, #000428 0%, #004e92 40%, #2196f3 100%)',
+        aiHint: '欧美好莱坞大片风格：高对比度调色，宽画幅电影构图，戏剧性光影，商业片视觉语言，IMAX 质感' },
+    ],
+  },
+  {
+    key: 'stop_motion', label: '定格动画',
+    styles: [
+      { value: 'stop_motion', label: '定格动画', desc: '手工质感', emoji: '🎞️', featured: true,
+        gradient: 'linear-gradient(135deg, #c9b18c 0%, #e8d5b7 30%, #f5ebe0 60%, #d5c4a1 100%)',
+        aiHint: '定格动画风格：手工制作质感，实物模型感，帧帧拍摄的微妙抖动，温暖手作美感' },
+      { value: 'clay_stop', label: '粘土定格', desc: '黏土世界', emoji: '🫕', featured: true,
+        gradient: 'linear-gradient(135deg, #ff8a65 0%, #ffab91 30%, #ffccbc 60%, #fbe9e7 100%)',
+        aiHint: '粘土定格动画风格：彩色黏土角色，手指捏制纹理，阿德曼动画式质感，圆润可爱的黏土世界' },
+      { value: 'lego_stop', label: '积木定格', desc: '乐高风格', emoji: '🧱',
+        gradient: 'linear-gradient(135deg, #f44336 0%, #ffeb3b 25%, #4caf50 50%, #2196f3 75%, #ff9800 100%)',
+        aiHint: '积木定格动画风格：乐高积木质感，鲜艳塑料色彩，方块化场景与角色，玩具模型般的趣味世界' },
+      { value: 'felt_stop', label: '毛毡定格', desc: '毛绒温暖', emoji: '🧶', featured: true,
+        gradient: 'linear-gradient(135deg, #e8d5b7 0%, #f48fb1 30%, #ce93d8 60%, #81d4fa 100%)',
+        aiHint: '毛毡定格动画风格：毛毡/羊毛材质质感，针织温暖感，柔和模糊边缘，手工缝制美感，温馨可爱' },
+      { value: 'paper_stop', label: '纸艺定格', desc: '剪纸风格', emoji: '📃',
+        gradient: 'linear-gradient(135deg, #fff8e1 0%, #ffecb3 30%, #ffe082 60%, #ff6f00 100%)',
+        aiHint: '纸艺定格动画风格：剪纸与折纸质感，层叠纸张立体感，皮影戏式光影，纸张纹理，中国剪纸艺术' },
+    ],
+  },
+];
+
+const ALL_STYLES = STYLE_CATEGORIES.flatMap(c => c.styles);
 
 const GENRE_ICONS: Record<string, string> = {
   boss: '💼', sweet: '🍬', warrior: '⚔️', timetravel: '🌀', palace: '👑',
@@ -94,6 +251,7 @@ const PROTAGONIST_FOCUS = [
 const STEPS = [
   { title: '核心创意', icon: Sparkles, desc: '描述你的创作灵感' },
   { title: '类型与受众', icon: Users, desc: '选择题材、平台与受众' },
+  { title: '视觉风格', icon: Palette, desc: '选择画面美学风格' },
   { title: '主线与标题', icon: Target, desc: '定义叙事主线和标题' },
   { title: '规模配置', icon: Settings2, desc: '集数和时长设置' },
 ];
@@ -102,11 +260,12 @@ const GEN_STEPS = [
   { label: '种子分析', step: 'create_0' },
   { label: '总导演规划大纲', step: 'create_1' },
   { label: '视觉资产设计', step: 'create_2' },
-  { label: '编剧手册+策略', step: 'create_3' },
-  { label: '完成', step: 'create_4' },
+  { label: '生成角色定妆照', step: 'create_3' },
+  { label: '编剧手册+策略', step: 'create_4' },
+  { label: '完成', step: 'create_5' },
 ];
 
-interface FormState extends CreateDramaParams { customAudience: string; useCustomAudience: boolean; selectedVisualStyle: VisualStyleValue; }
+interface FormState extends CreateDramaParams { customAudience: string; useCustomAudience: boolean; selectedVisualStyle: string; }
 
 const CreateDrama: React.FC = () => {
   const [step, setStep] = useState(0);
@@ -114,7 +273,7 @@ const CreateDrama: React.FC = () => {
   const [genProgress, setGenProgress] = useState(0);
   const [genSteps, setGenSteps] = useState(GEN_STEPS.map(s => ({ ...s, done: false })));
   const [genError, setGenError] = useState<string | null>(null);
-  const failedDramaIdRef = useRef<string | null>(null); // 失败时保存 dramaId，重试时从 checkpoint 继续
+  const failedDramaIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
@@ -124,6 +283,7 @@ const CreateDrama: React.FC = () => {
   const [generatingGoal, setGeneratingGoal] = useState(false);
   const [goalAlternatives, setGoalAlternatives] = useState<string[]>([]);
   const [recommending, setRecommending] = useState(false);
+  const [styleExpanded, setStyleExpanded] = useState(true);
 
   const [templates, setTemplates] = useState<DramaGenreTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
@@ -137,18 +297,19 @@ const CreateDrama: React.FC = () => {
     tonePreference: '', audienceTags: [], titleHint: '', mainStoryGoal: '',
     platformTarget: 'generic', aspectRatio: '9:16',
     targetEpisodeDurationSec: 180, plannedMinEpisodes: 60, plannedMaxEpisodes: 100,
-    customAudience: '', useCustomAudience: false, selectedVisualStyle: '' as VisualStyleValue,
+    customAudience: '', useCustomAudience: false, selectedVisualStyle: '',
   });
 
   const effectiveAudience = form.useCustomAudience ? form.customAudience : form.targetAudience;
-  const isGenerating = step === 4;
+  const isGenerating = step === 5;
   const formStepCount = STEPS.length;
 
   const canNext = useCallback(() => {
     if (step === 0) return (form.mainIdea ?? '').trim().length >= 10;
     if (step === 1) return (form.genre ?? '').trim().length > 0 && (effectiveAudience ?? '').trim().length > 0;
-    if (step === 2) return true;
+    if (step === 2) return true; // style is optional
     if (step === 3) return true;
+    if (step === 4) return true;
     return false;
   }, [step, form, effectiveAudience]);
 
@@ -200,7 +361,7 @@ const CreateDrama: React.FC = () => {
 
   const handleSubmit = async () => {
     const isRetry = !!(genError && failedDramaIdRef.current);
-    setStep(4);
+    setStep(5);
     setLoading(true);
     setGenProgress(0);
     if (!isRetry) setGenError(null);
@@ -216,7 +377,7 @@ const CreateDrama: React.FC = () => {
       plannedMinEpisodes: form.plannedMinEpisodes, plannedMaxEpisodes: form.plannedMaxEpisodes,
       genreTemplateId: form.genreTemplateId || undefined,
       visualStyleHint: form.selectedVisualStyle
-        ? VISUAL_STYLES.find(s => s.value === form.selectedVisualStyle)?.aiHint || undefined
+        ? ALL_STYLES.find(s => s.value === form.selectedVisualStyle)?.aiHint || undefined
         : undefined,
     };
 
@@ -300,7 +461,7 @@ const CreateDrama: React.FC = () => {
               }));
             }
 
-            if (payload.done && payload.step === 'create_4') {
+            if (payload.done && payload.step === 'create_5') {
               clearTimeout(staleTimer);
               failedDramaIdRef.current = null;
               setGenProgress(100);
@@ -332,6 +493,60 @@ const CreateDrama: React.FC = () => {
     if (isGenerating) return;
     if (step > 0) setStep(step - 1);
     else history.push('/novel');
+  };
+
+  // ─── Style thumbnail card ─────────────────────────────────────────
+  const StyleCard: React.FC<{ style: StyleOption }> = ({ style }) => {
+    const isSelected = form.selectedVisualStyle === style.value;
+    return (
+      <button
+        type="button"
+        onClick={() => setForm({ ...form, selectedVisualStyle: isSelected ? '' : style.value })}
+        className={cn(
+          'group relative flex flex-col rounded-xl overflow-hidden border-2 transition-all duration-200',
+          'hover:scale-[1.03] hover:shadow-md active:scale-100',
+          isSelected
+            ? 'border-primary ring-2 ring-primary/30 shadow-lg shadow-primary/10'
+            : 'border-transparent hover:border-primary/40',
+        )}
+      >
+        {/* Thumbnail */}
+        <div
+          className="relative aspect-[4/3] w-full flex items-center justify-center overflow-hidden"
+          style={{ background: style.thumbnailUrl ? undefined : style.gradient }}
+        >
+          {style.thumbnailUrl ? (
+            <img src={style.thumbnailUrl} alt={style.label} className="w-full h-full object-cover" />
+          ) : (
+            <span className="text-3xl drop-shadow-lg select-none">{style.emoji}</span>
+          )}
+          {/* Featured badge */}
+          {style.featured && (
+            <span className="absolute top-1 left-1 px-1.5 py-0.5 text-[9px] font-bold rounded bg-amber-500/90 text-white leading-none">
+              精选
+            </span>
+          )}
+          {/* Selected overlay */}
+          {isSelected && (
+            <div className="absolute inset-0 bg-primary/20 flex items-center justify-center">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-white shadow-lg">
+                <Check className="h-4 w-4" />
+              </div>
+            </div>
+          )}
+        </div>
+        {/* Label */}
+        <div className={cn(
+          'px-1.5 py-1.5 text-center transition-colors',
+          isSelected ? 'bg-primary/10' : 'bg-card',
+        )}>
+          <p className={cn('text-[11px] font-semibold leading-tight truncate', isSelected && 'text-primary')}>
+            {style.label}
+          </p>
+          <p className="text-[9px] text-muted-foreground leading-tight mt-0.5 truncate">{style.desc}</p>
+        </div>
+      </button>
+    );
   };
 
   return (
@@ -472,50 +687,6 @@ const CreateDrama: React.FC = () => {
             )}
           </div>
 
-          {/* ── 视觉风格 ── */}
-          <div className="space-y-3">
-            <div>
-              <Label>视觉风格</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                决定整部剧的美学基调，AI 会据此生成角色设定和场景描述
-                {form.selectedVisualStyle && (
-                  <button
-                    type="button"
-                    className="ml-2 text-primary hover:underline"
-                    onClick={() => setForm({ ...form, selectedVisualStyle: '' as VisualStyleValue })}
-                  >
-                    清除
-                  </button>
-                )}
-              </p>
-            </div>
-            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
-              {VISUAL_STYLES.map(style => (
-                <button
-                  key={style.value}
-                  type="button"
-                  onClick={() => setForm({ ...form, selectedVisualStyle: style.value as VisualStyleValue })}
-                  className={cn(
-                    'flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 text-center transition-all hover:scale-105 active:scale-100',
-                    form.selectedVisualStyle === style.value
-                      ? 'border-primary bg-primary/8 shadow-sm shadow-primary/20 ring-1 ring-primary/30'
-                      : 'border-border hover:border-primary/30 bg-card',
-                  )}
-                >
-                  <span className="text-2xl">{style.emoji}</span>
-                  <span className="text-xs font-semibold leading-tight">{style.label}</span>
-                  <span className="text-[10px] text-muted-foreground">{style.desc}</span>
-                  {form.selectedVisualStyle === style.value && (
-                    <span className="text-[9px] text-primary font-bold">✓ 已选</span>
-                  )}
-                </button>
-              ))}
-            </div>
-            {!form.selectedVisualStyle && (
-              <p className="text-xs text-muted-foreground/70 italic">不选择则由 AI 根据题材自动决定</p>
-            )}
-          </div>
-
           <div className="space-y-3">
             <div><Label>目标平台</Label><p className="text-xs text-muted-foreground mt-0.5">不同平台用户偏好不同，影响节奏和风格</p></div>
             <div className="flex flex-wrap gap-2">
@@ -554,8 +725,86 @@ const CreateDrama: React.FC = () => {
         </div>
       )}
 
-      {/* Step 3: Goal & Title */}
+      {/* Step 3: Visual Style Gallery */}
       {step === 2 && (
+        <div className="animate-fade-in space-y-5">
+          <div>
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl sm:text-2xl font-bold">选择视觉风格</h2>
+                <p className="mt-1.5 text-sm text-muted-foreground">
+                  决定整部剧的美学基调，AI 会据此生成角色设定和场景描述
+                </p>
+              </div>
+              {form.selectedVisualStyle && (
+                <Button
+                  variant="ghost" size="sm"
+                  className="text-xs text-muted-foreground hover:text-foreground shrink-0"
+                  onClick={() => setForm({ ...form, selectedVisualStyle: '' })}
+                >
+                  清除选择
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Selected style preview */}
+          {form.selectedVisualStyle && (() => {
+            const sel = ALL_STYLES.find(s => s.value === form.selectedVisualStyle);
+            if (!sel) return null;
+            return (
+              <Card className="border-primary/30 bg-primary/5 overflow-hidden">
+                <CardContent className="p-0">
+                  <div className="flex items-center gap-4 p-4">
+                    <div
+                      className="shrink-0 w-16 h-12 rounded-lg flex items-center justify-center overflow-hidden"
+                      style={{ background: sel.thumbnailUrl ? undefined : sel.gradient }}
+                    >
+                      {sel.thumbnailUrl
+                        ? <img src={sel.thumbnailUrl} alt={sel.label} className="w-full h-full object-cover" />
+                        : <span className="text-2xl">{sel.emoji}</span>
+                      }
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Check className="h-4 w-4 text-primary shrink-0" />
+                        <span className="text-sm font-bold text-primary">{sel.label}</span>
+                        <span className="text-xs text-muted-foreground">· {sel.desc}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{sel.aiHint}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
+
+          {/* Style categories */}
+          {STYLE_CATEGORIES.map(category => (
+            <div key={category.key} className="space-y-2.5">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-foreground">{category.label}</h3>
+                <div className="flex-1 h-px bg-border" />
+                <span className="text-[10px] text-muted-foreground tabular-nums">{category.styles.length} 款</span>
+              </div>
+              <div className="grid grid-cols-4 gap-2 sm:grid-cols-5 md:grid-cols-6">
+                {category.styles.map(style => (
+                  <StyleCard key={style.value} style={style} />
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {!form.selectedVisualStyle && (
+            <p className="text-xs text-muted-foreground/70 italic text-center pt-2">
+              不选择则由 AI 根据题材自动决定视觉风格
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Step 4: Goal & Title */}
+      {step === 3 && (
         <div className="animate-fade-in space-y-5">
           <div>
             <div className="flex items-center gap-3 mb-2">
@@ -599,8 +848,8 @@ const CreateDrama: React.FC = () => {
         </div>
       )}
 
-      {/* Step 4: Scale Config */}
-      {step === 3 && (
+      {/* Step 5: Scale Config */}
+      {step === 4 && (
         <div className="animate-fade-in space-y-5">
           <h2 className="text-xl sm:text-2xl font-bold">规模配置</h2>
 
@@ -669,7 +918,7 @@ const CreateDrama: React.FC = () => {
               {[
                 { label: '创意', value: form.mainIdea.slice(0, 60) + (form.mainIdea.length > 60 ? '...' : ''), clamp: true },
                 { label: '题材', value: form.genre || '—' },
-                { label: '风格', value: VISUAL_STYLES.find(s => s.value === form.selectedVisualStyle)?.label || 'AI 自动' },
+                { label: '风格', value: ALL_STYLES.find(s => s.value === form.selectedVisualStyle)?.label || 'AI 自动' },
                 { label: '平台', value: PLATFORM_PRESETS.find(p => p.value === form.platformTarget)?.label || '通用' },
                 { label: '观众', value: effectiveAudience || '—' },
                 { label: '冲突', value: form.mainStoryGoal || '—', clamp: true },
@@ -701,7 +950,7 @@ const CreateDrama: React.FC = () => {
                 <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/40"><AlertTriangle className="h-6 w-6 text-red-500" /></div>
                 <p className="text-center text-sm text-red-600 dark:text-red-400">{genError}</p>
                 <div className="flex gap-3">
-                  <Button variant="outline" size="sm" onClick={() => { setGenError(null); setStep(3); }}><ArrowLeft className="mr-1.5 h-3.5 w-3.5" />返回修改</Button>
+                  <Button variant="outline" size="sm" onClick={() => { setGenError(null); setStep(4); }}><ArrowLeft className="mr-1.5 h-3.5 w-3.5" />返回修改</Button>
                   <Button size="sm" onClick={handleSubmit}><RotateCcw className="mr-1.5 h-3.5 w-3.5" />重试</Button>
                 </div>
               </div>

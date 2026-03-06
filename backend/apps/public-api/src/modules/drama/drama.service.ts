@@ -164,9 +164,10 @@ export class DramaService implements OnModuleInit {
           contentMode,
         });
         out.seed = seed;
+        out.seedHints = seedHints ?? null;
         logDrama('seed_analyze_done', 'ok', '种子分析完成', { seedTitle: seed?.title });
         emitCreate(0, '种子分析完成', true);
-        await saveCP('seed_analyzed', { seed });
+        await saveCP('seed_analyzed', { seed, seedHints: out.seedHints });
       }
 
       if (resumeFrom <= 1) {
@@ -181,7 +182,10 @@ export class DramaService implements OnModuleInit {
       if (resumeFrom <= 2) {
         logDrama('visual_design_start', 'ok', '视觉资产设计');
         emitCreate(2, '视觉资产设计...');
-        const { characters, locations, visualStyle } = await this.visualDesigner.design(out.seed, out.outline, dto.visualStyleHint, contentMode);
+        const mergedStyleHint = dto.visualStyleHint
+          || (out.seedHints as any)?.visualStyleHints
+          || undefined;
+        const { characters, locations, visualStyle } = await this.visualDesigner.design(out.seed, out.outline, mergedStyleHint, contentMode);
         Object.assign(out, { characters, locations, visualStyle });
         logDrama('visual_design_done', 'ok', '视觉资产设计完成', { charCount: out.characters?.length, locCount: out.locations?.length });
         emitCreate(2, '视觉资产设计完成', true);
@@ -220,6 +224,7 @@ export class DramaService implements OnModuleInit {
           tonePreference: dto.tonePreference ?? '', platformTarget: dto.platformTarget ?? 'generic',
           aspectRatio: dto.aspectRatio ?? '9:16', hardConstraints: [], softPreferences: [],
         },
+        visualStyleHint: dto.visualStyleHint ?? '',
         promptProfile: out.promptProfile, strategy: out.strategy, visualStyle: out.visualStyle,
         characters: out.characters, locations: out.locations, seriesOutline: out.outline,
         arcSegments: [], episodeCursor: 1, episodeSummaries: [], lastCliffhanger: '',

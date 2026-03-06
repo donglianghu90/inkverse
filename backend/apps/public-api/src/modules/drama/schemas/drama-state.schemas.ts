@@ -166,6 +166,9 @@ export const visualStyleGuideSchema = z.object({
   colorGrading: z.string(), // 调色风格
   lightingStyle: z.string(), // 光影风格
   era: ns('contemporary'), // 时代背景
+  renderTechnique: ns(), // 渲染技术（如"3D NPR赛璐璐""2D手绘赛璐璐""写实CG""定格动画""粘土模型"）
+  textureStyle: ns(), // 材质质感（如"胶片颗粒""黏土质感""水彩晕染""像素块""毛毡纤维"）
+  referenceStyle: ns(), // 参考风格/作品（如"吉卜力""新海诚""皮克斯""伊藤润二""港片黄金时代"）
 });
 
 // ---------------------------------------------------------------------------
@@ -558,6 +561,7 @@ export const dramaStateSchema = z.object({
   promptProfile: dramaPromptProfileSchema.optional(),
   strategy: dramaStrategySchema.optional(),
 
+  visualStyleHint: ns(), // 用户在前端选择的原始视觉风格提示（如"3D 东方玄幻风格：..."），用于 debug/重试
   visualStyle: visualStyleGuideSchema.optional(),
   characters: na(characterIdentitySchema),
   locations: na(sceneLocationSchema),
