@@ -3,7 +3,7 @@ import { history } from '@umijs/max';
 import { message } from 'antd';
 import {
   ArrowLeft, ArrowRight, Sparkles, Loader2, Film, Users, Target,
-  Settings2, Check, AlertTriangle, RotateCcw, Palette, ChevronDown, ChevronUp,
+  Settings2, Check, AlertTriangle, RotateCcw, Palette,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils';
 import {
   createDrama, retryCreateDrama, getDrama, getCreateDramaSseUrl, listDramaGenreTemplates,
   enhanceDramaIdea, generateDramaGoal, recommendGenreAndAudience,
-  type CreateDramaParams, type DramaGenreTemplate,
+  type CreateDramaParams, type DramaGenreTemplate, type DramaSseEvent,
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
 
@@ -234,6 +234,12 @@ const SCALE_PRESETS = [
   { min: 100, max: 150, label: '100-150 集', desc: '长线型' },
 ];
 
+const GENERATION_MODE_PRESETS = [
+  { value: 'fast' as const, label: '极速', desc: '更快出片，质量门槛更宽松' },
+  { value: 'balanced' as const, label: '均衡', desc: '速度与质量平衡（推荐）' },
+  { value: 'quality' as const, label: '高质', desc: '更严格质量与重试，耗时更长' },
+];
+
 const AUDIENCE_PRESETS = [
   { label: '18-30 岁女性', tags: ['女性向', '18-30岁'] },
   { label: '18-30 岁男性', tags: ['男性向', '18-30岁'] },
@@ -283,7 +289,6 @@ const CreateDrama: React.FC = () => {
   const [generatingGoal, setGeneratingGoal] = useState(false);
   const [goalAlternatives, setGoalAlternatives] = useState<string[]>([]);
   const [recommending, setRecommending] = useState(false);
-  const [styleExpanded, setStyleExpanded] = useState(true);
 
   const [templates, setTemplates] = useState<DramaGenreTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
@@ -297,6 +302,7 @@ const CreateDrama: React.FC = () => {
     tonePreference: '', audienceTags: [], titleHint: '', mainStoryGoal: '',
     platformTarget: 'generic', aspectRatio: '9:16',
     targetEpisodeDurationSec: 180, plannedMinEpisodes: 60, plannedMaxEpisodes: 100,
+    generationMode: 'balanced',
     customAudience: '', useCustomAudience: false, selectedVisualStyle: '',
   });
 
@@ -375,6 +381,7 @@ const CreateDrama: React.FC = () => {
       platformTarget: form.platformTarget, aspectRatio: form.aspectRatio,
       targetEpisodeDurationSec: form.targetEpisodeDurationSec,
       plannedMinEpisodes: form.plannedMinEpisodes, plannedMaxEpisodes: form.plannedMaxEpisodes,
+      generationMode: form.generationMode,
       genreTemplateId: form.genreTemplateId || undefined,
       visualStyleHint: form.selectedVisualStyle
         ? ALL_STYLES.find(s => s.value === form.selectedVisualStyle)?.aiHint || undefined
@@ -398,9 +405,11 @@ const CreateDrama: React.FC = () => {
         const res = await createDrama(params);
         dramaId = res.dramaId;
       }
+      if (!dramaId) throw new Error('创建失败：dramaId缺失');
+      const currentDramaId = dramaId;
       touchStale();
 
-      const response = await fetch(getCreateDramaSseUrl(dramaId), {
+      const response = await fetch(getCreateDramaSseUrl(currentDramaId), {
         method: 'GET',
         headers: { Accept: 'text/event-stream', Authorization: `Bearer ${getToken()}` },
         signal: controller.signal,
@@ -412,17 +421,17 @@ const CreateDrama: React.FC = () => {
           for (let i = 0; i < 120; i++) {
             await new Promise(r => setTimeout(r, 3000));
             try {
-              const d = await getDrama(dramaId) as any;
+              const d = await getDrama(currentDramaId) as any;
               if (d?.state?.seed) {
                 setGenSteps(prev => prev.map(s => ({ ...s, done: true })));
                 setGenProgress(100);
                 message.success('短剧创建成功');
-                setTimeout(() => history.push(`/novel/drama/${dramaId}`), 600);
+                setTimeout(() => history.push(`/novel/drama/${currentDramaId}`), 600);
                 return;
               }
             } catch { /* retry */ }
           }
-          failedDramaIdRef.current = dramaId ?? null;
+          failedDramaIdRef.current = currentDramaId;
           setGenError('创建超时');
           setLoading(false);
         };
@@ -433,6 +442,7 @@ const CreateDrama: React.FC = () => {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let terminalHandled = false;
 
       while (true) {
         const { done: streamDone, value } = await reader.read();
@@ -445,28 +455,40 @@ const CreateDrama: React.FC = () => {
         for (const line of lines) {
           if (!line.startsWith('data:')) continue;
           try {
-            const payload = JSON.parse(line.slice(5).trim());
-            if (payload._type === 'heartbeat') continue;
-            if (payload.error) { clearTimeout(staleTimer); failedDramaIdRef.current = dramaId; setGenError(payload.message ?? '创建失败'); setLoading(false); return; }
-
-            const idx = payload.stepIndex ?? -1;
-            const progress = payload.totalSteps > 0 ? Math.round(((idx + (payload.done ? 1 : 0.5)) / payload.totalSteps) * 100) : 0;
-            setGenProgress(progress);
-
-            if (idx >= 0) {
-              setGenSteps(prev => prev.map((s, i) => {
-                if (i < idx) return { ...s, done: true };
-                if (i === idx) return { ...s, done: payload.done ?? false };
-                return s;
-              }));
+            const payload = JSON.parse(line.slice(5).trim()) as DramaSseEvent;
+            if (payload._type === 'heartbeat' || payload._type === 'info') continue;
+            if (payload._type === 'error' || payload.error || payload.terminalStatus === 'failed') {
+              clearTimeout(staleTimer);
+              failedDramaIdRef.current = currentDramaId;
+              const msg = payload.error || payload.message || '创建失败';
+              setGenError(msg);
+              setLoading(false);
+              return;
             }
-
-            if (payload.done && payload.step === 'create_5') {
+            if (payload._type === 'progress') {
+              const idx = payload.stepIndex ?? -1;
+              const total = payload.totalSteps ?? 0;
+              const progress = total > 0
+                ? Math.round(((idx + (payload.done ? 1 : 0.5)) / total) * 100)
+                : 0;
+              setGenProgress(progress);
+              if (idx >= 0) {
+                setGenSteps(prev => prev.map((s, i) => {
+                  if (i < idx) return { ...s, done: true };
+                  if (i === idx) return { ...s, done: payload.done ?? false };
+                  return s;
+                }));
+              }
+              continue;
+            }
+            if (payload._type === 'result') {
+              terminalHandled = true;
               clearTimeout(staleTimer);
               failedDramaIdRef.current = null;
               setGenProgress(100);
-              message.success('短剧创建成功');
-              setTimeout(() => history.push(`/novel/drama/${dramaId}`), 600);
+              setGenSteps(prev => prev.map(s => ({ ...s, done: true })));
+              message.success(payload.message || '短剧创建成功');
+              setTimeout(() => history.push(`/novel/drama/${currentDramaId}`), 600);
               return;
             }
           } catch { /* skip malformed */ }
@@ -474,11 +496,11 @@ const CreateDrama: React.FC = () => {
       }
 
       clearTimeout(staleTimer);
-      failedDramaIdRef.current = null;
-      setGenProgress(100);
-      setGenSteps(prev => prev.map(s => ({ ...s, done: true })));
-      message.success('短剧创建成功');
-      setTimeout(() => history.push(`/novel/drama/${dramaId}`), 600);
+      if (!terminalHandled) {
+        failedDramaIdRef.current = currentDramaId;
+        setGenError('创建连接中断，请重试');
+        setLoading(false);
+      }
     } catch (error: any) {
       clearTimeout(staleTimer!);
       if (dramaId) failedDramaIdRef.current = dramaId;
@@ -912,6 +934,30 @@ const CreateDrama: React.FC = () => {
               ))}
             </div>
           </div>
+
+          <div className="space-y-3">
+            <div>
+              <Label>生成模式</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">影响图片/视频并发、重试与质量校验强度</p>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {GENERATION_MODE_PRESETS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={cn(
+                    'flex flex-col items-center gap-1 rounded-lg border p-3 text-center transition-all',
+                    form.generationMode === opt.value ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : 'border-border',
+                  )}
+                  onClick={() => setForm({ ...form, generationMode: opt.value })}
+                >
+                  <span className="text-sm font-semibold">{opt.label}</span>
+                  <span className="text-[11px] text-muted-foreground leading-tight">{opt.desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <Card className="border-primary/15 bg-gradient-to-br from-primary/3 to-transparent">
             <CardContent className="p-4 space-y-2.5 text-sm">
               <div className="flex items-center gap-2 mb-3"><Film className="h-4 w-4 text-primary" /><span className="font-semibold">创建摘要</span></div>
@@ -922,6 +968,7 @@ const CreateDrama: React.FC = () => {
                 { label: '平台', value: PLATFORM_PRESETS.find(p => p.value === form.platformTarget)?.label || '通用' },
                 { label: '观众', value: effectiveAudience || '—' },
                 { label: '冲突', value: form.mainStoryGoal || '—', clamp: true },
+                { label: '生成', value: GENERATION_MODE_PRESETS.find(m => m.value === form.generationMode)?.label || '均衡' },
                 { label: '时长', value: `${(form.targetEpisodeDurationSec ?? 180) / 60} 分钟/集` },
                 { label: '集数', value: `${form.plannedMinEpisodes}-${form.plannedMaxEpisodes} 集` },
               ].map(({ label, value, clamp }) => (

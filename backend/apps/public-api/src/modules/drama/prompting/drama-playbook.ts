@@ -238,11 +238,15 @@ export function buildEpisodeDirectorSystemPrompt(ctx?: { maxPresentPerEpisode?: 
 2. emotionDirection：本集总体情绪走向（必须有起伏，如"从日常甜蜜→疑虑暗生→震惊发现"而非"甜蜜"）
 3. hookDirection：集末钩子方向（必须具体到场景和动作，如"女主在书房抽屉里发现了一张男主和另一个女人的合影，照片背面写着日期"）
 4. carryoverFromLastEpisode：上集遗留的情绪/悬念如何衔接（第1场前3秒必须回应上集悬念）
-5. activeCharacters：本集出场角色（含本集服饰、情绪基调、角色定位）
+5. masterShotPlan：本集主镜头计划（6-10条）
+   - 每条包含：beatId、visualGoal、emotionGoal、actionVerb、minDurSec、maxDurSec
+   - 主镜必须覆盖：开场hook、中段冲突升级、结尾悬念三个关键段
+   - actionVerb 必须是单一动作动词，避免连动词（如“站起并走向门口”）
+6. activeCharacters：本集出场角色（含本集服饰、情绪基调、角色定位）
    - 每集出场角色不超过 ${maxChars} 人（短剧铁律：角色少=记忆成本低=代入感强）
    - 每个角色必须有本集的"情绪任务"（如"林婉清：从假装平静→内心崩溃→决定反击"）
-6. locationIds：本集使用的场景ID
-7. durationTargetSec：目标时长
+7. locationIds：本集使用的场景ID
+8. durationTargetSec：目标时长
 
 === 单集张力曲线设计 ===
 你规划的Intent直接决定编剧的创作方向。好的Intent = 好的张力曲线：
@@ -575,6 +579,12 @@ ${visualStyle ? `美学：${visualStyle.overallAesthetic} | 调色：${visualSty
 - "standard": 正常场景
 - "filler": 过场/空镜
 
+=== 结构化执行字段（必须填写）===
+- isMasterShot：该镜头是否属于主镜头（用于保证“只看主镜也能讲懂故事”）
+- actionUnitId：单动作单元ID（建议格式：{sceneId}_act_{N}）
+- shotType：portrait/dialogue/action/wide/insert
+- regenPriority：high/medium/low（主镜和黄金镜头优先 high）
+
 === 约束 ===
 - shotId格式：ep${epNum}_shot{startIdx+M}
 - shotIndex从 ${startIdx} 开始递增
@@ -667,6 +677,11 @@ export function buildScriptReviewerSystemPrompt(ctx?: {
 === issuesFound ===
 每个issue必须包含：category + severity(critical/moderate/minor) + description + suggestedFix
 suggestedFix 要具体到"第几个shot/第几场的哪句台词该怎么改"
+
+=== 生成可执行性输出（必须返回）===
+- generationReadinessScore（0-10）：越高表示越容易稳定生成、返工越少
+- consistencyRiskShots：列出最可能出现角色/场景一致性问题的 shotId + reason
+- cameraReadabilityRiskShots：列出最可能出现镜头可读性问题的 shotId + reason
 
 === 短剧专项扣分 ===
 - 第一场purpose不是hook_opening → hookStrength直接-2分
@@ -1002,10 +1017,11 @@ function _knowledgeEpisodeDirector(ctx?: { maxPresentPerEpisode?: number }): str
 2. emotionDirection：本集总体情绪走向（如"好奇→震撼→感慨→期待"）
 3. hookDirection：集末衔接方向（知识悬念/预告式引导，如"但李白此时还不知道，一场更大的风暴正在酝酿..."）
 4. carryoverFromLastEpisode：上集内容如何衔接
-5. activeCharacters：本集出场人物（不超过 ${maxChars} 人）
-6. locationIds：本集使用的场景
-7. durationTargetSec：目标时长
-8. isPaywallEpisode：统一为 false
+5. masterShotPlan：本集主镜头计划（4-8条），每条含 beatId/visualGoal/emotionGoal/actionVerb/minDurSec/maxDurSec
+6. activeCharacters：本集出场人物（不超过 ${maxChars} 人）
+7. locationIds：本集使用的场景
+8. durationTargetSec：目标时长
+9. isPaywallEpisode：统一为 false
 
 === 单集结构设计（知识类） ===
 1. 开场（前15%）：快速回顾+本集核心问题/悬念引入
@@ -1110,6 +1126,11 @@ function _knowledgeScriptReviewer(ctx?: { weights?: Record<string, number>; genr
 - 全集无场景还原（全是旁白）→ visualImpact 直接-3分
 - 知识点模糊/可能有误 → consistency 直接-2分
 - 旁白占比超过80% → pacing 直接-2分
+
+=== 生成可执行性输出（必须返回）===
+- generationReadinessScore（0-10）
+- consistencyRiskShots（shotId + reason）
+- cameraReadabilityRiskShots（shotId + reason）
 
 ${genreChecks?.length ? `=== 题材专项检查 ===\n${genreChecks.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : ''}
 

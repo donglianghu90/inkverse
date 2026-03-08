@@ -14,6 +14,7 @@ export interface T2IOptimizeOptions {
   qualityTier?: string;    // 'golden' | 'standard' | 'filler'
   cameraAngle?: string;
   emotionColorHint?: string;
+  routeProfile?: string;
 }
 
 export interface T2VOptimizeOptions {
@@ -25,6 +26,7 @@ export interface T2VOptimizeOptions {
   cameraMovement?: string;
   cameraAngle?: string;
   emotionColorHint?: string;
+  routeProfile?: string;
 }
 
 const QUALITY_BOOSTERS: Record<string, string[]> = {
@@ -112,6 +114,22 @@ const COLOR_HINT_MAP: Record<string, string> = {
   neutral: '',
 };
 
+const T2I_ROUTE_HINTS: Record<string, string> = {
+  portrait_consistency: 'same character identity, consistent face structure, stable costume details',
+  action_motion: 'dynamic pose, clear motion intention, directional composition',
+  wide_atmosphere: 'strong environmental storytelling, layered depth, atmospheric perspective',
+  dialogue_stable: 'clean shot-reverse-shot readability, balanced framing, natural eyeline',
+  budget_fast: 'simple composition, clean subject-background separation',
+};
+
+const T2V_ROUTE_HINTS: Record<string, string> = {
+  portrait_consistency: 'stable face identity over time, subtle micro-expression changes',
+  action_motion: 'dynamic camera rhythm, clear trajectory, coherent motion blur',
+  wide_atmosphere: 'establishing camera language, environmental depth and parallax',
+  dialogue_stable: 'steady conversational blocking, readable eyeline continuity',
+  budget_fast: 'stable camera, minimal complex motion, efficient visual storytelling',
+};
+
 @Injectable()
 export class PromptOptimizerService implements OnModuleInit {
   private readonly logger = new Logger('PromptOptimizer');
@@ -145,6 +163,14 @@ export class PromptOptimizerService implements OnModuleInit {
       if (hint && !prompt.toLowerCase().includes(hint.split(',')[0].toLowerCase())) {
         prompt = `${prompt}, ${hint}`;
         added.push(hint);
+      }
+    }
+
+    if (opts.routeProfile) {
+      const routeHint = T2I_ROUTE_HINTS[opts.routeProfile];
+      if (routeHint && !prompt.toLowerCase().includes(routeHint.split(',')[0].toLowerCase())) {
+        prompt = `${prompt}, ${routeHint}`;
+        added.push(routeHint);
       }
     }
 
@@ -217,6 +243,14 @@ export class PromptOptimizerService implements OnModuleInit {
       if (angleCtx && !prompt.toLowerCase().includes(angleCtx.split(' ')[0].toLowerCase())) {
         prompt = `${angleCtx}, ${prompt}`;
         added.push(angleCtx);
+      }
+    }
+
+    if (opts.routeProfile) {
+      const routeHint = T2V_ROUTE_HINTS[opts.routeProfile];
+      if (routeHint && !prompt.toLowerCase().includes(routeHint.split(',')[0].toLowerCase())) {
+        prompt = `${prompt}, ${routeHint}`;
+        added.push(routeHint);
       }
     }
 

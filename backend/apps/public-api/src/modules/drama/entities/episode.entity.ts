@@ -47,7 +47,25 @@ export class EpisodeEntity {
   videoUrl: string; // 合成后的完整集视频
 
   @Column({ type: 'jsonb', nullable: true })
-  shotMediaMap: Record<string, { videoUrl?: string; videoJobId?: string; ttsUrl?: string; imageUrl?: string; lastFrameImageUrl?: string; status?: string }> | null;
+  shotMediaMap: Record<string, {
+    videoUrl?: string;
+    videoJobId?: string;
+    ttsUrl?: string;
+    imageUrl?: string;
+    lastFrameImageUrl?: string;
+    status?: string;
+    qc?: {
+      identityScore?: number;
+      styleScore?: number;
+      readabilityScore?: number;
+      score?: number;
+      passed?: boolean;
+      attempts?: number;
+      issues?: string[];
+      failReasons?: Array<'identity' | 'style' | 'camera' | 'motion'>;
+      recommendedFix?: 'identity' | 'style' | 'camera' | 'motion';
+    };
+  }> | null;
 
   @Column({ type: 'decimal', precision: 8, scale: 4, default: 0 })
   mediaCostUsd: number;

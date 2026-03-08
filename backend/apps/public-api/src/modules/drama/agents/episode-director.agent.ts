@@ -75,13 +75,19 @@ ${this.buildCalibrationHint(state)}
 可用场景：${state.locations.map(l => `${l.locationId}(${l.name})`).join('、')}
 ${contextInjections?.length ? `\n连续性约束（必须遵守）：\n${contextInjections.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : ''}
 ${prePaywallHint}
-请生成本集的详细意图。activeCharacters 中的 characterId 必须使用上面"可用角色"中的 characterId。`,
+请生成本集的详细意图。activeCharacters 中的 characterId 必须使用上面"可用角色"中的 characterId。
+
+额外要求：
+1. masterShotPlan 至少输出 ${state.contentMode === 'knowledge' ? 4 : 6} 条，按叙事顺序排列。
+2. 每条主镜都要满足“一镜一动作”，actionVerb 必须是单动词（如 reveal/confront/strike/turn）。
+3. minDurSec <= maxDurSec，且建议落在 1.5-8 秒区间。`,
       temperature: 0.5,
     });
 
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
     const intent = typeof root.intent === 'object' && root.intent ? root.intent : root;
-    return episodeIntentSchema.parse(intent);
+    const parsed = episodeIntentSchema.parse(intent);
+    return this.ensureMasterShotPlan(parsed, synopsis, state.contentMode);
   }
 
   private buildCalibrationHint(state: DramaState): string {
@@ -117,5 +123,31 @@ ${prePaywallHint}
     return weakOnes.map(w =>
       `⚠ ${w.dim} 平均${w.avg.toFixed(1)}分 → ${actionMap[w.dim] || '请针对性提升'}`,
     ).join('\n');
+  }
+
+  private ensureMasterShotPlan(intent: EpisodeIntent, synopsis: EpisodeSynopsis, mode: DramaState['contentMode']): EpisodeIntent {
+    const current = (intent.masterShotPlan ?? []).filter((s) => s.beatId && s.actionVerb);
+    const minCount = mode === 'knowledge' ? 4 : 6;
+    if (current.length >= minCount) return intent;
+
+    const baseGoals = intent.goals.length
+      ? intent.goals
+      : [synopsis.coreConflict, synopsis.cliffhanger, intent.hookDirection].filter(Boolean);
+    const fallbackSize = Math.max(minCount, Math.min(10, baseGoals.length || minCount));
+    const fillerVerbs = ['reveal', 'confront', 'turn', 'pause', 'strike', 'hold', 'discover', 'react'];
+    const fallback = Array.from({ length: fallbackSize }).map((_, i) => {
+      const goal = baseGoals[i] ?? baseGoals[baseGoals.length - 1] ?? `${synopsis.title}关键节点${i + 1}`;
+      const verb = fillerVerbs[i % fillerVerbs.length];
+      const isEnding = i === fallbackSize - 1;
+      return {
+        beatId: `ep${intent.episodeNumber}_beat_${i + 1}`,
+        visualGoal: goal,
+        emotionGoal: isEnding ? intent.hookDirection : intent.emotionDirection,
+        actionVerb: verb,
+        minDurSec: isEnding ? 1.5 : 2,
+        maxDurSec: isEnding ? 4 : 6,
+      };
+    });
+    return { ...intent, masterShotPlan: current.length ? [...current, ...fallback.slice(current.length)] : fallback };
   }
 }

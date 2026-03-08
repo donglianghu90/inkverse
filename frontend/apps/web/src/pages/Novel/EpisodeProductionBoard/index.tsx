@@ -20,8 +20,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import {
   getDrama, getEpisode, listEpisodes,
-  generateShotImage, getGenerateImagesSseUrl, getGenerateMediaSseUrl,
-  type EpisodeListItem,
+  generateShotImage, getGenerateImagesSseUrl, getGenerateMediaSseUrl, resetProblemShots,
+  type EpisodeListItem, type DramaSseEvent, type ResetFixTarget,
 } from '@/services/drama';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -35,17 +35,51 @@ interface Shot {
   visualPrompt: string; estimatedDurationSec: number;
   firstFrameImageUrl?: string | null; firstFramePrompt?: string | null;
   isFlashback?: boolean; isPreview?: boolean;
+  isMasterShot?: boolean;
+  shotType?: 'portrait' | 'dialogue' | 'action' | 'wide' | 'insert';
+  regenPriority?: 'high' | 'medium' | 'low';
   specialTechnique?: string | null;
   isHumanEdited?: boolean;
   qualityTier?: 'golden' | 'standard' | 'filler';
 }
-interface ShotMediaEntry { imageUrl?: string; videoUrl?: string; videoJobId?: string; status?: string; }
+type QcFixTarget = Exclude<ResetFixTarget, 'all'>;
+interface ShotMediaEntry {
+  imageUrl?: string;
+  videoUrl?: string;
+  videoJobId?: string;
+  status?: string;
+  qc?: {
+    identityScore?: number;
+    styleScore?: number;
+    readabilityScore?: number;
+    score?: number;
+    passed?: boolean;
+    attempts?: number;
+    issues?: string[];
+    failReasons?: QcFixTarget[];
+    recommendedFix?: QcFixTarget;
+  };
+}
 interface EpisodeData {
   id: string; episodeNumber: number; title?: string; totalDurationSec?: number;
   storyboard?: { shots: Shot[] };
+  review?: {
+    generationReadinessScore?: number;
+    consistencyRiskShots?: Array<{ shotId: string; reason: string }>;
+    cameraReadabilityRiskShots?: Array<{ shotId: string; reason: string }>;
+  } | null;
   shotMediaMap?: Record<string, ShotMediaEntry>;
   mediaStatus?: string; videoUrl?: string;
 }
+
+const FIX_TARGET_LABELS: Record<ResetFixTarget, string> = {
+  all: '全部',
+  identity: '身份',
+  style: '风格',
+  camera: '构图',
+  motion: '动作',
+};
+const FIX_TARGET_ORDER: QcFixTarget[] = ['identity', 'style', 'camera', 'motion'];
 
 // ─── Label maps ────────────────────────────────────────────────────────────────
 
@@ -59,6 +93,13 @@ const MOVEMENT_LABELS: Record<string, string> = {
   pan_left: '左摇', pan_right: '右摇', tilt_up: '上仰', tilt_down: '下俯',
   whip_pan: '甩镜', crane_up: '升镜', crane_down: '降镜',
   tracking: '跟镜', orbit: '环绕', handheld: '手持',
+};
+const SHOT_TYPE_LABELS: Record<string, string> = {
+  portrait: '人物',
+  dialogue: '对话',
+  action: '动作',
+  wide: '全景',
+  insert: '插入',
 };
 
 // ─── Helper: status badge for a shot's image ───────────────────────────────────
@@ -92,6 +133,49 @@ function QualityTierBadge({ tier }: { tier?: string }) {
   return null; // standard 不显示标记
 }
 
+function MasterShotBadge({ isMaster }: { isMaster?: boolean }) {
+  if (!isMaster) return null;
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300">
+      主镜
+    </span>
+  );
+}
+
+function RegenPriorityBadge({ priority }: { priority?: 'high' | 'medium' | 'low' }) {
+  if (!priority || priority === 'medium') return null;
+  if (priority === 'high') {
+    return (
+      <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-300">
+        高优先
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">
+      低优先
+    </span>
+  );
+}
+
+function ShotTypeBadge({ shotType }: { shotType?: Shot['shotType'] }) {
+  if (!shotType) return null;
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+      {SHOT_TYPE_LABELS[shotType] ?? shotType}
+    </span>
+  );
+}
+
+function RiskBadge({ consistencyRisk, cameraRisk }: { consistencyRisk?: boolean; cameraRisk?: boolean }) {
+  if (!consistencyRisk && !cameraRisk) return null;
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 border border-orange-300">
+      {consistencyRisk ? '一致性风险' : '可读性风险'}
+    </span>
+  );
+}
+
 // ─── Shot Image Card ────────────────────────────────────────────────────────────
 
 interface ShotImageCardProps {
@@ -99,10 +183,22 @@ interface ShotImageCardProps {
   media?: ShotMediaEntry;
   aspectRatio: '9:16' | '16:9';
   generating: boolean;
+  busy?: boolean;
+  consistencyRisk?: boolean;
+  cameraRisk?: boolean;
   onGenerate: () => void;
 }
 
-const ShotImageCard: React.FC<ShotImageCardProps> = ({ shot, media, aspectRatio, generating, onGenerate }) => {
+const ShotImageCard: React.FC<ShotImageCardProps> = ({
+  shot,
+  media,
+  aspectRatio,
+  generating,
+  busy,
+  consistencyRisk,
+  cameraRisk,
+  onGenerate,
+}) => {
   const [expanded, setExpanded] = useState(false);
   const hasImage = !!media?.imageUrl;
 
@@ -123,7 +219,16 @@ const ShotImageCard: React.FC<ShotImageCardProps> = ({ shot, media, aspectRatio,
           <span className="font-mono text-xs font-semibold text-muted-foreground">
             #{String(shot.shotIndex + 1).padStart(3, '0')}
           </span>
+          <MasterShotBadge isMaster={shot.isMasterShot} />
           <QualityTierBadge tier={shot.qualityTier} />
+          <RegenPriorityBadge priority={shot.regenPriority} />
+          <ShotTypeBadge shotType={shot.shotType} />
+          <RiskBadge consistencyRisk={consistencyRisk} cameraRisk={cameraRisk} />
+          {media?.qc?.recommendedFix && (
+            <Badge className="text-[10px] px-1 py-0 bg-amber-100 text-amber-700 border-amber-300">
+              建议修{FIX_TARGET_LABELS[media.qc.recommendedFix]}
+            </Badge>
+          )}
         </div>
         <div className="flex gap-1 flex-wrap justify-end">
           {shot.camera?.angle && (
@@ -179,12 +284,26 @@ const ShotImageCard: React.FC<ShotImageCardProps> = ({ shot, media, aspectRatio,
               「{shot.dialogue.text}」
             </p>
           )}
+          {expanded && media?.qc && (
+            <div className="mt-1.5 space-y-0.5">
+              <p className="text-[10px] text-muted-foreground">
+                QC: {typeof media.qc.score === 'number' ? media.qc.score.toFixed(1) : '-'}
+                {typeof media.qc.readabilityScore === 'number' ? ` · 可读性 ${media.qc.readabilityScore.toFixed(1)}` : ''}
+              </p>
+              {media.qc.failReasons?.length ? (
+                <p className="text-[10px] text-amber-700 dark:text-amber-300">
+                  归因：{media.qc.failReasons.map((x) => FIX_TARGET_LABELS[x]).join('、')}
+                </p>
+              ) : null}
+            </div>
+          )}
         </div>
 
         {/* Expand / collapse */}
         <div className="h-4">
           {shot.visualPrompt && shot.visualPrompt.length > 80 && (
             <button
+              type="button"
               className="text-xs text-muted-foreground/60 hover:text-muted-foreground flex items-center gap-0.5 self-start"
               onClick={() => setExpanded(v => !v)}
             >
@@ -204,7 +323,7 @@ const ShotImageCard: React.FC<ShotImageCardProps> = ({ shot, media, aspectRatio,
           size="sm"
           variant={hasImage ? 'outline' : 'default'}
           className="w-full h-7 text-xs gap-1 mt-auto"
-          disabled={generating || shot.isFlashback || shot.isPreview}
+          disabled={busy || generating || shot.isFlashback || shot.isPreview}
           onClick={onGenerate}
         >
           {generating ? (
@@ -226,9 +345,17 @@ interface ShotVideoCardProps {
   shot: Shot;
   media?: ShotMediaEntry;
   aspectRatio: '9:16' | '16:9';
+  consistencyRisk?: boolean;
+  cameraRisk?: boolean;
 }
 
-const ShotVideoCard: React.FC<ShotVideoCardProps> = ({ shot, media, aspectRatio }) => {
+const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
+  shot,
+  media,
+  aspectRatio,
+  consistencyRisk,
+  cameraRisk,
+}) => {
   const hasVideo = !!media?.videoUrl;
   const hasImage = !!media?.imageUrl;
   const isSubmitted = media?.status === 'submitted';
@@ -249,7 +376,16 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({ shot, media, aspectRatio 
           <span className="font-mono text-xs font-semibold text-muted-foreground">
             #{String(shot.shotIndex + 1).padStart(3, '0')}
           </span>
+          <MasterShotBadge isMaster={shot.isMasterShot} />
           <QualityTierBadge tier={shot.qualityTier} />
+          <RegenPriorityBadge priority={shot.regenPriority} />
+          <ShotTypeBadge shotType={shot.shotType} />
+          <RiskBadge consistencyRisk={consistencyRisk} cameraRisk={cameraRisk} />
+          {media?.qc?.recommendedFix && (
+            <Badge className="text-[10px] px-1 py-0 bg-amber-100 text-amber-700 border-amber-300">
+              建议修{FIX_TARGET_LABELS[media.qc.recommendedFix]}
+            </Badge>
+          )}
         </div>
         <ShotVideoStatus entry={media} />
       </div>
@@ -294,6 +430,11 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({ shot, media, aspectRatio 
         {shot.dialogue?.text && (
           <p className="text-xs text-foreground/70 italic line-clamp-1 mt-1">「{shot.dialogue.text}」</p>
         )}
+        {media?.qc?.failReasons?.length ? (
+          <p className="text-[10px] text-amber-700 dark:text-amber-300 mt-1">
+            归因：{media.qc.failReasons.map((x) => FIX_TARGET_LABELS[x]).join('、')}
+          </p>
+        ) : null}
         <p className="text-xs text-muted-foreground mt-1">{shot.estimatedDurationSec}s</p>
       </div>
     </div>
@@ -317,6 +458,182 @@ const BatchProgress: React.FC<BatchProgressProps> = ({ label, current, total, me
   </div>
 );
 
+function regenPriorityScore(priority?: Shot['regenPriority']): number {
+  if (priority === 'high') return 3;
+  if (priority === 'low') return 1;
+  return 2;
+}
+
+function qualityTierScore(tier?: Shot['qualityTier']): number {
+  if (tier === 'golden') return 3;
+  if (tier === 'filler') return 1;
+  return 2;
+}
+
+function shotTypeScore(shotType?: Shot['shotType']): number {
+  if (shotType === 'action' || shotType === 'dialogue') return 3;
+  if (shotType === 'wide' || shotType === 'portrait') return 2;
+  if (shotType === 'insert') return 1;
+  return 2;
+}
+
+function sortShotsByPriority(shots: Shot[]): Shot[] {
+  return [...shots].sort((a, b) => {
+    const regenDiff = regenPriorityScore(b.regenPriority) - regenPriorityScore(a.regenPriority);
+    if (regenDiff !== 0) return regenDiff;
+    const masterDiff = Number(!!b.isMasterShot) - Number(!!a.isMasterShot);
+    if (masterDiff !== 0) return masterDiff;
+    const tierDiff = qualityTierScore(b.qualityTier) - qualityTierScore(a.qualityTier);
+    if (tierDiff !== 0) return tierDiff;
+    const typeDiff = shotTypeScore(b.shotType) - shotTypeScore(a.shotType);
+    if (typeDiff !== 0) return typeDiff;
+    return a.shotIndex - b.shotIndex;
+  });
+}
+
+function isHighPriorityShot(shot: Shot): boolean {
+  return !!(shot.isMasterShot || shot.regenPriority === 'high' || shot.qualityTier === 'golden');
+}
+
+function isProblemShotMediaEntry(
+  shot: Shot,
+  media: ShotMediaEntry | undefined,
+  episodeMediaStatus?: string,
+): boolean {
+  if (!media) return false;
+  if (shot.isPreview) return false;
+  if (media.qc?.passed === false) return true;
+  if (media.status === 'failed' || media.status === 'submitted') return true;
+  if (media.status === 'completed' && !media.videoUrl) return true;
+  if (episodeMediaStatus === 'failed' && media.status === 'image_done' && !media.videoUrl && !shot.isFlashback) return true;
+  return false;
+}
+
+function isQcFixTarget(value: unknown): value is QcFixTarget {
+  return value === 'identity' || value === 'style' || value === 'camera' || value === 'motion';
+}
+
+function resolveShotFixTags(
+  shot: Shot,
+  media: ShotMediaEntry | undefined,
+  consistencyRiskSet: Set<string>,
+  cameraRiskSet: Set<string>,
+): Set<QcFixTarget> {
+  const tags = new Set<QcFixTarget>();
+  const qc = media?.qc;
+  if (isQcFixTarget(qc?.recommendedFix)) tags.add(qc.recommendedFix);
+  for (const reason of qc?.failReasons ?? []) {
+    if (isQcFixTarget(reason)) tags.add(reason);
+  }
+  if (consistencyRiskSet.has(shot.shotId)) {
+    tags.add('identity');
+    tags.add('style');
+  }
+  if (cameraRiskSet.has(shot.shotId)) tags.add('camera');
+  const likelyMotionProblem = media?.status === 'failed' && !media.videoUrl && !shot.isPreview;
+  if (likelyMotionProblem) tags.add('motion');
+  return tags;
+}
+
+// ─── Pipeline step indicator ────────────────────────────────────────────────────
+
+function PipelineStep({ icon, label, status }: { icon: React.ReactNode; label: string; status: 'done' | 'partial' | 'idle' }) {
+  return (
+    <div className={cn(
+      'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium whitespace-nowrap shrink-0',
+      status === 'done' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400' :
+      status === 'partial' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400' :
+      'bg-muted text-muted-foreground',
+    )}>
+      {icon}{label}
+      {status === 'done' && <CheckCircle2 className="w-3 h-3 ml-0.5" />}
+    </div>
+  );
+}
+
+function PipelineArrow() {
+  return <span className="text-muted-foreground/40 shrink-0">→</span>;
+}
+
+// ─── Script shot row (read-only) ────────────────────────────────────────────────
+
+const ANGLE_LABELS_S: Record<string, string> = {
+  extreme_close_up: '极特写', close_up: '特写', medium_close_up: '中特写',
+  medium: '中景', medium_wide: '中远景', wide: '远景', extreme_wide: '极远景',
+  over_shoulder: '过肩', bird_eye: '俯瞰', low_angle: '仰角', pov: '主观视角',
+};
+const MOVEMENT_LABELS_S: Record<string, string> = {
+  static: '固定', slow_push_in: '慢推', slow_pull_back: '慢拉',
+  pan_left: '左摇', pan_right: '右摇', tilt_up: '上仰', tilt_down: '下俯',
+  whip_pan: '甩镜', tracking: '跟镜', orbit: '环绕', handheld: '手持',
+};
+
+function ScriptShotRow(
+  { shot, consistencyRisk, cameraRisk }: { shot: Shot; consistencyRisk?: boolean; cameraRisk?: boolean },
+) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border rounded-lg bg-card p-3">
+      <div className="flex items-start gap-3">
+        <span className="font-mono text-xs font-bold text-muted-foreground w-8 shrink-0 pt-0.5">
+          #{String(shot.shotIndex + 1).padStart(3, '0')}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap gap-1 mb-1.5">
+            {shot.camera?.angle && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                {ANGLE_LABELS_S[shot.camera.angle] ?? shot.camera.angle}
+              </Badge>
+            )}
+            {shot.camera?.movement && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                {MOVEMENT_LABELS_S[shot.camera.movement] ?? shot.camera.movement}
+              </Badge>
+            )}
+            {shot.specialTechnique && (
+              <Badge className="text-[10px] px-1.5 py-0 bg-purple-100 text-purple-700 border-purple-200">
+                {shot.specialTechnique}
+              </Badge>
+            )}
+            <MasterShotBadge isMaster={shot.isMasterShot} />
+            <RegenPriorityBadge priority={shot.regenPriority} />
+            <ShotTypeBadge shotType={shot.shotType} />
+            <RiskBadge consistencyRisk={consistencyRisk} cameraRisk={cameraRisk} />
+            {shot.isHumanEdited && (
+              <Badge className="text-[10px] px-1.5 py-0 bg-orange-100 text-orange-700 border-orange-200">
+                已锁定
+              </Badge>
+            )}
+            <span className="text-[10px] text-muted-foreground self-center">{shot.estimatedDurationSec}s</span>
+          </div>
+          <p className={cn('text-sm text-foreground/80', open ? '' : 'line-clamp-2')}>{shot.visualPrompt}</p>
+          {shot.dialogue?.text && (
+            <p className="text-xs text-muted-foreground italic mt-1">
+              {shot.dialogue.isVoiceover ? '旁白' : '台词'}：「{shot.dialogue.text}」
+            </p>
+          )}
+          {open && shot.characters && shot.characters.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {shot.characters.map(c => (
+                <p key={c.characterId} className="text-xs text-muted-foreground">
+                  {c.characterId} — {c.action}（{c.emotion}）
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          className="text-muted-foreground/50 hover:text-muted-foreground shrink-0 mt-0.5"
+          onClick={() => setOpen(v => !v)}
+        >
+          {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main page ─────────────────────────────────────────────────────────────────
 
 const EpisodeProductionBoard: React.FC = () => {
@@ -338,6 +655,8 @@ const EpisodeProductionBoard: React.FC = () => {
   // Batch video generation state (SSE)
   const [isGeneratingVideos, setIsGeneratingVideos] = useState(false);
   const [videoBatchProgress, setVideoBatchProgress] = useState({ current: 0, total: 0, message: '' });
+  const [problemResetMode, setProblemResetMode] = useState<'all' | 'high' | QcFixTarget | null>(null);
+  const [sortMode, setSortMode] = useState<'story' | 'priority'>('story');
 
   const imagesSseRef = useRef<EventSource | null>(null);
   const videosSseRef = useRef<EventSource | null>(null);
@@ -372,13 +691,32 @@ const EpisodeProductionBoard: React.FC = () => {
 
   // ── Derived data ──────────────────────────────────────────────────────────────
 
-  const shots: Shot[] = (episode?.storyboard?.shots ?? []).sort((a, b) => a.shotIndex - b.shotIndex);
+  const storyOrderedShots: Shot[] = [...(episode?.storyboard?.shots ?? [])].sort((a, b) => a.shotIndex - b.shotIndex);
+  const displayShots: Shot[] = sortMode === 'priority' ? sortShotsByPriority(storyOrderedShots) : storyOrderedShots;
   const shotMediaMap: Record<string, ShotMediaEntry> = (episode?.shotMediaMap ?? {}) as Record<string, ShotMediaEntry>;
+  const consistencyRiskSet = new Set((episode?.review?.consistencyRiskShots ?? []).map((r) => r.shotId));
+  const cameraRiskSet = new Set((episode?.review?.cameraReadabilityRiskShots ?? []).map((r) => r.shotId));
+  const reviewRiskShotSet = new Set<string>([...consistencyRiskSet, ...cameraRiskSet]);
+  const readinessScore = episode?.review?.generationReadinessScore;
   const aspectRatio: '9:16' | '16:9' = ((drama as any)?.state?.audienceDirective?.aspectRatio ?? '9:16') as '9:16' | '16:9';
 
-  const imageCount = shots.filter(s => shotMediaMap[s.shotId]?.imageUrl).length;
-  const videoCount = shots.filter(s => shotMediaMap[s.shotId]?.videoUrl).length;
-  const totalShots = shots.length;
+  const imageCount = storyOrderedShots.filter(s => shotMediaMap[s.shotId]?.imageUrl).length;
+  const videoCount = storyOrderedShots.filter(s => shotMediaMap[s.shotId]?.videoUrl).length;
+  const totalShots = storyOrderedShots.length;
+  const problemShotIds = storyOrderedShots
+    .filter((shot) => isProblemShotMediaEntry(shot, shotMediaMap[shot.shotId], episode?.mediaStatus) || reviewRiskShotSet.has(shot.shotId))
+    .map((shot) => shot.shotId);
+  const problemShotSet = new Set(problemShotIds);
+  const problemShotCount = problemShotIds.length;
+  const highPriorityProblemShotCount = storyOrderedShots.filter(
+    (shot) => problemShotSet.has(shot.shotId) && isHighPriorityShot(shot),
+  ).length;
+  const fixTargetCounts: Record<QcFixTarget, number> = { identity: 0, style: 0, camera: 0, motion: 0 };
+  for (const shot of storyOrderedShots) {
+    if (!problemShotSet.has(shot.shotId)) continue;
+    const tags = resolveShotFixTags(shot, shotMediaMap[shot.shotId], consistencyRiskSet, cameraRiskSet);
+    for (const tag of tags) fixTargetCounts[tag] += 1;
+  }
 
   const episodeTitle = episode?.title ?? `第 ${episodeNumber} 集`;
   const dramaTitleRaw = (drama as any)?.state?.title ?? (drama as any)?.title ?? '';
@@ -415,7 +753,7 @@ const EpisodeProductionBoard: React.FC = () => {
     if (!dramaId || isGeneratingImages) return;
     imagesSseRef.current?.close();
 
-    const needsGen = shots.filter(s => !s.isFlashback && !s.isPreview && !shotMediaMap[s.shotId]?.imageUrl);
+    const needsGen = displayShots.filter(s => !s.isFlashback && !s.isPreview && !shotMediaMap[s.shotId]?.imageUrl);
     if (needsGen.length === 0) {
       message.info('所有分镜图已生成');
       return;
@@ -430,25 +768,27 @@ const EpisodeProductionBoard: React.FC = () => {
 
     es.onmessage = (evt) => {
       try {
-        const data = JSON.parse(evt.data);
-        if (data._type === 'heartbeat') return;
-
-        setImageBatchProgress({
-          current: data.stepIndex ?? 0,
-          total: data.totalSteps ?? needsGen.length,
-          message: data.message ?? '',
-        });
-
-        if (data.done || data._type === 'result') {
+        const data = JSON.parse(evt.data) as DramaSseEvent;
+        if (data._type === 'heartbeat' || data._type === 'info') return;
+        if (data._type === 'error' || data.error || data.terminalStatus === 'failed') {
+          es.close();
+          setIsGeneratingImages(false);
+          message.error(`生成失败: ${data.error || data.message || '未知错误'}`);
+          return;
+        }
+        if (data._type === 'progress') {
+          setImageBatchProgress({
+            current: data.stepIndex ?? 0,
+            total: data.totalSteps ?? needsGen.length,
+            message: data.message ?? '',
+          });
+          return;
+        }
+        if (data._type === 'result') {
           es.close();
           setIsGeneratingImages(false);
           loadEpisode();
-          message.success('批量图片生成完成');
-        }
-        if (data.error) {
-          es.close();
-          setIsGeneratingImages(false);
-          message.error(`生成失败: ${data.error}`);
+          message.success(data.message || '批量图片生成完成');
         }
       } catch {}
     };
@@ -458,7 +798,39 @@ const EpisodeProductionBoard: React.FC = () => {
       setIsGeneratingImages(false);
       loadEpisode();
     };
-  }, [dramaId, episodeNumber, isGeneratingImages, shots, shotMediaMap, loadEpisode]);
+  }, [dramaId, episodeNumber, isGeneratingImages, displayShots, shotMediaMap, loadEpisode]);
+
+  // ── Problem shot reset (targeted) ───────────────────────────────────────────
+
+  const handleResetProblemShots = useCallback(async (
+    opts?: { onlyHighPriority?: boolean; fixTarget?: ResetFixTarget },
+  ) => {
+    if (!dramaId) return;
+    const onlyHighPriority = opts?.onlyHighPriority ?? false;
+    const fixTarget = opts?.fixTarget ?? 'all';
+    const activeMode: 'all' | 'high' | QcFixTarget = onlyHighPriority ? 'high' : fixTarget;
+    setProblemResetMode(activeMode);
+    try {
+      const result = await resetProblemShots(dramaId, episodeNumber, {
+        includeReviewRisks: true,
+        onlyHighPriority,
+        fixTarget,
+      });
+      const scopeLabel = onlyHighPriority
+        ? '高优先'
+        : (fixTarget === 'all' ? '全部' : `${FIX_TARGET_LABELS[fixTarget]}类`);
+      if (result.resetCount > 0) {
+        message.success(`已重置 ${result.resetCount} 个${scopeLabel}问题镜头`);
+      } else {
+        message.info(`未发现${scopeLabel}问题镜头`);
+      }
+      await loadEpisode();
+    } catch (err: any) {
+      message.error(`重置失败: ${err?.message ?? '未知错误'}`);
+    } finally {
+      setProblemResetMode(null);
+    }
+  }, [dramaId, episodeNumber, loadEpisode]);
 
   // ── Batch video generation (SSE, reuses media-sse endpoint) ──────────────────
 
@@ -480,27 +852,27 @@ const EpisodeProductionBoard: React.FC = () => {
 
     es.onmessage = (evt) => {
       try {
-        const data = JSON.parse(evt.data);
-        if (data._type === 'heartbeat') return;
-
-        if (data.phase === 'media' || data.phase === 'videos') {
+        const data = JSON.parse(evt.data) as DramaSseEvent;
+        if (data._type === 'heartbeat' || data._type === 'info') return;
+        if (data._type === 'error' || data.error || data.terminalStatus === 'failed') {
+          es.close();
+          setIsGeneratingVideos(false);
+          message.error(`生成失败: ${data.error || data.message || '未知错误'}`);
+          return;
+        }
+        if (data._type === 'progress') {
           setVideoBatchProgress({
             current: data.stepIndex ?? 0,
             total: data.totalSteps ?? totalShots,
             message: data.message ?? '',
           });
+          return;
         }
-
-        if (data._type === 'result' || data.done) {
+        if (data._type === 'result') {
           es.close();
           setIsGeneratingVideos(false);
           loadEpisode();
-          message.success('批量视频生成完成');
-        }
-        if (data.error) {
-          es.close();
-          setIsGeneratingVideos(false);
-          message.error(`生成失败: ${data.error}`);
+          message.success(data.message || '批量视频生成完成');
         }
       } catch {}
     };
@@ -558,6 +930,7 @@ const EpisodeProductionBoard: React.FC = () => {
           {episodes.map(ep => (
             <button
               key={ep.episodeNumber}
+              type="button"
               onClick={() => history.push(`/novel/drama/${dramaId}/episodes/${ep.episodeNumber}`)}
               className={cn(
                 'w-7 h-7 rounded text-xs font-mono transition-colors',
@@ -610,37 +983,122 @@ const EpisodeProductionBoard: React.FC = () => {
 
       {/* ─── Main content ────────────────────────────────────────────────────── */}
       <Tabs defaultValue="images" className="flex-1 flex flex-col">
-        <TabsList className="mx-4 mt-3 w-auto self-start">
-          <TabsTrigger value="script" className="gap-1.5 text-xs">
-            <Film className="w-3.5 h-3.5" />分镜脚本
-            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{totalShots}</Badge>
-          </TabsTrigger>
-          <TabsTrigger value="images" className="gap-1.5 text-xs">
-            <ImageIcon className="w-3.5 h-3.5" />图片制作
-            <Badge
-              variant={imageCount === totalShots ? 'default' : 'secondary'}
-              className="text-[10px] px-1.5 py-0"
+        <div className="mx-4 mt-3 flex items-center justify-between gap-2">
+          <TabsList className="w-auto self-start">
+            <TabsTrigger value="script" className="gap-1.5 text-xs">
+              <Film className="w-3.5 h-3.5" />分镜脚本
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{totalShots}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="images" className="gap-1.5 text-xs">
+              <ImageIcon className="w-3.5 h-3.5" />图片制作
+              <Badge
+                variant={imageCount === totalShots ? 'default' : 'secondary'}
+                className="text-[10px] px-1.5 py-0"
+              >
+                {imageCount}/{totalShots}
+              </Badge>
+            </TabsTrigger>
+            <TabsTrigger value="videos" className="gap-1.5 text-xs">
+              <Video className="w-3.5 h-3.5" />视频制作
+              <Badge
+                variant={videoCount === totalShots ? 'default' : 'secondary'}
+                className="text-[10px] px-1.5 py-0"
+              >
+                {videoCount}/{totalShots}
+              </Badge>
+            </TabsTrigger>
+          </TabsList>
+          <div className="flex items-center gap-2">
+            {typeof readinessScore === 'number' && (
+              <Badge
+                variant={readinessScore >= 7 ? 'default' : 'secondary'}
+                className="text-[10px] px-1.5 py-0"
+              >
+                生成稳定性 {readinessScore.toFixed(1)}
+              </Badge>
+            )}
+            <Button
+              size="sm"
+              variant={sortMode === 'priority' ? 'default' : 'outline'}
+              className="h-7 text-xs"
+              onClick={() => setSortMode((m) => (m === 'priority' ? 'story' : 'priority'))}
             >
-              {imageCount}/{totalShots}
-            </Badge>
-          </TabsTrigger>
-          <TabsTrigger value="videos" className="gap-1.5 text-xs">
-            <Video className="w-3.5 h-3.5" />视频制作
-            <Badge
-              variant={videoCount === totalShots ? 'default' : 'secondary'}
-              className="text-[10px] px-1.5 py-0"
-            >
-              {videoCount}/{totalShots}
-            </Badge>
-          </TabsTrigger>
-        </TabsList>
+              {sortMode === 'priority' ? '优先级视图' : '剧情顺序'}
+            </Button>
+          </div>
+        </div>
+
+        {problemShotCount > 0 && (
+          <div className="mx-4 mt-2 mb-1 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/20 p-2.5 space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge variant="outline" className="border-red-300 text-red-700 bg-red-50">
+                问题镜头 {problemShotCount}
+              </Badge>
+              {highPriorityProblemShotCount > 0 && (
+                <Badge variant="outline" className="border-rose-300 text-rose-700 bg-rose-50">
+                  高优先 {highPriorityProblemShotCount}
+                </Badge>
+              )}
+              {FIX_TARGET_ORDER.filter((tag) => fixTargetCounts[tag] > 0).map((tag) => (
+                <Badge key={tag} variant="outline" className="border-amber-300 text-amber-700 bg-amber-50">
+                  {FIX_TARGET_LABELS[tag]} {fixTargetCounts[tag]}
+                </Badge>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                className="h-7 text-xs gap-1"
+                disabled={isGeneratingImages || isGeneratingVideos || problemResetMode !== null}
+                onClick={() => handleResetProblemShots({ onlyHighPriority: false, fixTarget: 'all' })}
+              >
+                {problemResetMode === 'all'
+                  ? <><Loader2 className="w-3 h-3 animate-spin" />全量重置中…</>
+                  : <><RefreshCw className="w-3 h-3" />重生全部问题镜头</>}
+              </Button>
+              {highPriorityProblemShotCount > 0 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1"
+                  disabled={isGeneratingImages || isGeneratingVideos || problemResetMode !== null}
+                  onClick={() => handleResetProblemShots({ onlyHighPriority: true, fixTarget: 'all' })}
+                >
+                  {problemResetMode === 'high'
+                    ? <><Loader2 className="w-3 h-3 animate-spin" />高优先重置中…</>
+                    : <><AlertCircle className="w-3 h-3" />仅高优先重生</>}
+                </Button>
+              )}
+              {FIX_TARGET_ORDER.filter((target) => fixTargetCounts[target] > 0).map((target) => (
+                <Button
+                  key={target}
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1"
+                  disabled={isGeneratingImages || isGeneratingVideos || problemResetMode !== null}
+                  onClick={() => handleResetProblemShots({ onlyHighPriority: false, fixTarget: target })}
+                >
+                  {problemResetMode === target
+                    ? <><Loader2 className="w-3 h-3 animate-spin" />{FIX_TARGET_LABELS[target]}重置中…</>
+                    : <><RefreshCw className="w-3 h-3" />仅修{FIX_TARGET_LABELS[target]}</>}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── 分镜脚本 tab ──────────────────────────────────────────────────── */}
         <TabsContent value="script" className="flex-1 mt-0 p-4">
           <ScrollArea className="h-[calc(100vh-160px)]">
             <div className="space-y-2 max-w-3xl mx-auto pr-3">
-              {shots.map((shot) => (
-                <ScriptShotRow key={shot.shotId} shot={shot} />
+              {storyOrderedShots.map((shot) => (
+                <ScriptShotRow
+                  key={shot.shotId}
+                  shot={shot}
+                  consistencyRisk={consistencyRiskSet.has(shot.shotId)}
+                  cameraRisk={cameraRiskSet.has(shot.shotId)}
+                />
               ))}
             </div>
           </ScrollArea>
@@ -674,7 +1132,7 @@ const EpisodeProductionBoard: React.FC = () => {
                 variant="outline"
                 className="h-8 text-xs gap-1"
                 onClick={loadEpisode}
-                disabled={isGeneratingImages}
+                disabled={isGeneratingImages || isGeneratingVideos || problemResetMode !== null}
               >
                 <RefreshCw className="w-3 h-3" />刷新
               </Button>
@@ -682,7 +1140,7 @@ const EpisodeProductionBoard: React.FC = () => {
                 size="sm"
                 className="h-8 text-xs gap-1"
                 onClick={handleBatchGenerateImages}
-                disabled={isGeneratingImages || imageCount === totalShots}
+                disabled={isGeneratingImages || isGeneratingVideos || problemResetMode !== null || imageCount === totalShots}
               >
                 {isGeneratingImages ? (
                   <><Loader2 className="w-3 h-3 animate-spin" />生成中…</>
@@ -700,13 +1158,16 @@ const EpisodeProductionBoard: React.FC = () => {
                 ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'
                 : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4',
             )}>
-              {shots.map(shot => (
+              {displayShots.map(shot => (
                 <ShotImageCard
                   key={shot.shotId}
                   shot={shot}
                   media={shotMediaMap[shot.shotId]}
                   aspectRatio={aspectRatio}
                   generating={generatingImageShots.has(shot.shotId)}
+                  busy={isGeneratingImages || isGeneratingVideos || problemResetMode !== null}
+                  consistencyRisk={consistencyRiskSet.has(shot.shotId)}
+                  cameraRisk={cameraRiskSet.has(shot.shotId)}
                   onGenerate={() => handleGenerateShotImage(shot.shotId)}
                 />
               ))}
@@ -748,7 +1209,7 @@ const EpisodeProductionBoard: React.FC = () => {
                 variant="outline"
                 className="h-8 text-xs gap-1"
                 onClick={loadEpisode}
-                disabled={isGeneratingVideos}
+                disabled={isGeneratingVideos || isGeneratingImages || problemResetMode !== null}
               >
                 <RefreshCw className="w-3 h-3" />刷新
               </Button>
@@ -756,7 +1217,7 @@ const EpisodeProductionBoard: React.FC = () => {
                 size="sm"
                 className="h-8 text-xs gap-1"
                 onClick={handleBatchGenerateVideos}
-                disabled={isGeneratingVideos}
+                disabled={isGeneratingVideos || isGeneratingImages || problemResetMode !== null}
               >
                 {isGeneratingVideos ? (
                   <><Loader2 className="w-3 h-3 animate-spin" />生成中…</>
@@ -774,12 +1235,14 @@ const EpisodeProductionBoard: React.FC = () => {
                 ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'
                 : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4',
             )}>
-              {shots.map(shot => (
+              {displayShots.map(shot => (
                 <ShotVideoCard
                   key={shot.shotId}
                   shot={shot}
                   media={shotMediaMap[shot.shotId]}
                   aspectRatio={aspectRatio}
+                  consistencyRisk={consistencyRiskSet.has(shot.shotId)}
+                  cameraRisk={cameraRiskSet.has(shot.shotId)}
                 />
               ))}
             </div>
@@ -789,97 +1252,5 @@ const EpisodeProductionBoard: React.FC = () => {
     </div>
   );
 };
-
-// ─── Pipeline step indicator ────────────────────────────────────────────────────
-
-function PipelineStep({ icon, label, status }: { icon: React.ReactNode; label: string; status: 'done' | 'partial' | 'idle' }) {
-  return (
-    <div className={cn(
-      'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium whitespace-nowrap shrink-0',
-      status === 'done' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400' :
-      status === 'partial' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400' :
-      'bg-muted text-muted-foreground',
-    )}>
-      {icon}{label}
-      {status === 'done' && <CheckCircle2 className="w-3 h-3 ml-0.5" />}
-    </div>
-  );
-}
-
-function PipelineArrow() {
-  return <span className="text-muted-foreground/40 shrink-0">→</span>;
-}
-
-// ─── Script shot row (read-only) ────────────────────────────────────────────────
-
-const ANGLE_LABELS_S: Record<string, string> = {
-  extreme_close_up: '极特写', close_up: '特写', medium_close_up: '中特写',
-  medium: '中景', medium_wide: '中远景', wide: '远景', extreme_wide: '极远景',
-  over_shoulder: '过肩', bird_eye: '俯瞰', low_angle: '仰角', pov: '主观视角',
-};
-const MOVEMENT_LABELS_S: Record<string, string> = {
-  static: '固定', slow_push_in: '慢推', slow_pull_back: '慢拉',
-  pan_left: '左摇', pan_right: '右摇', tilt_up: '上仰', tilt_down: '下俯',
-  whip_pan: '甩镜', tracking: '跟镜', orbit: '环绕', handheld: '手持',
-};
-
-function ScriptShotRow({ shot }: { shot: Shot }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="border rounded-lg bg-card p-3">
-      <div className="flex items-start gap-3">
-        <span className="font-mono text-xs font-bold text-muted-foreground w-8 shrink-0 pt-0.5">
-          #{String(shot.shotIndex + 1).padStart(3, '0')}
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap gap-1 mb-1.5">
-            {shot.camera?.angle && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                {ANGLE_LABELS_S[shot.camera.angle] ?? shot.camera.angle}
-              </Badge>
-            )}
-            {shot.camera?.movement && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                {MOVEMENT_LABELS_S[shot.camera.movement] ?? shot.camera.movement}
-              </Badge>
-            )}
-            {shot.specialTechnique && (
-              <Badge className="text-[10px] px-1.5 py-0 bg-purple-100 text-purple-700 border-purple-200">
-                {shot.specialTechnique}
-              </Badge>
-            )}
-            {shot.isHumanEdited && (
-              <Badge className="text-[10px] px-1.5 py-0 bg-orange-100 text-orange-700 border-orange-200">
-                已锁定
-              </Badge>
-            )}
-            <span className="text-[10px] text-muted-foreground self-center">{shot.estimatedDurationSec}s</span>
-          </div>
-          <p className={cn('text-sm text-foreground/80', open ? '' : 'line-clamp-2')}>{shot.visualPrompt}</p>
-          {shot.dialogue?.text && (
-            <p className="text-xs text-muted-foreground italic mt-1">
-              {shot.dialogue.isVoiceover ? '旁白' : '台词'}：「{shot.dialogue.text}」
-            </p>
-          )}
-          {open && shot.characters && shot.characters.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {shot.characters.map(c => (
-                <p key={c.characterId} className="text-xs text-muted-foreground">
-                  {c.characterId} — {c.action}（{c.emotion}）
-                </p>
-              ))}
-            </div>
-          )}
-        </div>
-        <button
-          className="text-muted-foreground/50 hover:text-muted-foreground shrink-0 mt-0.5"
-          onClick={() => setOpen(v => !v)}
-        >
-          {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 export default EpisodeProductionBoard;

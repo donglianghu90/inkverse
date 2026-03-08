@@ -54,6 +54,7 @@ import { DramaTaskRecoveryService } from './drama-task-recovery.service';
 import { MediaQualityGateService } from './media-quality-gate.service';
 import { ShotCoherenceValidatorService } from './shot-coherence-validator.service';
 import { EmotionMediaMapperService } from './emotion-media-mapper.service';
+import { GenerationPolicyService } from './generation-policy.service';
 import { DRAMA_QUEUE } from './task/types';
 
 @Module({
@@ -89,7 +90,7 @@ import { DRAMA_QUEUE } from './task/types';
     PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent,
     DramaDeterministicCheckerService, DramaPromptTemplateService, DramaCalibrationService,
     DramaUsageService, DramaTaskRecoveryService,
-    MediaQualityGateService, ShotCoherenceValidatorService, EmotionMediaMapperService,
+    MediaQualityGateService, ShotCoherenceValidatorService, EmotionMediaMapperService, GenerationPolicyService,
   ],
   exports: [DramaTaskService, TaskSubmitterService, DramaRunService, AssetHubService, DramaBillingService],
 })

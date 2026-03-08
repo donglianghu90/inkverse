@@ -5,7 +5,21 @@ import { Repository } from 'typeorm';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
 
 type DramaExecStatus = DramaWorkflowExecutionEntity['status'];
-export interface DramaExecutionSummary { overallScore?: number; shotCount?: number; duration?: number; totalDurationMs: number; editRounds: number; }
+export interface DramaSkippedStepSummary {
+  stepKey: string;
+  nodeId?: string;
+  skipReason?: string;
+  message?: string;
+}
+
+export interface DramaExecutionSummary {
+  overallScore?: number;
+  shotCount?: number;
+  duration?: number;
+  totalDurationMs: number;
+  editRounds: number;
+  skippedSteps?: DramaSkippedStepSummary[];
+}
 
 const STALE_THRESHOLD_MS = 60_000; // running超60s视为可恢复
 const DEFAULT_INSTANCE_ID = `${process.env.HOSTNAME ?? 'local'}-${process.pid}`;
@@ -143,6 +157,27 @@ export class DramaWorkflowExecutionService {
 
   async listRuns(dramaId: string, limit = 20): Promise<DramaWorkflowExecutionEntity[]> {
     return this.repo.find({ where: { dramaId }, order: { createdAt: 'DESC' }, take: limit });
+  }
+
+  /** 获取每一集最新一次执行记录（用于工作台快速展示） */
+  async listLatestRunsByEpisode(
+    dramaId: string,
+    limitEpisodes = 30,
+    includeCreation = true,
+  ): Promise<DramaWorkflowExecutionEntity[]> {
+    const fetchCount = Math.max(limitEpisodes * 6, 120);
+    const runs = await this.repo.find({
+      where: { dramaId },
+      order: { createdAt: 'DESC' },
+      take: fetchCount,
+    });
+    const latestByEpisode = new Map<number, DramaWorkflowExecutionEntity>();
+    for (const run of runs) {
+      if (!includeCreation && run.episodeNumber <= 0) continue;
+      if (!latestByEpisode.has(run.episodeNumber)) latestByEpisode.set(run.episodeNumber, run);
+      if (latestByEpisode.size >= limitEpisodes) break;
+    }
+    return [...latestByEpisode.values()].sort((a, b) => b.episodeNumber - a.episodeNumber).slice(0, limitEpisodes);
   }
 
   /** 查询此剧所有「进行中」或「最近中断」的执行记录（用于前端页面重入时恢复进度显示） */

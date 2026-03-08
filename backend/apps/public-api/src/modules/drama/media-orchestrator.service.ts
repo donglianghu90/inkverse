@@ -22,13 +22,31 @@ import { PromptOptimizerService } from '../media/prompt-optimizer.service';
 import { MediaQualityGateService } from './media-quality-gate.service';
 import { ShotCoherenceValidatorService } from './shot-coherence-validator.service';
 import { EmotionMediaMapperService } from './emotion-media-mapper.service';
+import {
+  GenerationPolicyService,
+  DramaGenerationMode,
+  DramaStyleBucket,
+} from './generation-policy.service';
 
-export interface ShotMediaEntry { videoUrl?: string; videoJobId?: string; ttsUrl?: string; imageUrl?: string; lastFrameImageUrl?: string; status: string }
-
-const T2I_CONCURRENCY = 3;
-const I2V_CONCURRENCY = 2;
-const MAX_MEDIA_RETRIES = 2;
-const RETRY_BASE_DELAY_MS = 2000;
+export interface ShotMediaEntry {
+  videoUrl?: string;
+  videoJobId?: string;
+  ttsUrl?: string;
+  imageUrl?: string;
+  lastFrameImageUrl?: string;
+  status: string;
+  qc?: {
+    identityScore?: number;
+    styleScore?: number;
+    readabilityScore?: number;
+    score?: number;
+    passed?: boolean;
+    attempts?: number;
+    issues?: string[];
+    failReasons?: Array<'identity' | 'style' | 'camera' | 'motion'>;
+    recommendedFix?: 'identity' | 'style' | 'camera' | 'motion';
+  };
+}
 
 @Injectable()
 export class MediaOrchestratorService implements OnModuleInit {
@@ -52,6 +70,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     private readonly qualityGate: MediaQualityGateService,
     private readonly coherenceValidator: ShotCoherenceValidatorService,
     private readonly emotionMapper: EmotionMediaMapperService,
+    private readonly generationPolicy: GenerationPolicyService,
   ) {}
 
   async onModuleInit() {
@@ -110,12 +129,26 @@ export class MediaOrchestratorService implements OnModuleInit {
     const state = drama.state as unknown as DramaState;
     const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
     const shots: Shot[] = storyboard?.shots ?? [];
+    const reviewRiskShotIds = this.extractReviewRiskShotIds(episode.review);
+    const orderedShots = this.orderShotsForProduction(shots, reviewRiskShotIds);
     const charImageMap = await this.buildCharacterImageMap(dramaId);
+    const characterAnchorMap = this.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
+    const styleRefImages = await this.buildStyleRefImages(dramaId, state);
     const flashbackVideoMap = await this.buildFlashbackVideoMap(dramaId, shots);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
     const imgSize = aspectRatio === '9:16' ? '720x1280' : '1280x720';
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
+    const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
+    this.logger.log(
+      `[policy] E${episodeNumber} mode=${mediaPolicy.mode} style=${mediaPolicy.styleBucket} ` +
+      `t2i=${mediaPolicy.t2iConcurrency} i2v=${mediaPolicy.i2vConcurrency} ` +
+      `retry=${mediaPolicy.maxMediaRetries} gate=${mediaPolicy.enableQualityGate ? 'on' : 'off'} ` +
+      `coherence=${mediaPolicy.enableCoherenceValidation ? 'on' : 'off'}`,
+    );
+    this.logShotOrder(`E${episodeNumber}`, orderedShots);
+    const withMediaRetry = <T>(fn: () => Promise<T>, label: string) =>
+      this.withRetry(fn, label, mediaPolicy.maxMediaRetries, mediaPolicy.retryBaseDelayMs);
 
     const raw = episode.shotMediaMap ?? {};
     const shotMediaMap: Record<string, ShotMediaEntry> = Object.fromEntries(
@@ -126,7 +159,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     const totalPhases = (hasT2I ? shots.length * 2 : 0) + shots.length * 2 + 1; // 首帧+尾帧+视频+TTS+合成
     let phaseOff = 0;
     const emit = (i: number, msg: string, done = false) =>
-      this.progressService.emit({ dramaId, phase: 'media', episodeNumber, step: `media_${i}`, stepIndex: i, totalSteps: totalPhases, message: msg, done });
+      this.progressService.emit({ dramaId, runType: 'media', episodeNumber, step: `media_${i}`, stepIndex: i, totalSteps: totalPhases, message: msg, done });
 
     try {
       const shotMediaParamsCache = new Map<string, ReturnType<EmotionMediaMapperService['mapShotToMediaParams']>>();
@@ -139,28 +172,53 @@ export class MediaOrchestratorService implements OnModuleInit {
         await this.updateMedia(episode.id, 'generating_first_frames', shotMediaMap);
         const sceneCache = new Map<string, string>();
         const prevFrameCache = new Map<number, string>();
+        let frameDirty = 0;
+        const flushFirstFrames = async (force = false) => {
+          frameDirty++;
+          if (force || frameDirty >= mediaPolicy.dbFlushEvery) {
+            await this.updateMedia(episode.id, 'generating_first_frames', shotMediaMap);
+            frameDirty = 0;
+          }
+        };
 
-        await this.runConcurrent(shots, T2I_CONCURRENCY, async (shot, i) => {
+        await this.runConcurrent(orderedShots, mediaPolicy.t2iConcurrency, async (shot, i) => {
           const sid = shot.shotId;
           if (shot.isFlashback || shot.isPreview) { emit(phaseOff + i, `${sid} 跳过T2I`, true); return; }
 
           const mediaParams = shotMediaParamsCache.get(sid);
           const emotionColorHint = mediaParams?.colorGrade;
+          const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
 
           if (!shotMediaMap[sid]?.imageUrl) {
             try {
               emit(phaseOff + i, `${sid} 首帧生成中...`);
-              const rawPrompt = this.assemblePrompt(shot.firstFramePrompt || shot.visualPrompt, shot.camera, t2iStylePrefix);
+              const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
+              const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix);
               const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, this.negPrompt ?? '', {
                 shotType: 'first_frame', qualityTier: shot.qualityTier ?? 'standard',
                 cameraAngle: shot.camera?.angle, emotionColorHint,
+                routeProfile: shotPolicy.routeProfile,
               });
-              const refs = this.buildRefImages(shot, charImageMap, variationImageMap, sceneCache, prevFrameCache, 'first');
+              const refs = this.buildRefImages(
+                shot,
+                charImageMap,
+                variationImageMap,
+                characterAnchorMap,
+                styleRefImages,
+                sceneCache,
+                prevFrameCache,
+                'first',
+              );
 
-              const tier = (shot.qualityTier ?? 'standard') as 'golden' | 'standard' | 'filler';
-              const tierCfg = this.qualityGate.getTierConfig(tier);
+              const tier = this.normalizeQualityTier(shot.qualityTier);
+              const shouldUseQualityGate = this.shouldUseQualityGate(
+                mediaPolicy.enableQualityGate,
+                tier,
+                shotPolicy.gateMaxAttempts,
+                shotPolicy.candidateCount,
+              );
               const genFn = async () => {
-                const res = await this.withRetry(() => this.mediaService.generateImage({
+                const res = await withMediaRetry(() => this.mediaService.generateImage({
                   prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined,
                   size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid,
                 }), `${sid} 首帧`);
@@ -168,19 +226,41 @@ export class MediaOrchestratorService implements OnModuleInit {
               };
 
               let imgUrl: string;
-              if (tier !== 'filler' && tierCfg.maxAttempts > 1) {
+              let gateQc: ShotMediaEntry['qc'] | undefined;
+              if (shouldUseQualityGate) {
+                const characterRefs = this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap);
                 const gateResult = await this.qualityGate.generateWithQualityGate(genFn, {
-                  maxAttempts: tierCfg.maxAttempts, minScore: tierCfg.minScore,
+                  maxAttempts: shotPolicy.gateMaxAttempts,
+                  minScore: shotPolicy.gateMinScore,
                   qualityTier: tier, prompt: optimized.prompt,
+                  characterRefs,
+                  styleRefs: styleRefImages,
+                  candidateCount: shotPolicy.candidateCount,
                 });
                 imgUrl = gateResult.imageUrl;
+                gateQc = {
+                  identityScore: gateResult.assessment.faceConsistencyScore,
+                  styleScore: gateResult.assessment.styleConsistencyScore,
+                  readabilityScore: gateResult.assessment.readabilityScore,
+                  score: gateResult.score,
+                  passed: gateResult.score >= shotPolicy.gateMinScore,
+                  attempts: gateResult.attempts,
+                  issues: gateResult.assessment.issues,
+                  failReasons: gateResult.assessment.failReasons,
+                  recommendedFix: gateResult.assessment.recommendedFix,
+                };
                 if (gateResult.attempts > 1) this.logger.log(`${sid} 质量关卡: score=${gateResult.score} attempts=${gateResult.attempts}`);
               } else {
                 imgUrl = await genFn();
               }
 
               if (imgUrl) {
-                shotMediaMap[sid] = { ...shotMediaMap[sid], imageUrl: imgUrl, status: shotMediaMap[sid]?.status ?? 'image_done' };
+                shotMediaMap[sid] = {
+                  ...shotMediaMap[sid],
+                  imageUrl: imgUrl,
+                  status: shotMediaMap[sid]?.status ?? 'image_done',
+                  qc: gateQc ?? shotMediaMap[sid]?.qc,
+                };
                 if (shot.sceneId && !sceneCache.has(shot.sceneId)) sceneCache.set(shot.sceneId, imgUrl);
                 prevFrameCache.set(shot.shotIndex, imgUrl);
                 try { await this.storage.downloadToLocal(imgUrl, this.storage.imageOutputPath(dramaId, sid)); } catch {}
@@ -194,25 +274,37 @@ export class MediaOrchestratorService implements OnModuleInit {
 
           if (shot.lastFramePrompt && !shotMediaMap[sid]?.lastFrameImageUrl) {
             try {
-              emit(phaseOff + shots.length + i, `${sid} 尾帧生成中...`);
-              const lastRefs = this.buildRefImages(shot, charImageMap, variationImageMap, sceneCache, prevFrameCache, 'last');
-              const rawLastPrompt = this.assemblePrompt(shot.lastFramePrompt!, shot.camera, t2iStylePrefix);
+              emit(phaseOff + orderedShots.length + i, `${sid} 尾帧生成中...`);
+              const lastRefs = this.buildRefImages(
+                shot,
+                charImageMap,
+                variationImageMap,
+                characterAnchorMap,
+                styleRefImages,
+                sceneCache,
+                prevFrameCache,
+                'last',
+              );
+              const styleLockedLastPrompt = this.applyStyleLockPrompt(shot.lastFramePrompt!, shot, state);
+              const rawLastPrompt = this.assemblePrompt(styleLockedLastPrompt, shot.camera, t2iStylePrefix);
               const optLast = this.promptOptimizer.optimizeForT2I(rawLastPrompt, this.negPrompt ?? '', {
                 shotType: 'last_frame', qualityTier: shot.qualityTier ?? 'standard', emotionColorHint,
+                routeProfile: shotPolicy.routeProfile,
               });
-              const res = await this.withRetry(() => this.mediaService.generateImage({ prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: lastRefs, dramaId, assetType: 'shot_last_frame', refId: `${sid}_last` }), `${sid} 尾帧`);
+              const res = await withMediaRetry(() => this.mediaService.generateImage({ prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: lastRefs, dramaId, assetType: 'shot_last_frame', refId: `${sid}_last` }), `${sid} 尾帧`);
               const lastUrl = res.images?.[0]?.url ?? '';
               if (lastUrl) shotMediaMap[sid] = { ...shotMediaMap[sid], lastFrameImageUrl: lastUrl };
-              emit(phaseOff + shots.length + i, `${sid} 尾帧完成`, true);
+              emit(phaseOff + orderedShots.length + i, `${sid} 尾帧完成`, true);
             } catch (err) { this.logger.warn(`${sid} 尾帧失败: ${(err as Error).message}`); }
           }
-          await this.updateMedia(episode.id, 'generating_first_frames', shotMediaMap);
+          await flushFirstFrames();
         });
+        await flushFirstFrames(true);
         phaseOff += shots.length * 2;
       }
 
       // ═══ Phase 0.5: 镜头连贯性验证 + 自动重生成 flagged shots ═══
-      if (hasT2I) {
+      if (hasT2I && mediaPolicy.enableCoherenceValidation) {
         try {
           await this.updateMedia(episode.id, 'generating_first_frames', shotMediaMap);
           const coherence = await this.coherenceValidator.validateEpisodeCoherence(dramaId, episodeNumber);
@@ -227,18 +319,30 @@ export class MediaOrchestratorService implements OnModuleInit {
                 if (s.sceneId && !sceneCache.has(s.sceneId)) sceneCache.set(s.sceneId, shotMediaMap[s.shotId].imageUrl!);
               }
             }
-            const flaggedShots = shots.filter(s => flaggedSet.has(s.shotId));
+            const flaggedShots = this.orderShotsForProduction(shots.filter(s => flaggedSet.has(s.shotId)), reviewRiskShotIds);
             for (const shot of flaggedShots) {
               const sid = shot.shotId;
+              const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
               try {
                 const mediaParams = shotMediaParamsCache.get(sid);
-                const rawPrompt = this.assemblePrompt(shot.firstFramePrompt || shot.visualPrompt, shot.camera, t2iStylePrefix);
+                const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
+                const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix);
                 const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, this.negPrompt ?? '', {
                   shotType: 'first_frame', qualityTier: shot.qualityTier ?? 'standard',
                   cameraAngle: shot.camera?.angle, emotionColorHint: mediaParams?.colorGrade,
+                  routeProfile: shotPolicy.routeProfile,
                 });
-                const refs = this.buildRefImages(shot, charImageMap, variationImageMap, sceneCache, prevFrameCache, 'first');
-                const res = await this.withRetry(() => this.mediaService.generateImage({
+                const refs = this.buildRefImages(
+                  shot,
+                  charImageMap,
+                  variationImageMap,
+                  characterAnchorMap,
+                  styleRefImages,
+                  sceneCache,
+                  prevFrameCache,
+                  'first',
+                );
+                const res = await withMediaRetry(() => this.mediaService.generateImage({
                   prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined,
                   size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: `${sid}_regen`,
                 }), `${sid} 连贯性重生成`);
@@ -258,7 +362,15 @@ export class MediaOrchestratorService implements OnModuleInit {
 
       // ═══ Phase 1: I2V / T2V 视频生成（镜头运动 + 情绪色调 + 动态分辨率） ═══
       await this.updateMedia(episode.id, 'generating_videos', shotMediaMap);
-      await this.runConcurrent(shots, I2V_CONCURRENCY, async (shot, i) => {
+      let videoSubmitDirty = 0;
+      const flushVideoSubmit = async (force = false) => {
+        videoSubmitDirty++;
+        if (force || videoSubmitDirty >= mediaPolicy.dbFlushEvery) {
+          await this.updateMedia(episode.id, 'generating_videos', shotMediaMap);
+          videoSubmitDirty = 0;
+        }
+      };
+      await this.runConcurrent(orderedShots, mediaPolicy.i2vConcurrency, async (shot, i) => {
         const sid = shot.shotId;
         if (shotMediaMap[sid]?.status === 'completed' && shotMediaMap[sid]?.videoUrl) {
           emit(phaseOff + i, `${sid} 视频已完成`, true); return;
@@ -276,10 +388,13 @@ export class MediaOrchestratorService implements OnModuleInit {
           if (firstFrame) refImages.push({ url: firstFrame, role: 'first_frame' });
           const lastFrame = shotMediaMap[sid]?.lastFrameImageUrl;
           if (lastFrame) refImages.push({ url: lastFrame, role: 'last_frame' });
-          this.collectRefImages(shot, charImageMap, variationImageMap).forEach(url => refImages.push({ url, role: 'character' }));
+          this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap).forEach(url => refImages.push({ url, role: 'character' }));
+          styleRefImages.slice(0, 1).forEach((url) => refImages.push({ url, role: 'style' }));
 
           const mediaParams = shotMediaParamsCache.get(sid);
-          const optVideo = this.promptOptimizer.optimizeForT2V(shot.visualPrompt, {
+          const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+          const styleLockedVideoPrompt = this.applyStyleLockPrompt(shot.visualPrompt, shot, state);
+          const optVideo = this.promptOptimizer.optimizeForT2V(styleLockedVideoPrompt, {
             duration: shot.estimatedDurationSec,
             hasFirstFrame: !!firstFrame,
             hasLastFrame: !!lastFrame,
@@ -287,23 +402,26 @@ export class MediaOrchestratorService implements OnModuleInit {
             cameraMovement: shot.camera?.movement,
             cameraAngle: shot.camera?.angle,
             emotionColorHint: mediaParams?.colorGrade,
+            routeProfile: shotPolicy.routeProfile,
           });
 
-          const videoQuality = QUALITY_TIER_TO_VIDEO_RES[shot.qualityTier ?? 'standard'] ?? '720p';
-          const sub = await this.withRetry(() => this.mediaService.submitVideo({
+          const videoQuality = shotPolicy.videoQuality;
+          const sub = await withMediaRetry(() => this.mediaService.submitVideo({
             prompt: optVideo.prompt,
             duration: Math.min(Math.max(Math.round(shot.estimatedDurationSec), 2), 10),
             quality: videoQuality, aspectRatio: aspectRatio as any,
             referenceImages: refImages, dramaId, assetType: 'shot_video', refId: sid,
           }), `${sid} 视频`);
           shotMediaMap[sid] = { ...shotMediaMap[sid], videoJobId: sub.jobId, status: 'submitted' };
-          await this.updateMedia(episode.id, 'generating_videos', shotMediaMap);
+          await flushVideoSubmit();
         } catch (err) {
           this.logger.error(`${sid} 视频提交失败: ${(err as Error).message}`);
           shotMediaMap[sid] = { ...shotMediaMap[sid], status: 'failed' };
+          await flushVideoSubmit();
         }
       });
-      await this.awaitVideoJobs(shotMediaMap, shots, dramaId, episode.id, phaseOff, emit);
+      await flushVideoSubmit(true);
+      await this.awaitVideoJobs(shotMediaMap, orderedShots, dramaId, episode.id, phaseOff, emit);
       phaseOff += shots.length;
 
       // ═══ Phase 2: TTS 语音合成（EmotionMediaMapper 驱动速度/音量 + 时长同步） ═══
@@ -312,8 +430,8 @@ export class MediaOrchestratorService implements OnModuleInit {
       try { this.registry.getTtsProvider(); ttsOk = true; } catch {}
       if (ttsOk) {
         const voiceMap = new Map(state.characters?.map(c => [c.characterId, c.voiceProfile]) ?? []);
-        for (let i = 0; i < shots.length; i++) {
-          const shot = shots[i];
+        for (let i = 0; i < orderedShots.length; i++) {
+          const shot = orderedShots[i];
           if (!shot.dialogue?.text || shot.isPreview) continue;
           if (shotMediaMap[shot.shotId]?.ttsUrl) continue;
           try {
@@ -417,11 +535,14 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
     const state = drama.state as unknown as DramaState;
+    const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
     const imgSize = aspectRatio === '9:16' ? '720x1280' : '1280x720';
 
     const charImageMap = await this.buildCharacterImageMap(dramaId);
+    const characterAnchorMap = this.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
+    const styleRefImages = await this.buildStyleRefImages(dramaId, state);
 
     // 用已有媒体填充场景 & 前帧缓存，以保持视觉连贯性
     const raw = episode.shotMediaMap ?? {};
@@ -436,24 +557,84 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
     const mediaParams = this.emotionMapper.mapShotToMediaParams(shot);
-    const rawPrompt = this.assemblePrompt(shot.firstFramePrompt || shot.visualPrompt, shot.camera, t2iStylePrefix);
+    const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+    const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
+    const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix);
     const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, this.negPrompt ?? '', {
       shotType: 'first_frame', qualityTier: shot.qualityTier ?? 'standard',
       cameraAngle: shot.camera?.angle, emotionColorHint: mediaParams.colorGrade,
+      routeProfile: shotPolicy.routeProfile,
     });
-    const refs = this.buildRefImages(shot, charImageMap, variationImageMap, sceneCache, prevFrameCache, 'first');
-
-    const res = await this.withRetry(
-      () => this.mediaService.generateImage({
-        prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1,
-        referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: shotId,
-      }),
-      `${shotId} 图片`,
+    const refs = this.buildRefImages(
+      shot,
+      charImageMap,
+      variationImageMap,
+      characterAnchorMap,
+      styleRefImages,
+      sceneCache,
+      prevFrameCache,
+      'first',
     );
 
-    const imgUrl = res.images?.[0]?.url ?? '';
+    const genFn = async () => {
+      const res = await this.withRetry(
+        () => this.mediaService.generateImage({
+          prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1,
+          referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: shotId,
+        }),
+        `${shotId} 图片`,
+        mediaPolicy.maxMediaRetries,
+        mediaPolicy.retryBaseDelayMs,
+      );
+      return res.images?.[0]?.url ?? '';
+    };
+    const tier = this.normalizeQualityTier(shot.qualityTier);
+    const shouldUseQualityGate = this.shouldUseQualityGate(
+      mediaPolicy.enableQualityGate,
+      tier,
+      shotPolicy.gateMaxAttempts,
+      shotPolicy.candidateCount,
+    );
+
+    let imgUrl = '';
+    let gateQc: ShotMediaEntry['qc'] | undefined;
+    if (shouldUseQualityGate) {
+      const characterRefs = this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap);
+      const gateResult = await this.qualityGate.generateWithQualityGate(genFn, {
+        maxAttempts: shotPolicy.gateMaxAttempts,
+        minScore: shotPolicy.gateMinScore,
+        qualityTier: tier,
+        prompt: optimized.prompt,
+        characterRefs,
+        styleRefs: styleRefImages,
+        candidateCount: shotPolicy.candidateCount,
+      });
+      imgUrl = gateResult.imageUrl;
+      gateQc = {
+        identityScore: gateResult.assessment.faceConsistencyScore,
+        styleScore: gateResult.assessment.styleConsistencyScore,
+        readabilityScore: gateResult.assessment.readabilityScore,
+        score: gateResult.score,
+        passed: gateResult.score >= shotPolicy.gateMinScore,
+        attempts: gateResult.attempts,
+        issues: gateResult.assessment.issues,
+        failReasons: gateResult.assessment.failReasons,
+        recommendedFix: gateResult.assessment.recommendedFix,
+      };
+    } else {
+      imgUrl = await genFn();
+    }
+
     if (imgUrl) {
-      const newMap = { ...raw, [shotId]: { ...raw[shotId], imageUrl: imgUrl, status: 'image_done' } };
+      const newMap = {
+        ...raw,
+        [shotId]: {
+          ...raw[shotId],
+          imageUrl: imgUrl,
+          status: 'image_done',
+          qc: gateQc ?? raw[shotId]?.qc,
+        },
+      };
       await this.episodeRepo.update(episode.id, { shotMediaMap: newMap });
       try { await this.storage.downloadToLocal(imgUrl, this.storage.imageOutputPath(dramaId, shotId)); } catch {}
       this.logger.log(`[ShotImage] ${shotId} → ${imgUrl}`);
@@ -471,10 +652,15 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
     const state = drama.state as unknown as DramaState;
+    const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
     const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
     const shots: Shot[] = storyboard?.shots ?? [];
+    const reviewRiskShotIds = this.extractReviewRiskShotIds(episode.review);
+    const orderedShots = this.orderShotsForProduction(shots, reviewRiskShotIds);
     const charImageMap = await this.buildCharacterImageMap(dramaId);
+    const characterAnchorMap = this.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
+    const styleRefImages = await this.buildStyleRefImages(dramaId, state);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
     const imgSize = aspectRatio === '9:16' ? '720x1280' : '1280x720';
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
@@ -486,14 +672,19 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     const sceneCache = new Map<string, string>();
     const prevFrameCache = new Map<number, string>();
-    const needsGen = shots.filter(s => !s.isFlashback && !s.isPreview && !shotMediaMap[s.shotId]?.imageUrl);
+    const needsGen = orderedShots.filter(s => !s.isFlashback && !s.isPreview && !shotMediaMap[s.shotId]?.imageUrl);
     const totalSteps = needsGen.length;
     let done = 0;
 
     const emit = (msg: string, isDone = false) =>
-      this.progressService.emit({ dramaId, phase: 'images', episodeNumber, step: `img_batch`, stepIndex: done, totalSteps, message: msg, done: isDone });
+      this.progressService.emit({ dramaId, runType: 'images', episodeNumber, step: `img_batch`, stepIndex: done, totalSteps, message: msg, done: isDone });
 
     emit(`开始生成 ${totalSteps} 张分镜图...`);
+    this.logger.log(
+      `[policy] images E${episodeNumber} mode=${mediaPolicy.mode} style=${mediaPolicy.styleBucket} ` +
+      `t2i=${mediaPolicy.t2iConcurrency} retry=${mediaPolicy.maxMediaRetries}`,
+    );
+    this.logShotOrder(`E${episodeNumber} images`, needsGen);
 
     // Pre-fill caches from existing media
     for (const s of shots) {
@@ -508,31 +699,89 @@ export class MediaOrchestratorService implements OnModuleInit {
       return;
     }
 
-    await this.runConcurrent(shots, T2I_CONCURRENCY, async (shot) => {
-      const sid = shot.shotId;
-      if (shot.isFlashback || shot.isPreview || shotMediaMap[sid]?.imageUrl) {
-        if (!shot.isFlashback && !shot.isPreview && shotMediaMap[sid]?.imageUrl) {
-          prevFrameCache.set(shot.shotIndex, shotMediaMap[sid].imageUrl!);
-          if (shot.sceneId && !sceneCache.has(shot.sceneId)) sceneCache.set(shot.sceneId, shotMediaMap[sid].imageUrl!);
-        }
-        return;
+    let imageDirty = 0;
+    const flushImages = async (force = false) => {
+      imageDirty++;
+      if (force || imageDirty >= mediaPolicy.dbFlushEvery) {
+        await this.episodeRepo.update(episode.id, { shotMediaMap });
+        imageDirty = 0;
       }
+    };
+
+    await this.runConcurrent(needsGen, mediaPolicy.t2iConcurrency, async (shot) => {
+      const sid = shot.shotId;
+      const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
       try {
         emit(`${sid} 生成中...`);
         const mediaParams = this.emotionMapper.mapShotToMediaParams(shot);
-        const rawPrompt = this.assemblePrompt(shot.firstFramePrompt || shot.visualPrompt, shot.camera, t2iStylePrefix);
+        const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
+        const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix);
         const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, this.negPrompt ?? '', {
           shotType: 'first_frame', qualityTier: shot.qualityTier ?? 'standard',
           cameraAngle: shot.camera?.angle, emotionColorHint: mediaParams.colorGrade,
+          routeProfile: shotPolicy.routeProfile,
         });
-        const refs = this.buildRefImages(shot, charImageMap, variationImageMap, sceneCache, prevFrameCache, 'first');
-        const res = await this.withRetry(
-          () => this.mediaService.generateImage({ prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid }),
-          `${sid} 图片`,
+        const refs = this.buildRefImages(
+          shot,
+          charImageMap,
+          variationImageMap,
+          characterAnchorMap,
+          styleRefImages,
+          sceneCache,
+          prevFrameCache,
+          'first',
         );
-        const imgUrl = res.images?.[0]?.url ?? '';
+        const genFn = async () => {
+          const res = await this.withRetry(
+            () => this.mediaService.generateImage({ prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid }),
+            `${sid} 图片`,
+            mediaPolicy.maxMediaRetries,
+            mediaPolicy.retryBaseDelayMs,
+          );
+          return res.images?.[0]?.url ?? '';
+        };
+        const tier = this.normalizeQualityTier(shot.qualityTier);
+        const shouldUseQualityGate = this.shouldUseQualityGate(
+          mediaPolicy.enableQualityGate,
+          tier,
+          shotPolicy.gateMaxAttempts,
+          shotPolicy.candidateCount,
+        );
+        let imgUrl = '';
+        let gateQc: ShotMediaEntry['qc'] | undefined;
+        if (shouldUseQualityGate) {
+          const characterRefs = this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap);
+          const gateResult = await this.qualityGate.generateWithQualityGate(genFn, {
+            maxAttempts: shotPolicy.gateMaxAttempts,
+            minScore: shotPolicy.gateMinScore,
+            qualityTier: tier,
+            prompt: optimized.prompt,
+            characterRefs,
+            styleRefs: styleRefImages,
+            candidateCount: shotPolicy.candidateCount,
+          });
+          imgUrl = gateResult.imageUrl;
+          gateQc = {
+            identityScore: gateResult.assessment.faceConsistencyScore,
+            styleScore: gateResult.assessment.styleConsistencyScore,
+            readabilityScore: gateResult.assessment.readabilityScore,
+            score: gateResult.score,
+            passed: gateResult.score >= shotPolicy.gateMinScore,
+            attempts: gateResult.attempts,
+            issues: gateResult.assessment.issues,
+            failReasons: gateResult.assessment.failReasons,
+            recommendedFix: gateResult.assessment.recommendedFix,
+          };
+        } else {
+          imgUrl = await genFn();
+        }
         if (imgUrl) {
-          shotMediaMap[sid] = { ...shotMediaMap[sid], imageUrl: imgUrl, status: 'image_done' };
+          shotMediaMap[sid] = {
+            ...shotMediaMap[sid],
+            imageUrl: imgUrl,
+            status: 'image_done',
+            qc: gateQc ?? shotMediaMap[sid]?.qc,
+          };
           if (shot.sceneId && !sceneCache.has(shot.sceneId)) sceneCache.set(shot.sceneId, imgUrl);
           prevFrameCache.set(shot.shotIndex, imgUrl);
           try { await this.storage.downloadToLocal(imgUrl, this.storage.imageOutputPath(dramaId, sid)); } catch {}
@@ -543,9 +792,10 @@ export class MediaOrchestratorService implements OnModuleInit {
         this.logger.warn(`${sid} 图片失败: ${(err as Error).message}`);
         emit(`${sid} 失败: ${(err as Error).message}`);
       }
-      await this.episodeRepo.update(episode.id, { shotMediaMap });
+      await flushImages();
     });
 
+    await flushImages(true);
     await this.episodeRepo.update(episode.id, { shotMediaMap });
     this.logger.log(`E${episodeNumber} 图片阶段完成: ${Object.values(shotMediaMap).filter(v => v.imageUrl).length}/${shots.length}`);
   }
@@ -573,51 +823,257 @@ export class MediaOrchestratorService implements OnModuleInit {
     await Promise.all(workers);
   }
 
+  private orderShotsForProduction(shots: Shot[], riskShotIds?: Set<string>): Shot[] {
+    return [...shots].sort((a, b) => this.compareShotPriority(a, b, riskShotIds));
+  }
+
+  private compareShotPriority(a: Shot, b: Shot, riskShotIds?: Set<string>): number {
+    const riskDiff = Number(riskShotIds?.has(b.shotId)) - Number(riskShotIds?.has(a.shotId));
+    if (riskDiff !== 0) return riskDiff;
+
+    const regenDiff = this.priorityScore(b.regenPriority) - this.priorityScore(a.regenPriority);
+    if (regenDiff !== 0) return regenDiff;
+
+    const masterDiff = Number(b.isMasterShot) - Number(a.isMasterShot);
+    if (masterDiff !== 0) return masterDiff;
+
+    const tierDiff = this.qualityTierScore(b.qualityTier) - this.qualityTierScore(a.qualityTier);
+    if (tierDiff !== 0) return tierDiff;
+
+    const typeDiff = this.shotTypeScore(b.shotType) - this.shotTypeScore(a.shotType);
+    if (typeDiff !== 0) return typeDiff;
+
+    return a.shotIndex - b.shotIndex;
+  }
+
+  private extractReviewRiskShotIds(review: unknown): Set<string> {
+    const root = (review && typeof review === 'object') ? (review as Record<string, unknown>) : {};
+    const ids = new Set<string>();
+    const pick = (list: unknown) => {
+      if (!Array.isArray(list)) return;
+      for (const item of list) {
+        if (!item || typeof item !== 'object') continue;
+        const shotId = (item as Record<string, unknown>).shotId;
+        if (typeof shotId === 'string' && shotId.trim()) ids.add(shotId);
+      }
+    };
+    pick(root.consistencyRiskShots);
+    pick(root.cameraReadabilityRiskShots);
+    return ids;
+  }
+
+  private priorityScore(priority?: Shot['regenPriority']): number {
+    if (priority === 'high') return 3;
+    if (priority === 'low') return 1;
+    return 2;
+  }
+
+  private qualityTierScore(tier?: Shot['qualityTier']): number {
+    if (tier === 'golden') return 3;
+    if (tier === 'filler') return 1;
+    return 2;
+  }
+
+  private shotTypeScore(shotType?: Shot['shotType']): number {
+    if (shotType === 'action') return 3;
+    if (shotType === 'dialogue') return 3;
+    if (shotType === 'wide') return 2;
+    if (shotType === 'portrait') return 2;
+    if (shotType === 'insert') return 1;
+    return 2;
+  }
+
+  private logShotOrder(tag: string, shots: Shot[]): void {
+    if (!shots.length) return;
+    const top = shots.slice(0, 10).map((s) => {
+      const master = s.isMasterShot ? '*' : '';
+      return `${s.shotId}[${s.regenPriority || 'medium'}${master}/${s.qualityTier || 'standard'}]`;
+    }).join(', ');
+    this.logger.log(`[scheduler] ${tag} order(top${Math.min(10, shots.length)}): ${top}`);
+  }
+
+  private buildCharacterAnchorMap(state: DramaState): Map<string, string[]> {
+    const map = new Map<string, string[]>();
+    for (const pack of state.visualBible?.identityPack ?? []) {
+      const urls = [pack.anchorImages?.faceFront, pack.anchorImages?.face34, pack.anchorImages?.upperOrFull]
+        .filter((u): u is string => typeof u === 'string' && !!u.trim());
+      if (!urls.length) continue;
+      map.set(pack.characterId, [...new Set(urls)]);
+    }
+    return map;
+  }
+
+  private resolveLockedCharacterIds(shot: Shot): string[] {
+    const ids: string[] = [];
+    for (const ref of shot.characterLockRefs ?? []) {
+      const id = this.parseCharacterIdFromLockRef(ref);
+      if (!id) continue;
+      if (!ids.includes(id)) ids.push(id);
+    }
+    if (ids.length) return ids;
+    for (const c of shot.characters ?? []) {
+      if (c?.characterId && !ids.includes(c.characterId)) ids.push(c.characterId);
+    }
+    return ids;
+  }
+
+  private parseCharacterIdFromLockRef(lockRef: string): string | null {
+    if (!lockRef) return null;
+    if (lockRef.startsWith('character:')) {
+      const cid = lockRef.slice('character:'.length).trim();
+      return cid || null;
+    }
+    if (lockRef.startsWith('vb:')) {
+      const parts = lockRef.split(':');
+      return parts[2]?.trim() || null;
+    }
+    if (!lockRef.includes(':')) return lockRef.trim() || null;
+    return null;
+  }
+
+  private applyStyleLockPrompt(basePrompt: string, shot: Shot, state: DramaState): string {
+    const styleTokens = this.resolveStyleLockTokens(shot, state);
+    if (!styleTokens.length) return basePrompt;
+    return this.mergePromptSegments([...styleTokens, basePrompt]);
+  }
+
+  private resolveStyleLockTokens(shot: Shot, state: DramaState): string[] {
+    const ref = (shot.styleLockRef ?? '').trim();
+    const tokens: string[] = [];
+    const push = (value: string) => { if (value && !tokens.includes(value)) tokens.push(value); };
+
+    if (ref.startsWith('vb-style:')) {
+      for (const t of state.visualBible?.stylePack?.styleTokens ?? []) push(t);
+      const lut = state.visualBible?.stylePack?.colorLutHint ?? '';
+      if (lut) push(lut);
+      return tokens.slice(0, 8);
+    }
+
+    if (ref.startsWith('style:')) {
+      ref.slice('style:'.length).split('|').map(s => s.trim()).filter(Boolean).forEach(push);
+      return tokens.slice(0, 8);
+    }
+
+    if (ref) {
+      if (ref.includes('|')) ref.split('|').map(s => s.trim()).filter(Boolean).forEach(push);
+      else push(ref);
+    }
+    return tokens.slice(0, 8);
+  }
+
+  private mergePromptSegments(chunks: string[]): string {
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const chunk of chunks) {
+      if (!chunk) continue;
+      for (const segment of chunk.split(',').map(s => s.trim()).filter(Boolean)) {
+        const key = segment.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(segment);
+      }
+    }
+    return deduped.join(', ');
+  }
+
   // ═══ 动态参考图构建 ═══
 
   /** 构建参考图候选列表，按镜头角度匹配最佳角色视角 + RenderingProfile 优先级筛选 */
   private buildRefImages(
     shot: Shot, charMap: Map<string, CharacterImageSet>, varMap: Map<string, string>,
+    anchorMap: Map<string, string[]>,
+    styleRefs: string[],
     sceneCache: Map<string, string>, prevFrameCache: Map<number, string>,
     frameType: 'first' | 'last',
   ): Array<{ url: string; weight: number }> {
     const isCloseUp = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.angle);
     const charWeight = isCloseUp ? 0.6 : 0.4;
+    const lockCharWeight = isCloseUp ? 0.8 : 0.55;
     const sceneWeight = isCloseUp ? 0.2 : 0.4;
+    const styleWeight = isCloseUp ? 0.1 : 0.2;
 
     const candidates: RefImageCandidate[] = [];
+    const seenUrls = new Set<string>();
+    const pushCandidate = (url: string | undefined, weight: number, role: RefImageCandidate['role']) => {
+      if (!url) return;
+      if (seenUrls.has(url)) return;
+      seenUrls.add(url);
+      candidates.push({ url, weight, role });
+    };
+
     if (shot.sceneId && sceneCache.has(shot.sceneId)) {
-      candidates.push({ url: sceneCache.get(shot.sceneId)!, weight: sceneWeight, role: 'scene' });
+      pushCandidate(sceneCache.get(shot.sceneId), sceneWeight, 'scene');
     }
+
+    const lockedIds = this.resolveLockedCharacterIds(shot);
+    for (const cid of lockedIds) {
+      const varId = shot.characterVariationIds?.[cid];
+      const varUrl = varId ? varMap.get(`${cid}_${varId}`) : undefined;
+      if (varUrl) {
+        pushCandidate(varUrl, lockCharWeight, 'character_face');
+      }
+      const anchorUrls = anchorMap.get(cid) ?? [];
+      for (const anchorUrl of anchorUrls) {
+        pushCandidate(anchorUrl, lockCharWeight, 'character_face');
+      }
+      const imageSet = charMap.get(cid);
+      if (imageSet?.primary) {
+        pushCandidate(imageSet.primary, lockCharWeight, 'character_face');
+      }
+    }
+
     (shot.characters ?? []).forEach(c => {
       const varId = shot.characterVariationIds?.[c.characterId];
       const varUrl = varId ? varMap.get(`${c.characterId}_${varId}`) : undefined;
       if (varUrl) {
-        candidates.push({ url: varUrl, weight: charWeight, role: 'character_face' });
+        pushCandidate(varUrl, charWeight, 'character_face');
       } else {
         const imageSet = charMap.get(c.characterId);
         if (imageSet) {
           const availableViews = Object.keys(imageSet.views) as CharacterViewAngle[];
           const bestView = selectBestCharacterView(availableViews, shot.camera?.angle, c.position);
           const url = imageSet.views[bestView] || imageSet.primary;
-          if (url) candidates.push({ url, weight: charWeight, role: 'character_face' });
+          pushCandidate(url, charWeight, 'character_face');
         }
       }
     });
     if (frameType === 'first' && shot.shotIndex > 0 && prevFrameCache.has(shot.shotIndex - 1)) {
-      candidates.push({ url: prevFrameCache.get(shot.shotIndex - 1)!, weight: 0.15, role: 'prev_frame' });
+      pushCandidate(prevFrameCache.get(shot.shotIndex - 1), 0.15, 'prev_frame');
+    }
+    if (styleRefs.length) {
+      pushCandidate(styleRefs[0], styleWeight, 'style');
     }
     return selectRefImages(candidates, this.profile, shot.camera?.angle);
   }
 
   /** 收集角色参考图URL（支持变体 + 多角度） */
-  private collectRefImages(shot: Shot, charMap: Map<string, CharacterImageSet>, varMap: Map<string, string>): string[] {
-    return [...new Set((shot.characters ?? []).map(c => {
+  private collectRefImages(
+    shot: Shot,
+    charMap: Map<string, CharacterImageSet>,
+    varMap: Map<string, string>,
+    anchorMap: Map<string, string[]>,
+  ): string[] {
+    const urls: string[] = [];
+    const push = (url: string | undefined) => {
+      if (!url) return;
+      if (urls.includes(url)) return;
+      urls.push(url);
+    };
+
+    for (const cid of this.resolveLockedCharacterIds(shot)) {
+      const varId = shot.characterVariationIds?.[cid];
+      if (varId) push(varMap.get(`${cid}_${varId}`));
+      (anchorMap.get(cid) ?? []).forEach(push);
+      push(charMap.get(cid)?.primary);
+    }
+
+    for (const c of shot.characters ?? []) {
       const varId = shot.characterVariationIds?.[c.characterId];
-      if (varId) return varMap.get(`${c.characterId}_${varId}`);
-      const imageSet = charMap.get(c.characterId);
-      return imageSet?.primary;
-    }).filter(Boolean) as string[])].slice(0, 4);
+      if (varId) push(varMap.get(`${c.characterId}_${varId}`));
+      push(charMap.get(c.characterId)?.primary);
+    }
+
+    return urls.slice(0, 4);
   }
 
   // ═══ 事件驱动视频等待 ═══
@@ -668,7 +1124,34 @@ export class MediaOrchestratorService implements OnModuleInit {
 
   // ═══ 工具方法 ═══
 
-  private async withRetry<T>(fn: () => Promise<T>, label: string, maxRetries = MAX_MEDIA_RETRIES, baseDelayMs = RETRY_BASE_DELAY_MS): Promise<T> {
+  private resolveShotRunPolicy(
+    shot: Shot,
+    mode: DramaGenerationMode,
+    styleBucket: DramaStyleBucket,
+  ) {
+    return this.generationPolicy.resolveShotRunPolicy({
+      mode,
+      styleBucket,
+      shotType: shot.shotType,
+      qualityTier: shot.qualityTier,
+    });
+  }
+
+  private normalizeQualityTier(tier?: Shot['qualityTier']): 'golden' | 'standard' | 'filler' {
+    return (tier ?? 'standard') as 'golden' | 'standard' | 'filler';
+  }
+
+  private shouldUseQualityGate(
+    gateEnabled: boolean,
+    tier: 'golden' | 'standard' | 'filler',
+    maxAttempts: number,
+    candidateCount: number,
+  ): boolean {
+    if (!gateEnabled || tier === 'filler') return false;
+    return maxAttempts > 1 || candidateCount > 1;
+  }
+
+  private async withRetry<T>(fn: () => Promise<T>, label: string, maxRetries = 2, baseDelayMs = 2000): Promise<T> {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try { return await fn(); } catch (err) {
         if (attempt === maxRetries) throw err;
@@ -706,6 +1189,17 @@ export class MediaOrchestratorService implements OnModuleInit {
     return map;
   }
 
+  private async buildStyleRefImages(dramaId: string, state: DramaState): Promise<string[]> {
+    const styleAsset = await this.assetRepo.findOne({ where: { dramaId, assetType: 'style_guide' as any } });
+    const fromAsset = [
+      styleAsset?.referenceImageUrl ?? '',
+      ...(styleAsset?.referenceImages ?? []).map((r) => r.imageUrl),
+    ].filter(Boolean);
+    if (fromAsset.length) return [...new Set(fromAsset)].slice(0, 2);
+    const fromBible = state.visualBible?.stylePack?.styleRefImages ?? [];
+    return [...new Set(fromBible.filter(Boolean))].slice(0, 2);
+  }
+
   private async buildFlashbackVideoMap(dramaId: string, shots: Shot[]): Promise<Record<string, string>> {
     const fbShots = shots.filter(s => s.isFlashback && s.flashbackSourceShotId);
     if (!fbShots.length) return {};
@@ -739,4 +1233,3 @@ export class MediaOrchestratorService implements OnModuleInit {
 }
 
 const SPEED_MAP: Record<string, number> = { slow: 0.85, normal: 1.0, fast: 1.2 };
-const QUALITY_TIER_TO_VIDEO_RES: Record<string, '480p' | '720p' | '1080p'> = { golden: '1080p', standard: '720p', filler: '480p' };

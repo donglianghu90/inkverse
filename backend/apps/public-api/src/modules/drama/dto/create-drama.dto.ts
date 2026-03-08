@@ -45,4 +45,7 @@ export class CreateDramaDto {
 
   @IsOptional() @IsString()
   visualStyleHint?: string; // 视觉风格提示（如"真人影视""2D 动漫""水墨古风"），传给视觉资产设计师
+
+  @IsOptional() @IsEnum(['fast', 'balanced', 'quality'])
+  generationMode?: 'fast' | 'balanced' | 'quality'; // 生成模式：速度优先 / 均衡 / 质量优先
 }

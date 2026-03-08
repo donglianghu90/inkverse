@@ -61,9 +61,9 @@ export class DramaWorkflowTopologyService {
     allNodes.push(mkNode('script-reviewer', P3));
     allNodes.push({
       id: 'review-gate', label: '精修判断', type: 'condition', isCore: false, isEnabled: true, phaseId: P3,
-      condition: `overallVerdict === "needs_edit" && round < ${p.maxEditRounds}`,
+      condition: `overallVerdict in {"needs_edit","major_issues"} && overallScore < ${p.qualityPassScore} && round < ${p.maxEditRounds}`,
       configParams: [
-        { key: 'qualityPassScore', label: '质量通过分数', type: 'number', value: p.qualityPassScore, min: 1, max: 10, step: 0.5, description: 'overallVerdict 为 needs_edit 时触发精修的阈值' },
+        { key: 'qualityPassScore', label: '质量通过分数', type: 'number', value: p.qualityPassScore, min: 1, max: 10, step: 0.5, description: '总体评分低于该分数时，且 verdict 非 good 才触发精修' },
         { key: 'maxEditRounds', label: '精修最大轮数', type: 'number', value: p.maxEditRounds, min: 0, max: 5, step: 1, description: '精修循环的最大轮数' },
       ],
     });

@@ -1,13 +1,15 @@
 import { Controller, Post, Get, Put, Patch, Delete, Param, Body, Query, Req, Sse, MessageEvent, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Observable, Subject } from 'rxjs';
 import { finalize } from 'rxjs/operators';
 import { DramaService } from './drama.service';
 import { CreateDramaDto } from './dto/create-drama.dto';
-import { DramaProgressService } from './drama-progress.service';
+import { DramaProgressEvent, DramaProgressService, DramaRunType } from './drama-progress.service';
 import { DramaGenreTemplateService } from './drama-genre-template.service';
 import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
 import { DramaWorkflowExecutionService } from './drama-workflow-execution.service';
 import { DramaAgentNodeConfig, DramaWorkflowParams } from './entities/drama-agent-pipeline.entity';
+import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
 import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto, AiGenerateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
 import { DramaUsageService } from './drama-usage.service';
 
@@ -21,6 +23,84 @@ export class DramaController {
     private readonly executionService: DramaWorkflowExecutionService,
     private readonly usageService: DramaUsageService,
   ) {}
+
+  private createSseSender(subject: Subject<MessageEvent>, runType: DramaRunType, dramaId: string, episodeNumber?: number) {
+    const runId = randomUUID();
+    let seq = 0;
+    const base = {
+      runType,
+      runId,
+      dramaId,
+      ...(episodeNumber !== undefined ? { episodeNumber } : {}),
+    };
+    const send = (payload: Record<string, unknown>) => {
+      subject.next({
+        data: {
+          ...base,
+          seq: ++seq,
+          ts: Date.now(),
+          ...payload,
+        },
+      } as MessageEvent);
+    };
+    return { runId, send };
+  }
+
+  private sendProgress(send: (payload: Record<string, unknown>) => void, event: DramaProgressEvent): void {
+    send({
+      _type: 'progress',
+      step: event.step,
+      ...(event.stepKey ? { stepKey: event.stepKey } : {}),
+      ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+      stepIndex: event.stepIndex,
+      totalSteps: event.totalSteps,
+      message: event.message,
+      done: event.done,
+      ...(event.skipped !== undefined ? { skipped: event.skipped } : {}),
+      ...(event.skipReason ? { skipReason: event.skipReason } : {}),
+      terminal: false,
+      ...(event.episodeNumber !== undefined ? { episodeNumber: event.episodeNumber } : {}),
+      ...(event.error ? { error: event.error } : {}),
+    });
+  }
+
+  private toBool(value: string | undefined, defaultValue: boolean): boolean {
+    if (value === undefined) return defaultValue;
+    const v = value.trim().toLowerCase();
+    if (v === '1' || v === 'true' || v === 'yes') return true;
+    if (v === '0' || v === 'false' || v === 'no') return false;
+    return defaultValue;
+  }
+
+  private toFixTarget(
+    value: string | undefined,
+  ): 'all' | 'identity' | 'style' | 'camera' | 'motion' | undefined {
+    if (!value) return undefined;
+    const v = value.trim().toLowerCase();
+    if (v === 'all' || v === 'identity' || v === 'style' || v === 'camera' || v === 'motion') {
+      return v;
+    }
+    return undefined;
+  }
+
+  private toExecutionPayload(run: DramaWorkflowExecutionEntity): Record<string, unknown> {
+    const summary = (run.summary ?? {}) as Record<string, unknown>;
+    const skippedSteps = Array.isArray(summary.skippedSteps)
+      ? summary.skippedSteps.filter((s) => !!s && typeof s === 'object')
+      : [];
+    return {
+      id: run.id,
+      episodeNumber: run.episodeNumber,
+      status: run.status,
+      lastCheckpoint: run.lastCheckpoint,
+      errorMessage: run.errorMessage,
+      createdAt: run.createdAt.toISOString(),
+      updatedAt: run.updatedAt.toISOString(),
+      summary,
+      skippedSteps,
+      skippedCount: skippedSteps.length,
+    };
+  }
 
   /* ─── 题材模板（静态路由优先于 :dramaId 参数路由） ─── */
 
@@ -131,6 +211,23 @@ export class DramaController {
     return this.usageService.getDramaUsage(dramaId);
   }
 
+  @Get(':dramaId/executions')
+  async listExecutions(
+    @Param('dramaId') dramaId: string,
+    @Query('latestPerEpisode') latestPerEpisode?: string,
+    @Query('limit') limit?: string,
+    @Query('includeCreation') includeCreation?: string,
+  ) {
+    const latest = this.toBool(latestPerEpisode, true);
+    const includeCreate = this.toBool(includeCreation, false);
+    const n = Math.max(1, Math.min(200, parseInt(limit || '40', 10) || 40));
+    const runs = latest
+      ? await this.executionService.listLatestRunsByEpisode(dramaId, n, includeCreate)
+      : await this.executionService.listRuns(dramaId, n);
+    const filtered = includeCreate ? runs : runs.filter((r) => r.episodeNumber > 0);
+    return { executions: filtered.map((r) => this.toExecutionPayload(r)) };
+  }
+
   @Post(':dramaId/retry-create')
   async retryCreation(@Param('dramaId') dramaId: string) {
     await this.dramaService.retryCreation(dramaId);
@@ -166,21 +263,41 @@ export class DramaController {
     @Query('count') count?: string,
   ): Promise<Observable<MessageEvent>> {
     const subject = new Subject<MessageEvent>();
-    const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
     const n = Math.max(1, Math.min(10, parseInt(count || '1', 10) || 1));
+    const { send } = this.createSseSender(subject, 'episode', dramaId);
+    const heartbeat = setInterval(() => send({ _type: 'heartbeat', terminal: false }), 15_000);
     const key = `${dramaId}:generate`;
     const alreadyRunning = !this.progressService.markGenerating(key);
-    const unsub = this.progressService.subscribe(dramaId, (event) => { subject.next({ data: event } as MessageEvent); });
+    const unsub = this.progressService.subscribe(dramaId, (event) => {
+      if (event.runType !== 'episode') return;
+      if (event.terminal) return; // 终态由 result/error 统一发射
+      this.sendProgress(send, event);
+    });
     if (alreadyRunning) {
-      subject.next({ data: { reconnected: true, message: '已重连到正在进行的生成任务' } } as MessageEvent);
+      send({ _type: 'info', terminal: false, message: '已重连到正在进行的生成任务' });
       return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
     }
     setTimeout(async () => {
       try {
         const result = await this.dramaService.generateEpisodesAndWait(dramaId, n);
-        if (!result.paused) subject.next({ data: { _type: 'result', ...result } } as MessageEvent);
+        send({
+          _type: 'result',
+          terminal: true,
+          terminalStatus: result.paused ? 'paused' : 'success',
+          message: result.message,
+          done: true,
+          data: result,
+        });
       } catch (err: any) {
-        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
+        const msg = err?.message ?? '集生成失败';
+        send({
+          _type: 'error',
+          terminal: true,
+          terminalStatus: 'failed',
+          message: msg,
+          error: msg,
+          done: true,
+        });
       } finally {
         this.progressService.clearGenerating(key);
         clearInterval(heartbeat);
@@ -229,6 +346,23 @@ export class DramaController {
     return this.dramaService.generateEpisodeMedia(dramaId, parseInt(ep, 10));
   }
 
+  @Post(':dramaId/episodes/:episodeNumber/reset-problem-shots')
+  async resetProblemShots(
+    @Param('dramaId') dramaId: string,
+    @Param('episodeNumber') ep: string,
+    @Query('includeReviewRisks') includeReviewRisks?: string,
+    @Query('onlyHighPriority') onlyHighPriority?: string,
+    @Query('fixTarget') fixTarget?: string,
+  ) {
+    const episodeNumber = parseInt(ep, 10);
+    if (!Number.isFinite(episodeNumber) || episodeNumber < 1) throw new NotFoundException(`无效集数: ${ep}`);
+    return this.dramaService.resetProblemShots(dramaId, episodeNumber, {
+      includeReviewRisks: this.toBool(includeReviewRisks, true),
+      onlyHighPriority: this.toBool(onlyHighPriority, false),
+      fixTarget: this.toFixTarget(fixTarget),
+    });
+  }
+
   @Get(':dramaId/episodes/:episodeNumber/media-status')
   async getEpisodeMediaStatus(@Param('dramaId') dramaId: string, @Param('episodeNumber') ep: string) {
     return this.dramaService.getEpisodeMediaStatus(dramaId, parseInt(ep, 10));
@@ -249,12 +383,41 @@ export class DramaController {
   @Sse(':dramaId/episodes/progress-sse')
   async episodeProgressSse(@Param('dramaId') dramaId: string): Promise<Observable<MessageEvent>> {
     const subject = new Subject<MessageEvent>();
-    const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
+    const { send } = this.createSseSender(subject, 'episode', dramaId);
+    const heartbeat = setInterval(() => send({ _type: 'heartbeat', terminal: false }), 15_000);
     const unsub = this.progressService.subscribe(dramaId, (event) => {
-      if (event.phase === 'episode') {
-        subject.next({ data: event } as MessageEvent);
-        if (event.done) { clearInterval(heartbeat); setTimeout(() => subject.complete(), 300); }
+      if (event.runType !== 'episode') return;
+      if (!event.terminal) {
+        this.sendProgress(send, event);
+        return;
       }
+      if (event.terminalStatus === 'failed' || event.error) {
+        send({
+          _type: 'error',
+          terminal: true,
+          terminalStatus: 'failed',
+          step: event.step,
+          message: event.error ?? event.message,
+          error: event.error ?? event.message,
+          done: true,
+        });
+      } else {
+        send({
+          _type: 'result',
+          terminal: true,
+          terminalStatus: event.terminalStatus ?? 'success',
+          step: event.step,
+          message: event.message,
+          done: true,
+          data: {
+            step: event.step,
+            message: event.message,
+            terminalStatus: event.terminalStatus ?? 'success',
+          },
+        });
+      }
+      clearInterval(heartbeat);
+      setTimeout(() => subject.complete(), 300);
     });
     return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
   }
@@ -264,10 +427,37 @@ export class DramaController {
   @Sse(':dramaId/create-sse')
   async createDramaSse(@Param('dramaId') dramaId: string): Promise<Observable<MessageEvent>> {
     const subject = new Subject<MessageEvent>();
-    const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
+    const { send } = this.createSseSender(subject, 'create', dramaId);
+    const heartbeat = setInterval(() => send({ _type: 'heartbeat', terminal: false }), 15_000);
     const unsub = this.progressService.subscribe(dramaId, (event) => {
-      subject.next({ data: event } as MessageEvent);
-      if (event.done && (event.step === 'create_5' || event.error)) { clearInterval(heartbeat); setTimeout(() => subject.complete(), 200); }
+      if (event.runType !== 'create') return;
+      if (!event.terminal) {
+        this.sendProgress(send, event);
+        return;
+      }
+      if (event.terminalStatus === 'failed' || event.error) {
+        send({
+          _type: 'error',
+          terminal: true,
+          terminalStatus: 'failed',
+          step: event.step,
+          message: event.error ?? event.message,
+          error: event.error ?? event.message,
+          done: true,
+        });
+      } else {
+        send({
+          _type: 'result',
+          terminal: true,
+          terminalStatus: event.terminalStatus ?? 'success',
+          step: event.step,
+          message: event.message,
+          done: true,
+          data: { message: event.message },
+        });
+      }
+      clearInterval(heartbeat);
+      setTimeout(() => subject.complete(), 200);
     });
     return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
   }
@@ -280,26 +470,44 @@ export class DramaController {
     @Param('episodeNumber') ep: string,
   ): Promise<Observable<MessageEvent>> {
     const subject = new Subject<MessageEvent>();
-    const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
     const episodeNumber = parseInt(ep, 10);
+    const { send } = this.createSseSender(subject, 'media', dramaId, episodeNumber);
+    const heartbeat = setInterval(() => send({ _type: 'heartbeat', terminal: false }), 15_000);
     const key = `${dramaId}:media:${episodeNumber}`;
 
     const alreadyRunning = !this.progressService.markGenerating(key);
     const unsub = this.progressService.subscribe(dramaId, (event) => {
-      if (event.phase === 'media' && event.episodeNumber === episodeNumber) subject.next({ data: event } as MessageEvent);
+      if (event.runType !== 'media' || event.episodeNumber !== episodeNumber) return;
+      if (event.terminal) return; // 终态由 result/error 统一发射
+      this.sendProgress(send, event);
     });
 
     if (alreadyRunning) {
-      subject.next({ data: { reconnected: true, message: '已重连到正在进行的媒体生成任务' } } as MessageEvent);
+      send({ _type: 'info', terminal: false, message: '已重连到正在进行的媒体生成任务' });
       return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
     }
 
     setTimeout(async () => {
       try {
         const result = await this.dramaService.generateEpisodeMedia(dramaId, episodeNumber);
-        subject.next({ data: { _type: 'result', ...result } } as MessageEvent);
+        send({
+          _type: 'result',
+          terminal: true,
+          terminalStatus: 'success',
+          message: '媒体生成完成',
+          done: true,
+          data: result,
+        });
       } catch (err: any) {
-        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
+        const msg = err?.message ?? '媒体生成失败';
+        send({
+          _type: 'error',
+          terminal: true,
+          terminalStatus: 'failed',
+          message: msg,
+          error: msg,
+          done: true,
+        });
       } finally {
         this.progressService.clearGenerating(key);
         clearInterval(heartbeat);
@@ -318,26 +526,44 @@ export class DramaController {
     @Param('episodeNumber') ep: string,
   ): Promise<Observable<MessageEvent>> {
     const subject = new Subject<MessageEvent>();
-    const heartbeat = setInterval(() => subject.next({ data: { _type: 'heartbeat', ts: Date.now() } } as MessageEvent), 15_000);
     const episodeNumber = parseInt(ep, 10);
+    const { send } = this.createSseSender(subject, 'images', dramaId, episodeNumber);
+    const heartbeat = setInterval(() => send({ _type: 'heartbeat', terminal: false }), 15_000);
     const key = `${dramaId}:images:${episodeNumber}`;
 
     const alreadyRunning = !this.progressService.markGenerating(key);
     const unsub = this.progressService.subscribe(dramaId, (event) => {
-      if (event.phase === 'images' && event.episodeNumber === episodeNumber) subject.next({ data: event } as MessageEvent);
+      if (event.runType !== 'images' || event.episodeNumber !== episodeNumber) return;
+      if (event.terminal) return; // 终态由 result/error 统一发射
+      this.sendProgress(send, event);
     });
 
     if (alreadyRunning) {
-      subject.next({ data: { reconnected: true, message: '已重连到正在进行的图片生成任务' } } as MessageEvent);
+      send({ _type: 'info', terminal: false, message: '已重连到正在进行的图片生成任务' });
       return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
     }
 
     setTimeout(async () => {
       try {
         await this.dramaService.generateEpisodeImages(dramaId, episodeNumber);
-        subject.next({ data: { _type: 'result', done: true, message: '图片生成完成' } } as MessageEvent);
+        send({
+          _type: 'result',
+          terminal: true,
+          terminalStatus: 'success',
+          message: '图片生成完成',
+          done: true,
+          data: { message: '图片生成完成' },
+        });
       } catch (err: any) {
-        subject.next({ data: { done: true, error: err.message } } as MessageEvent);
+        const msg = err?.message ?? '图片生成失败';
+        send({
+          _type: 'error',
+          terminal: true,
+          terminalStatus: 'failed',
+          message: msg,
+          error: msg,
+          done: true,
+        });
       } finally {
         this.progressService.clearGenerating(key);
         clearInterval(heartbeat);

@@ -52,7 +52,8 @@ ${shotDetail}
 
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
     const review = typeof root.review === 'object' && root.review ? root.review : root;
-    const result = episodeReviewSchema.parse(review);
+    const parsed = episodeReviewSchema.parse(review);
+    const result = this.ensureReviewCompleteness(parsed, storyboard);
     const hasCritical = result.issuesFound.some(i => i.severity === 'critical');
     if (result.overallScore < 5.5 || hasCritical) result.overallVerdict = 'major_issues';
     else if (result.overallScore >= 7.5 && !hasCritical && !result.issuesFound.some(i => i.severity === 'moderate')) result.overallVerdict = 'good';
@@ -104,5 +105,76 @@ ${shotDetail}
   private formatShot(s: any): string {
     const charInfo = (s.characters ?? []).map((c: any) => `${c.characterId}(${c.emotion})`).join(',');
     return `  shot${s.shotIndex ?? '?'}: ${s.camera?.angle ?? '?'}/${s.camera?.movement ?? 'static'} | ${charInfo} | vis="${(s.visualPrompt ?? '').slice(0, 60)}"${s.dialogue?.text ? ` | 💬"${s.dialogue.text}"` : ''}`;
+  }
+
+  private ensureReviewCompleteness(review: EpisodeReview, storyboard: EpisodeStoryboard): EpisodeReview {
+    const validShotIds = new Set((storyboard?.shots ?? []).map(s => s.shotId));
+    const normalizeRisks = (
+      items: Array<{ shotId?: string; reason?: string }> | undefined | null,
+    ): Array<{ shotId: string; reason: string }> =>
+      (items ?? [])
+        .filter(i => i?.shotId && validShotIds.has(i.shotId))
+        .map(i => ({ shotId: i.shotId, reason: i.reason || '风险未说明' }));
+
+    const hasConsistencyIssue = review.issuesFound.some(i =>
+      i.category === 'visual_continuity' || i.category === 'character_consistency',
+    );
+    const hasCameraIssue = review.issuesFound.some(i =>
+      i.category === 'camera_language' || i.category === 'pacing',
+    );
+
+    const consistencyRiskShots = normalizeRisks(review.consistencyRiskShots);
+    const cameraReadabilityRiskShots = normalizeRisks(review.cameraReadabilityRiskShots);
+
+    if (hasConsistencyIssue && consistencyRiskShots.length === 0) {
+      this.buildFallbackConsistencyRiskShots(storyboard).forEach(item => consistencyRiskShots.push(item));
+    }
+    if (hasCameraIssue && cameraReadabilityRiskShots.length === 0) {
+      this.buildFallbackCameraRiskShots(storyboard).forEach(item => cameraReadabilityRiskShots.push(item));
+    }
+
+    const readinessFromIssues = this.clamp(
+      review.overallScore
+      - review.issuesFound.filter(i => i.severity === 'critical').length * 1.2
+      - review.issuesFound.filter(i => i.severity === 'moderate').length * 0.6
+      - review.issuesFound.filter(i => i.severity === 'minor').length * 0.2,
+      0,
+      10,
+    );
+    const generationReadinessScore = this.clamp(
+      typeof review.generationReadinessScore === 'number' ? review.generationReadinessScore : readinessFromIssues,
+      0,
+      10,
+    );
+
+    return {
+      ...review,
+      generationReadinessScore,
+      consistencyRiskShots: consistencyRiskShots.slice(0, 6),
+      cameraReadabilityRiskShots: cameraReadabilityRiskShots.slice(0, 6),
+    };
+  }
+
+  private buildFallbackConsistencyRiskShots(storyboard: EpisodeStoryboard): Array<{ shotId: string; reason: string }> {
+    const shots = (storyboard?.shots ?? []).filter(s => s.isMasterShot || (s.characters?.length ?? 0) >= 3);
+    return shots.slice(0, 3).map(s => ({
+      shotId: s.shotId,
+      reason: '主镜/多人同框，角色一致性风险较高',
+    }));
+  }
+
+  private buildFallbackCameraRiskShots(storyboard: EpisodeStoryboard): Array<{ shotId: string; reason: string }> {
+    const riskyMovements = new Set(['whip_pan', 'handheld', 'dolly_zoom', 'orbit', 'tracking']);
+    const shots = (storyboard?.shots ?? []).filter(s =>
+      riskyMovements.has(s.camera?.movement ?? '') || s.camera?.angle === 'dutch_angle',
+    );
+    return shots.slice(0, 3).map(s => ({
+      shotId: s.shotId,
+      reason: '复杂运镜或倾斜构图，镜头可读性风险较高',
+    }));
+  }
+
+  private clamp(n: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, n));
   }
 }

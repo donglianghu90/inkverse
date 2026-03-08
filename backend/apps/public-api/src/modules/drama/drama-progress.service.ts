@@ -2,15 +2,25 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter } from 'events';
 
+export type DramaRunType = 'create' | 'episode' | 'media' | 'images';
+export type DramaTerminalStatus = 'success' | 'failed' | 'paused';
+
 export interface DramaProgressEvent {
+  _type: 'progress';
   dramaId: string;
-  phase: 'create' | 'episode' | 'media' | 'images'; // 创建 / 逐集生成 / 媒体生成 / 分镜图批量生成
+  runType: DramaRunType; // 创建 / 逐集生成 / 媒体生成 / 分镜图批量生成
   episodeNumber?: number;
   step: string;
+  stepKey?: string; // 语义步骤键（如 reviewed / edited）
+  nodeId?: string; // pipeline 节点 id（如 dialogue-coach）
   stepIndex: number;
   totalSteps: number;
   message: string;
   done: boolean;
+  skipped?: boolean; // 本步骤是否跳过
+  skipReason?: string; // 跳过原因（如 pipeline_disabled）
+  terminal: boolean;
+  terminalStatus?: DramaTerminalStatus;
   error?: string;
 }
 
@@ -37,14 +47,25 @@ export class DramaProgressService {
              : { generating: false, startedAt: null, lastStep: null, progress: 0 };
   }
 
-  emit(event: DramaProgressEvent): void {
-    const keys = [`${event.dramaId}:generate`];
-    if (event.phase === 'media' && event.episodeNumber) keys.push(`${event.dramaId}:media:${event.episodeNumber}`);
+  emit(event: Omit<DramaProgressEvent, '_type' | 'terminal'> & { terminal?: boolean }): void {
+    const payload: DramaProgressEvent = {
+      ...event,
+      _type: 'progress',
+      terminal: event.terminal ?? false,
+    };
+    const keys = [`${payload.dramaId}:generate`];
+    if (payload.runType === 'media' && payload.episodeNumber) keys.push(`${payload.dramaId}:media:${payload.episodeNumber}`);
+    if (payload.runType === 'images' && payload.episodeNumber) keys.push(`${payload.dramaId}:images:${payload.episodeNumber}`);
     for (const k of keys) {
       const a = this.active.get(k);
-      if (a) { a.lastStep = event.message ?? event.step; if (event.totalSteps > 0) a.progress = Math.round(((event.stepIndex + (event.done ? 1 : 0.5)) / event.totalSteps) * 100); }
+      if (a) {
+        a.lastStep = payload.message ?? payload.step;
+        if (payload.totalSteps > 0) {
+          a.progress = Math.round(((payload.stepIndex + (payload.done ? 1 : 0.5)) / payload.totalSteps) * 100);
+        }
+      }
     }
-    this.emitter.emit(`progress:${event.dramaId}`, event);
+    this.emitter.emit(`progress:${payload.dramaId}`, payload);
   }
 
   subscribe(dramaId: string, listener: (event: DramaProgressEvent) => void): () => void {

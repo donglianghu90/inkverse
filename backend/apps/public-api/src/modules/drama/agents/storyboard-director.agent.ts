@@ -107,16 +107,141 @@ ${locDesc}
 
     // 对过场场景的 qualityTier 做后处理保底（防止LLM忘记设置）
     const defaultTier = isGolden ? 'golden' : isFiller ? 'filler' : 'standard';
+    const styleLockRef = this.resolveStyleLockRef(state);
+    const identityRefMap = this.buildIdentityRefMap(state);
+    const masterBeatAssignments = this.resolveMasterBeatAssignments(script, scene, parsed.length, intent);
     return parsed.map((s: any, i: number) => {
       const idx = startIdx + i;
+      const beat = masterBeatAssignments.get(i);
+      const isMasterShot = typeof s.isMasterShot === 'boolean'
+        ? s.isMasterShot
+        : !!beat || (isGolden && i === 0);
+      const normalizedQualityTier = s.qualityTier ?? defaultTier;
+      const inferredShotType = this.inferShotType(s);
       return shotSchema.parse({
         ...s,
-        qualityTier: s.qualityTier ?? defaultTier,
+        isMasterShot,
+        actionUnitId: s.actionUnitId || beat?.beatId || `${scene.sceneId}_act_${i + 1}`,
+        shotType: s.shotType ?? inferredShotType,
+        regenPriority: s.regenPriority ?? this.inferRegenPriority(normalizedQualityTier, isMasterShot),
+        qualityTier: normalizedQualityTier,
+        characterLockRefs: this.buildCharacterLockRefs(s, identityRefMap),
+        styleLockRef: s.styleLockRef || styleLockRef,
         shotIndex: idx,
         shotId: s.shotId || `ep${epNum}_shot${idx}`,
         sceneId: scene.sceneId,
       });
     });
+  }
+
+  private inferShotType(shot: any): 'portrait' | 'dialogue' | 'action' | 'wide' | 'insert' {
+    const angle = shot?.camera?.angle ?? '';
+    const movement = shot?.camera?.movement ?? '';
+    const hasDialogue = !!shot?.dialogue?.text;
+    const charCount = Array.isArray(shot?.characters) ? shot.characters.length : 0;
+    const visualText = `${shot?.visualPrompt ?? ''} ${(shot?.characters ?? []).map((c: any) => c?.action ?? '').join(' ')}`.toLowerCase();
+
+    if (['extreme_wide', 'wide', 'medium_wide', 'bird_eye'].includes(angle)) return 'wide';
+    if (angle === 'extreme_close_up') return 'insert';
+
+    const actionTokens = ['run', 'chase', 'fight', 'hit', 'strike', 'kick', 'jump', 'grab', 'throw', 'punch', '冲', '打', '追', '跑', '跳', '砸', '挥', '扑'];
+    const movingCamera = ['tracking', 'crane_up', 'crane_down', 'whip_pan', 'orbit', 'handheld', 'dolly_zoom'].includes(movement);
+    if (movingCamera || actionTokens.some(t => visualText.includes(t))) return 'action';
+
+    if (hasDialogue && charCount >= 2) return 'dialogue';
+    if (charCount <= 1 && ['close_up', 'medium_close_up', 'high_angle', 'low_angle', 'pov'].includes(angle)) return 'portrait';
+    if (hasDialogue) return 'dialogue';
+    if (charCount === 0) return 'insert';
+    return 'portrait';
+  }
+
+  private inferRegenPriority(
+    qualityTier: 'golden' | 'standard' | 'filler',
+    isMasterShot: boolean,
+  ): 'high' | 'medium' | 'low' {
+    if (isMasterShot || qualityTier === 'golden') return 'high';
+    if (qualityTier === 'filler') return 'low';
+    return 'medium';
+  }
+
+  private buildIdentityRefMap(state: DramaState): Map<string, string> {
+    const map = new Map<string, string>();
+    const version = state.visualBible?.version || 'v0';
+    for (const pack of state.visualBible?.identityPack ?? []) {
+      const faceDnaKey = (pack.faceDna || 'face').slice(0, 18);
+      map.set(pack.characterId, `vb:${version}:${pack.characterId}:${faceDnaKey}`);
+    }
+    return map;
+  }
+
+  private buildCharacterLockRefs(shot: any, identityRefMap: Map<string, string>): string[] {
+    const ids = new Set<string>();
+    for (const c of shot?.characters ?? []) {
+      if (c?.characterId) ids.add(c.characterId);
+    }
+    const refs = [...ids].map(id => identityRefMap.get(id) || `character:${id}`);
+    return refs.slice(0, 4);
+  }
+
+  private resolveStyleLockRef(state: DramaState): string {
+    if (state.visualBible?.version) return `vb-style:${state.visualBible.version}`;
+    const styleBits = [
+      state.visualStyle?.overallAesthetic,
+      state.visualStyle?.renderTechnique,
+      state.visualStyle?.textureStyle,
+      state.visualStyle?.colorGrading,
+    ].filter(Boolean);
+    return styleBits.length ? `style:${styleBits.join('|')}` : '';
+  }
+
+  private resolveMasterBeatAssignments(
+    script: EpisodeScript,
+    scene: ScriptScene,
+    shotCount: number,
+    intent?: EpisodeIntent,
+  ): Map<number, EpisodeIntent['masterShotPlan'][number]> {
+    const assignments = new Map<number, EpisodeIntent['masterShotPlan'][number]>();
+    if (!intent?.masterShotPlan?.length || shotCount <= 0) return assignments;
+
+    const beats = intent.masterShotPlan.filter(b => b?.beatId);
+    if (!beats.length) return assignments;
+
+    const sceneDurations = script.scenes.map(s => Math.max(1, s.estimatedDurationSec || 1));
+    const totalDur = sceneDurations.reduce((acc, n) => acc + n, 0);
+    const sceneIndex = Math.max(0, scene.sceneIndex);
+    const sceneStart = sceneDurations.slice(0, sceneIndex).reduce((acc, n) => acc + n, 0);
+    const sceneDur = sceneDurations[sceneIndex] || Math.max(1, scene.estimatedDurationSec || 1);
+    const sceneEnd = sceneStart + sceneDur;
+    const used = new Set<number>();
+
+    for (let bi = 0; bi < beats.length; bi++) {
+      const beat = beats[bi];
+      const ratio = beats.length === 1 ? 0.5 : bi / (beats.length - 1);
+      const beatTime = totalDur * ratio;
+      const isInScene = beatTime >= sceneStart && beatTime <= sceneEnd;
+      if (!isInScene) continue;
+
+      const localRatio = sceneDur > 0 ? Math.min(0.999, Math.max(0, (beatTime - sceneStart) / sceneDur)) : 0;
+      const targetIndex = Math.min(shotCount - 1, Math.max(0, Math.floor(localRatio * shotCount)));
+      const claimIndex = this.claimNearestAvailableShotIndex(targetIndex, shotCount, used);
+      if (claimIndex < 0) continue;
+
+      assignments.set(claimIndex, beat);
+      used.add(claimIndex);
+    }
+    return assignments;
+  }
+
+  private claimNearestAvailableShotIndex(targetIndex: number, shotCount: number, used: Set<number>): number {
+    if (shotCount <= 0) return -1;
+    if (!used.has(targetIndex)) return targetIndex;
+    for (let offset = 1; offset < shotCount; offset++) {
+      const right = targetIndex + offset;
+      if (right < shotCount && !used.has(right)) return right;
+      const left = targetIndex - offset;
+      if (left >= 0 && !used.has(left)) return left;
+    }
+    return -1;
   }
 
   /** 后处理：确保首尾帧T2I prompt包含角色face描述（visualPrompt用于T2V，不注入face以节省token） */

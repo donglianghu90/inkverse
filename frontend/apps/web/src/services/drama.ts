@@ -20,6 +20,7 @@ export interface CreateDramaParams {
   plannedMaxEpisodes?: number;
   genreTemplateId?: string;
   visualStyleHint?: string; // 视觉风格提示（如"真人影视""2D 动漫""水墨古风"）
+  generationMode?: 'fast' | 'balanced' | 'quality';
 }
 
 export interface DramaListItem {
@@ -137,8 +138,43 @@ export interface GenerationStatus {
   dbRunning: DbRunningItem[];
 }
 
+export interface DramaExecutionSkippedStep {
+  stepKey?: string;
+  nodeId?: string;
+  skipReason?: string;
+  message?: string;
+}
+
+export interface DramaExecutionListItem {
+  id: string;
+  episodeNumber: number;
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | string;
+  lastCheckpoint: string;
+  errorMessage: string;
+  createdAt: string;
+  updatedAt: string;
+  summary?: Record<string, unknown>;
+  skippedSteps: DramaExecutionSkippedStep[];
+  skippedCount: number;
+}
+
 export async function getGenerationStatus(dramaId: string): Promise<GenerationStatus> {
   return request(`${BASE}/${dramaId}/generation-status`);
+}
+
+export async function listDramaExecutions(
+  dramaId: string,
+  opts?: { latestPerEpisode?: boolean; limit?: number; includeCreation?: boolean },
+): Promise<{ executions: DramaExecutionListItem[] }> {
+  const latestPerEpisode = opts?.latestPerEpisode ?? true;
+  const limit = Math.max(1, Math.min(200, opts?.limit ?? 40));
+  const includeCreation = opts?.includeCreation ?? false;
+  const params = new URLSearchParams({
+    latestPerEpisode: String(latestPerEpisode),
+    limit: String(limit),
+    includeCreation: String(includeCreation),
+  });
+  return request(`${BASE}/${dramaId}/executions?${params.toString()}`);
 }
 
 export async function generateEpisodes(dramaId: string, count = 1): Promise<{ message: string }> {
@@ -166,6 +202,33 @@ export async function getVisualAssets(dramaId: string): Promise<{ assets: Visual
 }
 
 /* ─── SSE URLs ─── */
+
+export type DramaSseType = 'heartbeat' | 'progress' | 'result' | 'error' | 'info';
+export type DramaRunType = 'create' | 'episode' | 'media' | 'images';
+export type DramaTerminalStatus = 'success' | 'failed' | 'paused';
+
+export interface DramaSseEvent {
+  _type: DramaSseType;
+  runType: DramaRunType;
+  runId: string;
+  seq: number;
+  ts: number;
+  dramaId: string;
+  episodeNumber?: number;
+  step?: string;
+  stepKey?: string;
+  nodeId?: string;
+  stepIndex?: number;
+  totalSteps?: number;
+  message?: string;
+  done?: boolean;
+  skipped?: boolean;
+  skipReason?: string;
+  terminal?: boolean;
+  terminalStatus?: DramaTerminalStatus;
+  error?: string;
+  data?: Record<string, unknown>;
+}
 
 export function getCreateDramaSseUrl(dramaId: string): string {
   const token = getToken();
@@ -207,6 +270,28 @@ export async function updateShot(
 
 export async function generateEpisodeMedia(dramaId: string, episodeNumber: number): Promise<{ mediaStatus: string; videoUrl?: string }> {
   return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/generate-media`, { method: 'POST' });
+}
+
+export interface ResetProblemShotsResult {
+  episodeNumber: number;
+  totalShots: number;
+  problemShotIds: string[];
+  resetCount: number;
+}
+
+export type ResetFixTarget = 'all' | 'identity' | 'style' | 'camera' | 'motion';
+
+export async function resetProblemShots(
+  dramaId: string,
+  episodeNumber: number,
+  opts?: { includeReviewRisks?: boolean; onlyHighPriority?: boolean; fixTarget?: ResetFixTarget },
+): Promise<ResetProblemShotsResult> {
+  const params = new URLSearchParams();
+  if (opts?.includeReviewRisks !== undefined) params.set('includeReviewRisks', String(opts.includeReviewRisks));
+  if (opts?.onlyHighPriority !== undefined) params.set('onlyHighPriority', String(opts.onlyHighPriority));
+  if (opts?.fixTarget !== undefined) params.set('fixTarget', String(opts.fixTarget));
+  const qs = params.toString();
+  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/reset-problem-shots${qs ? `?${qs}` : ''}`, { method: 'POST' });
 }
 
 export async function getEpisodeMediaStatus(dramaId: string, episodeNumber: number): Promise<{ mediaStatus: string; videoUrl?: string; shotMediaMap?: Record<string, unknown> }> {

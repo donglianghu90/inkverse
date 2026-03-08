@@ -171,6 +171,30 @@ export const visualStyleGuideSchema = z.object({
   referenceStyle: ns(), // 参考风格/作品（如"吉卜力""新海诚""皮克斯""伊藤润二""港片黄金时代"）
 });
 
+export const visualBibleSchema = z.object({
+  version: z.string(),
+  identityPack: na(z.object({
+    characterId: z.string(),
+    faceDna: z.string(),
+    anchorImages: z.object({
+      faceFront: ns(),
+      face34: ns(),
+      upperOrFull: ns(),
+    }),
+    variationPolicy: ns(),
+  })),
+  stylePack: z.object({
+    styleTokens: na(z.string()),
+    styleRefImages: na(z.string()),
+    colorLutHint: ns(),
+  }),
+  cameraPack: z.object({
+    preferredAngles: na(z.string()),
+    movementPolicy: na(z.string()),
+    continuityRules: na(z.string()),
+  }),
+});
+
 // ---------------------------------------------------------------------------
 // Phase 3: 全剧大纲 (Series Outline)
 // ---------------------------------------------------------------------------
@@ -227,6 +251,14 @@ export const episodeIntentSchema = z.object({
   emotionDirection: z.string(),
   hookDirection: z.string(),
   carryoverFromLastEpisode: z.string(),
+  masterShotPlan: na(z.object({
+    beatId: z.string(), // 主镜头节拍ID（用于 script/storyboard 对齐）
+    visualGoal: z.string(), // 本主镜必须被“看见”的视觉目标
+    emotionGoal: z.string(), // 本主镜要传达的情绪目标
+    actionVerb: z.string(), // 单动作动词（如 reveal/confront/strike/turn）
+    minDurSec: z.number().min(0.5).max(30),
+    maxDurSec: z.number().min(0.5).max(60),
+  })),
   activeCharacters: na(z.object({
     characterId: z.string(),
     costumeOverride: z.string().nullish().transform(v => v ?? ''), // AI 可能输出 null
@@ -358,8 +390,14 @@ export const shotSchema = z.object({
   shotIndex: z.number().int().nonnegative(),
   shotId: z.string(),
   sceneId: z.string(), // 关联的剧本场景ID
+  isMasterShot: z.boolean().default(false), // 是否主镜头（主镜优先保证叙事可读）
+  actionUnitId: z.string().default(''), // 单动作单元ID（用于问题定位和定向重生）
+  shotType: z.enum(['portrait', 'dialogue', 'action', 'wide', 'insert']).default('dialogue'),
+  regenPriority: z.enum(['high', 'medium', 'low']).default('medium'),
   camera: shotCameraSchema,
   characters: na(shotCharacterSchema),
+  characterLockRefs: na(z.string()), // 角色身份锁引用（来自 visualBible.identityPack）
+  styleLockRef: ns(), // 风格锁引用（来自 visualBible.stylePack/version）
   dialogue: shotDialogueSchema.nullish(), // AI 可能输出 null
   audio: shotAudioSchema.nullish().transform(v => v ?? {}),
   visualPrompt: z.string(), // T2V 视觉提示词（英文，含风格/光影/构图/角色参考）
@@ -415,6 +453,7 @@ export const episodeStoryboardSchema = z.object({
 export const episodeReviewSchema = z.object({
   overallVerdict: z.enum(['good', 'needs_edit', 'major_issues']),
   overallScore: z.number().min(0).max(10),
+  generationReadinessScore: z.number().min(0).max(10).default(7), // 可生成稳定性评分（高=少返工）
   dimensions: z.object({
     visualImpact: z.number().min(0).max(10), // 画面冲击力
     dialogueNaturalness: z.number().min(0).max(10), // 台词自然度
@@ -434,6 +473,14 @@ export const episodeReviewSchema = z.object({
     suggestedFix: z.string(),
   })),
   strengths: na(z.string()),
+  consistencyRiskShots: na(z.object({
+    shotId: z.string(),
+    reason: z.string(),
+  })),
+  cameraReadabilityRiskShots: na(z.object({
+    shotId: z.string(),
+    reason: z.string(),
+  })),
 });
 
 // ---------------------------------------------------------------------------
@@ -562,7 +609,9 @@ export const dramaStateSchema = z.object({
   strategy: dramaStrategySchema.optional(),
 
   visualStyleHint: ns(), // 用户在前端选择的原始视觉风格提示（如"3D 东方玄幻风格：..."），用于 debug/重试
+  generationMode: z.enum(['fast', 'balanced', 'quality']).default('balanced'), // 媒体生成策略档位
   visualStyle: visualStyleGuideSchema.optional(),
+  visualBible: visualBibleSchema.optional(),
   characters: na(characterIdentitySchema),
   locations: na(sceneLocationSchema),
 
@@ -631,6 +680,7 @@ export type CharacterVariation = z.infer<typeof characterVariationSchema>;
 export type CharacterIdentity = z.infer<typeof characterIdentitySchema>;
 export type SceneLocation = z.infer<typeof sceneLocationSchema>;
 export type VisualStyleGuide = z.infer<typeof visualStyleGuideSchema>;
+export type VisualBible = z.infer<typeof visualBibleSchema>;
 export type EpisodeSynopsis = z.infer<typeof episodeSynopsisSchema>;
 export type SeriesOutline = z.infer<typeof seriesOutlineSchema>;
 export type ArcSegment = z.infer<typeof arcSegmentSchema>;

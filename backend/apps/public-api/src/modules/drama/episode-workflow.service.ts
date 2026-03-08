@@ -3,7 +3,7 @@
  * 流程：ArcDirector → EpisodeDirector → ContinuityGuard → Scriptwriter → DialogueCoach
  *       → StoryboardDirector(+intent情绪地图+场景类型摄影语言) → AudioDirector
  *       → DeterministicChecker → ScriptReviewer
- *       → (if needs_edit) [分镜回炉 if visualImpact<6] ScriptEditor → PacingAnalyzer → HookCrafter → EpisodeRecorder
+ *       → (if verdict非good 且 score<qualityPassScore) [分镜回炉 if visualImpact<6] ScriptEditor → PacingAnalyzer → HookCrafter → EpisodeRecorder
  *
  * 质量优化链：
  * - VisualStyle → Scriptwriter 台词风格（动漫/真人/古装各异）
@@ -34,7 +34,7 @@ import { DramaProgressService } from './drama-progress.service';
 import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
 import { DramaWorkflowExecutionService } from './drama-workflow-execution.service';
 import { DramaCalibrationService } from './drama-calibration.service';
-import { DramaWorkflowParams, DEFAULT_DRAMA_WORKFLOW_PARAMS } from './entities/drama-agent-pipeline.entity';
+import { DramaAgentNodeConfig, DramaWorkflowParams } from './entities/drama-agent-pipeline.entity';
 import { LlmTraceLoggerService } from '../novel/llm/llm-trace-logger.service';
 
 const STEP_ORDER = [ // 步骤顺序定义（用于断点续跑）
@@ -45,6 +45,7 @@ const STEP_ORDER = [ // 步骤顺序定义（用于断点续跑）
 ] as const;
 
 type StepName = typeof STEP_ORDER[number];
+type NodeEnabledMap = Record<string, boolean>;
 
 @Injectable()
 export class EpisodeWorkflowService {
@@ -85,6 +86,8 @@ export class EpisodeWorkflowService {
     const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
     const state = drama.state as unknown as DramaState;
     const wp: DramaWorkflowParams = await this.pipelineService.getWorkflowParams(dramaId);
+    const pipelineNodes: DramaAgentNodeConfig[] = await this.pipelineService.getPublishedNodes(dramaId);
+    const nodeEnabledMap = this.buildNodeEnabledMap(pipelineNodes);
     let synopsis = state.seriesOutline?.episodes?.[episodeNumber - 1];
     if (!synopsis) throw new Error(`大纲中不存在第 ${episodeNumber} 集`);
 
@@ -144,11 +147,60 @@ export class EpisodeWorkflowService {
       const ok = await this.executionService.touchHeartbeat(runId).catch(() => false);
       if (!ok) { ownershipLost = true; this.logger.warn(`[E${episodeNumber}] 心跳续命失败，标记所有权丢失`); }
     }, 20_000);
-    const emitEp = (stepIndex: number, message: string, done = false) =>
-      this.progressService.emit({ dramaId, phase: 'episode', episodeNumber, step: `ep_${stepIndex}`, stepIndex, totalSteps: 13, message, done });
+    const skippedStepRecords: Array<{ stepKey: string; nodeId?: string; skipReason?: string; message?: string }> = [];
+    const skippedStepKeys = new Set<string>();
+    const emitEp = (
+      stepIndex: number,
+      message: string,
+      done = false,
+      extra?: { nodeId?: string; skipped?: boolean; skipReason?: string; stepKey?: string },
+    ) => {
+      if (extra?.skipped) {
+        const stepKey = extra.stepKey ?? STEP_ORDER[stepIndex] ?? `ep_${stepIndex}`;
+        const uniq = `${stepKey}:${extra.nodeId ?? ''}:${extra.skipReason ?? ''}`;
+        if (!skippedStepKeys.has(uniq)) {
+          skippedStepKeys.add(uniq);
+          skippedStepRecords.push({ stepKey, nodeId: extra.nodeId, skipReason: extra.skipReason, message });
+        }
+      }
+      this.progressService.emit({
+        dramaId,
+        runType: 'episode',
+        episodeNumber,
+        step: `ep_${stepIndex}`,
+        stepKey: extra?.stepKey ?? STEP_ORDER[stepIndex],
+        nodeId: extra?.nodeId,
+        skipped: extra?.skipped,
+        skipReason: extra?.skipReason,
+        stepIndex,
+        totalSteps: 13,
+        message,
+        done,
+      });
+    };
     const logDrama = (step: string, status: 'ok' | 'error', message?: string, meta?: Record<string, unknown>) =>
       this.traceLogger.logDramaWorkflowEvent({ dramaId, phase: 'episode', step, status, episodeNumber, message, ...meta });
+
+    const enableContinuityGuard = this.isNodeEnabled(nodeEnabledMap, 'continuity-guard');
+    const enableDialogueCoach = wp.enableDialogueCoach && this.isNodeEnabled(nodeEnabledMap, 'dialogue-coach');
+    const enableAudioDirector = this.isNodeEnabled(nodeEnabledMap, 'audio-director');
+    const enableReviewer = this.isNodeEnabled(nodeEnabledMap, 'script-reviewer');
+    const enableScriptEditor = this.isNodeEnabled(nodeEnabledMap, 'script-editor');
+    const enablePacingAnalyzer = wp.enablePacingAnalyzer && this.isNodeEnabled(nodeEnabledMap, 'pacing-analyzer');
+    const enableHookCrafter = wp.enableHookCrafter && this.isNodeEnabled(nodeEnabledMap, 'hook-crafter');
+
     logDrama('episode_start', 'ok', `E${episodeNumber} 工作流开始`, { runId, resumeFrom, resumed });
+    logDrama('pipeline_resolved', 'ok', 'pipeline 节点启用状态已解析', {
+      enableContinuityGuard,
+      enableDialogueCoach,
+      enableAudioDirector,
+      enableReviewer,
+      enableScriptEditor,
+      enablePacingAnalyzer,
+      enableHookCrafter,
+      qualityPassScore: wp.qualityPassScore,
+      maxEditRounds: wp.maxEditRounds,
+    });
 
     const outputs = (cached ?? {}) as Record<string, Record<string, unknown>>;
     let arcSegment = outputs.arc_planned?.arcSegment as any;
@@ -159,6 +211,7 @@ export class EpisodeWorkflowService {
     let review = outputs.reviewed?.review as any;
     let pacing = outputs.pacing_analyzed?.pacing as any;
     let hookResult = outputs.hook_crafted?.hookResult as any;
+    let editRoundsUsed = (outputs.edited?.round as number | undefined) ?? 0;
 
     try {
       if (resumeFrom < 0) { // Step 0: 段落规划 + 骨架集展开
@@ -199,20 +252,32 @@ export class EpisodeWorkflowService {
       if (resumeFrom < 2) { // Step 2: 连续性检查（阻断时回退重试）
         logDrama('continuity_start', 'ok', '连续性检查');
         emitEp(2, '连续性检查...');
-        continuity = await this.continuityGuard.verify(state, intent);
-        const blocks = continuity.warnings.filter((w: any) => w.severity === 'block');
-        if (blocks.length > 0) {
-          this.logger.warn(`E${episodeNumber} 连续性阻断: ${blocks.map((b: any) => b.description).join('; ')}`);
-          for (let retry = 0; retry < wp.maxContinuityRetries; retry++) {
-            emitEp(2, `连续性阻断，重新规划(${retry + 1})...`);
-            intent = await this.episodeDirector.direct(state, synopsis, continuity.contextInjections);
-            continuity = await this.continuityGuard.verify(state, intent);
-            if (!continuity.warnings.some((w: any) => w.severity === 'block')) break;
+        let continuitySkipped = false;
+        if (enableContinuityGuard) {
+          continuity = await this.continuityGuard.verify(state, intent);
+          const blocks = continuity.warnings.filter((w: any) => w.severity === 'block');
+          if (blocks.length > 0) {
+            this.logger.warn(`E${episodeNumber} 连续性阻断: ${blocks.map((b: any) => b.description).join('; ')}`);
+            for (let retry = 0; retry < wp.maxContinuityRetries; retry++) {
+              emitEp(2, `连续性阻断，重新规划(${retry + 1})...`);
+              intent = await this.episodeDirector.direct(state, synopsis, continuity.contextInjections);
+              continuity = await this.continuityGuard.verify(state, intent);
+              if (!continuity.warnings.some((w: any) => w.severity === 'block')) break;
+            }
           }
+        } else {
+          continuity = { pass: true, warnings: [], contextInjections: [] };
+          this.logger.log(`E${episodeNumber} 连续性检查已跳过(pipeline禁用 continuity-guard)`);
+          continuitySkipped = true;
         }
         await saveStep('continuity_checked', { continuity }); await checkpoint('continuity_checked');
         logDrama('continuity_done', 'ok', '连续性检查完成');
-        emitEp(2, '连续性检查完成', true);
+        emitEp(
+          2,
+          continuitySkipped ? '连续性检查已跳过（pipeline禁用）' : '连续性检查完成',
+          true,
+          continuitySkipped ? { nodeId: 'continuity-guard', skipped: true, skipReason: 'pipeline_disabled' } : undefined,
+        );
       }
 
       if (resumeFrom < 3) { // Step 3: 编剧创作
@@ -227,13 +292,26 @@ export class EpisodeWorkflowService {
       if (resumeFrom < 4) { // Step 4: 台词润色（可配置开关）
         logDrama('dialogue_start', 'ok', '台词润色');
         emitEp(4, '台词润色...');
-        if (wp.enableDialogueCoach) {
+        let dialogueSkipped = false;
+        if (enableDialogueCoach) {
           try { script = await this.dialogueCoach.polish(script, state.characters, state.promptProfile, state.dramaId, state); }
           catch (err) { this.logger.warn(`E${episodeNumber} 台词润色降级: ${(err as Error).message}`); }
-        } else { this.logger.log(`E${episodeNumber} 台词润色已跳过(配置关闭)`); }
+        } else {
+          dialogueSkipped = true;
+          this.logger.log(`E${episodeNumber} 台词润色已跳过(工作流参数或pipeline配置关闭)`);
+        }
         await saveStep('dialogue_polished', { script }); await checkpoint('dialogue_polished');
         logDrama('dialogue_done', 'ok', '台词润色完成');
-        emitEp(4, '台词润色完成', true);
+        emitEp(
+          4,
+          dialogueSkipped ? '台词润色已跳过' : '台词润色完成',
+          true,
+          dialogueSkipped ? {
+            nodeId: 'dialogue-coach',
+            skipped: true,
+            skipReason: wp.enableDialogueCoach ? 'pipeline_disabled' : 'workflow_param_disabled',
+          } : undefined,
+        );
       }
 
       if (resumeFrom < 5) { // Step 5: 分镜生成（按场景分步，传入 intent 以注入情绪地图）
@@ -256,10 +334,20 @@ export class EpisodeWorkflowService {
         }
         logDrama('audio_start', 'ok', '音频设计');
         emitEp(6, '音频设计...');
-        storyboard = await this.audioDirector.enhance(state, storyboard);
+        let audioSkipped = false;
+        if (enableAudioDirector) storyboard = await this.audioDirector.enhance(state, storyboard);
+        else {
+          audioSkipped = true;
+          this.logger.log(`E${episodeNumber} 音频设计已跳过(pipeline禁用 audio-director)`);
+        }
         await saveStep('audio_designed', { storyboard }); await checkpoint('audio_designed');
         logDrama('audio_done', 'ok', '音频设计完成');
-        emitEp(6, '音频设计完成', true);
+        emitEp(
+          6,
+          audioSkipped ? '音频设计已跳过（pipeline禁用）' : '音频设计完成',
+          true,
+          audioSkipped ? { nodeId: 'audio-director', skipped: true, skipReason: 'pipeline_disabled' } : undefined,
+        );
       }
 
       if (resumeFrom < 7) { // Step 7: 硬规则校验
@@ -279,23 +367,44 @@ export class EpisodeWorkflowService {
       }
 
       if (resumeFrom < 8) { // Step 8: 质量审核
-        if (!storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行质量审核');
         logDrama('review_start', 'ok', '质量审核');
         emitEp(8, '质量审核...');
-        review = await this.reviewer.review(state, script, storyboard);
+        let reviewerSkipped = false;
+        if (enableReviewer) {
+          if (!storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行质量审核');
+          review = await this.reviewer.review(state, script, storyboard);
+          review = this.normalizeReview(review, wp);
+        } else {
+          reviewerSkipped = true;
+          review = this.makeSkippedReview(wp, 'script-reviewer 已禁用，使用降级评审结果');
+          this.logger.log(`E${episodeNumber} 质量审核已跳过(pipeline禁用 script-reviewer)`);
+        }
         await saveStep('reviewed', { review }); await checkpoint('reviewed');
-        logDrama('review_done', 'ok', '质量审核完成', { verdict: review?.overallVerdict });
-        emitEp(8, '质量审核完成', true);
+        logDrama('review_done', 'ok', '质量审核完成', { verdict: review?.overallVerdict, score: review?.overallScore });
+        emitEp(
+          8,
+          reviewerSkipped ? '质量审核已跳过（pipeline禁用）' : '质量审核完成',
+          true,
+          reviewerSkipped ? { nodeId: 'script-reviewer', skipped: true, skipReason: 'pipeline_disabled' } : undefined,
+        );
       }
 
       if (resumeFrom < 9) { // Step 9: 精修（定向修复 + 分镜回炉通道）
         logDrama('edit_start', 'ok', '精修');
-        for (let round = 0; round < wp.maxEditRounds && review.overallVerdict === 'needs_edit'; round++) {
+        const shouldEdit = () => this.shouldRunEdit(review, wp);
+        let editorSkipped = false;
+        let editorSkipReason: string | undefined;
+        if (!enableScriptEditor && shouldEdit()) {
+          this.logger.warn(`[E${episodeNumber}] 精修需求存在但 script-editor 已禁用，跳过精修。score=${review?.overallScore}, verdict=${review?.overallVerdict}`);
+          editorSkipped = true;
+          editorSkipReason = 'pipeline_disabled';
+        }
+        for (let round = 0; enableScriptEditor && round < wp.maxEditRounds && shouldEdit(); round++) {
           emitEp(9, `精修第${round + 1}轮...`);
-          const criticalIssues = review.issuesFound?.filter((i: any) => i.severity === 'critical') ?? [];
+          const criticalIssues = review?.issuesFound?.filter((i: any) => i.severity === 'critical') ?? [];
 
           // 分镜回炉通道：若视觉维度低分（<6），且尚未触发过回炉，重新生成分镜
-          const dims = (review.dimensions ?? {}) as Record<string, number>;
+          const dims = (review?.dimensions ?? {}) as Record<string, number>;
           const visualIssueScore = Math.min(dims.visualImpact ?? 10, dims.pacing ?? 10);
           const storyboardRebakeTriggered = (round === 0) && (visualIssueScore < 6) && !!intent;
           if (storyboardRebakeTriggered) {
@@ -303,38 +412,70 @@ export class EpisodeWorkflowService {
             emitEp(9, `视觉质量低（${visualIssueScore.toFixed(1)}分），重新生成分镜...`);
             storyboard = await this.storyboardDirector.direct(state, script, intent);
             // 补音频设计
-            try { storyboard = await this.audioDirector.enhance(state, storyboard); } catch {}
-            review = await this.reviewer.review(state, script, storyboard);
-            logDrama('storyboard_rebake', 'ok', '分镜回炉完成', { newScore: review.overallScore });
+            if (enableAudioDirector) {
+              try { storyboard = await this.audioDirector.enhance(state, storyboard); } catch {}
+            }
+            if (enableReviewer) {
+              review = await this.reviewer.review(state, script, storyboard);
+              review = this.normalizeReview(review, wp);
+            } else {
+              review = this.makeSkippedReview(wp, 'script-reviewer 已禁用，精修后跳过复审', review);
+            }
+            logDrama('storyboard_rebake', 'ok', '分镜回炉完成', { newScore: review?.overallScore });
           } else {
             storyboard = await this.editor.fix(state, storyboard, review, criticalIssues);
-            review = await this.reviewer.review(state, script, storyboard);
+            if (enableReviewer) {
+              review = await this.reviewer.review(state, script, storyboard);
+              review = this.normalizeReview(review, wp);
+            } else {
+              review = this.makeSkippedReview(wp, 'script-reviewer 已禁用，精修后跳过复审', review);
+            }
           }
-          await saveStep('edited', { storyboard, review, round: round + 1 }); await checkpoint('edited');
+          editRoundsUsed = round + 1;
         }
+        await saveStep('edited', { storyboard, review, round: editRoundsUsed }); await checkpoint('edited');
         logDrama('edit_done', 'ok', '精修完成');
-        emitEp(9, '精修完成', true);
+        emitEp(
+          9,
+          editorSkipped ? '精修已跳过（pipeline禁用）' : '精修完成',
+          true,
+          editorSkipped ? { nodeId: 'script-editor', skipped: true, skipReason: editorSkipReason } : undefined,
+        );
       }
 
       if (resumeFrom < 10) { // Step 10: 节奏分析（可配置开关）
-        if (wp.enablePacingAnalyzer && !storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行节奏分析');
+        if (enablePacingAnalyzer && !storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行节奏分析');
         logDrama('pacing_start', 'ok', '节奏分析');
         emitEp(10, '节奏分析...');
-        if (wp.enablePacingAnalyzer) {
+        let pacingSkipped = false;
+        if (enablePacingAnalyzer) {
           try { pacing = await this.pacingAnalyzer.analyze(state, storyboard); }
           catch (err) { this.logger.warn(`E${episodeNumber} 节奏分析降级: ${(err as Error).message}`); }
-        } else { this.logger.log(`E${episodeNumber} 节奏分析已跳过(配置关闭)`); }
+        } else {
+          pacingSkipped = true;
+          this.logger.log(`E${episodeNumber} 节奏分析已跳过(工作流参数或pipeline配置关闭)`);
+        }
         await saveStep('pacing_analyzed', { pacing }); await checkpoint('pacing_analyzed');
         logDrama('pacing_done', 'ok', '节奏分析完成');
-        emitEp(10, '节奏分析完成', true);
+        emitEp(
+          10,
+          pacingSkipped ? '节奏分析已跳过' : '节奏分析完成',
+          true,
+          pacingSkipped ? {
+            nodeId: 'pacing-analyzer',
+            skipped: true,
+            skipReason: wp.enablePacingAnalyzer ? 'pipeline_disabled' : 'workflow_param_disabled',
+          } : undefined,
+        );
       }
 
       if (resumeFrom < 11) { // Step 11: 悬念设计（可配置开关）
-        if (!storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行悬念设计');
+        if (enableHookCrafter && !storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行悬念设计');
         logDrama('hook_start', 'ok', '悬念设计');
         emitEp(11, '悬念设计...');
         hookResult = { previewShots: [] };
-        if (wp.enableHookCrafter) {
+        let hookSkipped = false;
+        if (enableHookCrafter) {
           try {
             hookResult = await this.hookCrafter.craft(state, storyboard);
             if (hookResult.previewShots?.length) {
@@ -351,10 +492,27 @@ export class EpisodeWorkflowService {
               storyboard!.totalEstimatedDurationSec = Math.round(sbShots.reduce((s: number, sh: any) => s + (sh.estimatedDurationSec ?? 0), 0) * 10) / 10;
             }
           } catch (err) { this.logger.warn(`E${episodeNumber} 悬念设计降级: ${(err as Error).message}`); }
-        } else { this.logger.log(`E${episodeNumber} 悬念设计已跳过(配置关闭)`); }
+        } else {
+          hookSkipped = true;
+          this.logger.log(`E${episodeNumber} 悬念设计已跳过(工作流参数或pipeline配置关闭)`);
+        }
         await saveStep('hook_crafted', { hookResult }); await checkpoint('hook_crafted');
         logDrama('hook_done', 'ok', '悬念设计完成');
-        emitEp(11, '悬念设计完成', true);
+        emitEp(
+          11,
+          hookSkipped ? '悬念设计已跳过' : '悬念设计完成',
+          true,
+          hookSkipped ? {
+            nodeId: 'hook-crafter',
+            skipped: true,
+            skipReason: wp.enableHookCrafter ? 'pipeline_disabled' : 'workflow_param_disabled',
+          } : undefined,
+        );
+      }
+
+      if (!review) {
+        review = this.makeSkippedReview(wp, 'review 数据缺失，使用降级评审结果');
+        this.logger.warn(`[E${episodeNumber}] review 缺失，已降级填充默认评审结果`);
       }
 
       if (resumeFrom < 12) { // Step 12: 知识记录 + 持久化
@@ -392,11 +550,12 @@ export class EpisodeWorkflowService {
 
         await this.executionService.completeRun(runId!, {
           overallScore: review.overallScore, shotCount: sbShots.length,
-          duration: storyboard?.totalEstimatedDurationSec ?? 0, totalDurationMs: 0, editRounds: 0,
+          duration: storyboard?.totalEstimatedDurationSec ?? 0, totalDurationMs: 0, editRounds: editRoundsUsed,
+          skippedSteps: skippedStepRecords,
         });
         logDrama('episode_done', 'ok', `E${episodeNumber} 生成完成`, { score: review.overallScore, shotCount: sbShots.length, durationSec: storyboard?.totalEstimatedDurationSec });
         emitEp(12, `E${episodeNumber} 生成完成`, true);
-        this.logger.log(`E${episodeNumber} 完成 — 评分:${review.overallScore} Shot:${sbShots.length} 时长:${storyboard?.totalEstimatedDurationSec}s`);
+        this.logger.log(`E${episodeNumber} 完成 — 评分:${review.overallScore} Shot:${sbShots.length} 时长:${storyboard?.totalEstimatedDurationSec}s 精修轮数:${editRoundsUsed}`);
       }
     } catch (err) {
       logDrama('episode_failed', 'error', (err as Error).message, { error: (err as Error).message });
@@ -418,6 +577,69 @@ export class EpisodeWorkflowService {
   private getResumeStep(checkpoint: string): number {
     const idx = STEP_ORDER.indexOf(checkpoint as StepName);
     return idx; // idx 就是最后完成的步骤号，-1 表示未找到/未开始
+  }
+
+  private buildNodeEnabledMap(nodes: DramaAgentNodeConfig[]): NodeEnabledMap {
+    return nodes.reduce<NodeEnabledMap>((acc, node) => {
+      acc[node.id] = node.isEnabled !== false;
+      return acc;
+    }, {});
+  }
+
+  private isNodeEnabled(map: NodeEnabledMap, nodeId: string, defaultValue = true): boolean {
+    return map[nodeId] ?? defaultValue;
+  }
+
+  private normalizeScore(value: unknown, fallback: number): number {
+    const n = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(n)) return Math.min(10, Math.max(0, fallback));
+    return Math.min(10, Math.max(0, Math.round(n * 10) / 10));
+  }
+
+  private normalizeReview(review: any, wp: DramaWorkflowParams): any {
+    const baseScore = this.normalizeScore(review?.overallScore, wp.qualityPassScore);
+    const verdict = (review?.overallVerdict === 'good' || review?.overallVerdict === 'needs_edit' || review?.overallVerdict === 'major_issues')
+      ? review.overallVerdict
+      : (baseScore >= wp.qualityPassScore ? 'good' : 'needs_edit');
+    const dims = review?.dimensions ?? {};
+
+    return {
+      ...review,
+      overallVerdict: verdict,
+      overallScore: baseScore,
+      dimensions: {
+        visualImpact: this.normalizeScore(dims.visualImpact, baseScore),
+        dialogueNaturalness: this.normalizeScore(dims.dialogueNaturalness, baseScore),
+        pacing: this.normalizeScore(dims.pacing, baseScore),
+        hookStrength: this.normalizeScore(dims.hookStrength, baseScore),
+        consistency: this.normalizeScore(dims.consistency, baseScore),
+        emotionalImpact: this.normalizeScore(dims.emotionalImpact, baseScore),
+      },
+      issuesFound: Array.isArray(review?.issuesFound) ? review.issuesFound : [],
+      strengths: Array.isArray(review?.strengths) ? review.strengths : [],
+    };
+  }
+
+  private makeSkippedReview(wp: DramaWorkflowParams, reason: string, baseReview?: any): any {
+    const normalized = this.normalizeReview(baseReview ?? {}, wp);
+    const strengths = new Set<string>(normalized.strengths ?? []);
+    strengths.add(reason);
+    return {
+      ...normalized,
+      overallVerdict: normalized.overallScore >= wp.qualityPassScore ? 'good' : 'needs_edit',
+      strengths: Array.from(strengths),
+      skipped: true,
+      skipReason: reason,
+    };
+  }
+
+  private shouldRunEdit(review: any, wp: DramaWorkflowParams): boolean {
+    if (!review) return false;
+    const verdict = review.overallVerdict;
+    const needsEditByVerdict = verdict === 'needs_edit' || verdict === 'major_issues';
+    const score = this.normalizeScore(review.overallScore, 0);
+    const belowPassLine = score < wp.qualityPassScore;
+    return needsEditByVerdict && belowPassLine;
   }
 
   private updateDramaState(

@@ -4,7 +4,7 @@ import { message } from 'antd';
 import {
   ArrowLeft, Play, Pause, Loader2, AlertCircle, Film, Clock, Star,
   ChevronRight, Eye, Camera, Users, MapPin, ChevronDown,
-  ChevronUp, Clapperboard, Pencil, Save, X, Lock, Unlock,
+  ChevronUp, Clapperboard, Pencil, Save, X, Lock, Unlock, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -21,7 +21,9 @@ import {
   getDrama, listEpisodes, getEpisode, getVisualAssets,
   getGenerateEpisodeSseUrl, getGenerateMediaSseUrl, getEpisodeProgressSseUrl,
   getGenerationStatus, pauseEpisodeGeneration, type DbRunningItem,
-  getDramaUsage, updateShot, type EpisodeListItem, type ShotPatch, type DramaUsageSummary,
+  getDramaUsage, updateShot, listDramaExecutions, resetProblemShots,
+  type EpisodeListItem, type ShotPatch, type DramaUsageSummary, type DramaSseEvent, type DramaExecutionListItem,
+  type ResetFixTarget,
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
 
@@ -145,6 +147,43 @@ const STEP_LABELS: Record<string, string> = {
   character_variation: '角色变体图',
 };
 
+const EPISODE_STEP_KEY_LABELS: Record<string, string> = {
+  arc_planned: '段落规划',
+  intent_ready: '集导演规划',
+  continuity_checked: '连续性检查',
+  script_drafted: '编剧创作',
+  dialogue_polished: '台词润色',
+  storyboard_drafted: '分镜生成',
+  audio_designed: '音频设计',
+  deterministic_checked: '硬规则校验',
+  reviewed: '质量审核',
+  edited: '精修',
+  pacing_analyzed: '节奏分析',
+  hook_crafted: '悬念设计',
+  recorded: '知识记录',
+};
+
+const PIPELINE_NODE_LABELS: Record<string, string> = {
+  'arc-director': '卷导演',
+  'episode-director': '集导演',
+  'continuity-guard': '连续性守卫',
+  scriptwriter: '编剧',
+  'dialogue-coach': '台词润色',
+  'storyboard-director': '分镜导演',
+  'audio-director': '音频设计',
+  'deterministic-checker': '硬规则校验',
+  'script-reviewer': '质量审核',
+  'script-editor': '精修编辑',
+  'pacing-analyzer': '节奏分析',
+  'hook-crafter': '悬念设计',
+  'episode-recorder': '知识记录',
+};
+
+const SKIP_REASON_LABELS: Record<string, string> = {
+  pipeline_disabled: 'Pipeline 节点禁用',
+  workflow_param_disabled: '工作流参数关闭',
+};
+
 const CONTINUITY_WARNING_LABELS: Record<string, string> = {
   character_appearance_mismatch: '角色外貌与设定不一致',
   location_continuity_break: '场景连续性断裂',
@@ -164,7 +203,31 @@ const CONTINUITY_SEVERITY_LABELS: Record<string, string> = {
   block: '阻断',
 };
 
+type QcFixTarget = Exclude<ResetFixTarget, 'all'>;
+
+const FIX_TARGET_LABELS: Record<ResetFixTarget, string> = {
+  all: '全部',
+  identity: '身份',
+  style: '风格',
+  camera: '构图',
+  motion: '动作',
+};
+
+const FIX_TARGET_ORDER: QcFixTarget[] = ['identity', 'style', 'camera', 'motion'];
+
 const fmtUsd = (n?: number) => `$${Number(n ?? 0).toFixed(4)}`;
+
+const resolveSkippedStepLabel = (input: { nodeId?: string; stepKey?: string; step?: string; message?: string }): string => {
+  if (input.nodeId && PIPELINE_NODE_LABELS[input.nodeId]) return PIPELINE_NODE_LABELS[input.nodeId];
+  if (input.stepKey && EPISODE_STEP_KEY_LABELS[input.stepKey]) return EPISODE_STEP_KEY_LABELS[input.stepKey];
+  if (input.step && STEP_LABELS[input.step]) return STEP_LABELS[input.step];
+  return input.message || input.step || '未知步骤';
+};
+
+const resolveSkipReasonLabel = (skipReason?: string): string => {
+  if (skipReason && SKIP_REASON_LABELS[skipReason]) return SKIP_REASON_LABELS[skipReason];
+  return skipReason || '已跳过';
+};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -189,18 +252,83 @@ interface Shot {
   visualPrompt: string; subtitle?: { text: string; style: string } | null;
   estimatedDurationSec: number; transitionToNext: string;
   firstFrameImageUrl?: string | null; lastFrameImageUrl?: string | null;
+  isMasterShot?: boolean;
+  regenPriority?: 'high' | 'medium' | 'low';
+  qualityTier?: 'golden' | 'standard' | 'filler';
   isFlashback?: boolean;
+  isPreview?: boolean;
   specialTechnique?: string | null;
   isHumanEdited?: boolean;
   humanEditedAt?: string | null;
 }
-interface ShotMedia { imageUrl?: string; videoUrl?: string; }
+interface ShotMediaQc {
+  identityScore?: number;
+  styleScore?: number;
+  readabilityScore?: number;
+  score?: number;
+  passed?: boolean;
+  attempts?: number;
+  issues?: string[];
+  failReasons?: QcFixTarget[];
+  recommendedFix?: QcFixTarget;
+}
+interface ShotMedia {
+  imageUrl?: string;
+  videoUrl?: string;
+  ttsUrl?: string;
+  lastFrameImageUrl?: string;
+  status?: string;
+  qc?: ShotMediaQc;
+}
 interface ContinuityWarning {
   type: string;
   description: string;
   severity: 'warning' | 'block' | string;
   affectedEntityId?: string;
 }
+interface SkippedStepItem {
+  key: string;
+  label: string;
+  reason: string;
+}
+
+const isProblemShotMediaEntry = (shot: Shot, media: ShotMedia | null | undefined, episodeMediaStatus?: string): boolean => {
+  if (!media) return false;
+  if (shot.isPreview) return false;
+  if (media.qc?.passed === false) return true;
+  if (media.status === 'failed' || media.status === 'submitted') return true;
+  if (media.status === 'completed' && !media.videoUrl) return true;
+  if (episodeMediaStatus === 'failed' && media.status === 'image_done' && !media.videoUrl && !shot.isFlashback) return true;
+  return false;
+};
+
+const isHighPriorityShot = (shot: Shot): boolean =>
+  !!(shot.isMasterShot || shot.regenPriority === 'high' || shot.qualityTier === 'golden');
+
+const isQcFixTarget = (value: unknown): value is QcFixTarget =>
+  value === 'identity' || value === 'style' || value === 'camera' || value === 'motion';
+
+const resolveShotFixTags = (
+  shot: Shot,
+  media: ShotMedia | null | undefined,
+  reviewConsistencyRiskIds: Set<string>,
+  reviewCameraRiskIds: Set<string>,
+): Set<QcFixTarget> => {
+  const tags = new Set<QcFixTarget>();
+  const qc = media?.qc;
+  if (isQcFixTarget(qc?.recommendedFix)) tags.add(qc.recommendedFix);
+  for (const reason of qc?.failReasons ?? []) {
+    if (isQcFixTarget(reason)) tags.add(reason);
+  }
+  if (reviewConsistencyRiskIds.has(shot.shotId)) {
+    tags.add('identity');
+    tags.add('style');
+  }
+  if (reviewCameraRiskIds.has(shot.shotId)) tags.add('camera');
+  const likelyMotionProblem = media?.status === 'failed' && !media?.videoUrl && !shot.isPreview;
+  if (likelyMotionProblem) tags.add('motion');
+  return tags;
+};
 
 // ─── ShotEditPanel ────────────────────────────────────────────────────────────
 
@@ -391,6 +519,7 @@ const ShotCard: React.FC<ShotCardProps> = ({
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const imgUrl = mediaItem?.imageUrl ?? shot.firstFrameImageUrl ?? shot.lastFrameImageUrl;
+  const qc = mediaItem?.qc;
 
   const handleSaved = (patch: ShotPatch) => {
     setEditing(false);
@@ -416,7 +545,9 @@ const ShotCard: React.FC<ShotCardProps> = ({
               {String(index + 1).padStart(3, '0')}
             </button>
             {shot.isHumanEdited && (
-              <Lock className="h-2.5 w-2.5 text-violet-500" title="人工已锁定" />
+              <span title="人工已锁定">
+                <Lock className="h-2.5 w-2.5 text-violet-500" />
+              </span>
             )}
             {imgUrl && (
               <div className="w-8 h-6 rounded overflow-hidden bg-muted shrink-0">
@@ -455,6 +586,24 @@ const ShotCard: React.FC<ShotCardProps> = ({
               {shot.isHumanEdited && (
                 <span className="text-[10px] bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 px-1.5 py-0.5 rounded flex items-center gap-0.5">
                   <Lock className="h-2 w-2" />已锁定
+                </span>
+              )}
+              {qc && (
+                <span
+                  className={cn(
+                    'text-[10px] px-1.5 py-0.5 rounded',
+                    qc.passed === false
+                      ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                      : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300',
+                  )}
+                >
+                  {qc.passed === false ? 'QC未过' : 'QC通过'}
+                  {typeof qc.score === 'number' ? ` ${qc.score.toFixed(1)}` : ''}
+                </span>
+              )}
+              {qc?.recommendedFix && (
+                <span className="text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 rounded">
+                  建议修复：{FIX_TARGET_LABELS[qc.recommendedFix]}
                 </span>
               )}
             </div>
@@ -503,6 +652,36 @@ const ShotCard: React.FC<ShotCardProps> = ({
             {imgUrl && (
               <div className="rounded-lg overflow-hidden bg-muted">
                 <img src={imgUrl} alt={`shot ${index + 1}`} className="w-full object-cover max-h-48" />
+              </div>
+            )}
+
+            {qc && (
+              <div>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">画面质检</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {[
+                    { label: '总分', value: typeof qc.score === 'number' ? qc.score.toFixed(1) : '-' },
+                    { label: '人物一致性', value: typeof qc.identityScore === 'number' ? qc.identityScore.toFixed(1) : '-' },
+                    { label: '风格一致性', value: typeof qc.styleScore === 'number' ? qc.styleScore.toFixed(1) : '-' },
+                    { label: '构图可读性', value: typeof qc.readabilityScore === 'number' ? qc.readabilityScore.toFixed(1) : '-' },
+                    { label: '重试次数', value: String(qc.attempts ?? 1) },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-md bg-muted/50 px-2 py-1.5">
+                      <p className="text-[9px] text-muted-foreground">{item.label}</p>
+                      <p className="text-[11px] font-medium mt-0.5">{item.value}</p>
+                    </div>
+                  ))}
+                </div>
+                {qc.failReasons?.length ? (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-1.5">
+                    归因：{qc.failReasons.map((x) => FIX_TARGET_LABELS[x]).join('、')}
+                  </p>
+                ) : null}
+                {qc.issues?.length ? (
+                  <p className="text-[11px] text-red-600 dark:text-red-300 mt-1.5">
+                    问题：{qc.issues.join('；')}
+                  </p>
+                ) : null}
               </div>
             )}
 
@@ -683,7 +862,7 @@ const CharacterCard: React.FC<{ char: Character; imageUrl?: string; viewImages?:
                 {char.voiceProfile?.timbre && <p><span className="text-muted-foreground">音色：</span>{char.voiceProfile.timbre}</p>}
                 {char.voiceProfile?.speakingStyle && <p><span className="text-muted-foreground">配音风格：</span>{char.voiceProfile.speakingStyle}</p>}
                 {char.voiceProfile?.catchphrase && (
-                  <p><span className="text-muted-foreground">口头禅：</span><span className="italic">"{char.voiceProfile.catchphrase}"</span></p>
+                  <p><span className="text-muted-foreground">口头禅：</span><span className="italic">&quot;{char.voiceProfile.catchphrase}&quot;</span></p>
                 )}
               </div>
             )}
@@ -756,6 +935,7 @@ const DramaWorkbench: React.FC = () => {
   const [genProgress, setGenProgress] = useState(0);
   const [genStep, setGenStep] = useState('');
   const [lastError, setLastError] = useState<string | null>(null);
+  const [skippedSteps, setSkippedSteps] = useState<SkippedStepItem[]>([]);
   const [paused, setPaused] = useState(false);
   const [pauseLoading, setPauseLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -763,11 +943,14 @@ const DramaWorkbench: React.FC = () => {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [mediaGenEp, setMediaGenEp] = useState<number | null>(null);
   const [mediaGenProgress, setMediaGenProgress] = useState(0);
+  const [problemResetEp, setProblemResetEp] = useState<number | null>(null);
+  const [problemResetMode, setProblemResetMode] = useState<'all' | 'high' | QcFixTarget | null>(null);
   const mediaAbortRef = useRef<AbortController | null>(null);
   const [showMediaConfirm, setShowMediaConfirm] = useState(false);
   const [usage, setUsage] = useState<DramaUsageSummary | null>(null);
   const [usageExpanded, setUsageExpanded] = useState(false);
   const [expandedEpisodeUsage, setExpandedEpisodeUsage] = useState<number | null>(null);
+  const [latestExecByEpisode, setLatestExecByEpisode] = useState<Map<number, DramaExecutionListItem>>(new Map());
   const [dbRunning, setDbRunning] = useState<DbRunningItem[]>([]);
   const [assetImages, setAssetImages] = useState<Map<string, string>>(new Map());
   const [assetViewImages, setAssetViewImages] = useState<Map<string, Array<{ viewAngle: string; imageUrl: string }>>>(new Map());
@@ -778,13 +961,19 @@ const DramaWorkbench: React.FC = () => {
     if (!dramaId) return;
     try {
       setLoading(true);
-      const [d, epRes, usageRes, assetsRes] = await Promise.all([
+      const [d, epRes, usageRes, assetsRes, execRes] = await Promise.all([
         getDrama(dramaId), listEpisodes(dramaId), getDramaUsage(dramaId),
         getVisualAssets(dramaId).catch(() => ({ assets: [] as any[] })),
+        listDramaExecutions(dramaId, { latestPerEpisode: true, limit: 80, includeCreation: false }).catch(() => ({ executions: [] as DramaExecutionListItem[] })),
       ]);
       setDrama(d);
       setEpisodes(epRes.episodes);
       setUsage(usageRes);
+      const execMap = new Map<number, DramaExecutionListItem>();
+      (execRes.executions ?? []).forEach((exec) => {
+        if (exec.episodeNumber > 0 && !execMap.has(exec.episodeNumber)) execMap.set(exec.episodeNumber, exec);
+      });
+      setLatestExecByEpisode(execMap);
       const imgMap = new Map<string, string>();
       const viewMap = new Map<string, Array<{ viewAngle: string; imageUrl: string }>>();
       (assetsRes.assets ?? []).forEach((a: any) => {
@@ -822,14 +1011,40 @@ const DramaWorkbench: React.FC = () => {
         for (const line of lines) {
           if (!line.startsWith('data:')) continue;
           try {
-            const p = JSON.parse(line.slice(5).trim());
-            if (p._type === 'heartbeat') continue;
-            if (p._type === 'result') { onResult?.(p.message ?? '生成完成'); stopped = true; break; }
-            if (p.error) { setLastError(p.error); message.error(p.error); stopped = true; break; }
-            if (p.step === 'paused') { setPaused(true); setPauseLoading(false); stopped = true; break; }
-            if (p.totalSteps > 0)
-              setGenProgress(Math.round(((p.stepIndex + (p.done ? 1 : 0.5)) / p.totalSteps) * 100));
-            setGenStep(p.message ?? p.step ?? '');
+            const p = JSON.parse(line.slice(5).trim()) as DramaSseEvent;
+            if (p._type === 'heartbeat' || p._type === 'info') continue;
+            if (p._type === 'error' || p.error || p.terminalStatus === 'failed') {
+              const err = p.error || p.message || '生成失败';
+              setLastError(err);
+              message.error(err);
+              stopped = true;
+              break;
+            }
+            if (p._type === 'result') {
+              if (p.terminalStatus === 'paused' || Boolean((p.data as any)?.paused)) {
+                setPaused(true);
+                setPauseLoading(false);
+              } else {
+                onResult?.(p.message ?? '生成完成');
+              }
+              stopped = true;
+              break;
+            }
+            if (p._type === 'progress') {
+              if ((p.totalSteps ?? 0) > 0) {
+                setGenProgress(Math.round((((p.stepIndex ?? 0) + ((p.done ?? false) ? 1 : 0.5)) / (p.totalSteps ?? 1)) * 100));
+              }
+              setGenStep(p.message ?? p.step ?? '');
+              if (p.skipped) {
+                const key = p.nodeId ?? p.stepKey ?? p.step ?? `ep_${p.stepIndex ?? 0}`;
+                const label = resolveSkippedStepLabel(p);
+                const reason = resolveSkipReasonLabel(p.skipReason);
+                setSkippedSteps((prev) => {
+                  if (prev.some((item) => item.key === key)) return prev;
+                  return [...prev, { key, label, reason }];
+                });
+              }
+            }
           } catch { /* skip */ }
         }
       }
@@ -863,6 +1078,7 @@ const DramaWorkbench: React.FC = () => {
         } else if (liveRunning) {
           if (livePaused) setPauseLoading(true);
           setGenerating(true);
+          setSkippedSteps([]);
           setGenProgress(s.episode.progress ?? 0);
           setGenStep(s.episode.lastStep ?? '生成中...');
           readSseStream(getEpisodeProgressSseUrl(dramaId));
@@ -877,6 +1093,7 @@ const DramaWorkbench: React.FC = () => {
     if (!dramaId) return;
     setPaused(false); setPauseLoading(false);
     setGenerating(true); setGenProgress(0); setGenStep(''); setLastError(null); setDbRunning([]);
+    setSkippedSteps([]);
     await readSseStream(getGenerateEpisodeSseUrl(dramaId, count), (msg) => message.success(msg));
   }, [dramaId, readSseStream]);
 
@@ -914,7 +1131,8 @@ const DramaWorkbench: React.FC = () => {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
-      while (true) {
+      let stopped = false;
+      while (!stopped) {
         const { done, value } = await reader.read();
         if (done) break;
         buf += decoder.decode(value, { stream: true });
@@ -922,11 +1140,21 @@ const DramaWorkbench: React.FC = () => {
         for (const line of lines) {
           if (!line.startsWith('data:')) continue;
           try {
-            const p = JSON.parse(line.slice(5).trim());
-            if (p._type === 'heartbeat') continue;
-            if (p._type === 'result') { message.success('媒体生成完成'); break; }
-            if (p.error) { message.error(p.error); break; }
-            if (p.totalSteps > 0) setMediaGenProgress(Math.round(((p.stepIndex ?? 0) + (p.done ? 1 : 0.5)) / p.totalSteps * 100));
+            const p = JSON.parse(line.slice(5).trim()) as DramaSseEvent;
+            if (p._type === 'heartbeat' || p._type === 'info') continue;
+            if (p._type === 'error' || p.error || p.terminalStatus === 'failed') {
+              message.error(p.error || p.message || '媒体生成失败');
+              stopped = true;
+              break;
+            }
+            if (p._type === 'result') {
+              message.success(p.message || '媒体生成完成');
+              stopped = true;
+              break;
+            }
+            if (p._type === 'progress' && (p.totalSteps ?? 0) > 0) {
+              setMediaGenProgress(Math.round((((p.stepIndex ?? 0) + ((p.done ?? false) ? 1 : 0.5)) / (p.totalSteps ?? 1)) * 100));
+            }
           } catch { /* skip */ }
         }
       }
@@ -936,6 +1164,44 @@ const DramaWorkbench: React.FC = () => {
     } catch (e: any) {
       if (e?.name !== 'AbortError') message.error(e?.message ?? '媒体生成失败');
     } finally { setMediaGenEp(null); setMediaGenProgress(0); }
+  };
+
+  const handleRegenerateProblemShots = async (
+    episodeNumber: number,
+    opts?: { onlyHighPriority?: boolean; fixTarget?: ResetFixTarget },
+  ) => {
+    if (!dramaId) return;
+    const onlyHighPriority = opts?.onlyHighPriority ?? false;
+    const fixTarget = opts?.fixTarget ?? 'all';
+    const activeMode: 'all' | 'high' | QcFixTarget = onlyHighPriority ? 'high' : fixTarget;
+    setProblemResetEp(episodeNumber);
+    setProblemResetMode(activeMode);
+    setShowMediaConfirm(false);
+    try {
+      const result = await resetProblemShots(dramaId, episodeNumber, {
+        includeReviewRisks: true,
+        onlyHighPriority,
+        fixTarget,
+      });
+      const scopeLabel = onlyHighPriority
+        ? '高优先'
+        : (fixTarget === 'all' ? '全部' : `${FIX_TARGET_LABELS[fixTarget]}类`);
+      if (result.resetCount > 0) {
+        message.success(`已重置 ${result.resetCount} 个${scopeLabel}问题镜头，开始重新生成媒体`);
+      } else {
+        message.info(`未发现${scopeLabel}问题镜头，直接开始媒体生成`);
+      }
+      if (previewEp && (previewEp as any).episodeNumber === episodeNumber) {
+        setPreviewEp(await getEpisode(dramaId, episodeNumber));
+      }
+      await fetchData();
+      await handleGenerateMedia(episodeNumber);
+    } catch (e: any) {
+      message.error(e?.message ?? '问题镜头重置失败');
+    } finally {
+      setProblemResetEp(null);
+      setProblemResetMode(null);
+    }
   };
 
   // 人工编辑 Shot 后在本地同步更新，无需重新请求
@@ -970,6 +1236,8 @@ const DramaWorkbench: React.FC = () => {
   const state = (drama as any).state as Record<string, unknown> | undefined;
   const seed = state?.seed as Record<string, unknown> | undefined;
   const outline = state?.seriesOutline as Record<string, unknown> | undefined;
+  const catharsisType = typeof seed?.catharsisType === 'string' ? seed.catharsisType : '';
+  const logline = typeof seed?.logline === 'string' ? seed.logline : '';
   const characters = (state?.characters as Character[]) ?? [];
   const locations = (state?.locations as Location[]) ?? [];
   const charNames = new Map<string, string>(characters.map(c => [c.characterId, c.name]));
@@ -978,8 +1246,38 @@ const DramaWorkbench: React.FC = () => {
   const shots = ((previewEp as any)?.storyboard?.shots as Shot[]) ?? [];
   const shotMediaMap = ((previewEp as any)?.shotMediaMap as Record<string, ShotMedia>) ?? {};
   const generatedShotCount = Object.keys(shotMediaMap).filter(k => shotMediaMap[k]?.imageUrl).length;
+  const reviewConsistencyRiskIds = new Set(
+    ((((previewEp as any)?.review?.consistencyRiskShots as Array<{ shotId?: string }> | undefined) ?? [])
+      .map((r) => r?.shotId)
+      .filter((sid): sid is string => !!sid)),
+  );
+  const reviewCameraRiskIds = new Set(
+    ((((previewEp as any)?.review?.cameraReadabilityRiskShots as Array<{ shotId?: string }> | undefined) ?? [])
+      .map((r) => r?.shotId)
+      .filter((sid): sid is string => !!sid)),
+  );
+  const reviewRiskShotIds = new Set<string>([...reviewConsistencyRiskIds, ...reviewCameraRiskIds]);
+  const problemShotIds = shots
+    .filter((shot) =>
+      isProblemShotMediaEntry(shot, shotMediaMap[shot.shotId], (previewEp as any)?.mediaStatus)
+      || reviewRiskShotIds.has(shot.shotId),
+    )
+    .map((shot) => shot.shotId);
+  const problemShotSet = new Set(problemShotIds);
+  const problemShotCount = problemShotIds.length;
+  const highPriorityProblemShotCount = shots.filter((shot) =>
+    problemShotSet.has(shot.shotId) && isHighPriorityShot(shot),
+  ).length;
+  const fixTargetCounts: Record<QcFixTarget, number> = { identity: 0, style: 0, camera: 0, motion: 0 };
+  for (const shot of shots) {
+    if (!problemShotSet.has(shot.shotId)) continue;
+    const tags = resolveShotFixTags(shot, shotMediaMap[shot.shotId], reviewConsistencyRiskIds, reviewCameraRiskIds);
+    for (const tag of tags) fixTargetCounts[tag] += 1;
+  }
   const humanEditedCount = shots.filter(s => s.isHumanEdited).length;
   const previewEpNum = (previewEp as any)?.episodeNumber as number | undefined;
+  const previewExec = previewEpNum !== undefined ? latestExecByEpisode.get(previewEpNum) : undefined;
+  const previewSkippedSteps = previewExec?.skippedSteps ?? [];
   const continuityResult = ((previewEp as any)?.continuity ?? (previewEp as any)?.continuityCheck ?? null) as
     { pass?: boolean; warnings?: ContinuityWarning[]; contextInjections?: string[] } | null;
   const continuityWarnings = continuityResult?.warnings ?? [];
@@ -1004,11 +1302,11 @@ const DramaWorkbench: React.FC = () => {
           <span>{(drama as any).genre}</span>
           <span>·</span>
           <span>{(drama as any).episodesGenerated ?? 0} / {(outline?.totalPlannedEpisodes as number) ?? '?'} 集</span>
-          {seed?.catharsisType && <><span>·</span><span>爽点：{seed.catharsisType as string}</span></>}
+          {catharsisType && <><span>·</span><span>爽点：{catharsisType}</span></>}
           {characters.length > 0 && <><span>·</span><span>{characters.length} 角色</span></>}
           {locations.length > 0 && <><span>·</span><span>{locations.length} 场景</span></>}
         </div>
-        {seed?.logline && <p className="mt-3 text-sm text-muted-foreground leading-relaxed">{seed.logline as string}</p>}
+        {logline && <p className="mt-3 text-sm text-muted-foreground leading-relaxed">{logline}</p>}
       </div>
 
       {usage && (
@@ -1184,6 +1482,18 @@ const DramaWorkbench: React.FC = () => {
                   <span className="text-muted-foreground ml-auto tabular-nums">{genProgress}%</span>
                 </div>
                 <Progress value={genProgress} className="h-1.5" />
+                {skippedSteps.length > 0 && (
+                  <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-900/15 px-2.5 py-2 space-y-1">
+                    <p className="text-[11px] font-medium text-amber-800 dark:text-amber-300">本轮已跳过步骤</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {skippedSteps.map((item) => (
+                        <Badge key={item.key} variant="outline" className="text-[10px] border-amber-300 text-amber-700 dark:text-amber-300">
+                          {item.label} · {item.reason}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {!pauseLoading && (
                   <Button
                     variant="outline"
@@ -1250,64 +1560,80 @@ const DramaWorkbench: React.FC = () => {
             <Card><CardContent className="py-12 text-center text-muted-foreground">尚未生成任何集</CardContent></Card>
           ) : (
             <div className="space-y-2">
-              {episodes.map(ep => (
-                <Card
-                  key={ep.id}
-                  className="group cursor-pointer hover:border-primary/30 transition-all"
-                  onClick={() => history.push(`/novel/drama/${dramaId}/episodes/${ep.episodeNumber}`)}
-                >
-                  <CardContent className="flex items-center gap-4 p-4">
-                    <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 font-bold text-sm shrink-0">
-                      {ep.episodeNumber}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{ep.title}</p>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                        <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" />{ep.totalDurationSec}s</span>
-                        <span className="inline-flex items-center gap-1"><Camera className="h-3 w-3" />{ep.shotCount} 镜</span>
-                        {ep.mediaStatus === 'completed' && (
-                          <span className="text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1">
-                            <Film className="h-3 w-3" />已生成
-                          </span>
-                        )}
-                        {(ep.mediaStatus === 'generating_first_frames' || ep.mediaStatus === 'generating_images' || ep.mediaStatus === 'generating_videos') && (
-                          <span className="text-amber-600 inline-flex items-center gap-1">
-                            <Loader2 className="h-3 w-3 animate-spin" />生成中
-                          </span>
-                        )}
+              {episodes.map((ep) => {
+                const epExec = latestExecByEpisode.get(ep.episodeNumber);
+                const skippedCount = epExec?.skippedCount ?? 0;
+                const skippedTooltip = (epExec?.skippedSteps ?? [])
+                  .slice(0, 8)
+                  .map((s) => `${resolveSkippedStepLabel({ nodeId: s.nodeId, stepKey: s.stepKey, message: s.message })} · ${resolveSkipReasonLabel(s.skipReason)}`)
+                  .join('\n');
+                return (
+                  <Card
+                    key={ep.id}
+                    className="group cursor-pointer hover:border-primary/30 transition-all"
+                    onClick={() => history.push(`/novel/drama/${dramaId}/episodes/${ep.episodeNumber}`)}
+                  >
+                    <CardContent className="flex items-center gap-4 p-4">
+                      <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 font-bold text-sm shrink-0">
+                        {ep.episodeNumber}
                       </div>
-                    </div>
-                    {ep.overallScore != null && (() => {
-                      const score = Number(ep.overallScore);
-                      if (!Number.isFinite(score)) return null;
-                      return (
-                        <span className={cn('text-sm font-semibold tabular-nums',
-                          score >= 8 ? 'text-emerald-600' : score >= 7 ? 'text-amber-600' : 'text-red-500')}>
-                          <Star className="h-3.5 w-3.5 inline mr-0.5" />{score.toFixed(1)}
-                        </span>
-                      );
-                    })()}
-                    <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={() => handlePreview(ep)}
-                      >
-                        <Eye className="h-3 w-3" />脚本
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="h-7 text-xs gap-1"
-                        onClick={() => history.push(`/novel/drama/${dramaId}/episodes/${ep.episodeNumber}`)}
-                      >
-                        <Clapperboard className="h-3 w-3" />制作台
-                      </Button>
-                    </div>
-                    <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary transition-colors" />
-                  </CardContent>
-                </Card>
-              ))}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{ep.title}</p>
+                        <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                          <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" />{ep.totalDurationSec}s</span>
+                          <span className="inline-flex items-center gap-1"><Camera className="h-3 w-3" />{ep.shotCount} 镜</span>
+                          {ep.mediaStatus === 'completed' && (
+                            <span className="text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1">
+                              <Film className="h-3 w-3" />已生成
+                            </span>
+                          )}
+                          {(ep.mediaStatus === 'generating_first_frames' || ep.mediaStatus === 'generating_images' || ep.mediaStatus === 'generating_videos') && (
+                            <span className="text-amber-600 inline-flex items-center gap-1">
+                              <Loader2 className="h-3 w-3 animate-spin" />生成中
+                            </span>
+                          )}
+                          {skippedCount > 0 && (
+                            <span
+                              className="text-amber-700 dark:text-amber-300 inline-flex items-center gap-1"
+                              title={skippedTooltip || '存在流程跳过项'}
+                            >
+                              <AlertCircle className="h-3 w-3" />跳过 {skippedCount} 步
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {ep.overallScore !== null && (() => {
+                        const score = Number(ep.overallScore);
+                        if (!Number.isFinite(score)) return null;
+                        return (
+                          <span className={cn('text-sm font-semibold tabular-nums',
+                            score >= 8 ? 'text-emerald-600' : score >= 7 ? 'text-amber-600' : 'text-red-500')}>
+                            <Star className="h-3.5 w-3.5 inline mr-0.5" />{score.toFixed(1)}
+                          </span>
+                        );
+                      })()}
+                      <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => handlePreview(ep)}
+                        >
+                          <Eye className="h-3 w-3" />脚本
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-7 text-xs gap-1"
+                          onClick={() => history.push(`/novel/drama/${dramaId}/episodes/${ep.episodeNumber}`)}
+                        >
+                          <Clapperboard className="h-3 w-3" />制作台
+                        </Button>
+                      </div>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary transition-colors" />
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </TabsContent>
@@ -1394,33 +1720,133 @@ const DramaWorkbench: React.FC = () => {
                         <Eye className="h-3.5 w-3.5" />{generatedShotCount}/{shots.length} 张图
                       </span>
                     )}
+                    {problemShotCount > 0 && (
+                      <span className="inline-flex items-center gap-1.5 text-red-600">
+                        <AlertCircle className="h-3.5 w-3.5" />{problemShotCount} 个问题镜头
+                      </span>
+                    )}
+                    {problemShotCount > 0 && FIX_TARGET_ORDER.some((tag) => fixTargetCounts[tag] > 0) && (
+                      <span className="inline-flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
+                        <Star className="h-3.5 w-3.5" />
+                        {FIX_TARGET_ORDER.filter((tag) => fixTargetCounts[tag] > 0)
+                          .map((tag) => `${FIX_TARGET_LABELS[tag]}:${fixTargetCounts[tag]}`)
+                          .join(' · ')}
+                      </span>
+                    )}
                     {humanEditedCount > 0 && (
                       <span className="inline-flex items-center gap-1.5 text-violet-600">
                         <Lock className="h-3.5 w-3.5" />{humanEditedCount} 镜锁定
                       </span>
                     )}
+                    {previewSkippedSteps.length > 0 && (
+                      <span className="inline-flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
+                        <AlertCircle className="h-3.5 w-3.5" />跳过 {previewSkippedSteps.length} 步
+                      </span>
+                    )}
                   </div>
-                  {(previewEp as any).mediaStatus !== 'completed' && previewEpNum !== undefined && (
-                    !showMediaConfirm ? (
-                      <Button size="sm" variant="outline" disabled={mediaGenEp !== null} onClick={() => setShowMediaConfirm(true)}>
-                        <Film className="h-3.5 w-3.5 mr-1.5" />生成媒体
-                      </Button>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <p className="text-xs text-muted-foreground">确认生成？将消耗积分</p>
-                        <Button size="sm" disabled={mediaGenEp !== null} onClick={() => handleGenerateMedia(previewEpNum)}>
-                          {mediaGenEp === previewEpNum
-                            ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />{mediaGenProgress}%</>
-                            : '确认'}
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setShowMediaConfirm(false)}>取消</Button>
-                      </div>
-                    )
+
+                  {previewEpNum !== undefined && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {problemShotCount > 0 && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={mediaGenEp !== null || problemResetEp !== null}
+                            onClick={() => handleRegenerateProblemShots(previewEpNum, { onlyHighPriority: false, fixTarget: 'all' })}
+                          >
+                            {problemResetEp === previewEpNum && problemResetMode === 'all' ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                全量重置中...
+                              </>
+                            ) : (
+                              <>
+                                <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                                重生全部问题镜头
+                              </>
+                            )}
+                          </Button>
+                          {highPriorityProblemShotCount > 0 && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={mediaGenEp !== null || problemResetEp !== null}
+                              onClick={() => handleRegenerateProblemShots(previewEpNum, { onlyHighPriority: true, fixTarget: 'all' })}
+                            >
+                              {problemResetEp === previewEpNum && problemResetMode === 'high' ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                  高优先重置中...
+                                </>
+                              ) : (
+                                <>
+                                  <Star className="h-3.5 w-3.5 mr-1.5" />
+                                  仅高优先重生（{highPriorityProblemShotCount}）
+                                </>
+                              )}
+                            </Button>
+                          )}
+                          {FIX_TARGET_ORDER.filter((target) => fixTargetCounts[target] > 0).map((target) => (
+                            <Button
+                              key={target}
+                              size="sm"
+                              variant="outline"
+                              disabled={mediaGenEp !== null || problemResetEp !== null}
+                              onClick={() => handleRegenerateProblemShots(previewEpNum, { onlyHighPriority: false, fixTarget: target })}
+                            >
+                              {problemResetEp === previewEpNum && problemResetMode === target ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                  {FIX_TARGET_LABELS[target]}重置中...
+                                </>
+                              ) : (
+                                <>
+                                  <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                                  仅修{FIX_TARGET_LABELS[target]}（{fixTargetCounts[target]}）
+                                </>
+                              )}
+                            </Button>
+                          ))}
+                        </>
+                      )}
+
+                      {(previewEp as any).mediaStatus !== 'completed' && (
+                        !showMediaConfirm ? (
+                          <Button size="sm" variant="outline" disabled={mediaGenEp !== null || problemResetEp !== null} onClick={() => setShowMediaConfirm(true)}>
+                            <Film className="h-3.5 w-3.5 mr-1.5" />生成媒体
+                          </Button>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <p className="text-xs text-muted-foreground">确认生成？将消耗积分</p>
+                            <Button size="sm" disabled={mediaGenEp !== null || problemResetEp !== null} onClick={() => handleGenerateMedia(previewEpNum)}>
+                              {mediaGenEp === previewEpNum
+                                ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />{mediaGenProgress}%</>
+                                : '确认'}
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setShowMediaConfirm(false)}>取消</Button>
+                          </div>
+                        )
+                      )}
+                    </div>
                   )}
                 </div>
 
-                {(previewEp as any).videoUrl && (
-                  <div className="rounded-lg overflow-hidden bg-black">
+	                {previewSkippedSteps.length > 0 && (
+	                  <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-900/15 p-2.5">
+	                    <p className="text-[11px] font-medium text-amber-800 dark:text-amber-300 mb-1.5">流程跳过记录</p>
+	                    <div className="flex flex-wrap gap-1.5">
+	                      {previewSkippedSteps.slice(0, 12).map((step, idx) => (
+	                        <Badge key={`${step.stepKey ?? 'step'}-${step.nodeId ?? ''}-${idx}`} variant="outline" className="text-[10px] border-amber-300 text-amber-700 dark:text-amber-300">
+	                          {resolveSkippedStepLabel({ nodeId: step.nodeId, stepKey: step.stepKey, message: step.message })} · {resolveSkipReasonLabel(step.skipReason)}
+	                        </Badge>
+	                      ))}
+	                    </div>
+	                  </div>
+	                )}
+
+	                {(previewEp as any).videoUrl && (
+	                  <div className="rounded-lg overflow-hidden bg-black">
                     <video src={(previewEp as any).videoUrl} controls className="w-full max-h-56" />
                   </div>
                 )}

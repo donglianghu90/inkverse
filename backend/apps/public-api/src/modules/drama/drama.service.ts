@@ -12,7 +12,7 @@ import { EpisodeEntity } from './entities/episode.entity';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
 import { VisualAssetEntity } from './entities/visual-asset.entity';
 import { CreateDramaDto } from './dto/create-drama.dto';
-import { DramaState, ContentMode } from './schemas/drama-state.schemas';
+import { DramaState, ContentMode, EpisodeStoryboard, Shot } from './schemas/drama-state.schemas';
 import { LlmService } from '../novel/llm/llm.service';
 import { LlmTraceLoggerService } from '../novel/llm/llm-trace-logger.service';
 import { DramaSeedAnalyzerAgent } from './agents/drama-seed-analyzer.agent';
@@ -29,6 +29,13 @@ import { CharacterViewAngle, buildViewAnglePrompt } from '../media/rendering/ren
 import { DramaGenreTemplateService } from './drama-genre-template.service';
 
 interface CreateDramaOptions { userId?: string; progressDramaId?: string; }
+type ProblemFixTarget = 'all' | 'identity' | 'style' | 'camera' | 'motion';
+
+interface ReviewRiskShotSets {
+  all: Set<string>;
+  consistency: Set<string>;
+  camera: Set<string>;
+}
 
 const CREATION_CHECKPOINTS = ['seed_analyzed', 'outline_planned', 'visual_designed', 'assets_generated', 'profile_ready', 'creation_done'] as const;
 
@@ -119,8 +126,25 @@ export class DramaService implements OnModuleInit {
 
   async runCreationPipeline(dramaId: string, dto: CreateDramaDto, opts: CreateDramaOptions = {}): Promise<void> {
     const TOTAL_STEPS = 6;
-    const emitCreate = (stepIndex: number, msg: string, done = false) =>
-      this.progressService.emit({ dramaId, phase: 'create', step: `create_${stepIndex}`, stepIndex, totalSteps: TOTAL_STEPS, message: msg, done });
+    const emitCreate = (
+      stepIndex: number,
+      msg: string,
+      done = false,
+      terminal = false,
+      terminalStatus?: 'success' | 'failed' | 'paused',
+      error?: string,
+    ) => this.progressService.emit({
+      dramaId,
+      runType: 'create',
+      step: `create_${stepIndex}`,
+      stepIndex,
+      totalSteps: TOTAL_STEPS,
+      message: msg,
+      done,
+      terminal,
+      terminalStatus,
+      error,
+    });
     const logDrama = (step: string, status: 'ok' | 'error', message?: string, meta?: Record<string, unknown>) =>
       this.traceLogger.logDramaWorkflowEvent({ dramaId, phase: 'create', step, status, message, ...meta });
 
@@ -197,9 +221,10 @@ export class DramaService implements OnModuleInit {
         emitCreate(3, '生成角色定妆照 + 场景参考图...');
         const assetEntities = await this.persistVisualAssets(dramaId, out.characters, out.locations, out.visualStyle);
         await this.generateReferenceImages(dramaId, assetEntities, out.characters, out.locations);
+        out.visualAssets = assetEntities;
         logDrama('assets_generate_done', 'ok', '参考图生成完成');
         emitCreate(3, '参考图生成完成', true);
-        await saveCP('assets_generated', {});
+        await saveCP('assets_generated', { visualAssets: assetEntities });
       }
 
       if (resumeFrom <= 4) {
@@ -225,7 +250,14 @@ export class DramaService implements OnModuleInit {
           aspectRatio: dto.aspectRatio ?? '9:16', hardConstraints: [], softPreferences: [],
         },
         visualStyleHint: dto.visualStyleHint ?? '',
+        generationMode: dto.generationMode ?? 'balanced',
         promptProfile: out.promptProfile, strategy: out.strategy, visualStyle: out.visualStyle,
+        visualBible: this.buildVisualBible(
+          out.characters,
+          out.visualStyle,
+          out.promptProfile,
+          (out.visualAssets as Array<Partial<VisualAssetEntity>> | undefined) ?? [],
+        ),
         characters: out.characters, locations: out.locations, seriesOutline: out.outline,
         arcSegments: [], episodeCursor: 1, episodeSummaries: [], lastCliffhanger: '',
         recentHookTypes: [], secretLedger: [], flashbackBank: [], kpiHistory: [],
@@ -238,7 +270,7 @@ export class DramaService implements OnModuleInit {
       await this.dramaRepo.save(drama);
       await this.wfExecRepo.update(wfExec!.id, { status: 'completed', lastCheckpoint: 'creation_done' });
       logDrama('creation_done', 'ok', '短剧创建完成', { title: out.seed?.title, totalEpisodes: out.outline?.totalPlannedEpisodes });
-      emitCreate(5, '短剧创建完成', true);
+      emitCreate(5, '短剧创建完成', true, true, 'success');
       this.logger.log(`短剧创建完成 — dramaId: ${dramaId} | 标题: ${out.seed.title} | ${out.outline.totalPlannedEpisodes}集`);
     } catch (err: any) {
       logDrama('creation_failed', 'error', err.message, { error: err.message });
@@ -251,7 +283,18 @@ export class DramaService implements OnModuleInit {
           await this.dramaRepo.save(d);
         }
       } catch { /* 尽力更新，不影响主错误抛出 */ }
-      this.progressService.emit({ dramaId, phase: 'create', step: 'error', stepIndex: -1, totalSteps: 5, message: err.message ?? '创建失败', done: true, error: err.message });
+      this.progressService.emit({
+        dramaId,
+        runType: 'create',
+        step: 'error',
+        stepIndex: -1,
+        totalSteps: TOTAL_STEPS,
+        message: err.message ?? '创建失败',
+        done: true,
+        terminal: true,
+        terminalStatus: 'failed',
+        error: err.message,
+      });
       throw err;
     }
   }
@@ -299,6 +342,7 @@ export class DramaService implements OnModuleInit {
     const profile = this.renderingProfileService.getImageProfile();
     const charAssets = assets.filter(a => a.assetType === 'character');
     const locAssets = assets.filter(a => a.assetType === 'location');
+    const styleAssets = assets.filter(a => a.assetType === 'style_guide');
 
     // ═══ Phase 1: face_front + 场景参考图（并发） ═══
     const phase1Tasks = [
@@ -335,6 +379,37 @@ export class DramaService implements OnModuleInit {
             await this.visualAssetRepo.update(asset.id, { referenceImageUrl: asset.referenceImageUrl });
           }
         } catch (err) { this.logger.warn(`场景参考图失败: ${asset.refId} — ${(err as Error).message}`); }
+      }),
+      ...styleAssets.map(asset => async () => {
+        const style = asset.data as Record<string, unknown>;
+        const parts = [
+          String(style.overallAesthetic ?? ''),
+          String(style.renderTechnique ?? ''),
+          String(style.textureStyle ?? ''),
+          String(style.colorGrading ?? ''),
+          String(style.lightingStyle ?? ''),
+          String(style.referenceStyle ?? ''),
+        ].map(p => p.trim()).filter(Boolean);
+        if (!parts.length) return;
+        try {
+          this.logger.log(`[Phase1] 风格参考图: ${asset.refId}`);
+          const result = await this.mediaService.generateImage({
+            prompt: `${parts.join(', ')}, concept art mood board, consistent style sheet`,
+            size: '1280x720',
+            count: 1,
+            dramaId,
+            assetType: 'style_guide_image',
+            refId: asset.refId,
+          });
+          if (result.images?.[0]?.url) {
+            asset.referenceImageUrl = result.images[0].url;
+            asset.referenceImages = [{ viewAngle: 'style_master', imageUrl: result.images[0].url }];
+            await this.visualAssetRepo.update(asset.id, {
+              referenceImageUrl: asset.referenceImageUrl,
+              referenceImages: asset.referenceImages,
+            });
+          }
+        } catch (err) { this.logger.warn(`风格参考图失败: ${asset.refId} — ${(err as Error).message}`); }
       }),
     ];
     await this.runConcurrent(phase1Tasks, 3);
@@ -404,7 +479,17 @@ export class DramaService implements OnModuleInit {
     if (!asset) throw new NotFoundException(`视觉资产 ${assetId} 不存在`);
     const data = asset.data as Record<string, unknown>;
     const prompt = asset.assetType === 'character'
-      ? String(data.faceReferencePrompt || '') : String(data.visualPrompt || '');
+      ? String(data.faceReferencePrompt || '')
+      : asset.assetType === 'location'
+        ? String(data.visualPrompt || '')
+        : [
+            String(data.overallAesthetic ?? ''),
+            String(data.renderTechnique ?? ''),
+            String(data.textureStyle ?? ''),
+            String(data.colorGrading ?? ''),
+            String(data.lightingStyle ?? ''),
+            String(data.referenceStyle ?? ''),
+          ].map(p => p.trim()).filter(Boolean).join(', ');
     if (!prompt) throw new Error(`资产 ${assetId} 缺少生成提示词`);
     const size = asset.assetType === 'character' ? '720x1280' : '1280x720';
     const result = await this.mediaService.generateImage({
@@ -415,6 +500,77 @@ export class DramaService implements OnModuleInit {
       await this.visualAssetRepo.update(asset.id, { referenceImageUrl: asset.referenceImageUrl });
     }
     return asset;
+  }
+
+  private buildVisualBible(
+    characters: DramaState['characters'],
+    visualStyle: DramaState['visualStyle'] | undefined,
+    promptProfile: DramaState['promptProfile'] | undefined,
+    visualAssets: Array<Partial<VisualAssetEntity>>,
+  ): NonNullable<DramaState['visualBible']> {
+    const charAssetMap = new Map(
+      visualAssets
+        .filter((a) => a.assetType === 'character' && a.refId)
+        .map((a) => [a.refId!, a]),
+    );
+    const styleAsset = visualAssets.find((a) => a.assetType === 'style_guide');
+
+    const identityPack = (characters ?? []).map((c) => {
+      const asset = charAssetMap.get(c.characterId);
+      const refs = Array.isArray(asset?.referenceImages) ? asset!.referenceImages! : [];
+      const faceFront = refs.find((r) => r.viewAngle === 'face_front')?.imageUrl || asset?.referenceImageUrl || '';
+      const face34 = refs.find((r) => r.viewAngle === 'face_three_quarter')?.imageUrl || '';
+      const upperOrFull = refs.find((r) => r.viewAngle === 'upper_body_front')?.imageUrl
+        || refs.find((r) => r.viewAngle === 'full_body_front')?.imageUrl
+        || '';
+      return {
+        characterId: c.characterId,
+        faceDna: c.faceDescription,
+        anchorImages: { faceFront, face34, upperOrFull },
+        variationPolicy: c.variations?.length
+          ? `allow:${c.variations.map(v => v.variationId).join(',')}`
+          : 'allow:default_only',
+      };
+    });
+
+    const styleTokens = [
+      visualStyle?.overallAesthetic,
+      visualStyle?.renderTechnique,
+      visualStyle?.textureStyle,
+      visualStyle?.colorGrading,
+      visualStyle?.lightingStyle,
+      visualStyle?.referenceStyle,
+    ].filter(Boolean) as string[];
+
+    const styleRefImages = [
+      styleAsset?.referenceImageUrl ?? '',
+      ...(Array.isArray(styleAsset?.referenceImages) ? styleAsset!.referenceImages!.map((r) => r.imageUrl) : []),
+    ].filter(Boolean);
+
+    const preferredAngles = promptProfile?.cameraStyleGuide?.preferredAngles ?? [];
+    const movementPolicy = promptProfile?.cameraStyleGuide?.signatureTechniques ?? [];
+    const transitionStyle = promptProfile?.cameraStyleGuide?.transitionStyle
+      ? [promptProfile.cameraStyleGuide.transitionStyle]
+      : [];
+
+    return {
+      version: `vb_${Date.now()}`,
+      identityPack,
+      stylePack: {
+        styleTokens,
+        styleRefImages,
+        colorLutHint: visualStyle?.colorGrading ?? '',
+      },
+      cameraPack: {
+        preferredAngles,
+        movementPolicy: [...movementPolicy, ...transitionStyle],
+        continuityRules: [
+          'same_scene_keep_axis',
+          'avoid_abrupt_scale_jump',
+          'emotion_peak_allow_fast_motion_only',
+        ],
+      },
+    };
   }
 
   async listDramas(userId?: string): Promise<{ dramas: DramaEntity[] }> {
@@ -472,20 +628,56 @@ export class DramaService implements OnModuleInit {
 
   /** 后台逐集串行执行（确保上下文正确传递），返回 true 表示被暂停 */
   private async runEpisodePipeline(dramaId: string, startEp: number, endEp: number): Promise<boolean> {
-    for (let ep = startEp; ep <= endEp; ep++) {
-      if (this.pausedDramas.has(dramaId)) {
-        this.logger.log(`生成已暂停 dramaId=${dramaId}，停在 E${ep} 之前`);
-        this.progressService.emit({ dramaId, phase: 'episode', step: 'paused', stepIndex: 0, totalSteps: 1, message: `已暂停，下次将从 E${ep} 继续`, done: true });
-        const drama = await this.getDrama(dramaId);
-        const st = drama.state as any;
-        st.episodeCursor = ep;
-        await this.dramaRepo.update(dramaId, { state: st });
-        return true;
+    try {
+      for (let ep = startEp; ep <= endEp; ep++) {
+        if (this.pausedDramas.has(dramaId)) {
+          this.logger.log(`生成已暂停 dramaId=${dramaId}，停在 E${ep} 之前`);
+          this.progressService.emit({
+            dramaId,
+            runType: 'episode',
+            step: 'paused',
+            stepIndex: 0,
+            totalSteps: 1,
+            message: `已暂停，下次将从 E${ep} 继续`,
+            done: true,
+            terminal: true,
+            terminalStatus: 'paused',
+          });
+          const drama = await this.getDrama(dramaId);
+          const st = drama.state as any;
+          st.episodeCursor = ep;
+          await this.dramaRepo.update(dramaId, { state: st });
+          return true;
+        }
+        await this.episodeWorkflow.generateEpisode(dramaId, ep);
       }
-      await this.episodeWorkflow.generateEpisode(dramaId, ep);
+      this.progressService.emit({
+        dramaId,
+        runType: 'episode',
+        step: 'all_done',
+        stepIndex: 0,
+        totalSteps: 1,
+        message: `E${startEp}-E${endEp} 全部完成`,
+        done: true,
+        terminal: true,
+        terminalStatus: 'success',
+      });
+      return false;
+    } catch (err: any) {
+      this.progressService.emit({
+        dramaId,
+        runType: 'episode',
+        step: 'failed',
+        stepIndex: 0,
+        totalSteps: 1,
+        message: err?.message ?? `E${startEp}-E${endEp} 生成失败`,
+        done: true,
+        terminal: true,
+        terminalStatus: 'failed',
+        error: err?.message ?? '生成失败',
+      });
+      throw err;
     }
-    this.progressService.emit({ dramaId, phase: 'episode', step: 'all_done', stepIndex: 0, totalSteps: 1, message: `E${startEp}-E${endEp} 全部完成`, done: true });
-    return false;
   }
 
   pauseGeneration(dramaId: string): boolean {
@@ -576,6 +768,81 @@ export class DramaService implements OnModuleInit {
     return this.mediaOrchestrator.generateEpisodeMedia(dramaId, episodeNumber);
   }
 
+  /**
+   * 重置单集中"问题镜头"的媒体状态，供前端一键重生后再触发 generate-media。
+   * 问题判定：
+   * 1) 质量关卡未通过（qc.passed=false）
+   * 2) 视频失败/卡住（status=failed|submitted）
+   * 3) 标记完成但缺少 videoUrl
+   * 4) 集级媒体失败 + 仅有首帧(image_done)未产出视频
+   * 5) 审核器标记的风险镜头（consistencyRiskShots/cameraReadabilityRiskShots）
+   */
+  async resetProblemShots(
+    dramaId: string,
+    episodeNumber: number,
+    opts?: { includeReviewRisks?: boolean; onlyHighPriority?: boolean; fixTarget?: ProblemFixTarget },
+  ): Promise<{ episodeNumber: number; totalShots: number; problemShotIds: string[]; resetCount: number }> {
+    const episode = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber } });
+    if (!episode) throw new NotFoundException(`短剧 ${dramaId} 第 ${episodeNumber} 集不存在`);
+    const includeReviewRisks = opts?.includeReviewRisks ?? true;
+    const onlyHighPriority = opts?.onlyHighPriority ?? false;
+    const fixTarget = this.normalizeFixTarget(opts?.fixTarget);
+
+    const storyboard = (episode.storyboard as EpisodeStoryboard | null) ?? null;
+    const shots = storyboard?.shots ?? [];
+    const rawMap = (episode.shotMediaMap ?? {}) as Record<string, {
+      status?: string;
+      videoUrl?: string;
+      qc?: {
+        passed?: boolean;
+        readabilityScore?: number;
+        failReasons?: Array<'identity' | 'style' | 'camera' | 'motion'>;
+        recommendedFix?: 'identity' | 'style' | 'camera' | 'motion';
+      };
+    }>;
+    const reviewRiskSets = includeReviewRisks
+      ? this.extractReviewRiskShotIds(episode.review)
+      : { all: new Set<string>(), consistency: new Set<string>(), camera: new Set<string>() };
+
+    const problemShotIds: string[] = [];
+    for (const shot of shots) {
+      const entry = rawMap[shot.shotId];
+      const mediaProblem = this.isProblemShotMediaEntry(shot, entry, episode.mediaStatus);
+      const reviewRisk = reviewRiskSets.all.has(shot.shotId);
+      if (!mediaProblem && !reviewRisk) continue;
+      if (onlyHighPriority && !this.isHighPriorityShot(shot)) continue;
+      if (!this.matchesFixTarget(fixTarget, shot, entry, reviewRiskSets)) continue;
+      problemShotIds.push(shot.shotId);
+    }
+
+    if (problemShotIds.length === 0) {
+      return { episodeNumber, totalShots: shots.length, problemShotIds: [], resetCount: 0 };
+    }
+
+    const resetMap: Record<string, Record<string, unknown>> = { ...rawMap };
+    for (const sid of problemShotIds) {
+      resetMap[sid] = { status: 'not_started' };
+    }
+
+    await this.episodeRepo.update(episode.id, {
+      shotMediaMap: resetMap,
+      mediaStatus: 'not_started',
+      mediaError: '',
+      videoUrl: '',
+    });
+
+    this.logger.log(
+      `[MediaReset] drama=${dramaId} ep=${episodeNumber} reset=${problemShotIds.length} includeReviewRisks=${includeReviewRisks} ` +
+      `onlyHighPriority=${onlyHighPriority} fixTarget=${fixTarget} shots=${problemShotIds.join(',')}`,
+    );
+    return {
+      episodeNumber,
+      totalShots: shots.length,
+      problemShotIds,
+      resetCount: problemShotIds.length,
+    };
+  }
+
   async generateEpisodeImages(dramaId: string, episodeNumber: number): Promise<void> {
     return this.mediaOrchestrator.generateEpisodeImages(dramaId, episodeNumber);
   }
@@ -586,6 +853,95 @@ export class DramaService implements OnModuleInit {
 
   async getEpisodeMediaStatus(dramaId: string, episodeNumber: number) {
     return this.mediaOrchestrator.getMediaStatus(dramaId, episodeNumber);
+  }
+
+  private isProblemShotMediaEntry(
+    shot: Shot,
+    entry: {
+      status?: string;
+      videoUrl?: string;
+      qc?: {
+        passed?: boolean;
+        readabilityScore?: number;
+        failReasons?: Array<'identity' | 'style' | 'camera' | 'motion'>;
+        recommendedFix?: 'identity' | 'style' | 'camera' | 'motion';
+      };
+    } | undefined,
+    episodeMediaStatus: EpisodeEntity['mediaStatus'],
+  ): boolean {
+    if (!entry) return false;
+    if (shot.isPreview) return false;
+    if (entry.qc?.passed === false) return true;
+    if (entry.status === 'failed' || entry.status === 'submitted') return true;
+    if (entry.status === 'completed' && !entry.videoUrl) return true;
+    if (episodeMediaStatus === 'failed' && entry.status === 'image_done' && !entry.videoUrl && !shot.isFlashback) return true;
+    return false;
+  }
+
+  private isHighPriorityShot(shot: Shot): boolean {
+    return !!(shot.isMasterShot || shot.regenPriority === 'high' || shot.qualityTier === 'golden');
+  }
+
+  private normalizeFixTarget(target: ProblemFixTarget | undefined): ProblemFixTarget {
+    const valid: ProblemFixTarget[] = ['all', 'identity', 'style', 'camera', 'motion'];
+    if (!target || !valid.includes(target)) return 'all';
+    return target;
+  }
+
+  private matchesFixTarget(
+    fixTarget: ProblemFixTarget,
+    shot: Shot,
+    entry: {
+      status?: string;
+      videoUrl?: string;
+      qc?: {
+        passed?: boolean;
+        readabilityScore?: number;
+        failReasons?: Array<'identity' | 'style' | 'camera' | 'motion'>;
+        recommendedFix?: 'identity' | 'style' | 'camera' | 'motion';
+      };
+    } | undefined,
+    reviewRiskSets: ReviewRiskShotSets,
+  ): boolean {
+    if (fixTarget === 'all') return true;
+    const failReasons = entry?.qc?.failReasons ?? [];
+    const recommendedFix = entry?.qc?.recommendedFix;
+    const hasFixTag = (tag: 'identity' | 'style' | 'camera' | 'motion'): boolean =>
+      (tag === recommendedFix) || failReasons.includes(tag);
+
+    if (fixTarget === 'identity') {
+      return hasFixTag('identity') || reviewRiskSets.consistency.has(shot.shotId);
+    }
+    if (fixTarget === 'style') {
+      return hasFixTag('style') || reviewRiskSets.consistency.has(shot.shotId);
+    }
+    if (fixTarget === 'camera') {
+      const readabilityLow = typeof entry?.qc?.readabilityScore === 'number' && entry.qc.readabilityScore < 6;
+      return hasFixTag('camera') || readabilityLow || reviewRiskSets.camera.has(shot.shotId);
+    }
+    const likelyMotionProblem = entry?.status === 'failed' && !entry.videoUrl && !shot.isPreview;
+    return hasFixTag('motion') || likelyMotionProblem;
+  }
+
+  private extractReviewRiskShotIds(review: unknown): ReviewRiskShotSets {
+    const root = (review && typeof review === 'object') ? (review as Record<string, unknown>) : {};
+    const consistency = new Set<string>();
+    const camera = new Set<string>();
+    const pick = (list: unknown, sink: Set<string>) => {
+      if (!Array.isArray(list)) return;
+      for (const item of list) {
+        if (!item || typeof item !== 'object') continue;
+        const shotId = (item as Record<string, unknown>).shotId;
+        if (typeof shotId === 'string' && shotId.trim()) sink.add(shotId);
+      }
+    };
+    pick(root.consistencyRiskShots, consistency);
+    pick(root.cameraReadabilityRiskShots, camera);
+    return {
+      all: new Set<string>([...consistency, ...camera]),
+      consistency,
+      camera,
+    };
   }
 
   private async runConcurrent(tasks: Array<() => Promise<void>>, concurrency: number): Promise<void> {

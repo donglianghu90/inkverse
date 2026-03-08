@@ -37,6 +37,7 @@ export class DramaSeedAnalyzerAgent {
     const durSec = input.targetEpisodeDurationSec ?? 180;
 
     const contentMode: ContentMode = input.contentMode ?? 'drama';
+    const hintBlock = this.buildSeedHintBlock(input.seedHints);
 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-seed-analyzer',
@@ -54,6 +55,7 @@ ${input.tonePreference ? `调性偏好：${input.tonePreference}` : ''}
 ${input.audienceTags?.length ? `受众标签：${input.audienceTags.join('、')}` : ''}
 ${input.titleHint ? `标题灵感：${input.titleHint}` : ''}
 ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
+${hintBlock}
 规模：每集约 ${durSec} 秒，计划 ${epMin}-${epMax} 集
 
 要求：
@@ -76,6 +78,7 @@ ${input.tonePreference ? `调性偏好：${input.tonePreference}` : ''}
 ${input.audienceTags?.length ? `受众标签：${input.audienceTags.join('、')}` : ''}
 ${input.titleHint ? `剧名灵感：${input.titleHint}` : ''}
 ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
+${hintBlock}
 规模：每集约 ${durSec} 秒，计划 ${epMin}-${epMax} 集
 
 要求：
@@ -139,5 +142,15 @@ ${input.mainStoryGoal ? `主线目标：${input.mainStoryGoal}` : ''}
   private strArr(v: unknown, fb: string[]): string[] {
     if (Array.isArray(v)) { const a = v.map(x => this.str(x)).filter(Boolean); return a.length ? a : fb; }
     return fb;
+  }
+
+  private buildSeedHintBlock(hints?: DramaSeedHints): string {
+    if (!hints) return '';
+    const lines: string[] = [];
+    if (hints.catharsisPresets?.length) lines.push(`模板爽点偏好：${hints.catharsisPresets.join('、')}`);
+    if (hints.conflictPatterns?.length) lines.push(`模板冲突模式：${hints.conflictPatterns.join('、')}`);
+    if (hints.paywallStrategyHints) lines.push(`模板卡点建议：${hints.paywallStrategyHints}`);
+    if (hints.dialogueStyleHints) lines.push(`模板台词风格：${hints.dialogueStyleHints}`);
+    return lines.length ? `\n模板提示：\n${lines.map(l => `- ${l}`).join('\n')}` : '';
   }
 }
