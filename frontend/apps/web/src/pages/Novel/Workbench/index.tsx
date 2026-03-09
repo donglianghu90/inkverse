@@ -801,17 +801,17 @@ const Workbench: React.FC = () => {
                       if (!cu) return null;
                       const fmt = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
                       const modelTip = (cu.byModel?.length ?? 0) > 0
-                        ? '\n\n模型明细:\n' + cu.byModel!.map((m: any) => `  ${m.model} (${m.provider}/${m.tier}): ${m.calls}次 · 入${m.promptTokens.toLocaleString()} 出${m.completionTokens.toLocaleString()} · $${m.estimatedCostUsd.toFixed(4)}`).join('\n')
+                        ? '\n\n模型明细:\n' + cu.byModel!.map((m: any) => `  ${m.model} (${m.provider}/${m.tier}): ${m.calls}次 · 入${m.promptTokens.toLocaleString()} 出${m.completionTokens.toLocaleString()} · ¥${m.estimatedCostCny.toFixed(4)}`).join('\n')
                         : '';
                       return (
                         <>
                           <button
                             className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/70 hover:text-muted-foreground transition-colors rounded px-1 -mx-1"
                             onClick={() => setShowTokenDetail(v => !v)}
-                            title={`输入 ${cu.promptTokens.toLocaleString()} / 输出 ${cu.completionTokens.toLocaleString()} tokens · ${cu.totalCalls} 次调用 · $${cu.estimatedCostUsd.toFixed(4)}${modelTip}`}
+                            title={`输入 ${cu.promptTokens.toLocaleString()} / 输出 ${cu.completionTokens.toLocaleString()} tokens · ${cu.totalCalls} 次调用 · ¥${cu.estimatedCostCny.toFixed(4)}${modelTip}`}
                           >
                             <Coins className="h-3 w-3" />
-                            <span className="tabular-nums">${cu.estimatedCostUsd < 0.01 ? cu.estimatedCostUsd.toFixed(4) : cu.estimatedCostUsd.toFixed(2)}</span>
+                            <span className="tabular-nums">¥{cu.estimatedCostCny < 0.01 ? cu.estimatedCostCny.toFixed(4) : cu.estimatedCostCny.toFixed(2)}</span>
                           </button>
                           {showTokenDetail && (
                             <span className="text-[11px] tabular-nums text-muted-foreground animate-fade-in">

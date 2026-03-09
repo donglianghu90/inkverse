@@ -11,6 +11,7 @@ import {
 @Index('idx_ue_user_module', ['userId', 'module'])
 @Index('idx_ue_resource', ['module', 'resourceId'])
 @Index('idx_ue_resource_scope', ['module', 'resourceId', 'scope'])
+@Index('idx_ue_resource_ok', ['module', 'resourceId', 'ok'])
 export class UsageEventEntity {
   @PrimaryGeneratedColumn('uuid') id: string;
 
@@ -21,14 +22,14 @@ export class UsageEventEntity {
 
   @Column({ name: 'resource_id' }) resourceId: string; // bookId | dramaId
 
-  @Column({ name: 'scope', type: 'varchar', length: 64 })
-  scope: string; // 'creation' | 'chapter:3' | 'episode:2' | 'shot:abc'
+  @Column({ name: 'scope', type: 'varchar', length: 128 })
+  scope: string; // 'creation' | 'chapter:3' | 'episode:2' | 'shot:abc' | 未来 scene/panel 等
 
   @Column({ name: 'action', type: 'varchar', length: 64 })
   action: string; // agent/step name
 
-  @Column({ name: 'kind', type: 'varchar', length: 16 })
-  kind: string; // 'llm' | 'image' | 'video' | 'embedding' | 'tts'
+  @Column({ name: 'kind', type: 'varchar', length: 32 })
+  kind: string; // 'llm' | 'image' | 'video' | 'embedding' | 'tts' | 未来 audio/3d 等
 
   @Column({ name: 'provider', type: 'varchar', length: 32 })
   provider: string; // 'gemini' | 'claude' | 'openai' | 'flux' | 'volcengine'
@@ -41,8 +42,8 @@ export class UsageEventEntity {
 
   @Column({ name: 'quantity', type: 'smallint', default: 1 }) quantity: number;
 
-  @Column({ name: 'cost_usd', type: 'decimal', precision: 12, scale: 8, default: 0 })
-  costUsd: number;
+  @Column({ name: 'cost_cny', type: 'decimal', precision: 12, scale: 8, default: 0 })
+  costCny: number;
 
   @Column({ name: 'ok', type: 'boolean', default: true }) ok: boolean;
   @Column({ name: 'duration_ms', type: 'int', default: 0 }) durationMs: number;

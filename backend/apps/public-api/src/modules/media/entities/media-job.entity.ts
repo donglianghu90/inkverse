@@ -32,6 +32,10 @@ export class MediaJobEntity {
   @Column({ type: 'varchar', length: 128, default: '' })
   refId: string; // characterId / locationId / shotId
 
+  /** 短剧集号，用于计费 scope 归属 episode:N */
+  @Column({ type: 'int', nullable: true })
+  episodeNumber: number | null;
+
   @Column({ type: 'jsonb', default: {} })
   request: Record<string, unknown>; // 原始请求参数
 

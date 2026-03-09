@@ -27,12 +27,13 @@ export class MediaJobService implements OnModuleInit, OnModuleDestroy {
   onModuleInit() { this.startPolling(); }
   onModuleDestroy() { if (this.pollTimer) clearInterval(this.pollTimer); }
 
-  async createJob(params: { jobType: MediaJobType; provider: string; providerTaskId: string; dramaId?: string; assetType?: string; refId?: string; request: Record<string, unknown>; userId?: string }): Promise<MediaJobEntity> {
+  async createJob(params: { jobType: MediaJobType; provider: string; providerTaskId: string; dramaId?: string; assetType?: string; refId?: string; episodeNumber?: number; request: Record<string, unknown>; userId?: string }): Promise<MediaJobEntity> {
     const entity = this.repo.create({
       jobType: params.jobType, provider: params.provider,
       providerTaskId: params.providerTaskId, status: 'pending' as VideoTaskStatus,
       dramaId: params.dramaId ?? null, assetType: params.assetType ?? '',
-      refId: params.refId ?? '', request: params.request, userId: params.userId ?? null,
+      refId: params.refId ?? '', episodeNumber: params.episodeNumber ?? null,
+      request: params.request, userId: params.userId ?? null,
     });
     return this.repo.save(entity);
   }
@@ -45,10 +46,13 @@ export class MediaJobService implements OnModuleInit, OnModuleDestroy {
 
   async markCompleted(id: string, result: Record<string, unknown>, durationMs: number): Promise<void> {
     await this.repo.update(id, { status: 'completed', result, durationMs });
+    const job = await this.findById(id);
+    if (job) this.events.emit('completed', { jobId: id, status: 'completed' as VideoTaskStatus, result } as JobCompletedEvent);
   }
 
   async markFailed(id: string, error: string): Promise<void> {
     await this.repo.update(id, { status: 'failed', error });
+    this.events.emit('completed', { jobId: id, status: 'failed' as VideoTaskStatus, error } as JobCompletedEvent);
   }
 
   async deleteByDrama(dramaId: string): Promise<number> {
@@ -82,11 +86,9 @@ export class MediaJobService implements OnModuleInit, OnModuleDestroy {
             const res = { videoUrl: result.videoUrl, coverUrl: result.coverUrl, durationSeconds: result.durationSeconds };
             const dur = Date.now() - job.createdAt.getTime();
             await this.markCompleted(job.id, res as Record<string, unknown>, dur);
-            this.events.emit('completed', { jobId: job.id, status: 'completed', result: res } as JobCompletedEvent);
             this.logger.log(`视频任务完成: ${job.id} (${dur}ms) → ${result.videoUrl?.slice(0, 80)}`);
           } else if (result.status === 'failed') {
             await this.markFailed(job.id, result.error ?? '未知错误');
-            this.events.emit('completed', { jobId: job.id, status: 'failed', error: result.error } as JobCompletedEvent);
             this.logger.warn(`视频任务失败: ${job.id} → ${result.error}`);
           } else {
             if (job.status !== result.status) await this.repo.update(job.id, { status: result.status });

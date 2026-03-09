@@ -639,6 +639,13 @@ export class DramaService implements OnModuleInit {
     return drama;
   }
 
+  /** 校验短剧归属，用于 usage 等需权限的接口 */
+  async assertDramaOwnership(dramaId: string, userId: string): Promise<void> {
+    const drama = await this.dramaRepo.findOne({ where: { id: dramaId }, select: ['id', 'userId'] });
+    if (!drama) throw new NotFoundException(`短剧 ${dramaId} 不存在`);
+    if (drama.userId !== userId) throw new NotFoundException(`短剧 ${dramaId} 不存在`);
+  }
+
   async deleteDrama(dramaId: string, userId?: string): Promise<{ success: boolean }> {
     const drama = await this.dramaRepo.findOne({ where: { id: dramaId } });
     if (!drama) throw new NotFoundException(`短剧 ${dramaId} 不存在`);

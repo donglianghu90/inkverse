@@ -521,11 +521,11 @@ export interface BookTokenUsage {
   totalPromptTokens: number;
   totalCompletionTokens: number;
   totalTokens: number;
-  totalCostUsd: number;
+  totalCostCny: number;
   totalCalls: number;
-  byProvider: Array<{ provider: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number }>;
-  byModel: Array<{ model: string; provider: string; tier: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; avgDurationMs: number }>;
-  chapters: Array<{ chapterNumber: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; totalCalls: number; byModel?: Array<{ model: string; provider: string; tier: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; avgDurationMs: number }> }>;
+  byProvider: Array<{ provider: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostCny: number }>;
+  byModel: Array<{ model: string; provider: string; tier: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostCny: number; avgDurationMs: number }>;
+  chapters: Array<{ chapterNumber: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostCny: number; totalCalls: number; byModel?: Array<{ model: string; provider: string; tier: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostCny: number; avgDurationMs: number }> }>;
 }
 
 export async function getBookTokenUsage(bookId: string): Promise<BookTokenUsage> {

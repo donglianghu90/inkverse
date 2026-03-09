@@ -22,10 +22,10 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
-function fmtCost(usd: number): string {
-  if (usd >= 1) return `$${usd.toFixed(2)}`;
-  if (usd >= 0.01) return `$${usd.toFixed(3)}`;
-  return `$${usd.toFixed(4)}`;
+function fmtCost(cny: number): string {
+  if (cny >= 1) return `¥${cny.toFixed(2)}`;
+  if (cny >= 0.01) return `¥${cny.toFixed(3)}`;
+  return `¥${cny.toFixed(4)}`;
 }
 
 function fmtDuration(ms: number): string {
@@ -115,7 +115,7 @@ export const QualityDashboard: React.FC<Props> = ({ latestKpi, tokenUsage }) => 
             </div>
             <div>
               <p className="text-muted-foreground">估算费用</p>
-              <p className="font-semibold tabular-nums text-amber-600">{fmtCost(tokenUsage!.totalCostUsd)}</p>
+              <p className="font-semibold tabular-nums text-amber-600">{fmtCost(tokenUsage!.totalCostCny)}</p>
             </div>
             <div>
               <p className="text-muted-foreground">LLM 调用</p>
@@ -133,7 +133,7 @@ export const QualityDashboard: React.FC<Props> = ({ latestKpi, tokenUsage }) => 
               <div className="flex items-center gap-3 text-[11px] tabular-nums">
                 <span className="text-blue-600">入 {fmtTokens(creationUsage.promptTokens)}</span>
                 <span className="text-violet-600">出 {fmtTokens(creationUsage.completionTokens)}</span>
-                <span className="text-amber-600">{fmtCost(creationUsage.estimatedCostUsd)}</span>
+                <span className="text-amber-600">{fmtCost(creationUsage.estimatedCostCny)}</span>
               </div>
             </div>
           )}
@@ -149,7 +149,7 @@ export const QualityDashboard: React.FC<Props> = ({ latestKpi, tokenUsage }) => 
                   出 {fmtTokens(Math.round(tokenUsage!.chapters.filter((c) => c.chapterNumber > 0).reduce((s, c) => s + c.completionTokens, 0) / chapterCount))}
                 </span>
                 <span className="text-amber-600">
-                  {fmtCost(tokenUsage!.chapters.filter((c) => c.chapterNumber > 0).reduce((s, c) => s + c.estimatedCostUsd, 0) / chapterCount)}
+                  {fmtCost(tokenUsage!.chapters.filter((c) => c.chapterNumber > 0).reduce((s, c) => s + c.estimatedCostCny, 0) / chapterCount)}
                 </span>
               </div>
             </div>
@@ -165,7 +165,7 @@ export const QualityDashboard: React.FC<Props> = ({ latestKpi, tokenUsage }) => 
                     <span className={cn('font-medium capitalize', PROVIDER_COLORS[bp.provider] || 'text-foreground')}>
                       {bp.provider}
                     </span>
-                    <span className="tabular-nums text-muted-foreground">{bp.calls} 次 · {fmtCost(bp.estimatedCostUsd)}</span>
+                    <span className="tabular-nums text-muted-foreground">{bp.calls} 次 · {fmtCost(bp.estimatedCostCny)}</span>
                   </div>
                   <div className="h-1 w-full rounded-full bg-muted overflow-hidden">
                     {pctBar(bp.totalTokens, tokenUsage!.totalTokens, bp.provider === 'gemini' ? 'bg-blue-500' : bp.provider === 'claude' ? 'bg-orange-500' : 'bg-green-500')}
@@ -209,7 +209,7 @@ export const QualityDashboard: React.FC<Props> = ({ latestKpi, tokenUsage }) => 
                     </div>
                     <div>
                       <p className="text-muted-foreground">费用</p>
-                      <p className="font-medium text-amber-600">{fmtCost(bm.estimatedCostUsd)}</p>
+                      <p className="font-medium text-amber-600">{fmtCost(bm.estimatedCostCny)}</p>
                     </div>
                   </div>
                   <div className="flex gap-3 text-[10px] tabular-nums text-muted-foreground">
@@ -234,7 +234,7 @@ export const QualityDashboard: React.FC<Props> = ({ latestKpi, tokenUsage }) => 
                       {pctBar(ch.totalTokens, Math.max(...tokenUsage!.chapters.filter((c) => c.chapterNumber > 0).map((c) => c.totalTokens)), 'bg-indigo-500')}
                     </div>
                     <span className="shrink-0 text-muted-foreground">{fmtTokens(ch.totalTokens)}</span>
-                    <span className="shrink-0 w-14 text-right text-amber-600">{fmtCost(ch.estimatedCostUsd)}</span>
+                    <span className="shrink-0 w-14 text-right text-amber-600">{fmtCost(ch.estimatedCostCny)}</span>
                   </div>
                 ))}
               </div>

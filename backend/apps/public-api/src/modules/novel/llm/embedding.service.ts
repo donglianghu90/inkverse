@@ -5,8 +5,14 @@ import { UsageLedgerService } from '../../usage/usage-ledger.service';
 
 export interface EmbeddingMeta {
   userId?: string;
+  /** 小说模块：书籍 ID */
   bookId?: string;
+  /** 小说模块：章节号 */
   chapterNumber?: number;
+  /** 短剧模块：剧目 ID */
+  dramaId?: string;
+  /** 短剧模块：集号 */
+  episodeNumber?: number;
 }
 
 @Injectable()
@@ -28,7 +34,7 @@ export class EmbeddingService {
     this.baseUrl = String(emb.baseUrl || '').replace(/\/+$/, '');
     this.model = String(emb.model || 'text-embedding-3-large');
     this.dimensions = Number(emb.dimensions) || 1536;
-    this.costPer1MTokens = Number(emb.costPer1MTokens) || 0.13;
+    this.costPer1MTokens = Number(emb.costPer1MTokens) || 1.4;
     if (!this.apiKey || !this.baseUrl) { this.logger.warn('Embedding API Key 或 BaseUrl 未配置，Embedding 不可用'); return; }
     this.logger.log(`Embedding 初始化完成 (model=${this.model}, dim=${this.dimensions})`);
   }
@@ -82,18 +88,23 @@ export class EmbeddingService {
   }
 
   private recordUsage(tokens: number, ok: boolean, durationMs: number, meta?: EmbeddingMeta) {
-    const costUsd = tokens > 0 ? (tokens / 1_000_000) * this.costPer1MTokens : 0;
+    const costCny = ok && tokens > 0 ? (tokens / 1_000_000) * this.costPer1MTokens : 0;
+    const module = meta?.dramaId ? 'drama' : meta?.bookId ? 'novel' : 'unknown';
+    const resourceId = meta?.dramaId ?? meta?.bookId ?? '';
+    let scope = 'creation';
+    if (meta?.episodeNumber != null) scope = `episode:${meta.episodeNumber}`;
+    else if (meta?.chapterNumber != null) scope = `chapter:${meta.chapterNumber}`;
     this.usageLedger.record({
       userId: meta?.userId ?? '',
-      module: 'novel',
-      resourceId: meta?.bookId ?? '',
-      scope: meta?.chapterNumber != null ? `chapter:${meta.chapterNumber}` : 'creation',
+      module,
+      resourceId,
+      scope,
       action: 'embedding',
       kind: 'embedding',
       provider: 'openai',
       model: this.model,
       tokensIn: tokens,
-      costUsd,
+      costCny,
       ok,
       durationMs,
     }).catch(() => {});

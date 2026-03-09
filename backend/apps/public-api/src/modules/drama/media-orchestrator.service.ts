@@ -232,7 +232,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                 const effectiveNeg = retryNeg ? [optimized.negativePrompt, retryNeg].filter(Boolean).join(', ') : (optimized.negativePrompt || undefined);
                 const res = await withMediaRetry(() => this.mediaService.generateImage({
                   prompt: optimized.prompt, negativePrompt: effectiveNeg,
-                  size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid, userId,
+                  size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid, userId, episodeNumber,
                 }), `${sid} 首帧`);
                 return res.images?.[0]?.url ?? '';
               };
@@ -304,7 +304,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                 shotType: 'last_frame', qualityTier: shot.qualityTier ?? 'standard', emotionColorHint,
                 routeProfile: shotPolicy.routeProfile,
               });
-              const res = await withMediaRetry(() => this.mediaService.generateImage({ prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: lastRefs, dramaId, assetType: 'shot_last_frame', refId: `${sid}_last`, userId }), `${sid} 尾帧`);
+              const res = await withMediaRetry(() => this.mediaService.generateImage({ prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: lastRefs, dramaId, assetType: 'shot_last_frame', refId: `${sid}_last`, userId, episodeNumber }), `${sid} 尾帧`);
               const lastUrl = res.images?.[0]?.url ?? '';
               if (lastUrl) shotMediaMap[sid] = { ...shotMediaMap[sid], lastFrameImageUrl: lastUrl };
               emit(phaseOff + orderedShots.length + i, `${sid} 尾帧完成`, true);
@@ -357,7 +357,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                 );
                 const res = await withMediaRetry(() => this.mediaService.generateImage({
                   prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined,
-                  size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: `${sid}_regen`, userId,
+                  size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: `${sid}_regen`, userId, episodeNumber,
                 }), `${sid} 连贯性重生成`);
                 const newUrl = res.images?.[0]?.url ?? '';
                 if (newUrl) {
@@ -423,7 +423,7 @@ export class MediaOrchestratorService implements OnModuleInit {
             prompt: optVideo.prompt,
             duration: Math.min(Math.max(Math.round(shot.estimatedDurationSec), 2), 10),
             quality: videoQuality, aspectRatio: aspectRatio as any,
-            referenceImages: refImages, dramaId, assetType: 'shot_video', refId: sid, userId,
+            referenceImages: refImages, dramaId, assetType: 'shot_video', refId: sid, userId, episodeNumber,
           }), `${sid} 视频`);
           shotMediaMap[sid] = { ...shotMediaMap[sid], videoJobId: sub.jobId, status: 'submitted' };
           await flushVideoSubmit();
@@ -624,7 +624,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       const res = await this.withRetry(
         () => this.mediaService.generateImage({
           prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1,
-          referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: shotId, userId,
+          referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: shotId, userId, episodeNumber,
         }),
         `${shotId} 图片`,
         mediaPolicy.maxMediaRetries,
@@ -781,7 +781,7 @@ export class MediaOrchestratorService implements OnModuleInit {
         );
         const genFn = async () => {
           const res = await this.withRetry(
-            () => this.mediaService.generateImage({ prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid, userId }),
+            () => this.mediaService.generateImage({ prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid, userId, episodeNumber }),
             `${sid} 图片`,
             mediaPolicy.maxMediaRetries,
             mediaPolicy.retryBaseDelayMs,

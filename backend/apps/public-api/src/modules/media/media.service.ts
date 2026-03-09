@@ -1,5 +1,5 @@
 /** 媒体生成门面服务 — 统一入口，屏蔽 Provider 细节，供 Drama/Novel 模块调用 */
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger, Optional, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -9,6 +9,15 @@ import { MediaTraceLoggerService } from './media-trace-logger.service';
 import { ImageGenerationRequest, ImageGenerationResult, VideoGenerationRequest, VideoTaskResult, TtsRequest, TtsResult, MediaProviderMeta } from './interfaces/media-provider.interface';
 import { OssService, ConfigService } from '@packages/modules';
 import { UsageLedgerService } from '../usage/usage-ledger.service';
+import { BillingResolverService } from '../usage/billing-resolver.service';
+
+/** 通用 scope 粒度，支持 novel(drama)/短剧(chapter/episode) 及未来模块 */
+export interface MediaScopeOpts {
+  episodeNumber?: number;
+  chapterNumber?: number;
+  assetType?: string;
+  refId?: string;
+}
 
 export interface GenerateImageOptions extends ImageGenerationRequest {
   provider?: string;
@@ -19,6 +28,7 @@ export interface GenerateImageOptions extends ImageGenerationRequest {
   refId?: string;
   userId?: string;
   episodeNumber?: number;
+  chapterNumber?: number;
 }
 
 export interface SubmitVideoOptions extends VideoGenerationRequest {
@@ -30,6 +40,7 @@ export interface SubmitVideoOptions extends VideoGenerationRequest {
   refId?: string;
   userId?: string;
   episodeNumber?: number;
+  chapterNumber?: number;
 }
 
 export interface SynthesizeTtsOptions {
@@ -41,30 +52,48 @@ export interface SynthesizeTtsOptions {
   module?: string;
   userId?: string;
   episodeNumber?: number;
+  chapterNumber?: number;
 }
 
 @Injectable()
-export class MediaService {
+export class MediaService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('MediaService');
-  private readonly imageCostByProvider: Record<string, number> = {};
-  private readonly videoCostByProvider: Record<string, number> = {};
-  private readonly ttsCostByProvider: Record<string, number> = {};
+  private videoCompletionHandler: ((evt: { jobId: string; status: string; result?: Record<string, unknown>; error?: string }) => void) | null = null;
 
   constructor(
     private readonly registry: ProviderRegistryService,
     private readonly jobService: MediaJobService,
     private readonly traceLogger: MediaTraceLoggerService,
     private readonly usageLedger: UsageLedgerService,
+    private readonly billingResolver: BillingResolverService,
     private readonly configService: ConfigService,
     @Optional() private readonly ossService?: OssService,
-  ) {
-    const mediaCost = (this.configService.get('media.cost') ?? {}) as Record<string, unknown>;
-    const image = (mediaCost.image ?? {}) as Record<string, unknown>;
-    const video = (mediaCost.video ?? {}) as Record<string, unknown>;
-    const tts = (mediaCost.tts ?? {}) as Record<string, unknown>;
-    for (const [k, v] of Object.entries(image)) this.imageCostByProvider[k] = Number(v) || 0;
-    for (const [k, v] of Object.entries(video)) this.videoCostByProvider[k] = Number(v) || 0;
-    for (const [k, v] of Object.entries(tts)) this.ttsCostByProvider[k] = Number(v) || 0;
+  ) {}
+
+  onModuleInit() {
+    this.videoCompletionHandler = async (evt) => {
+      if (evt.status !== 'completed' && evt.status !== 'failed') return;
+      const job = await this.jobService.findById(evt.jobId);
+      if (!job || job.jobType !== 'video') return;
+      const module = job.dramaId ? 'drama' : 'novel';
+      const resourceId = job.dramaId || '_unknown';
+      const scope = job.episodeNumber != null ? `episode:${job.episodeNumber}` : (job.assetType?.startsWith('shot_') ? `shot:${job.refId || 'unknown'}` : 'creation');
+      const quality = (job.request as any)?.quality as string | undefined;
+      const vidCost = evt.status === 'completed' ? this.billingResolver.resolveVideoCostUsd(job.provider, quality) : 0;
+      const durationMs = evt.status === 'completed' && job.durationMs ? job.durationMs : 0;
+      this.usageLedger.record({
+        userId: job.userId ?? '', module, resourceId, scope,
+        action: job.assetType ?? 'video', kind: 'video',
+        provider: job.provider, model: quality ?? 'default',
+        quantity: 1, costCny: vidCost,
+        ok: evt.status === 'completed', durationMs,
+      }).catch(() => {});
+    };
+    this.jobService.events.on('completed', this.videoCompletionHandler);
+  }
+
+  onModuleDestroy() {
+    if (this.videoCompletionHandler) this.jobService.events.removeListener('completed', this.videoCompletionHandler);
   }
 
   private resolveModule(opts: { dramaId?: string; bookId?: string; module?: string }): string {
@@ -73,8 +102,10 @@ export class MediaService {
   private resolveResourceId(opts: { dramaId?: string; bookId?: string }): string {
     return opts.dramaId ?? opts.bookId ?? '';
   }
-  private resolveScope(opts: { assetType?: string; refId?: string; episodeNumber?: number }): string {
-    if (opts.episodeNumber) return `episode:${opts.episodeNumber}`;
+  /** 统一 scope 解析：支持 episode/chapter/shot，便于 novel 与 drama 共用图片/视频/TTS */
+  private resolveScope(opts: MediaScopeOpts): string {
+    if (opts.episodeNumber != null) return `episode:${opts.episodeNumber}`;
+    if (opts.chapterNumber != null) return `chapter:${opts.chapterNumber}`;
     if (opts.assetType?.startsWith('shot_')) return `shot:${opts.refId ?? 'unknown'}`;
     return 'creation';
   }
@@ -105,13 +136,13 @@ export class MediaService {
         status: 'success', jobId: job.id,
       });
       const imgCount = result.images.length;
-      const imgUnitCost = this.imageCostByProvider[provider.name] ?? 0.04;
+      const imgUnitCost = this.billingResolver.resolveImageCostUsd(provider.name, result.model, opts.size);
       this.usageLedger.record({
         userId: opts.userId ?? '', module: this.resolveModule(opts),
         resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
         action: opts.assetType ?? 'image', kind: 'image',
         provider: provider.name, model: result.model,
-        quantity: imgCount, costUsd: imgCount * imgUnitCost,
+        quantity: imgCount, costCny: imgCount * imgUnitCost,
         ok: true, durationMs: result.durationMs,
       }).catch(() => {});
       return { ...result, jobId: job.id };
@@ -122,13 +153,12 @@ export class MediaService {
         input: { prompt: opts.prompt, size: opts.size, count: opts.count ?? 1, referenceImages: opts.referenceImages?.length },
         output: {}, status: 'error', error: (err as Error).message,
       });
-      const imgUnitCost = this.imageCostByProvider[provider.name] ?? 0.04;
       this.usageLedger.record({
         userId: opts.userId ?? '', module: this.resolveModule(opts),
         resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
         action: opts.assetType ?? 'image', kind: 'image',
         provider: provider.name, model: 'unknown',
-        quantity: opts.count ?? 1, costUsd: (opts.count ?? 1) * imgUnitCost,
+        quantity: opts.count ?? 1, costCny: 0,
         ok: false, durationMs: Date.now() - t0,
       }).catch(() => {});
       throw err;
@@ -164,24 +194,15 @@ export class MediaService {
 
   async submitVideo(opts: SubmitVideoOptions): Promise<{ jobId: string; providerTaskId: string }> {
     const provider = this.registry.getVideoProvider(opts.provider);
-    const vidUnitCost = this.videoCostByProvider[provider.name] ?? 0.50;
     try {
       const submitResult = await provider.submit(opts);
       const job = await this.jobService.createJob({
         jobType: 'video', provider: provider.name, providerTaskId: submitResult.providerTaskId,
-        dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId,
+        dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId, episodeNumber: opts.episodeNumber,
         request: { prompt: opts.prompt, duration: opts.duration, quality: opts.quality, aspectRatio: opts.aspectRatio },
         userId: opts.userId,
       });
       this.logger.log(`视频任务已提交: jobId=${job.id} providerTaskId=${submitResult.providerTaskId}`);
-      this.usageLedger.record({
-        userId: opts.userId ?? '', module: this.resolveModule(opts),
-        resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
-        action: opts.assetType ?? 'video', kind: 'video',
-        provider: provider.name, model: opts.quality ?? 'default',
-        quantity: 1, costUsd: vidUnitCost,
-        ok: true, durationMs: 0,
-      }).catch(() => {});
       return { jobId: job.id, providerTaskId: submitResult.providerTaskId };
     } catch (err) {
       this.usageLedger.record({
@@ -189,7 +210,7 @@ export class MediaService {
         resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
         action: opts.assetType ?? 'video', kind: 'video',
         provider: provider.name, model: opts.quality ?? 'default',
-        quantity: 1, costUsd: vidUnitCost,
+        quantity: 1, costCny: 0,
         ok: false, durationMs: 0,
       }).catch(() => {});
       throw err;
@@ -252,7 +273,7 @@ export class MediaService {
     const meta = isNewApi ? reqOrOpts as SynthesizeTtsOptions : {} as Partial<SynthesizeTtsOptions>;
 
     const tts = this.registry.getTtsProvider(prov);
-    const ttsUnitCost = this.ttsCostByProvider[tts.name] ?? 0.01;
+    const ttsUnitCost = this.billingResolver.resolveTtsCostUsd(tts.name, req.voiceId);
     const t0 = Date.now();
     const dir = path.dirname(outPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -275,21 +296,21 @@ export class MediaService {
       }
       const mod = meta.module ?? (meta.dramaId ? 'drama' : meta.bookId ? 'novel' : 'unknown');
       const resourceId = meta.dramaId ?? meta.bookId ?? '';
-      const scope = meta.episodeNumber != null ? `episode:${meta.episodeNumber}` : 'creation';
+      const scope = this.resolveScope({ episodeNumber: meta.episodeNumber, chapterNumber: meta.chapterNumber });
       this.usageLedger.record({
         userId: meta.userId ?? '', module: mod, resourceId, scope,
         action: 'tts', kind: 'tts', provider: tts.name, model: req.voiceId || 'default',
-        quantity: 1, costUsd: ttsUnitCost, ok: true, durationMs: Date.now() - t0,
+        quantity: 1, costCny: ttsUnitCost, ok: true, durationMs: Date.now() - t0,
       }).catch(() => {});
       return result;
     } catch (err) {
       const mod = meta.module ?? (meta.dramaId ? 'drama' : meta.bookId ? 'novel' : 'unknown');
       const resourceId = meta.dramaId ?? meta.bookId ?? '';
-      const scope = meta.episodeNumber != null ? `episode:${meta.episodeNumber}` : 'creation';
+      const scope = this.resolveScope({ episodeNumber: meta.episodeNumber, chapterNumber: meta.chapterNumber });
       this.usageLedger.record({
         userId: meta.userId ?? '', module: mod, resourceId, scope,
         action: 'tts', kind: 'tts', provider: tts.name, model: req.voiceId || 'default',
-        quantity: 1, costUsd: ttsUnitCost, ok: false, durationMs: Date.now() - t0,
+        quantity: 1, costCny: 0, ok: false, durationMs: Date.now() - t0,
       }).catch(() => {});
       throw err;
     }

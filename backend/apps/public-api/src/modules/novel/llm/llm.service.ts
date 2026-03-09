@@ -360,7 +360,7 @@ export class LlmService {
             scope: errIsDrama ? (errMeta.episodeNumber ? `episode:${errMeta.episodeNumber}` : 'creation') : (errMeta.chapterNumber ? `chapter:${errMeta.chapterNumber}` : 'creation'),
             action: input.taskName, kind: 'llm', provider, model: modelName,
             tokensIn: errTokens.prompt, tokensOut: errTokens.completion,
-            costUsd: errCost, ok: false, durationMs: Date.now() - t0,
+            costCny: errCost, ok: false, durationMs: Date.now() - t0,
           }).catch(() => {});
           throw error;
         }
@@ -396,7 +396,7 @@ export class LlmService {
       module: mod, resourceId, scope,
       action: input.taskName, kind: 'llm', provider, model: modelName,
       tokensIn: usage.promptTokens, tokensOut: usage.completionTokens,
-      costUsd: cost, ok: wrapped.parsed != null, durationMs,
+      costCny: cost, ok: wrapped.parsed != null, durationMs,
     }).catch(() => {});
 
     if (wrapped.parsed == null) {

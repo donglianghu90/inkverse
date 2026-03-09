@@ -212,7 +212,9 @@ export class DramaController {
   }
 
   @Get(':dramaId/usage')
-  async getDramaUsage(@Param('dramaId') dramaId: string) {
+  async getDramaUsage(@Param('dramaId') dramaId: string, @Req() req: any) {
+    const userId = req.user?.userId ?? req.user?.id ?? '';
+    await this.dramaService.assertDramaOwnership(dramaId, userId);
     return this.usageLedger.resourceDetailForDrama('drama', dramaId);
   }
 

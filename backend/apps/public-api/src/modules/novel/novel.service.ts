@@ -785,42 +785,47 @@ ${input.goal}
     const totalPromptTokens = llm.tokensIn;
     const totalCompletionTokens = llm.tokensOut;
     const totalTokens = llm.tokensIn + llm.tokensOut;
-    const totalCostUsd = detail.total.costUsd;
+    const totalCostCny = detail.total.costCny;
     const totalCalls = llm.calls + detail.total.image.calls + detail.total.video.calls
       + detail.total.embedding.calls + detail.total.tts.calls;
 
-    const providerMap = new Map<string, { calls: number; tokensIn: number; tokensOut: number; costUsd: number }>();
+    const providerMap = new Map<string, { calls: number; tokensIn: number; tokensOut: number; costCny: number }>();
     for (const m of detail.byModel) {
-      const p = providerMap.get(m.provider) ?? { calls: 0, tokensIn: 0, tokensOut: 0, costUsd: 0 };
-      p.calls += m.calls; p.tokensIn += m.tokensIn; p.tokensOut += m.tokensOut; p.costUsd += m.costUsd;
+      const p = providerMap.get(m.provider) ?? { calls: 0, tokensIn: 0, tokensOut: 0, costCny: 0 };
+      p.calls += m.calls; p.tokensIn += m.tokensIn; p.tokensOut += m.tokensOut; p.costCny += m.costCny;
       providerMap.set(m.provider, p);
     }
     const byProvider = [...providerMap.entries()].map(([provider, p]) => ({
       provider, calls: p.calls,
       promptTokens: p.tokensIn, completionTokens: p.tokensOut,
-      totalTokens: p.tokensIn + p.tokensOut, estimatedCostUsd: p.costUsd,
+      totalTokens: p.tokensIn + p.tokensOut, estimatedCostCny: p.costCny,
     }));
 
     const byModel = detail.byModel.map(m => ({
       model: m.model, provider: m.provider, tier: m.kind,
       calls: m.calls, promptTokens: m.tokensIn, completionTokens: m.tokensOut,
-      totalTokens: m.tokensIn + m.tokensOut, estimatedCostUsd: m.costUsd, avgDurationMs: 0,
+      totalTokens: m.tokensIn + m.tokensOut, estimatedCostCny: m.costCny, avgDurationMs: 0,
     }));
 
     const chapters = detail.byScope.map(s => {
       const m = s.scope.match(/^chapter:(\d+)$/);
       const chapterNumber = m ? +m[1] : 0;
+      const scopeTotalCalls = (s as any).byKind
+        ? Object.values((s as any).byKind).reduce((sum: number, b: any) => sum + (b?.calls ?? 0), 0)
+        : s.llm.calls + s.image.calls + s.video.calls + s.embedding.calls + s.tts.calls;
       return {
         chapterNumber,
-        promptTokens: s.llm.tokensIn, completionTokens: s.llm.tokensOut,
+        promptTokens: s.llm.tokensIn,
+        completionTokens: s.llm.tokensOut,
         totalTokens: s.llm.tokensIn + s.llm.tokensOut,
-        estimatedCostUsd: s.costUsd, totalCalls: s.llm.calls,
+        estimatedCostCny: s.costCny,
+        totalCalls: scopeTotalCalls,
       };
     }).sort((a, b) => a.chapterNumber - b.chapterNumber);
 
     return {
       bookId, totalPromptTokens, totalCompletionTokens, totalTokens,
-      totalCostUsd, totalCalls, byProvider, byModel, chapters,
+      totalCostCny, totalCalls, byProvider, byModel, chapters,
     };
   }
 
