@@ -13,16 +13,8 @@ import {
   DEFAULT_PIPELINE_NODES,
   DEFAULT_WORKFLOW_PARAMS,
 } from './entities/book-agent-pipeline.entity';
-import { WorkflowTopologyService, WorkflowTopology } from './workflow-topology.service';
-
-export interface PipelineView {
-  bookId: string;
-  draftNodes: AgentNodeConfig[];
-  publishedNodes: AgentNodeConfig[] | null;
-  publishedAt: string | null;
-  hasDraft: boolean;
-  workflowParams: WorkflowParams;
-}
+import { WorkflowTopologyService } from './workflow-topology.service';
+import type { PipelineView, WorkflowTopology } from './interfaces';
 
 @Injectable()
 export class BookAgentPipelineService {

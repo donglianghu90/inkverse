@@ -10,7 +10,8 @@ import { DramaState, Shot, EpisodeStoryboard } from './schemas/drama-state.schem
 import { MediaService } from '../media/media.service';
 import { ProviderRegistryService } from '../media/providers/provider-registry.service';
 import { AudioResourceService } from '../media/audio-resource.service';
-import { VideoComposerService, ComposeShotInput } from '../media/video-composer.service';
+import { VideoComposerService } from '../media/video-composer.service';
+import type { ComposeShotInput } from '../media/interfaces';
 import { LocalStorageService } from '../media/local-storage.service';
 import { DramaProgressService } from './drama-progress.service';
 import { RenderingProfileService } from '../media/rendering/rendering-profile.service';
@@ -27,27 +28,9 @@ import {
   DramaGenerationMode,
   DramaStyleBucket,
 } from './generation-policy.service';
+import type { ShotMediaEntry } from './interfaces';
 
-export interface ShotMediaEntry {
-  videoUrl?: string;
-  videoJobId?: string;
-  ttsUrl?: string;
-  imageUrl?: string;
-  lastFrameImageUrl?: string;
-  status: string;
-  kenBurnsFallback?: boolean;
-  qc?: {
-    identityScore?: number;
-    styleScore?: number;
-    readabilityScore?: number;
-    score?: number;
-    passed?: boolean;
-    attempts?: number;
-    issues?: string[];
-    failReasons?: Array<'identity' | 'style' | 'camera' | 'motion'>;
-    recommendedFix?: 'identity' | 'style' | 'camera' | 'motion';
-  };
-}
+export type { ShotMediaEntry } from './interfaces';
 
 @Injectable()
 export class MediaOrchestratorService implements OnModuleInit {

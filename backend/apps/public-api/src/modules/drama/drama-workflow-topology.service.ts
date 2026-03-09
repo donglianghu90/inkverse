@@ -1,17 +1,10 @@
 /** Drama 工作流拓扑生成服务 — 根据 Pipeline 节点配置生成线性链可视化拓扑 */
 import { Injectable } from '@nestjs/common';
-import { DramaAgentNodeConfig, DramaWorkflowParams, DEFAULT_DRAMA_WORKFLOW_PARAMS } from './entities/drama-agent-pipeline.entity';
+import { DEFAULT_DRAMA_WORKFLOW_PARAMS } from './entities/drama-agent-pipeline.entity';
+import type { DramaAgentNodeConfig, DramaWorkflowParams } from './interfaces';
+import type { WfEdgeType, WfNode, WfEdge, WfPhase, DramaWorkflowTopology } from './interfaces';
 
-export type WfNodeType = 'agent' | 'condition' | 'check' | 'phase_header';
-export type WfEdgeType = 'normal' | 'conditional_true' | 'conditional_false' | 'retry';
-export type WfPhaseType = 'sequential';
-export type ConfigParamType = 'number' | 'boolean';
-
-export interface ConfigParam { key: string; label: string; type: ConfigParamType; value: number | boolean; min?: number; max?: number; step?: number; description: string; }
-export interface WfNode { id: string; label: string; type: WfNodeType; agentType?: string; icon?: string; isCore: boolean; isEnabled: boolean; condition?: string; configParams?: ConfigParam[]; phaseId: string; }
-export interface WfEdge { id: string; source: string; target: string; type: WfEdgeType; label?: string; animated?: boolean; }
-export interface WfPhase { id: string; label: string; type: WfPhaseType; nodeIds: string[]; }
-export interface DramaWorkflowTopology { phases: WfPhase[]; nodes: WfNode[]; edges: WfEdge[]; params: DramaWorkflowParams; }
+export type { WfNodeType, WfEdgeType, WfPhaseType, ConfigParamType, ConfigParam, WfNode, WfEdge, WfPhase, DramaWorkflowTopology } from './interfaces';
 
 const AGENT_ICON: Record<string, string> = {
   'arc-director': '🎬', 'episode-director': '🎯', 'continuity-guard': '🛡️', scriptwriter: '✍️',

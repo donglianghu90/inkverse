@@ -1,37 +1,9 @@
 /** Drama Agent Pipeline 实体 — 存储短剧 Pipeline 节点配置与工作流参数 */
 import { Entity, Column, PrimaryColumn, CreateDateColumn, UpdateDateColumn, OneToOne, JoinColumn } from 'typeorm';
+import type { DramaAgentNodeConfig, DramaWorkflowParams } from '../interfaces';
 import { DramaEntity } from './drama.entity';
 
-export type DramaAgentNodeType =
-  | 'arc-director' | 'episode-director' | 'continuity-guard'
-  | 'scriptwriter' | 'dialogue-coach'
-  | 'storyboard-director' | 'audio-director'
-  | 'deterministic-checker' | 'script-reviewer' | 'script-editor'
-  | 'pacing-analyzer' | 'hook-crafter' | 'episode-recorder'
-  | 'custom';
-
-export interface DramaAgentNodeConfig {
-  id: string;
-  type: DramaAgentNodeType;
-  label: string;
-  description: string;
-  isEnabled: boolean;
-  isDeletable: boolean;
-  isCore: boolean;
-  position: number;
-  rfPosition: { x: number; y: number };
-  additionalSystemPrompt: string;
-  customConfig?: { systemPrompt: string; userPromptTemplate: string; temperature: number };
-}
-
-export interface DramaWorkflowParams {
-  maxEditRounds: number;           // 精修最大轮数
-  maxContinuityRetries: number;    // 连续性阻断最大重试次数
-  qualityPassScore: number;        // 质量通过分数
-  enableDialogueCoach: boolean;    // 是否启用台词润色
-  enablePacingAnalyzer: boolean;   // 是否启用节奏分析
-  enableHookCrafter: boolean;      // 是否启用悬念设计
-}
+export type { DramaAgentNodeConfig, DramaWorkflowParams } from '../interfaces';
 
 export const DEFAULT_DRAMA_WORKFLOW_PARAMS: DramaWorkflowParams = {
   maxEditRounds: 2, maxContinuityRetries: 1, qualityPassScore: 7.0,

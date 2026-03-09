@@ -6,16 +6,8 @@ import {
   DramaAgentPipelineEntity, DramaAgentNodeConfig, DramaWorkflowParams,
   DEFAULT_DRAMA_PIPELINE_NODES, DEFAULT_DRAMA_WORKFLOW_PARAMS,
 } from './entities/drama-agent-pipeline.entity';
-import { DramaWorkflowTopologyService, DramaWorkflowTopology } from './drama-workflow-topology.service';
-
-export interface DramaPipelineView {
-  dramaId: string;
-  draftNodes: DramaAgentNodeConfig[];
-  publishedNodes: DramaAgentNodeConfig[] | null;
-  publishedAt: string | null;
-  hasDraft: boolean;
-  workflowParams: DramaWorkflowParams;
-}
+import { DramaWorkflowTopologyService } from './drama-workflow-topology.service';
+import type { DramaPipelineView, DramaWorkflowTopology } from './interfaces';
 
 const CORE_NODE_IDS = ['arc-director', 'episode-director', 'scriptwriter', 'storyboard-director', 'deterministic-checker', 'episode-recorder'];
 

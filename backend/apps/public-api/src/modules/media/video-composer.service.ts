@@ -6,38 +6,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { LocalStorageService } from './local-storage.service';
-import { VideoPostProcessorService, PostProcessOptions } from './video-post-processor.service';
+import { VideoPostProcessorService } from './video-post-processor.service';
+import type { ComposeShotInput, ComposeEpisodeInput, ComposeResult } from './interfaces/video-composer.interface';
+
+export type { ComposeShotInput, ComposeEpisodeInput, ComposeResult } from './interfaces/video-composer.interface';
 
 const execFileAsync = promisify(execFile);
-
-export interface ComposeShotInput {
-  shotId: string;
-  videoPath: string;
-  ttsAudioPath?: string;
-  durationSec: number;
-  transition: string;
-  subtitle?: { text: string; style: string };
-  bgmPath?: string;
-  bgmIntensity?: number;
-  bgmAction?: string;
-  sfxPaths?: string[];
-  ambiencePath?: string;
-  postProcess?: PostProcessOptions;
-}
-
-export interface ComposeEpisodeInput {
-  episodeId: string;
-  shots: ComposeShotInput[];
-  outputPath: string;
-  aspectRatio?: string; // 9:16 / 16:9
-  fps?: number;
-}
-
-export interface ComposeResult {
-  outputPath: string;
-  durationSec: number;
-  fileSizeMb: number;
-}
 
 const XFADE_DURATION = 0.5; // 转场过渡时长(秒)
 const ENCODE_ARGS = ['-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k']; // V8: 统一编码参数

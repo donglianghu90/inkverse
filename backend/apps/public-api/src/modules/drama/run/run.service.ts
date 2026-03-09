@@ -2,13 +2,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, MoreThan, In } from 'typeorm';
+import type { AppendEventInput } from '../interfaces';
 import { DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity } from './entities/run.entity';
 
-export type RunEventType = 'run.start' | 'step.start' | 'step.chunk' | 'step.complete' | 'step.error' | 'run.complete' | 'run.error' | 'run.canceled';
-
-export interface AppendEventInput {
-  runId: string; eventType: RunEventType; stepKey?: string; attempt?: number; payload?: Record<string, unknown>;
-}
+export type { RunEventType, AppendEventInput } from '../interfaces';
 
 @Injectable()
 export class DramaRunService {

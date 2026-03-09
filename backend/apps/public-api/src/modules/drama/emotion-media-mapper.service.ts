@@ -1,8 +1,9 @@
 /** 情绪→媒体参数映射器 — 纯逻辑，将 Shot 情绪/场景数据映射为具体的媒体生产参数 */
 import { Injectable } from '@nestjs/common';
+import type { ColorGrade } from '../media/interfaces/post-process.interface';
 import { Shot, ScriptScene } from './schemas/drama-state.schemas';
 
-export type ColorGrade = 'warm' | 'cold' | 'high_contrast' | 'desaturated' | 'golden_hour' | 'noir' | 'neutral';
+export type { ColorGrade } from '../media/interfaces/post-process.interface';
 
 export interface ShotMediaParams {
   colorGrade: ColorGrade;

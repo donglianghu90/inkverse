@@ -1,30 +1,9 @@
 /** 进度推送服务 — EventEmitter 驱动，支持章节生成进度 + 创建结果事件 */
 import { Injectable } from '@nestjs/common';
 import { EventEmitter } from 'events';
+import type { GenerationProgressEvent, CreateBookResultEvent, GenerationStatus } from './interfaces';
 
-export interface GenerationProgressEvent {
-  bookId: string;
-  chapterNumber: number;
-  step: string;
-  stepIndex: number;
-  totalSteps: number;
-  message: string;
-  done: boolean;
-  error?: string;
-  nodeId?: string;
-  loopAttempt?: number;
-  score?: number;
-  durationMs?: number;
-  skipped?: boolean;
-  phase?: string;
-}
-
-export interface CreateBookResultEvent { // 创建完成/失败的结果事件
-  result?: Record<string, unknown>;
-  error?: string;
-}
-
-export interface GenerationStatus { generating: boolean; startedAt: number | null; lastStep: string | null; progress: number; }
+export type { GenerationProgressEvent, CreateBookResultEvent, GenerationStatus } from './interfaces';
 
 @Injectable()
 export class NovelProgressService {

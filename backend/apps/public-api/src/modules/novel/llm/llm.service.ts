@@ -10,9 +10,9 @@ import { z, ZodTypeAny } from 'zod';
 import { LlmTraceLoggerService } from './llm-trace-logger.service';
 import { ConfigService } from '@packages/modules';
 import { UsageLedgerService } from '../../usage/usage-ledger.service';
+import type { LlmProvider, ModelTier, TaskRoute } from '../interfaces';
 
-export type LlmProvider = 'gemini' | 'claude' | 'openai';
-export type ModelTier = 'creative' | 'standard' | 'lightweight';
+export type { LlmProvider, ModelTier, TaskRoute } from '../interfaces';
 
 interface StructuredGenerationInput<T extends ZodTypeAny> {
   taskName: string;
@@ -44,8 +44,6 @@ interface ProviderConfig {
   azureInstanceName?: string;
   azureApiVersion?: string;
 }
-
-export interface TaskRoute { provider: LlmProvider; tier: ModelTier; }
 
 /**
  * 任务→模型路由表：Gemini(创作/规划/轻量) + Claude(审阅) + OpenAI(可选)

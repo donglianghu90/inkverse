@@ -7,21 +7,9 @@ import * as path from 'path';
 
 const execFileAsync = promisify(execFile);
 
-export type ColorGrade = 'warm' | 'cold' | 'high_contrast' | 'desaturated' | 'golden_hour' | 'noir' | 'neutral';
+import type { ColorGrade, PostProcessOptions, PostProcessResult } from './interfaces/post-process.interface';
 
-export interface PostProcessOptions {
-  specialTechnique?: string;
-  colorGrade?: ColorGrade;
-  stabilize?: boolean;
-  kenBurns?: { direction: 'zoom_in' | 'zoom_out' | 'pan_left' | 'pan_right'; zoomFactor: number };
-  speedFactor?: number;
-  durationSec?: number;
-}
-
-export interface PostProcessResult {
-  outputPath: string;
-  durationSec: number;
-}
+export type { ColorGrade, PostProcessOptions, PostProcessResult } from './interfaces/post-process.interface';
 
 const COLOR_FILTERS: Record<ColorGrade, string> = {
   warm: 'colortemperature=temperature=6800,eq=saturation=1.15:brightness=0.03',

@@ -1,58 +1,10 @@
 /** 工作流拓扑生成服务 — 根据 Pipeline 节点配置生成完整的可视化拓扑描述 */
 import { Injectable } from '@nestjs/common';
-import { AgentNodeConfig, WorkflowParams, DEFAULT_WORKFLOW_PARAMS } from './entities/book-agent-pipeline.entity';
+import { DEFAULT_WORKFLOW_PARAMS } from './entities/book-agent-pipeline.entity';
+import type { AgentNodeConfig, WorkflowParams } from './interfaces';
+import type { WfNode, WfEdge, WfEdgeType, WfPhase, WorkflowTopology } from './interfaces';
 
-export type WfNodeType = 'agent' | 'condition' | 'check' | 'parallel_fork' | 'parallel_join' | 'loop_entry' | 'loop_exit' | 'phase_header';
-export type WfEdgeType = 'normal' | 'conditional_true' | 'conditional_false' | 'retry' | 'rollback' | 'parallel';
-export type WfPhaseType = 'sequential' | 'loop' | 'parallel_group';
-export type ConfigParamType = 'number' | 'boolean';
-
-export interface ConfigParam {
-  key: string;
-  label: string;
-  type: ConfigParamType;
-  value: number | boolean;
-  min?: number;
-  max?: number;
-  step?: number;
-  description: string;
-}
-
-export interface WfNode {
-  id: string;
-  label: string;
-  type: WfNodeType;
-  agentType?: string;
-  icon?: string;
-  isCore: boolean;
-  isEnabled: boolean;
-  condition?: string;
-  configParams?: ConfigParam[];
-  phaseId: string;
-}
-
-export interface WfEdge {
-  id: string;
-  source: string;
-  target: string;
-  type: WfEdgeType;
-  label?: string;
-  animated?: boolean;
-}
-
-export interface WfPhase {
-  id: string;
-  label: string;
-  type: WfPhaseType;
-  nodeIds: string[];
-}
-
-export interface WorkflowTopology {
-  phases: WfPhase[];
-  nodes: WfNode[];
-  edges: WfEdge[];
-  params: WorkflowParams;
-}
+export type { WfNodeType, WfEdgeType, WfPhaseType, ConfigParamType, ConfigParam, WfNode, WfEdge, WfPhase, WorkflowTopology } from './interfaces';
 
 const AGENT_ICON: Record<string, string> = {
   'arc-director': '🎬', intent: '🧭', 'continuity-guard': '🛡️', 'scene-planner': '🎯',

@@ -1,30 +1,9 @@
 /** 短剧进度推送服务 — EventEmitter 驱动，支持创建进度 + 逐集生成进度 */
 import { Injectable } from '@nestjs/common';
 import { EventEmitter } from 'events';
+import type { DramaProgressEvent, DramaGenerationStatus } from './interfaces';
 
-export type DramaRunType = 'create' | 'episode' | 'media' | 'images';
-export type DramaTerminalStatus = 'success' | 'failed' | 'paused';
-
-export interface DramaProgressEvent {
-  _type: 'progress';
-  dramaId: string;
-  runType: DramaRunType; // 创建 / 逐集生成 / 媒体生成 / 分镜图批量生成
-  episodeNumber?: number;
-  step: string;
-  stepKey?: string; // 语义步骤键（如 reviewed / edited）
-  nodeId?: string; // pipeline 节点 id（如 dialogue-coach）
-  stepIndex: number;
-  totalSteps: number;
-  message: string;
-  done: boolean;
-  skipped?: boolean; // 本步骤是否跳过
-  skipReason?: string; // 跳过原因（如 pipeline_disabled）
-  terminal: boolean;
-  terminalStatus?: DramaTerminalStatus;
-  error?: string;
-}
-
-export interface DramaGenerationStatus { generating: boolean; startedAt: number | null; lastStep: string | null; progress: number; }
+export type { DramaProgressEvent, DramaGenerationStatus, DramaRunType, DramaTerminalStatus } from './interfaces';
 
 @Injectable()
 export class DramaProgressService {

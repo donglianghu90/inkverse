@@ -2,18 +2,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@packages/modules';
 import { UsageLedgerService } from '../../usage/usage-ledger.service';
+import type { EmbeddingMeta } from '../interfaces';
 
-export interface EmbeddingMeta {
-  userId?: string;
-  /** 小说模块：书籍 ID */
-  bookId?: string;
-  /** 小说模块：章节号 */
-  chapterNumber?: number;
-  /** 短剧模块：剧目 ID */
-  dramaId?: string;
-  /** 短剧模块：集号 */
-  episodeNumber?: number;
-}
+export type { EmbeddingMeta } from '../interfaces';
 
 @Injectable()
 export class EmbeddingService {

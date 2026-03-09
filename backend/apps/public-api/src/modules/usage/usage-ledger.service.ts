@@ -2,34 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UsageEventEntity } from './entities/usage-event.entity';
-import type { ScopeGranularity, UsageBucketView } from './usage.types';
+import type { RecordUsageInput } from './interfaces/record-usage.interface';
+import type { KindBucket, UsageBucketView } from './interfaces/usage-bucket.interface';
+import type { ScopeGranularity } from './usage.types';
 import { MODULE_SCOPE_GRANULARITY, USAGE_KINDS } from './usage.types';
 
-export interface RecordUsageInput {
-  userId: string;
-  module: string;
-  resourceId: string;
-  scope: string;
-  action: string;
-  kind: string;
-  provider: string;
-  model: string;
-  tokensIn?: number;
-  tokensOut?: number;
-  quantity?: number;
-  costCny: number;
-  ok: boolean;
-  durationMs?: number;
-  idempotencyKey?: string;
-}
-
-interface KindBucket {
-  calls: number;
-  tokensIn: number;
-  tokensOut: number;
-  quantity: number;
-  costCny: number;
-}
+export type { RecordUsageInput } from './interfaces/record-usage.interface';
 
 function emptyBucket(): KindBucket {
   return { calls: 0, tokensIn: 0, tokensOut: 0, quantity: 0, costCny: 0 };

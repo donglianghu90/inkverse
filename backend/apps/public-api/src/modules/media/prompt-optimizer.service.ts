@@ -1,33 +1,9 @@
 /** Prompt 优化器 — 针对 T2I/T2V 模型特性优化提示词，提升生成质量 */
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@packages/modules';
+import type { OptimizeResult, T2IOptimizeOptions, T2VOptimizeOptions } from './interfaces/prompt-optimizer.interface';
 
-export interface OptimizeResult {
-  prompt: string;
-  negativePrompt: string;
-  metadata: { addedKeywords: string[]; removedKeywords: string[] };
-}
-
-export interface T2IOptimizeOptions {
-  provider?: string;
-  shotType?: string;       // 'first_frame' | 'last_frame' | 'character' | 'location'
-  qualityTier?: string;    // 'golden' | 'standard' | 'filler'
-  cameraAngle?: string;
-  emotionColorHint?: string;
-  routeProfile?: string;
-}
-
-export interface T2VOptimizeOptions {
-  provider?: string;
-  duration?: number;
-  hasFirstFrame?: boolean;
-  hasLastFrame?: boolean;
-  specialTechnique?: string;
-  cameraMovement?: string;
-  cameraAngle?: string;
-  emotionColorHint?: string;
-  routeProfile?: string;
-}
+export type { OptimizeResult, T2IOptimizeOptions, T2VOptimizeOptions } from './interfaces/prompt-optimizer.interface';
 
 const QUALITY_BOOSTERS: Record<string, string[]> = {
   volcengine: ['cinematic lighting', 'rich color depth'],

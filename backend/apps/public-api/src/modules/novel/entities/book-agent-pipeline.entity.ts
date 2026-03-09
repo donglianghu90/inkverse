@@ -7,52 +7,10 @@ import {
   OneToOne,
   JoinColumn,
 } from 'typeorm';
+import type { AgentNodeConfig, WorkflowParams } from '../interfaces';
 import { BookEntity } from './book.entity';
 
-export type AgentNodeType =
-  | 'intent'
-  | 'arc-director'
-  | 'scene-planner'
-  | 'creative-writer'
-  | 'scene-stitcher'
-  | 'reviewer'
-  | 'editor'
-  | 'recorder'
-  | 'continuity-guard'
-  | 'hook-crafter'
-  | 'pacing-analyzer'
-  | 'character-voice-coach'
-  | 'custom';
-
-export type CustomOutputType = 'ChapterDraft' | 'ChapterIntent';
-
-export interface CustomAgentConfig {
-  systemPrompt: string;
-  userPromptTemplate: string;
-  outputType: CustomOutputType;
-  temperature: number;
-}
-
-export interface AgentNodeConfig {
-  id: string;
-  type: AgentNodeType;
-  label: string;
-  description: string;
-  isEnabled: boolean;
-  isDeletable: boolean;
-  isCore: boolean;
-  position: number;
-  rfPosition: { x: number; y: number };
-  additionalSystemPrompt: string;
-  customConfig?: CustomAgentConfig;
-}
-
-export interface WorkflowParams {
-  qualityPassScore: number;        // 质量门控通过分数，默认 8.5
-  maxRepairRounds: number;         // 最大重写轮数，默认 2
-  editorPolishThreshold: number;   // 编辑精修触发阈值，默认 7.0
-  longRangeMemoryThreshold: number; // 长程记忆检索章节阈值，默认 10
-}
+export type { AgentNodeConfig, WorkflowParams, AgentNodeType, CustomOutputType, CustomAgentConfig } from '../interfaces';
 
 export const DEFAULT_WORKFLOW_PARAMS: WorkflowParams = {
   qualityPassScore: 8.5,

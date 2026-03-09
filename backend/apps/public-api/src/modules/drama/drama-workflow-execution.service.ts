@@ -4,22 +4,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
 
-type DramaExecStatus = DramaWorkflowExecutionEntity['status'];
-export interface DramaSkippedStepSummary {
-  stepKey: string;
-  nodeId?: string;
-  skipReason?: string;
-  message?: string;
-}
+import type { DramaSkippedStepSummary, DramaExecutionSummary } from './interfaces';
 
-export interface DramaExecutionSummary {
-  overallScore?: number;
-  shotCount?: number;
-  duration?: number;
-  totalDurationMs: number;
-  editRounds: number;
-  skippedSteps?: DramaSkippedStepSummary[];
-}
+export type { DramaSkippedStepSummary, DramaExecutionSummary } from './interfaces';
+
+type DramaExecStatus = DramaWorkflowExecutionEntity['status'];
 
 const STALE_THRESHOLD_MS = 60_000; // running超60s视为可恢复
 const DEFAULT_INSTANCE_ID = `${process.env.HOSTNAME ?? 'local'}-${process.pid}`;

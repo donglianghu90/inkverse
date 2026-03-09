@@ -3,8 +3,9 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@packages/modules';
 import * as path from 'path';
 import * as fs from 'fs';
+import type { AudioSegment } from './interfaces/audio.interface';
 
-export interface AudioSegment { url: string; durationSec?: number; label: string }
+export type { AudioSegment } from './interfaces/audio.interface';
 
 const DEFAULT_BGM: Record<string, string> = { // mood → 文件名（相对于 audioBaseDir）
   tension_building: 'bgm/tension.mp3', romantic_sweet: 'bgm/romantic.mp3',
