@@ -125,6 +125,7 @@ const CreateBook: React.FC = () => {
   const [originalGoal, setOriginalGoal] = useState('');
   const [showSerialAdvanced, setShowSerialAdvanced] = useState(false);
 
+  const [showAdvancedStep2, setShowAdvancedStep2] = useState(false);
   const [genreTemplates, setGenreTemplates] = useState<GenreProfileTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   useEffect(() => {
@@ -136,7 +137,8 @@ const CreateBook: React.FC = () => {
   const [generatedProfile, setGeneratedProfile] = useState<BookPromptProfile | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
 
-  const [form, setForm] = useState<FormState>({
+  const DRAFT_KEY = 'inkverse_create_book_draft';
+  const defaultForm: FormState = {
     mainIdea: '',
     genre: '',
     targetAudience: '',
@@ -158,7 +160,43 @@ const CreateBook: React.FC = () => {
     autoSerializationMinOverallScore: 7,
     customAudience: '',
     useCustomAudience: false,
+  };
+
+  const [form, setForm] = useState<FormState>(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.step != null) setStep(parsed.step);
+        return { ...defaultForm, ...parsed.form };
+      }
+    } catch { /* ignore corrupt draft */ }
+    return defaultForm;
   });
+  const [hasDraft, setHasDraft] = useState(() => !!localStorage.getItem(DRAFT_KEY));
+
+  useEffect(() => {
+    if (step >= 4) return;
+    const timer = setTimeout(() => {
+      const hasContent = form.mainIdea.trim().length > 0;
+      if (hasContent) {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, step }));
+        setHasDraft(true);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [form, step]);
+
+  const clearDraft = useCallback(() => {
+    localStorage.removeItem(DRAFT_KEY);
+    setHasDraft(false);
+  }, []);
+
+  const discardDraft = useCallback(() => {
+    clearDraft();
+    setForm(defaultForm);
+    setStep(0);
+  }, [clearDraft]);
 
   const abortRef = useRef<AbortController | null>(null);
   const sessionRef = useRef<{ key: string; fingerprint: string } | null>(null);
@@ -297,6 +335,7 @@ const CreateBook: React.FC = () => {
         setGenSteps((prev) => prev.map((s) => ({ ...s, done: true })));
         setCreatedBookId(session.result.bookId);
         setGeneratedProfile(session.result.bookPromptProfile);
+        clearDraft();
         setTimeout(() => { setStep(5); setLoading(false); }, 600);
         return;
       }
@@ -340,6 +379,7 @@ const CreateBook: React.FC = () => {
               setGenSteps((prev) => prev.map((s) => ({ ...s, done: true })));
               setCreatedBookId(payload.result.bookId);
               setGeneratedProfile(payload.result.bookPromptProfile);
+              clearDraft();
               setTimeout(() => { setStep(5); setLoading(false); }, 600);
               return;
             }
@@ -420,17 +460,35 @@ const CreateBook: React.FC = () => {
     <div className="mx-auto max-w-3xl px-4 sm:px-6 py-6 sm:py-8 pb-24 sm:pb-8">
       {/* Header: back + step indicator inline */}
       <div className="mb-6 sm:mb-8">
-        {/* Back */}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mb-4 gap-1.5 -ml-2"
-          onClick={goBack}
-          disabled={isGenerating || isReviewing}
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {step > 0 && !isGenerating && !isReviewing ? '上一步' : '返回书架'}
-        </Button>
+        {/* Back + draft indicator */}
+        <div className="flex items-center justify-between mb-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1.5 -ml-2"
+            onClick={goBack}
+            disabled={isGenerating || isReviewing}
+          >
+            <ArrowLeft className="h-4 w-4" />
+            {step > 0 && !isGenerating && !isReviewing ? '上一步' : '返回书架'}
+          </Button>
+          {hasDraft && !isGenerating && !isReviewing && (
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-muted-foreground/60 flex items-center gap-1">
+                <Save className="h-3 w-3" />
+                草稿已保存
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 text-[11px] text-muted-foreground hover:text-destructive px-1.5"
+                onClick={discardDraft}
+              >
+                清除草稿
+              </Button>
+            </div>
+          )}
+        </div>
 
         {/* Step indicator — Desktop: only 4 form steps */}
         {step < formStepCount && (
@@ -753,43 +811,64 @@ const CreateBook: React.FC = () => {
             </div>
           </div>
 
-          <div className="space-y-3">
-            <Label>写作模式</Label>
-            <div className="grid grid-cols-2 gap-3">
-              {([
-                { value: 'commercial' as const, label: '畅读模式', desc: '商业节奏优先，追求翻页欲和读者满足感', icon: '📖' },
-                { value: 'literary' as const, label: '文学探索', desc: '主题深度优先，允许实验叙事和非传统结构', icon: '🎭' },
-              ]).map((opt) => (
-                <button
-                  type="button"
-                  key={opt.value}
-                  className={cn(
-                    'flex flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-all hover:border-primary/50 active:scale-[0.97]',
-                    form.writingMode === opt.value
-                      ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
-                      : 'border-border',
+          {/* Collapsible advanced options */}
+          <div className="rounded-lg border border-border/60">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium hover:bg-accent/30 transition-colors rounded-lg"
+              onClick={() => setShowAdvancedStep2(v => !v)}
+            >
+              <div className="flex items-center gap-2">
+                <Settings2 className="h-4 w-4 text-muted-foreground" />
+                <span>高级选项</span>
+                {(form.writingMode === 'literary' || form.tonePreference) && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                )}
+              </div>
+              <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', showAdvancedStep2 && 'rotate-180')} />
+            </button>
+            {showAdvancedStep2 && (
+              <div className="px-4 pb-4 space-y-5 animate-fade-in border-t">
+                <div className="space-y-3 pt-4">
+                  <Label>写作模式</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {([
+                      { value: 'commercial' as const, label: '畅读模式', desc: '商业节奏优先，追求翻页欲和读者满足感', icon: '📖' },
+                      { value: 'literary' as const, label: '文学探索', desc: '主题深度优先，允许实验叙事和非传统结构', icon: '🎭' },
+                    ]).map((opt) => (
+                      <button
+                        type="button"
+                        key={opt.value}
+                        className={cn(
+                          'flex flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-all hover:border-primary/50 active:scale-[0.97]',
+                          form.writingMode === opt.value
+                            ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
+                            : 'border-border',
+                        )}
+                        onClick={() => setForm({ ...form, writingMode: opt.value })}
+                      >
+                        <span className="text-sm font-medium">{opt.icon} {opt.label}</span>
+                        <span className="text-[10px] sm:text-[11px] text-muted-foreground leading-tight">{opt.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {form.writingMode === 'literary' && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">文学探索模式下会启用更高温度、实验章型、originality 评分维度，适合追求文学深度的创作。</p>
                   )}
-                  onClick={() => setForm({ ...form, writingMode: opt.value })}
-                >
-                  <span className="text-sm font-medium">{opt.icon} {opt.label}</span>
-                  <span className="text-[10px] sm:text-[11px] text-muted-foreground leading-tight">{opt.desc}</span>
-                </button>
-              ))}
-            </div>
-            {form.writingMode === 'literary' && (
-              <p className="text-xs text-amber-600 dark:text-amber-400">文学探索模式下会启用更高温度、实验章型、originality 评分维度，适合追求文学深度的创作。</p>
-            )}
-          </div>
+                </div>
 
-          <div className="space-y-3">
-            <Label htmlFor="tonePreference">调性偏好（可选）</Label>
-            <Input
-              id="tonePreference"
-              placeholder="例如：细腻慢热、热血高燃、冷峻克制"
-              value={form.tonePreference ?? ''}
-              onChange={(e) => setForm({ ...form, tonePreference: e.target.value })}
-            />
-            <p className="text-xs text-muted-foreground">将用于模板匹配与写作风格约束。</p>
+                <div className="space-y-3">
+                  <Label htmlFor="tonePreference">调性偏好（可选）</Label>
+                  <Input
+                    id="tonePreference"
+                    placeholder="例如：细腻慢热、热血高燃、冷峻克制"
+                    value={form.tonePreference ?? ''}
+                    onChange={(e) => setForm({ ...form, tonePreference: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">将用于模板匹配与写作风格约束。</p>
+                </div>
+              </div>
+            )}
           </div>
 
           <Card className="border-primary/10 bg-gradient-to-br from-primary/3 to-transparent overflow-hidden">

@@ -51,6 +51,11 @@ export class MediaJobService implements OnModuleInit, OnModuleDestroy {
     await this.repo.update(id, { status: 'failed', error });
   }
 
+  async deleteByDrama(dramaId: string): Promise<number> {
+    const r = await this.repo.delete({ dramaId });
+    return r.affected ?? 0;
+  }
+
   // ═══ 异步轮询 — 定期检查未完成的视频任务 ═══
 
   private startPolling() {

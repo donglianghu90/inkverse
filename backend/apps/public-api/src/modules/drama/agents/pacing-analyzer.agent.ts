@@ -37,8 +37,8 @@ export class PacingAnalyzerAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-pacing-analyzer',
       schema: pacingResultSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'pacing-analyzer', buildPacingAnalyzerSystemPrompt({ contentMode: state.contentMode })),
-
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'pacing-analyzer', buildPacingAnalyzerSystemPrompt()),
+      metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: storyboard.episodeNumber },
       userPrompt: `分析第 ${storyboard.episodeNumber} 集节奏：
 
 总时长：${storyboard.totalEstimatedDurationSec}秒

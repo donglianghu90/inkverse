@@ -315,6 +315,7 @@ export class DeepMaintenanceService {
     const bible = await this.llm.generateStructured({
       taskName: 'bible-crystallization',
       schema: crystallizedBibleSchema,
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber },
       systemPrompt: `你是设定整理专家。从已写内容中提炼IP圣经——这不是创造新设定，而是把已经建立的内容整理成权威参考文件。
 
 关键原则：
@@ -369,6 +370,7 @@ ${JSON.stringify(context, null, 2)}
     const revisedOutline = await this.llm.generateStructured({
       taskName: 'outline-revision',
       schema: roughOutlineSchema,
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber },
       systemPrompt: `你是大纲修订师。
 根据实际已写的故事内容，修订后续的粗大纲。
 已经写过的部分不要改动，只调整尚未写到的未来方向。
@@ -410,6 +412,7 @@ ${JSON.stringify(context, null, 2)}
     const result = await this.llm.generateStructured({
       taskName: 'consistency-audit',
       schema: consistencyAuditResultSchema,
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber },
       systemPrompt: `你是一位严谨的故事一致性审计员。
 你的任务是检查已写故事中的所有角色、地点、时间线是否存在矛盾或不一致。
 
@@ -499,6 +502,7 @@ ${JSON.stringify((state.characterFactLedger ?? []).slice(-50), null, 2)}
     const result = await this.llm.generateStructured({
       taskName: 'canon-arbitration',
       schema: canonArbitrationResultSchema,
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber },
       systemPrompt: `你是人设档案仲裁员。
 你的任务是检查角色的事实档案，找出互相矛盾的条目，并仲裁取舍。
 
@@ -550,6 +554,7 @@ ${JSON.stringify(state.characters.filter((c) => charsWithMultiple.some((x) => x.
     const result = await this.llm.generateStructured({
       taskName: 'thread-health-check',
       schema: threadHealthResultSchema,
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber },
       systemPrompt: `你是伏线管理专家。
 你的任务是检查所有开放伏线的健康度，并给出处理建议。
 
@@ -676,6 +681,7 @@ ${JSON.stringify(state.chapterSummaries.slice(-10), null, 2)}
     const newArc = await this.llm.generateStructured({
       taskName: 'arc-planning',
       schema: miniArcSchema,
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber },
       systemPrompt: `你是一位擅长节奏控制的网文策划师。规划接下来${arcRange.min}-${arcRange.max}章的"卷计划"。
 
 === 新鲜感要求（重要）===
@@ -871,6 +877,7 @@ ${state.seed.mainStoryGoal ? `\n全书主线目标：${state.seed.mainStoryGoal}
     const anchor = await this.llm.generateStructured({
       taskName: 'style-anchoring',
       schema: styleAnchorSchema,
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber },
       systemPrompt: `你是一位顶级文风分析专家，专门研究中文网文的"文风DNA"。你需要从文本样本中提取深层风格特征——不是笼统的描述，而是具体到可以指导写作的"配方"。
 
 分析维度：
@@ -930,6 +937,7 @@ ${emotionSamples.length > 0 ? `\n情感段落：\n${emotionSamples.map((p, i) =>
     const output = await this.llm.generateStructured({
       taskName: 'arc-summary-pyramid',
       schema: arcSummaryOutputSchema,
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber },
       systemPrompt: `你是故事摘要专家。为刚结束的「卷/弧」生成结构化摘要，供后续章节远程记忆召回使用。
 要求：summary 300-500字，概括本弧核心剧情发展、角色成长、情感主线；emotionalArc 一句话描述情感走向；keywords 用于语义检索。`,
       userPrompt: `弧信息：
@@ -957,7 +965,7 @@ ${state.characters.slice(0, 12).map((c) => `${c.name}(${c.role}): ${c.archetype}
       resolvedThreads: output.resolvedThreads, newThreadsPlanted: output.newThreadsPlanted,
       emotionalArc: output.emotionalArc, keyTurningPoints: output.keyTurningPoints,
       worldStateChanges: output.worldStateChanges, keywords: output.keywords,
-    } as any);
+    } as any, state.userId);
     this.logger.log(`[Maintenance] 弧摘要生成完成：「${safeArc.arcTitle}」${safeArc.startChapter}-${chapterNumber}`);
   }
 
@@ -975,6 +983,7 @@ ${state.characters.slice(0, 12).map((c) => `${c.name}(${c.role}): ${c.archetype}
     const output = await this.llm.generateStructured({
       taskName: 'volume-summary-pyramid',
       schema: volumeSummaryOutputSchema,
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber },
       systemPrompt: `你是故事摘要专家。为刚结束的「大卷」生成宏观摘要，供后续卷的远程记忆召回使用。
 要求：summary 500-800字，宏观概括本卷剧情、主角成长、世界观展开；powerProgression 描述实力变化；keywords 用于语义检索。`,
       userPrompt: `卷信息：
@@ -1000,7 +1009,7 @@ ${state.characters.filter((c) => c.role === 'protagonist').map((c) => `${c.name}
       majorPlotMovements: output.majorPlotMovements, characterGrowth: output.characterGrowth,
       worldExpansion: output.worldExpansion, arcIds: arcsInVol.map((a) => a.arcId),
       keywords: output.keywords,
-    } as any);
+    } as any, state.userId);
     this.logger.log(`[Volume] 卷摘要生成完成：「${safeVol.title}」${safeVol.startChapter}-${chapterNumber}`);
   }
 

@@ -120,6 +120,7 @@ export class ArcDirectorAgent {
       schema: arcDirectorDirectiveSchema,
       tags: ['workflow', 'chapter', 'arc-director'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber,
         arcId: arc.arcId,

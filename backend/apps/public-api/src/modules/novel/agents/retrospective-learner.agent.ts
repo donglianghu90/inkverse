@@ -33,7 +33,7 @@ export class RetrospectiveLearnerAgent {
       taskName: 'retrospective-learner',
       schema: retrospectiveLessonsOutputSchema,
       tags: ['workflow', 'maintenance', 'retrospective'],
-      metadata: { bookId: state.bookId, arcId },
+      metadata: { userId: state.userId, bookId: state.bookId, arcId },
       systemPrompt: `你是一位数据驱动的写作教练。你收到了一个已完成弧的质量数据，需要从中提炼可复用的"写作教训"。
 
 === 分析原则 ===

@@ -23,7 +23,7 @@ export class TaskSubmitterService {
   async submit(input: { // 提交任务：创建记录→入队
     userId: string; dramaId: string; episodeNumber?: number; type: DramaTaskType;
     targetType: string; targetId: string; payload?: Record<string, unknown>;
-    priority?: number; maxAttempts?: number; billingInfo?: Record<string, unknown>;
+    priority?: number; maxAttempts?: number;
   }): Promise<{ taskId: string; deduped: boolean }> {
     const { task, deduped } = await this.taskService.createTask(input);
     if (deduped) { this.logger.log(`任务去重 taskId=${task.id} type=${input.type}`); return { taskId: task.id, deduped: true }; }
@@ -35,7 +35,7 @@ export class TaskSubmitterService {
     try {
       const jobData: DramaTaskPayload = { taskId: task.id, type: input.type, dramaId: input.dramaId, userId: input.userId,
         episodeNumber: input.episodeNumber, targetType: input.targetType, targetId: input.targetId,
-        payload: input.payload, billingInfo: input.billingInfo, priority: input.priority, maxAttempts: input.maxAttempts ?? 3 };
+        payload: input.payload, priority: input.priority, maxAttempts: input.maxAttempts ?? 3 };
       await queue.add(input.type, jobData, {
         priority: input.priority ?? 0, attempts: input.maxAttempts ?? 3,
         backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 100, removeOnFail: 200,

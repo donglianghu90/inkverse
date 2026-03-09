@@ -10,12 +10,17 @@ import {
 } from '../schemas/drama-state.schemas';
 import { buildScriptReviewerSystemPrompt } from '../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../prompting/drama-prompt-template.service';
+import { DramaCalibrationService } from '../drama-calibration.service';
 
 const reviewOutputSchema = z.object({ review: episodeReviewSchema });
 
 @Injectable()
 export class ScriptReviewerAgent {
-  constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
+  constructor(
+    private readonly llm: LlmService,
+    private readonly promptService: DramaPromptTemplateService,
+    private readonly calibration: DramaCalibrationService,
+  ) {}
 
   async review(
     state: DramaState, script: EpisodeScript, storyboard: EpisodeStoryboard,
@@ -31,7 +36,8 @@ export class ScriptReviewerAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-script-reviewer',
       schema: reviewOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'script-reviewer', buildScriptReviewerSystemPrompt({ weights, genreChecks, contentMode: state.contentMode })),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'script-reviewer', buildScriptReviewerSystemPrompt({ weights, genreChecks })),
+      metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: script.episodeNumber },
       userPrompt: `审核第 ${script.episodeNumber} 集：
 
 === 基本信息 ===
@@ -39,7 +45,7 @@ export class ScriptReviewerAgent {
 Hook策略：${script.hookStrategy}
 情绪弧：${script.overallEmotionalArc}
 最近KPI：${state.kpiHistory.slice(-3).map(k => `E${k.episodeNumber}=${k.overallScore}`).join(', ') || '（无历史）'}
-${this.buildCalibrationHint(state)}
+${this.calibration.buildCalibrationHint(state)}
 === 剧本实际内容（审核台词自然度/情感冲击力/节奏） ===
 ${scriptDetail}
 
@@ -59,15 +65,6 @@ ${shotDetail}
     else if (result.overallScore >= 7.5 && !hasCritical && !result.issuesFound.some(i => i.severity === 'moderate')) result.overallVerdict = 'good';
     else result.overallVerdict = 'needs_edit';
     return result;
-  }
-
-  private buildCalibrationHint(state: DramaState): string {
-    const patterns = (state.recentIssuePatterns ?? []).filter(p => p.status === 'active' && p.occurrences >= 2);
-    if (!patterns.length) return '';
-    const sorted = [...patterns].sort((a, b) => b.occurrences - a.occurrences).slice(0, 5);
-    const lines = ['=== 自校准警示（近期高频问题，审核时重点关注）==='];
-    for (const p of sorted) lines.push(`⚠ [${p.dimension}] ${p.pattern.split(':').slice(1).join(':')}（已出现${p.occurrences}次）`);
-    return lines.join('\n');
   }
 
   /** 构建剧本详情：每场戏的purpose + 完整台词 + 关键动作（限制token量） */

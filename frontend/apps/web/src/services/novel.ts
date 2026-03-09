@@ -50,6 +50,7 @@ export interface BookListItem {
   bookId: string;
   title: string;
   genre: string;
+  mainIdea?: string;
   chaptersGenerated: number;
   latestKpi: { qualityScore: number; overallScore: number } | null;
   updatedAt: string;

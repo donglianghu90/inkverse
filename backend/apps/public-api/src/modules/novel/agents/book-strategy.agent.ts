@@ -31,11 +31,13 @@ export class BookStrategyAgent {
     outline: RoughOutline;
     audienceDirective?: AudienceDirective;
     profile: BookPromptProfile;
+    userId?: string;
   }): Promise<BookStrategy> {
     const result = await this.llm.generateStructured({
       taskName: 'book-strategy-init',
       schema: bookStrategySchema,
       tags: ['setup', 'book-strategy'],
+      metadata: { userId: input.userId ?? '' },
       systemPrompt: `你是网文总策划，负责生成“书级策略（L2）”。书级策略必须稳定、可执行，不要写空话。
 
 输出要求：
@@ -93,6 +95,7 @@ export class BookStrategyAgent {
       taskName: 'book-strategy-refresh-policies',
       schema: refreshPolicySchema,
       tags: ['workflow', 'book-strategy'],
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber: state.chapterCursor },
       systemPrompt: `你是卷级策略优化器。只刷新4个策略，不改其它：
 1) hookCadencePolicy
 2) threadPolicy

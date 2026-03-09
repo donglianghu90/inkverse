@@ -42,6 +42,7 @@ export class AudioDirectorAgent {
         taskName: 'drama-audio-director',
         schema: batchOutputSchema,
         systemPrompt: sysPrompt,
+        metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: storyboard.episodeNumber },
         userPrompt: `第 ${storyboard.episodeNumber} 集音频设计（Shot ${off}-${off + batch.length - 1}，共${shots.length}个）：
 
 角色配音：${charVoices}

@@ -23,6 +23,7 @@ import {
   generateShotImage, getGenerateImagesSseUrl, getGenerateMediaSseUrl, resetProblemShots,
   type EpisodeListItem, type DramaSseEvent, type ResetFixTarget,
 } from '@/services/drama';
+import { getToken } from '@/services/auth';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -658,8 +659,8 @@ const EpisodeProductionBoard: React.FC = () => {
   const [problemResetMode, setProblemResetMode] = useState<'all' | 'high' | QcFixTarget | null>(null);
   const [sortMode, setSortMode] = useState<'story' | 'priority'>('story');
 
-  const imagesSseRef = useRef<EventSource | null>(null);
-  const videosSseRef = useRef<EventSource | null>(null);
+  const imagesSseRef = useRef<AbortController | null>(null);
+  const videosSseRef = useRef<AbortController | null>(null);
 
   // ── Data loading ─────────────────────────────────────────────────────────────
 
@@ -685,8 +686,8 @@ const EpisodeProductionBoard: React.FC = () => {
 
   // Clean up SSE on unmount
   useEffect(() => () => {
-    imagesSseRef.current?.close();
-    videosSseRef.current?.close();
+    imagesSseRef.current?.abort();
+    videosSseRef.current?.abort();
   }, []);
 
   // ── Derived data ──────────────────────────────────────────────────────────────
@@ -749,9 +750,9 @@ const EpisodeProductionBoard: React.FC = () => {
 
   // ── Batch image generation (SSE) ─────────────────────────────────────────────
 
-  const handleBatchGenerateImages = useCallback(() => {
+  const handleBatchGenerateImages = useCallback(async () => {
     if (!dramaId || isGeneratingImages) return;
-    imagesSseRef.current?.close();
+    imagesSseRef.current?.abort();
 
     const needsGen = displayShots.filter(s => !s.isFlashback && !s.isPreview && !shotMediaMap[s.shotId]?.imageUrl);
     if (needsGen.length === 0) {
@@ -762,42 +763,55 @@ const EpisodeProductionBoard: React.FC = () => {
     setIsGeneratingImages(true);
     setImageBatchProgress({ current: 0, total: needsGen.length, message: '正在连接…' });
 
+    const controller = new AbortController();
+    imagesSseRef.current = controller;
     const url = getGenerateImagesSseUrl(dramaId, episodeNumber);
-    const es = new EventSource(url);
-    imagesSseRef.current = es;
 
-    es.onmessage = (evt) => {
-      try {
-        const data = JSON.parse(evt.data) as DramaSseEvent;
-        if (data._type === 'heartbeat' || data._type === 'info') return;
-        if (data._type === 'error' || data.error || data.terminalStatus === 'failed') {
-          es.close();
-          setIsGeneratingImages(false);
-          message.error(`生成失败: ${data.error || data.message || '未知错误'}`);
-          return;
+    try {
+      const response = await fetch(url, {
+        headers: { Accept: 'text/event-stream', Authorization: `Bearer ${getToken()}` },
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) throw new Error('SSE 连接失败');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let stopped = false;
+      while (!stopped) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n'); buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          try {
+            const data = JSON.parse(line.slice(5).trim()) as DramaSseEvent;
+            if (data._type === 'heartbeat' || data._type === 'info') continue;
+            if (data._type === 'error' || data.error || data.terminalStatus === 'failed') {
+              message.error(`生成失败: ${data.error || data.message || '未知错误'}`);
+              stopped = true; break;
+            }
+            if (data._type === 'progress') {
+              setImageBatchProgress({
+                current: data.stepIndex ?? 0,
+                total: data.totalSteps ?? needsGen.length,
+                message: data.message ?? '',
+              });
+              continue;
+            }
+            if (data._type === 'result') {
+              message.success(data.message || '批量图片生成完成');
+              stopped = true; break;
+            }
+          } catch { /* skip malformed */ }
         }
-        if (data._type === 'progress') {
-          setImageBatchProgress({
-            current: data.stepIndex ?? 0,
-            total: data.totalSteps ?? needsGen.length,
-            message: data.message ?? '',
-          });
-          return;
-        }
-        if (data._type === 'result') {
-          es.close();
-          setIsGeneratingImages(false);
-          loadEpisode();
-          message.success(data.message || '批量图片生成完成');
-        }
-      } catch {}
-    };
-
-    es.onerror = () => {
-      es.close();
+      }
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') message.error(e?.message ?? '批量图片生成失败');
+    } finally {
       setIsGeneratingImages(false);
       loadEpisode();
-    };
+    }
   }, [dramaId, episodeNumber, isGeneratingImages, displayShots, shotMediaMap, loadEpisode]);
 
   // ── Problem shot reset (targeted) ───────────────────────────────────────────
@@ -834,9 +848,9 @@ const EpisodeProductionBoard: React.FC = () => {
 
   // ── Batch video generation (SSE, reuses media-sse endpoint) ──────────────────
 
-  const handleBatchGenerateVideos = useCallback(() => {
+  const handleBatchGenerateVideos = useCallback(async () => {
     if (!dramaId || isGeneratingVideos) return;
-    videosSseRef.current?.close();
+    videosSseRef.current?.abort();
 
     if (imageCount < totalShots) {
       const missing = totalShots - imageCount;
@@ -846,42 +860,55 @@ const EpisodeProductionBoard: React.FC = () => {
     setIsGeneratingVideos(true);
     setVideoBatchProgress({ current: 0, total: totalShots, message: '正在连接…' });
 
+    const controller = new AbortController();
+    videosSseRef.current = controller;
     const url = getGenerateMediaSseUrl(dramaId, episodeNumber);
-    const es = new EventSource(url);
-    videosSseRef.current = es;
 
-    es.onmessage = (evt) => {
-      try {
-        const data = JSON.parse(evt.data) as DramaSseEvent;
-        if (data._type === 'heartbeat' || data._type === 'info') return;
-        if (data._type === 'error' || data.error || data.terminalStatus === 'failed') {
-          es.close();
-          setIsGeneratingVideos(false);
-          message.error(`生成失败: ${data.error || data.message || '未知错误'}`);
-          return;
+    try {
+      const response = await fetch(url, {
+        headers: { Accept: 'text/event-stream', Authorization: `Bearer ${getToken()}` },
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) throw new Error('SSE 连接失败');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let stopped = false;
+      while (!stopped) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n'); buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          try {
+            const data = JSON.parse(line.slice(5).trim()) as DramaSseEvent;
+            if (data._type === 'heartbeat' || data._type === 'info') continue;
+            if (data._type === 'error' || data.error || data.terminalStatus === 'failed') {
+              message.error(`生成失败: ${data.error || data.message || '未知错误'}`);
+              stopped = true; break;
+            }
+            if (data._type === 'progress') {
+              setVideoBatchProgress({
+                current: data.stepIndex ?? 0,
+                total: data.totalSteps ?? totalShots,
+                message: data.message ?? '',
+              });
+              continue;
+            }
+            if (data._type === 'result') {
+              message.success(data.message || '批量视频生成完成');
+              stopped = true; break;
+            }
+          } catch { /* skip malformed */ }
         }
-        if (data._type === 'progress') {
-          setVideoBatchProgress({
-            current: data.stepIndex ?? 0,
-            total: data.totalSteps ?? totalShots,
-            message: data.message ?? '',
-          });
-          return;
-        }
-        if (data._type === 'result') {
-          es.close();
-          setIsGeneratingVideos(false);
-          loadEpisode();
-          message.success(data.message || '批量视频生成完成');
-        }
-      } catch {}
-    };
-
-    es.onerror = () => {
-      es.close();
+      }
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') message.error(e?.message ?? '批量视频生成失败');
+    } finally {
       setIsGeneratingVideos(false);
       loadEpisode();
-    };
+    }
   }, [dramaId, episodeNumber, isGeneratingVideos, imageCount, totalShots, loadEpisode]);
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -907,7 +934,7 @@ const EpisodeProductionBoard: React.FC = () => {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* ─── Header ─────────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur-sm px-4 h-14 flex items-center gap-3">
+      <header className="sticky top-[57px] z-30 border-b bg-background/95 backdrop-blur-sm px-4 h-12 flex items-center gap-3">
         <Button
           variant="ghost"
           size="icon"
@@ -926,14 +953,14 @@ const EpisodeProductionBoard: React.FC = () => {
         </div>
 
         {/* Episode navigator */}
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1 shrink-0 max-w-[40%] overflow-x-auto scrollbar-none">
           {episodes.map(ep => (
             <button
               key={ep.episodeNumber}
               type="button"
               onClick={() => history.push(`/novel/drama/${dramaId}/episodes/${ep.episodeNumber}`)}
               className={cn(
-                'w-7 h-7 rounded text-xs font-mono transition-colors',
+                'w-6 h-6 rounded text-[10px] font-mono transition-colors shrink-0',
                 ep.episodeNumber === episodeNumber
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-muted hover:bg-muted/80 text-muted-foreground',
@@ -946,7 +973,7 @@ const EpisodeProductionBoard: React.FC = () => {
       </header>
 
       {/* ─── Pipeline progress ───────────────────────────────────────────────── */}
-      <div className="border-b px-4 py-2 bg-muted/30 flex items-center gap-4 text-sm overflow-x-auto">
+      <div className="sticky top-[105px] z-20 border-b px-4 py-2 bg-muted/30 backdrop-blur-sm flex items-center gap-4 text-sm overflow-x-auto">
         <PipelineStep icon={<Film className="w-3.5 h-3.5" />} label="脚本" status="done" />
         <PipelineArrow />
         <PipelineStep
@@ -1090,7 +1117,7 @@ const EpisodeProductionBoard: React.FC = () => {
 
         {/* ── 分镜脚本 tab ──────────────────────────────────────────────────── */}
         <TabsContent value="script" className="flex-1 mt-0 p-4">
-          <ScrollArea className="h-[calc(100vh-160px)]">
+          <ScrollArea className="h-[calc(100vh-220px)]">
             <div className="space-y-2 max-w-3xl mx-auto pr-3">
               {storyOrderedShots.map((shot) => (
                 <ScriptShotRow

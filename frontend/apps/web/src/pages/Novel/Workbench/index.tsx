@@ -20,6 +20,9 @@ import {
   Save,
   X,
   Trash2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Coins,
 } from 'lucide-react';
 import emptyBookshelfImg from '@/assets/illustrations/empty-bookshelf.png';
 import { Button } from '@/components/ui/button';
@@ -45,6 +48,16 @@ import {
 import { AutoSerializationPanel } from './AutoSerializationPanel';
 import { BatchGenerateDialog } from './BatchGenerateDialog';
 import { QualityDashboard } from './QualityDashboard';
+
+function friendlyError(raw: string | null | undefined): string {
+  if (!raw) return '加载失败，请稍后重试';
+  if (raw.startsWith('[') || raw.startsWith('{')) return '数据格式异常，请联系管理员或稍后重试';
+  if (raw.includes('invalid input syntax')) return '数据读取失败，可能存在数据损坏';
+  if (raw.includes('not found') || raw.includes('Not Found')) return '书籍不存在或已被删除';
+  if (raw.includes('network') || raw.includes('fetch')) return '网络连接失败，请检查后重试';
+  if (raw.length > 120) return '加载时发生异常，请稍后重试';
+  return raw;
+}
 
 const SERIF_FONT = '"Noto Serif SC", "Source Han Serif SC", Georgia, "Times New Roman", serif';
 const P_CLASS = 'text-[15px] leading-[1.9] text-foreground/85 indent-[2em] mb-4 tracking-wide';
@@ -122,6 +135,8 @@ const Workbench: React.FC = () => {
   const [tokenUsage, setTokenUsage] = useState<BookTokenUsage | null>(null);
   const [deleteChapterTarget, setDeleteChapterTarget] = useState<ChapterItem | null>(null);
   const [deletingChapter, setDeletingChapter] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showTokenDetail, setShowTokenDetail] = useState(false);
   const articleRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const workbenchPath = bookId ? `/novel/book/${bookId}` : '';
@@ -459,10 +474,18 @@ const Workbench: React.FC = () => {
 
   if (error || !book) {
     return (
-      <div className="flex h-[60vh] flex-col items-center justify-center gap-3 text-muted-foreground">
-        <AlertCircle className="h-10 w-10" />
-        <p>{error ?? '书籍不存在'}</p>
-        <Button variant="outline" onClick={() => history.push('/novel')}>返回书架</Button>
+      <div className="flex h-[60vh] flex-col items-center justify-center gap-4 text-muted-foreground">
+        <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center">
+          <AlertCircle className="h-8 w-8" />
+        </div>
+        <div className="text-center space-y-1">
+          <p className="font-medium text-foreground">{friendlyError(error) || '书籍不存在'}</p>
+          <p className="text-sm">如持续出现问题，请检查网络连接或联系支持</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => window.location.reload()}>重新加载</Button>
+          <Button variant="ghost" onClick={() => history.push('/novel')}>返回书架</Button>
+        </div>
       </div>
     );
   }
@@ -470,225 +493,262 @@ const Workbench: React.FC = () => {
   return (
     <div className="flex min-h-[calc(100vh-57px)] flex-col lg:h-[calc(100vh-57px)] lg:flex-row">
       {/* Sidebar */}
-      <div className="flex w-full flex-col border-b bg-card/50 lg:h-full lg:w-80 lg:border-b-0 lg:border-r">
+      <div className={cn(
+        'flex w-full flex-col border-b bg-card/50 lg:h-full lg:border-b-0 lg:border-r transition-[width] duration-200',
+        sidebarCollapsed ? 'lg:w-14' : 'lg:w-80',
+      )}>
         {/* Book Header */}
         <div className="border-b bg-card">
           <div className="h-0.5 bg-gradient-to-r from-primary/60 via-primary/20 to-transparent" />
-          <div className="p-4">
-          <div className="flex items-center gap-2 mb-3">
+          <div className={cn('p-4', sidebarCollapsed && 'lg:px-2 lg:py-3')}>
+            <div className="flex items-center gap-2 mb-3">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0"
+                onClick={() => history.push('/novel')}
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              {!sidebarCollapsed && (
+                <h2 className="font-bold truncate text-base tracking-tight">《{book.title}》</h2>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 ml-auto hidden lg:flex"
+                onClick={() => setSidebarCollapsed(v => !v)}
+                title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+              >
+                {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+              </Button>
+            </div>
+            {!sidebarCollapsed && (
+              <>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground ml-9">
+                  {book.genre && <Badge variant="secondary" className="text-xs max-w-[140px] truncate">{book.genre}</Badge>}
+                  <span className="shrink-0">{chapters.length} 章</span>
+                  {book.currentArc && (
+                    <>
+                      <span>·</span>
+                      <span className="truncate max-w-[150px]" title={arcProgressText}>
+                        当前卷 {arcProgressText}
+                      </span>
+                    </>
+                  )}
+                  {book.latestKpi && (
+                    <>
+                      <span>·</span>
+                      <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                        综合 {book.latestKpi.overallScore.toFixed(1)}
+                      </span>
+                    </>
+                  )}
+                </div>
+                {interventionAlert && (
+                  <div className="mt-3 rounded-md border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/40 px-2.5 py-2 text-[11px] text-red-700 dark:text-red-300">
+                    <p className="font-medium">需要人工介入</p>
+                    <p className="mt-1">
+                      连续低分 {interventionAlert.consecutiveLowQualityRuns}/{interventionAlert.threshold} 次。
+                      {interventionAlert.failingChapterNumber
+                        ? ` 重点检查第 ${interventionAlert.failingChapterNumber} 章。`
+                        : ''}
+                    </p>
+                    {interventionAlert.reason ? <p className="mt-1">{interventionAlert.reason}</p> : null}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Sidebar body — hidden when collapsed on desktop */}
+        {!sidebarCollapsed && (
+          <>
+            {/* Sidebar Tabs */}
+            <Tabs
+              value={sidebarTab}
+              onValueChange={(v) => setSidebarTab(v as 'chapters' | 'quality')}
+              className="flex flex-col min-h-0 lg:flex-1"
+            >
+              <TabsList className="mx-4 mt-3 grid w-auto grid-cols-2">
+                <TabsTrigger value="chapters" className="gap-1 text-xs">
+                  <FileText className="h-3.5 w-3.5" />
+                  章节
+                </TabsTrigger>
+                <TabsTrigger value="quality" className="gap-1 text-xs">
+                  <BarChart3 className="h-3.5 w-3.5" />
+                  质量
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="chapters" className="mt-0 overflow-hidden lg:flex-1">
+                <ScrollArea className="max-h-72 lg:h-full lg:max-h-none">
+                  <div className="p-1.5 space-y-0.5">
+                    {chapters.length === 0 ? (
+                      <div className="flex flex-col items-center py-12 text-muted-foreground text-sm gap-2">
+                        <BookOpen className="h-8 w-8 opacity-30" />
+                        <p>还没有章节</p>
+                        <p className="text-xs">点击下方按钮开始生成</p>
+                      </div>
+                    ) : (
+                      [...chapters].reverse().map((ch) => {
+                        const isActive = selectedChapter?.chapterNumber === ch.chapterNumber;
+                        const displayTitle = ch.title.replace(/^第\d+章\s*/, '');
+                        const wc = ch.content?.length ?? 0;
+                        return (
+                          <button
+                            key={ch.chapterNumber}
+                            className={cn(
+                              'group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-all',
+                              isActive
+                                ? 'bg-primary/8 ring-1 ring-primary/20'
+                                : 'hover:bg-accent/60',
+                            )}
+                            onClick={() => handleChapterSelect(ch)}
+                          >
+                            <span className={cn(
+                              'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold tabular-nums transition-all',
+                              isActive
+                                ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
+                                : 'bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary',
+                            )}>
+                              {ch.chapterNumber}
+                            </span>
+                            <div className="min-w-0 flex-1 space-y-px">
+                              <div className="flex items-center gap-1.5">
+                                <p className={cn('truncate text-[13px] leading-none', isActive ? 'font-semibold text-primary' : 'font-medium')}>
+                                  {displayTitle || ch.title}
+                                </p>
+                                {interventionMarkerChapters.includes(ch.chapterNumber) ? (
+                                  <span className="shrink-0 rounded-full border border-amber-300/80 bg-amber-50 px-1.5 text-[10px] text-amber-600 font-medium">
+                                    需修复
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="flex items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
+                                <span>{new Date(ch.createdAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</span>
+                                {wc > 0 && <>
+                                  <span className="opacity-30">·</span>
+                                  <span>{wc >= 1000 ? `${(wc / 1000).toFixed(1)}k` : wc} 字</span>
+                                </>}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <button
+                                className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                                onClick={(e) => { e.stopPropagation(); setDeleteChapterTarget(ch); }}
+                                title="删除章节"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                              <ChevronRight className={cn(
+                                'h-3.5 w-3.5 transition-all',
+                                isActive ? 'text-primary/60' : 'text-muted-foreground/20 group-hover:text-muted-foreground/50',
+                              )} />
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+
+              <TabsContent value="quality" className="mt-0 overflow-hidden lg:flex-1">
+                <ScrollArea className="max-h-72 lg:h-full lg:max-h-none">
+                  <div className="p-4">
+                    <QualityDashboard latestKpi={book.latestKpi} tokenUsage={tokenUsage} />
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+            </Tabs>
+
+            {/* Sidebar Footer Actions — reorganized */}
+            <div className="border-t p-3 space-y-2 bg-card">
+              {/* Primary: generate */}
+              <Button
+                className="w-full gap-2 shadow-sm shadow-primary/15"
+                disabled={generating}
+                onClick={handleGenerate}
+              >
+                {generating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    生成中...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4" />
+                    生成下一章
+                  </>
+                )}
+              </Button>
+              {/* Secondary: generation tools */}
+              <div className="grid grid-cols-2 gap-1.5">
+                <Button variant="outline" size="sm" className="gap-1 text-xs h-8" onClick={() => setShowBatchDialog(true)}>
+                  <Layers className="h-3.5 w-3.5" />
+                  批量生成
+                </Button>
+                <Button variant="outline" size="sm" className="gap-1 text-xs h-8" onClick={() => setShowAutoPanel(true)}>
+                  <Clock className="h-3.5 w-3.5" />
+                  自动连载
+                </Button>
+              </div>
+              {/* Tertiary: navigation */}
+              <div className="flex items-center gap-1 pt-0.5 border-t border-border/50">
+                {([
+                  { icon: Workflow, label: '工作流', path: `/novel/book/${bookId}/pipeline` },
+                  { icon: Globe, label: '世界观', path: `/novel/book/${bookId}/world` },
+                  { icon: FileEdit, label: '写作手册', path: `/novel/book/${bookId}/profile` },
+                ] as const).map(({ icon: Icon, label, path }) => (
+                  <Button
+                    key={label}
+                    variant="ghost"
+                    size="sm"
+                    className="flex-1 gap-1 text-[11px] h-7 text-muted-foreground hover:text-foreground px-1"
+                    onClick={() => history.push(path)}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Collapsed sidebar: minimal action buttons */}
+        {sidebarCollapsed && (
+          <div className="hidden lg:flex flex-col items-center gap-2 p-2 flex-1">
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7 shrink-0"
-              onClick={() => history.push('/novel')}
+              className="h-8 w-8"
+              disabled={generating}
+              onClick={handleGenerate}
+              title="生成下一章"
             >
-              <ArrowLeft className="h-4 w-4" />
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
             </Button>
-            <h2 className="font-bold truncate text-base tracking-tight">《{book.title}》</h2>
-          </div>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground ml-9">
-            {book.genre && <Badge variant="secondary" className="text-xs max-w-[140px] truncate">{book.genre}</Badge>}
-            <span className="shrink-0">{chapters.length} 章</span>
-            {book.currentArc && (
-              <>
-                <span>·</span>
-                <span className="truncate max-w-[150px]" title={arcProgressText}>
-                  当前卷 {arcProgressText}
-                </span>
-              </>
-            )}
-            {book.latestKpi && (
-              <>
-                <span>·</span>
-                <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                  综合 {book.latestKpi.overallScore.toFixed(1)}
-                </span>
-              </>
-            )}
-          </div>
-          {interventionAlert && (
-            <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-2.5 py-2 text-[11px] text-red-700">
-              <p className="font-medium">需要人工介入</p>
-              <p className="mt-1">
-                连续低分 {interventionAlert.consecutiveLowQualityRuns}/{interventionAlert.threshold} 次。
-                {interventionAlert.failingChapterNumber
-                  ? ` 重点检查第 ${interventionAlert.failingChapterNumber} 章。`
-                  : ''}
-              </p>
-              {interventionAlert.reason ? <p className="mt-1">{interventionAlert.reason}</p> : null}
-            </div>
-          )}
-          </div>
-        </div>
-
-        {/* Sidebar Tabs */}
-        <Tabs
-          value={sidebarTab}
-          onValueChange={(v) => setSidebarTab(v as 'chapters' | 'quality')}
-          className="flex flex-col min-h-0 lg:flex-1"
-        >
-          <TabsList className="mx-4 mt-3 grid w-auto grid-cols-2">
-            <TabsTrigger value="chapters" className="gap-1 text-xs">
-              <FileText className="h-3.5 w-3.5" />
-              章节
-            </TabsTrigger>
-            <TabsTrigger value="quality" className="gap-1 text-xs">
-              <BarChart3 className="h-3.5 w-3.5" />
-              质量
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="chapters" className="mt-0 overflow-hidden lg:flex-1">
-            <ScrollArea className="max-h-72 lg:h-full lg:max-h-none">
-              <div className="p-1.5 space-y-0.5">
-                {chapters.length === 0 ? (
-                  <div className="flex flex-col items-center py-12 text-muted-foreground text-sm gap-2">
-                    <BookOpen className="h-8 w-8 opacity-30" />
-                    <p>还没有章节</p>
-                    <p className="text-xs">点击下方按钮开始生成</p>
-                  </div>
-                ) : (
-                  [...chapters].reverse().map((ch) => {
-                    const isActive = selectedChapter?.chapterNumber === ch.chapterNumber;
-                    const displayTitle = ch.title.replace(/^第\d+章\s*/, '');
-                    const wc = ch.content?.length ?? 0;
-                    return (
-                      <button
-                        key={ch.chapterNumber}
-                        className={cn(
-                          'group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-all',
-                          isActive
-                            ? 'bg-primary/8 ring-1 ring-primary/20'
-                            : 'hover:bg-accent/60',
-                        )}
-                        onClick={() => handleChapterSelect(ch)}
-                      >
-                        <span className={cn(
-                          'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold tabular-nums transition-all',
-                          isActive
-                            ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
-                            : 'bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary',
-                        )}>
-                          {ch.chapterNumber}
-                        </span>
-                        <div className="min-w-0 flex-1 space-y-px">
-                          <div className="flex items-center gap-1.5">
-                            <p className={cn('truncate text-[13px] leading-none', isActive ? 'font-semibold text-primary' : 'font-medium')}>
-                              {displayTitle || ch.title}
-                            </p>
-                            {interventionMarkerChapters.includes(ch.chapterNumber) ? (
-                              <span className="shrink-0 rounded-full border border-amber-300/80 bg-amber-50 px-1.5 text-[10px] text-amber-600 font-medium">
-                                需修复
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="flex items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
-                            <span>{new Date(ch.createdAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</span>
-                            {wc > 0 && <>
-                              <span className="opacity-30">·</span>
-                              <span>{wc >= 1000 ? `${(wc / 1000).toFixed(1)}k` : wc} 字</span>
-                            </>}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-0.5 shrink-0">
-                          <button
-                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-                            onClick={(e) => { e.stopPropagation(); setDeleteChapterTarget(ch); }}
-                            title="删除章节"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                          <ChevronRight className={cn(
-                            'h-3.5 w-3.5 transition-all',
-                            isActive ? 'text-primary/60' : 'text-muted-foreground/20 group-hover:text-muted-foreground/50',
-                          )} />
-                        </div>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </ScrollArea>
-          </TabsContent>
-
-          <TabsContent value="quality" className="mt-0 overflow-hidden lg:flex-1">
-            <ScrollArea className="max-h-72 lg:h-full lg:max-h-none">
-              <div className="p-4">
-                <QualityDashboard latestKpi={book.latestKpi} tokenUsage={tokenUsage} />
-              </div>
-            </ScrollArea>
-          </TabsContent>
-        </Tabs>
-
-        {/* Sidebar Footer Actions */}
-        <div className="border-t p-3 space-y-2.5 bg-card">
-          <Button
-            className="w-full gap-2 shadow-sm shadow-primary/15"
-            disabled={generating}
-            onClick={handleGenerate}
-          >
-            {generating ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                生成中...
-              </>
-            ) : (
-              <>
-                <Sparkles className="h-4 w-4" />
-                生成下一章
-              </>
-            )}
-          </Button>
-          <div className="grid grid-cols-3 gap-1.5">
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1 text-xs h-8"
-              onClick={() => setShowBatchDialog(true)}
-            >
-              <Layers className="h-3.5 w-3.5" />
-              批量
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowBatchDialog(true)} title="批量生成">
+              <Layers className="h-4 w-4" />
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1 text-xs h-8"
-              onClick={() => setShowAutoPanel(true)}
-            >
-              <Settings className="h-3.5 w-3.5" />
-              连载
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowAutoPanel(true)} title="自动连载">
+              <Clock className="h-4 w-4" />
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1 text-xs h-8"
-              onClick={() => history.push(`/novel/book/${bookId}/pipeline`)}
-            >
-              <Workflow className="h-3.5 w-3.5" />
-              工作流
+            <div className="flex-1" />
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => history.push(`/novel/book/${bookId}/pipeline`)} title="工作流">
+              <Workflow className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => history.push(`/novel/book/${bookId}/world`)} title="世界观">
+              <Globe className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => history.push(`/novel/book/${bookId}/profile`)} title="写作手册">
+              <FileEdit className="h-4 w-4" />
             </Button>
           </div>
-          <div className="grid grid-cols-2 gap-1.5">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-1.5 text-xs h-8 text-muted-foreground hover:text-foreground"
-              onClick={() => history.push(`/novel/book/${bookId}/world`)}
-            >
-              <Globe className="h-3.5 w-3.5" />
-              世界观百科
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-1.5 text-xs h-8 text-muted-foreground hover:text-foreground"
-              onClick={() => history.push(`/novel/book/${bookId}/profile`)}
-            >
-              <FileEdit className="h-3.5 w-3.5" />
-              写作手册
-            </Button>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Main Content Area */}
@@ -717,6 +777,7 @@ const Workbench: React.FC = () => {
                 {isEditing ? (
                   <>
                     <span className="text-xs text-muted-foreground tabular-nums">{editCharCount} 字</span>
+                    <span className="hidden sm:inline text-[10px] text-muted-foreground/50">⌘S 保存 · Esc 取消</span>
                     <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground hover:text-foreground" onClick={handleCancelEdit} disabled={saving}>
                       <X className="h-4 w-4" />
                       取消
@@ -744,14 +805,21 @@ const Workbench: React.FC = () => {
                         : '';
                       return (
                         <>
-                          <span className="text-xs text-muted-foreground">·</span>
-                          <span className="text-[11px] tabular-nums text-muted-foreground" title={`输入 ${cu.promptTokens.toLocaleString()} / 输出 ${cu.completionTokens.toLocaleString()} tokens · ${cu.totalCalls} 次调用 · $${cu.estimatedCostUsd.toFixed(4)}${modelTip}`}>
-                            <span className="text-blue-500">入{fmt(cu.promptTokens)}</span>
-                            <span className="opacity-40"> / </span>
-                            <span className="text-violet-500">出{fmt(cu.completionTokens)}</span>
-                            {' '}
-                            <span className="text-amber-500">${cu.estimatedCostUsd < 0.01 ? cu.estimatedCostUsd.toFixed(4) : cu.estimatedCostUsd.toFixed(2)}</span>
-                          </span>
+                          <button
+                            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/70 hover:text-muted-foreground transition-colors rounded px-1 -mx-1"
+                            onClick={() => setShowTokenDetail(v => !v)}
+                            title={`输入 ${cu.promptTokens.toLocaleString()} / 输出 ${cu.completionTokens.toLocaleString()} tokens · ${cu.totalCalls} 次调用 · $${cu.estimatedCostUsd.toFixed(4)}${modelTip}`}
+                          >
+                            <Coins className="h-3 w-3" />
+                            <span className="tabular-nums">${cu.estimatedCostUsd < 0.01 ? cu.estimatedCostUsd.toFixed(4) : cu.estimatedCostUsd.toFixed(2)}</span>
+                          </button>
+                          {showTokenDetail && (
+                            <span className="text-[11px] tabular-nums text-muted-foreground animate-fade-in">
+                              <span className="text-blue-500">入{fmt(cu.promptTokens)}</span>
+                              <span className="opacity-40"> / </span>
+                              <span className="text-violet-500">出{fmt(cu.completionTokens)}</span>
+                            </span>
+                          )}
                         </>
                       );
                     })()}

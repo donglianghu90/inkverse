@@ -22,6 +22,7 @@ export class PacingAnalyzerAgent {
       schema: pacingAnalysisSchema,
       tags: ['workflow', 'chapter', 'pacing'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: draft.chapterNumber,
       },

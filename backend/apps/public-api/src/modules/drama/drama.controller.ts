@@ -11,7 +11,7 @@ import { DramaWorkflowExecutionService } from './drama-workflow-execution.servic
 import { DramaAgentNodeConfig, DramaWorkflowParams } from './entities/drama-agent-pipeline.entity';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
 import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto, AiGenerateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
-import { DramaUsageService } from './drama-usage.service';
+import { UsageLedgerService } from '../usage/usage-ledger.service';
 
 @Controller('drama')
 export class DramaController {
@@ -21,7 +21,7 @@ export class DramaController {
     private readonly genreTemplateService: DramaGenreTemplateService,
     private readonly pipelineService: DramaAgentPipelineService,
     private readonly executionService: DramaWorkflowExecutionService,
-    private readonly usageService: DramaUsageService,
+    private readonly usageLedger: UsageLedgerService,
   ) {}
 
   private createSseSender(subject: Subject<MessageEvent>, runType: DramaRunType, dramaId: string, episodeNumber?: number) {
@@ -111,7 +111,7 @@ export class DramaController {
 
   @Post('genre-templates/ai-generate')
   async aiGenerateGenreTemplate(@Body() dto: AiGenerateDramaGenreTemplateDto, @Req() req: any) {
-    const result = await this.genreTemplateService.aiGenerate(dto);
+    const result = await this.genreTemplateService.aiGenerate({ ...dto, userId: req.user?.userId });
     return this.genreTemplateService.create(req.user?.userId ?? 'anonymous', {
       genreKey: dto.genreName.toLowerCase().replace(/\s+/g, '-'),
       displayName: result.displayName,
@@ -175,18 +175,18 @@ export class DramaController {
   /* ─── 创意辅助（静态路由） ─── */
 
   @Post('idea/enhance')
-  async enhanceIdea(@Body() body: { idea: string; genre?: string }) {
-    return this.dramaService.enhanceIdea(body.idea, body.genre);
+  async enhanceIdea(@Body() body: { idea: string; genre?: string }, @Req() req: any) {
+    return this.dramaService.enhanceIdea(body.idea, body.genre, req.user?.userId);
   }
 
   @Post('idea/generate-goal')
-  async generateGoal(@Body() body: { mainIdea: string; genre: string; targetAudience: string }) {
-    return this.dramaService.generateStoryGoal(body);
+  async generateGoal(@Body() body: { mainIdea: string; genre: string; targetAudience: string }, @Req() req: any) {
+    return this.dramaService.generateStoryGoal(body, req.user?.userId);
   }
 
   @Post('idea/recommend-genre-audience')
-  async recommendGenreAndAudience(@Body() body: { mainIdea: string }) {
-    return this.dramaService.recommendGenreAndAudience(body.mainIdea);
+  async recommendGenreAndAudience(@Body() body: { mainIdea: string }, @Req() req: any) {
+    return this.dramaService.recommendGenreAndAudience(body.mainIdea, req.user?.userId);
   }
 
   /* ─── CRUD ─── */
@@ -206,9 +206,14 @@ export class DramaController {
     return this.dramaService.getDrama(dramaId);
   }
 
+  @Delete(':dramaId')
+  async deleteDrama(@Param('dramaId') dramaId: string, @Req() req: any) {
+    return this.dramaService.deleteDrama(dramaId, req.user?.userId);
+  }
+
   @Get(':dramaId/usage')
   async getDramaUsage(@Param('dramaId') dramaId: string) {
-    return this.usageService.getDramaUsage(dramaId);
+    return this.usageLedger.resourceDetailForDrama('drama', dramaId);
   }
 
   @Get(':dramaId/executions')

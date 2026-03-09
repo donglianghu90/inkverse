@@ -19,7 +19,7 @@ import {
   selectRefImages, selectBestCharacterView, buildCameraHint, assembleT2iPrompt,
 } from '../media/rendering/rendering-profile';
 import { PromptOptimizerService } from '../media/prompt-optimizer.service';
-import { MediaQualityGateService } from './media-quality-gate.service';
+import { MediaQualityGateService, QualityAssessment } from './media-quality-gate.service';
 import { ShotCoherenceValidatorService } from './shot-coherence-validator.service';
 import { EmotionMediaMapperService } from './emotion-media-mapper.service';
 import {
@@ -35,6 +35,7 @@ export interface ShotMediaEntry {
   imageUrl?: string;
   lastFrameImageUrl?: string;
   status: string;
+  kenBurnsFallback?: boolean;
   qc?: {
     identityScore?: number;
     styleScore?: number;
@@ -113,6 +114,11 @@ export class MediaOrchestratorService implements OnModuleInit {
     return parts.join(', ') + ', ';
   }
 
+  /** 根据画幅比例返回 Seedream 5.0 宽高比 */
+  private static resolveImageSize(aspectRatio: string): string {
+    return aspectRatio === '9:16' ? '9:16' : '16:9';
+  }
+
   /** 按当前模型决定是否使用 negative prompt */
   private get negPrompt(): string | undefined {
     const np = this.profile.negativePrompt;
@@ -127,6 +133,7 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
     const state = drama.state as unknown as DramaState;
+    const userId = drama.userId;
     const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
     const shots: Shot[] = storyboard?.shots ?? [];
     const reviewRiskShotIds = this.extractReviewRiskShotIds(episode.review);
@@ -137,7 +144,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     const styleRefImages = await this.buildStyleRefImages(dramaId, state);
     const flashbackVideoMap = await this.buildFlashbackVideoMap(dramaId, shots);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
-    const imgSize = aspectRatio === '9:16' ? '720x1280' : '1280x720';
+    const imgSize = MediaOrchestratorService.resolveImageSize(aspectRatio);
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
     const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
     this.logger.log(
@@ -162,9 +169,11 @@ export class MediaOrchestratorService implements OnModuleInit {
       this.progressService.emit({ dramaId, runType: 'media', episodeNumber, step: `media_${i}`, stepIndex: i, totalSteps: totalPhases, message: msg, done });
 
     try {
+      const scriptScenes = ((episode.script as any)?.scenes ?? []) as import('./schemas/drama-state.schemas').ScriptScene[];
+      const sceneMap = new Map(scriptScenes.map(s => [s.sceneId, s]));
       const shotMediaParamsCache = new Map<string, ReturnType<EmotionMediaMapperService['mapShotToMediaParams']>>();
       for (const shot of shots) {
-        shotMediaParamsCache.set(shot.shotId, this.emotionMapper.mapShotToMediaParams(shot));
+        shotMediaParamsCache.set(shot.shotId, this.emotionMapper.mapShotToMediaParams(shot, sceneMap.get(shot.sceneId)));
       }
 
       if (hasT2I) {
@@ -217,10 +226,13 @@ export class MediaOrchestratorService implements OnModuleInit {
                 shotPolicy.gateMaxAttempts,
                 shotPolicy.candidateCount,
               );
-              const genFn = async () => {
+              const genFn = async (prevAssessment?: QualityAssessment) => {
+                const fixHint = prevAssessment?.recommendedFix;
+                const retryNeg = fixHint ? this.buildFixNegativeHint(fixHint, prevAssessment?.issues) : '';
+                const effectiveNeg = retryNeg ? [optimized.negativePrompt, retryNeg].filter(Boolean).join(', ') : (optimized.negativePrompt || undefined);
                 const res = await withMediaRetry(() => this.mediaService.generateImage({
-                  prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined,
-                  size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid,
+                  prompt: optimized.prompt, negativePrompt: effectiveNeg,
+                  size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid, userId,
                 }), `${sid} 首帧`);
                 return res.images?.[0]?.url ?? '';
               };
@@ -236,6 +248,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                   characterRefs,
                   styleRefs: styleRefImages,
                   candidateCount: shotPolicy.candidateCount,
+                  dramaId, userId,
                 });
                 imgUrl = gateResult.imageUrl;
                 gateQc = {
@@ -291,7 +304,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                 shotType: 'last_frame', qualityTier: shot.qualityTier ?? 'standard', emotionColorHint,
                 routeProfile: shotPolicy.routeProfile,
               });
-              const res = await withMediaRetry(() => this.mediaService.generateImage({ prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: lastRefs, dramaId, assetType: 'shot_last_frame', refId: `${sid}_last` }), `${sid} 尾帧`);
+              const res = await withMediaRetry(() => this.mediaService.generateImage({ prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: lastRefs, dramaId, assetType: 'shot_last_frame', refId: `${sid}_last`, userId }), `${sid} 尾帧`);
               const lastUrl = res.images?.[0]?.url ?? '';
               if (lastUrl) shotMediaMap[sid] = { ...shotMediaMap[sid], lastFrameImageUrl: lastUrl };
               emit(phaseOff + orderedShots.length + i, `${sid} 尾帧完成`, true);
@@ -344,7 +357,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                 );
                 const res = await withMediaRetry(() => this.mediaService.generateImage({
                   prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined,
-                  size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: `${sid}_regen`,
+                  size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: `${sid}_regen`, userId,
                 }), `${sid} 连贯性重生成`);
                 const newUrl = res.images?.[0]?.url ?? '';
                 if (newUrl) {
@@ -410,13 +423,19 @@ export class MediaOrchestratorService implements OnModuleInit {
             prompt: optVideo.prompt,
             duration: Math.min(Math.max(Math.round(shot.estimatedDurationSec), 2), 10),
             quality: videoQuality, aspectRatio: aspectRatio as any,
-            referenceImages: refImages, dramaId, assetType: 'shot_video', refId: sid,
+            referenceImages: refImages, dramaId, assetType: 'shot_video', refId: sid, userId,
           }), `${sid} 视频`);
           shotMediaMap[sid] = { ...shotMediaMap[sid], videoJobId: sub.jobId, status: 'submitted' };
           await flushVideoSubmit();
         } catch (err) {
           this.logger.error(`${sid} 视频提交失败: ${(err as Error).message}`);
-          shotMediaMap[sid] = { ...shotMediaMap[sid], status: 'failed' };
+          const fallbackImage = shotMediaMap[sid]?.imageUrl;
+          if (fallbackImage) {
+            this.logger.warn(`${sid} I2V降级: 使用首帧 Ken Burns 代替视频`);
+            shotMediaMap[sid] = { ...shotMediaMap[sid], videoUrl: fallbackImage, status: 'completed', kenBurnsFallback: true };
+          } else {
+            shotMediaMap[sid] = { ...shotMediaMap[sid], status: 'failed' };
+          }
           await flushVideoSubmit();
         }
       });
@@ -429,27 +448,47 @@ export class MediaOrchestratorService implements OnModuleInit {
       let ttsOk = false;
       try { this.registry.getTtsProvider(); ttsOk = true; } catch {}
       if (ttsOk) {
+        const TTS_MAX_RETRIES = 2;
+        const FALLBACK_VOICE_ID = '';
         const voiceMap = new Map(state.characters?.map(c => [c.characterId, c.voiceProfile]) ?? []);
         for (let i = 0; i < orderedShots.length; i++) {
           const shot = orderedShots[i];
           if (!shot.dialogue?.text || shot.isPreview) continue;
           if (shotMediaMap[shot.shotId]?.ttsUrl) continue;
-          try {
-            const voice = voiceMap.get(shot.dialogue.characterId);
-            const mediaParams = shotMediaParamsCache.get(shot.shotId);
-            const baseSpeed = SPEED_MAP[voice?.speed ?? 'normal'] ?? 1.0;
-            const ttsSpeed = baseSpeed * (mediaParams?.ttsSpeedMultiplier ?? 1.0);
-            emit(phaseOff + i, `${shot.shotId} TTS...`);
-            const outPath = this.storage.ttsOutputPath(dramaId, shot.shotId);
-            const ttsRes = await this.mediaService.synthesizeTtsToFile({
-              text: shot.dialogue.text, voiceId: voice?.ttsVoiceId || '',
-              speed: ttsSpeed, emotion: shot.dialogue.emotion,
-              extra: { volume: shot.dialogue.volume, volumeMultiplier: mediaParams?.ttsVolumeMultiplier },
-            }, outPath);
-            shotMediaMap[shot.shotId] = { ...shotMediaMap[shot.shotId], ttsUrl: ttsRes.audioUrl };
-            if (ttsRes.durationSeconds > 0) ttsDurations.set(shot.shotId, ttsRes.durationSeconds);
-            emit(phaseOff + i, `${shot.shotId} TTS完成`, true);
-          } catch (err) { this.logger.warn(`${shot.shotId} TTS失败: ${(err as Error).message}`); }
+          const voice = voiceMap.get(shot.dialogue.characterId);
+          const mediaParams = shotMediaParamsCache.get(shot.shotId);
+          const baseSpeed = SPEED_MAP[voice?.speed ?? 'normal'] ?? 1.0;
+          const ttsSpeed = baseSpeed * (mediaParams?.ttsSpeedMultiplier ?? 1.0);
+          emit(phaseOff + i, `${shot.shotId} TTS...`);
+          const outPath = this.storage.ttsOutputPath(dramaId, shot.shotId);
+
+          let ttsSuccess = false;
+          for (let attempt = 0; attempt <= TTS_MAX_RETRIES && !ttsSuccess; attempt++) {
+            const useVoiceId = attempt <= TTS_MAX_RETRIES - 1
+              ? (voice?.ttsVoiceId || '')
+              : (FALLBACK_VOICE_ID || voice?.ttsVoiceId || '');
+            try {
+              const ttsRes = await this.mediaService.synthesizeTtsToFile({
+                request: {
+                  text: shot.dialogue.text, voiceId: useVoiceId,
+                  speed: ttsSpeed, emotion: shot.dialogue.emotion,
+                  extra: { volume: shot.dialogue.volume, volumeMultiplier: mediaParams?.ttsVolumeMultiplier },
+                },
+                outputPath: outPath,
+                dramaId, userId, episodeNumber: episode.episodeNumber,
+              });
+              shotMediaMap[shot.shotId] = { ...shotMediaMap[shot.shotId], ttsUrl: ttsRes.audioUrl };
+              if (ttsRes.durationSeconds > 0) ttsDurations.set(shot.shotId, ttsRes.durationSeconds);
+              ttsSuccess = true;
+              emit(phaseOff + i, `${shot.shotId} TTS完成`, true);
+            } catch (err) {
+              if (attempt < TTS_MAX_RETRIES) {
+                this.logger.warn(`${shot.shotId} TTS第${attempt + 1}次失败，重试: ${(err as Error).message}`);
+              } else {
+                this.logger.warn(`${shot.shotId} TTS最终失败(${TTS_MAX_RETRIES + 1}次尝试): ${(err as Error).message}`);
+              }
+            }
+          }
         }
       } else { this.logger.warn('TTS Provider 未配置，跳过语音合成'); }
       await this.updateMedia(episode.id, 'generating_videos', shotMediaMap);
@@ -490,8 +529,10 @@ export class MediaOrchestratorService implements OnModuleInit {
                 colorGrade: mp.colorGrade,
                 speedFactor,
                 stabilize: mp.stabilize,
-                kenBurns: mp.kenBurns,
+                kenBurns: shotMediaMap[s.shotId]?.kenBurnsFallback ? { enabled: true, direction: 'zoom_in' as const } : mp.kenBurns,
                 specialTechnique: s.specialTechnique ?? undefined,
+              } : shotMediaMap[s.shotId]?.kenBurnsFallback ? {
+                kenBurns: { enabled: true, direction: 'zoom_in' as const },
               } : undefined,
             };
           });
@@ -535,9 +576,10 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
     const state = drama.state as unknown as DramaState;
+    const userId = drama.userId;
     const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
-    const imgSize = aspectRatio === '9:16' ? '720x1280' : '1280x720';
+    const imgSize = MediaOrchestratorService.resolveImageSize(aspectRatio);
 
     const charImageMap = await this.buildCharacterImageMap(dramaId);
     const characterAnchorMap = this.buildCharacterAnchorMap(state);
@@ -555,8 +597,10 @@ export class MediaOrchestratorService implements OnModuleInit {
       }
     }
 
+    const scriptScenes = ((episode.script as any)?.scenes ?? []) as import('./schemas/drama-state.schemas').ScriptScene[];
+    const sceneForShot = scriptScenes.find(s => s.sceneId === shot.sceneId);
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
-    const mediaParams = this.emotionMapper.mapShotToMediaParams(shot);
+    const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, sceneForShot);
     const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
     const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
     const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix);
@@ -580,7 +624,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       const res = await this.withRetry(
         () => this.mediaService.generateImage({
           prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1,
-          referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: shotId,
+          referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: shotId, userId,
         }),
         `${shotId} 图片`,
         mediaPolicy.maxMediaRetries,
@@ -608,6 +652,7 @@ export class MediaOrchestratorService implements OnModuleInit {
         characterRefs,
         styleRefs: styleRefImages,
         candidateCount: shotPolicy.candidateCount,
+        dramaId, userId,
       });
       imgUrl = gateResult.imageUrl;
       gateQc = {
@@ -652,6 +697,7 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
     const state = drama.state as unknown as DramaState;
+    const userId = drama.userId;
     const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
     const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
     const shots: Shot[] = storyboard?.shots ?? [];
@@ -662,8 +708,10 @@ export class MediaOrchestratorService implements OnModuleInit {
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
     const styleRefImages = await this.buildStyleRefImages(dramaId, state);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
-    const imgSize = aspectRatio === '9:16' ? '720x1280' : '1280x720';
+    const imgSize = MediaOrchestratorService.resolveImageSize(aspectRatio);
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
+    const imgScriptScenes = ((episode.script as any)?.scenes ?? []) as import('./schemas/drama-state.schemas').ScriptScene[];
+    const imgSceneMap = new Map(imgScriptScenes.map(s => [s.sceneId, s]));
 
     const raw = episode.shotMediaMap ?? {};
     const shotMediaMap: Record<string, ShotMediaEntry> = Object.fromEntries(
@@ -713,7 +761,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
       try {
         emit(`${sid} 生成中...`);
-        const mediaParams = this.emotionMapper.mapShotToMediaParams(shot);
+        const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, imgSceneMap.get(shot.sceneId));
         const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
         const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix);
         const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, this.negPrompt ?? '', {
@@ -733,7 +781,7 @@ export class MediaOrchestratorService implements OnModuleInit {
         );
         const genFn = async () => {
           const res = await this.withRetry(
-            () => this.mediaService.generateImage({ prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid }),
+            () => this.mediaService.generateImage({ prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid, userId }),
             `${sid} 图片`,
             mediaPolicy.maxMediaRetries,
             mediaPolicy.retryBaseDelayMs,
@@ -759,6 +807,7 @@ export class MediaOrchestratorService implements OnModuleInit {
             characterRefs,
             styleRefs: styleRefImages,
             candidateCount: shotPolicy.candidateCount,
+            dramaId, userId,
           });
           imgUrl = gateResult.imageUrl;
           gateQc = {
@@ -1095,7 +1144,12 @@ export class MediaOrchestratorService implements OnModuleInit {
         emit(off + (idx >= 0 ? idx : 0), `${sid} 视频完成(补查)`, true);
         if (vUrl) try { await this.storage.downloadToLocal(vUrl, this.storage.resolve(`videos/${dramaId}/${sid}.mp4`)); } catch {}
         remaining--;
-      } else if (job.status === 'failed') { map[sid] = { ...map[sid], status: 'failed' }; remaining--; }
+      } else if (job.status === 'failed') {
+        const fb = map[sid]?.imageUrl;
+        if (fb) { map[sid] = { ...map[sid], videoUrl: fb, status: 'completed', kenBurnsFallback: true }; this.logger.warn(`${sid} I2V轮询降级: Ken Burns`); }
+        else { map[sid] = { ...map[sid], status: 'failed' }; }
+        remaining--;
+      }
     }
     if (remaining <= 0) { await this.updateMedia(epId, 'generating_videos', map); return; }
     await this.updateMedia(epId, 'generating_videos', map);
@@ -1111,7 +1165,11 @@ export class MediaOrchestratorService implements OnModuleInit {
           const idx = shots.findIndex(s => s.shotId === sid);
           emit(off + (idx >= 0 ? idx : 0), `${sid} 视频完成`, true);
           if (vUrl) try { await this.storage.downloadToLocal(vUrl, this.storage.resolve(`videos/${dramaId}/${sid}.mp4`)); } catch {}
-        } else if (evt.status === 'failed') { map[sid] = { ...map[sid], status: 'failed' }; }
+        } else if (evt.status === 'failed') {
+          const fb = map[sid]?.imageUrl;
+          if (fb) { map[sid] = { ...map[sid], videoUrl: fb, status: 'completed', kenBurnsFallback: true }; this.logger.warn(`${sid} I2V事件降级: Ken Burns`); }
+          else { map[sid] = { ...map[sid], status: 'failed' }; }
+        }
         else return;
         remaining--;
         await this.updateMedia(epId, 'generating_videos', map);
@@ -1135,6 +1193,18 @@ export class MediaOrchestratorService implements OnModuleInit {
       shotType: shot.shotType,
       qualityTier: shot.qualityTier,
     });
+  }
+
+  private buildFixNegativeHint(fixType: string, issues?: string[]): string {
+    const hints: Record<string, string> = {
+      identity: 'deformed face, extra fingers, distorted features, wrong character identity, inconsistent face',
+      style: 'inconsistent style, wrong color palette, mismatched lighting, different art style',
+      camera: 'bad composition, unclear subject, wrong camera angle, cluttered frame',
+      motion: 'motion blur, ghosting, afterimage, jitter, distorted movement',
+    };
+    const base = hints[fixType] ?? '';
+    const issueHint = (issues ?? []).slice(0, 2).join(', ');
+    return [base, issueHint].filter(Boolean).join(', ');
   }
 
   private normalizeQualityTier(tier?: Shot['qualityTier']): 'golden' | 'standard' | 'filler' {

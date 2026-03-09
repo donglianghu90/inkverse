@@ -96,7 +96,7 @@ export class IntentAgent {
       taskName: 'chapter-intent',
       schema: chapterIntentSchema,
       tags: ['workflow', 'chapter', 'intent'],
-      metadata: { bookId: state.bookId, chapterNumber, chapterType },
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber, chapterType },
       systemPrompt: `${playbooks?.['agent:intent:role'] ?? (isLiterary
         ? '你是一位兼具文学素养与叙事直觉的创作顾问。为下一章设定灵魂方向——不是施工图纸，而是创作灵感与主题探索的指引。'
         : '你是一位经验丰富的网文策划师。为下一章设定灵魂方向——不是施工图纸，而是灵感指引。')}

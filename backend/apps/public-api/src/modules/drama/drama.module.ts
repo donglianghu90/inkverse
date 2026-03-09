@@ -8,10 +8,9 @@ import { VisualAssetEntity } from './entities/visual-asset.entity';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
 import { DramaGenreTemplateEntity } from './entities/drama-genre-template.entity';
 import { DramaAgentPipelineEntity } from './entities/drama-agent-pipeline.entity';
-import { DramaTaskEntity } from './task/task.entity'; // 任务队列
-import { DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity } from './run/run.entity'; // 事件追踪
-import { GlobalAssetFolderEntity, GlobalCharacterEntity, GlobalLocationEntity, GlobalStyleEntity } from './asset-hub/asset-hub.entity'; // 全局资产
-import { DramaUserBalanceEntity, DramaBalanceFreezeEntity, DramaBalanceTransactionEntity } from './billing/billing.entity'; // 计费
+import { DramaTaskEntity } from './task/entities/task.entity'; // 任务队列
+import { DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity } from './run/entities/run.entity'; // 事件追踪
+import { GlobalAssetFolderEntity, GlobalCharacterEntity, GlobalLocationEntity, GlobalStyleEntity } from './asset-hub/entities/asset-hub.entity'; // 全局资产
 import { MediaModule } from '../media/media.module';
 import { DramaController } from './drama.controller';
 import { DramaService } from './drama.service';
@@ -28,7 +27,6 @@ import { DramaTextProcessor } from './task/drama-text.processor';
 import { DramaImageProcessor, DramaVideoProcessor, DramaVoiceProcessor } from './task/drama-media.processor';
 import { DramaRunService } from './run/run.service'; // 运行时服务
 import { AssetHubService } from './asset-hub/asset-hub.service'; // 资产中心
-import { DramaBillingService } from './billing/billing.service'; // 计费服务
 import { DramaSeedAnalyzerAgent } from './agents/drama-seed-analyzer.agent';
 import { SeriesDirectorAgent } from './agents/series-director.agent';
 import { VisualAssetDesignerAgent } from './agents/visual-asset-designer.agent';
@@ -49,7 +47,6 @@ import { EpisodeRecorderAgent } from './agents/episode-recorder.agent';
 import { DramaDeterministicCheckerService } from './validators/deterministic-checker.service';
 import { DramaPromptTemplateService } from './prompting/drama-prompt-template.service';
 import { DramaCalibrationService } from './drama-calibration.service';
-import { DramaUsageService } from './drama-usage.service';
 import { DramaTaskRecoveryService } from './drama-task-recovery.service';
 import { MediaQualityGateService } from './media-quality-gate.service';
 import { ShotCoherenceValidatorService } from './shot-coherence-validator.service';
@@ -64,7 +61,6 @@ import { DRAMA_QUEUE } from './task/types';
       DramaTaskEntity, // 任务队列
       DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity, // 事件追踪
       GlobalAssetFolderEntity, GlobalCharacterEntity, GlobalLocationEntity, GlobalStyleEntity, // 全局资产
-      DramaUserBalanceEntity, DramaBalanceFreezeEntity, DramaBalanceTransactionEntity, // 计费
     ]),
     BullModule.registerQueue( // 四队列分治
       { name: DRAMA_QUEUE.TEXT }, { name: DRAMA_QUEUE.IMAGE },
@@ -80,7 +76,6 @@ import { DRAMA_QUEUE } from './task/types';
     DramaTextProcessor, DramaImageProcessor, DramaVideoProcessor, DramaVoiceProcessor, // Worker 处理器
     DramaRunService, // 运行时事件追踪
     AssetHubService, // 全局资产
-    DramaBillingService, // 计费
     DramaSeedAnalyzerAgent, SeriesDirectorAgent, VisualAssetDesignerAgent,
     DramaProfilerAgent, DramaStrategyAgent,
     ArcDirectorAgent, EpisodeDirectorAgent, ContinuityGuardAgent,
@@ -89,9 +84,9 @@ import { DRAMA_QUEUE } from './task/types';
     ScriptReviewerAgent, ScriptEditorAgent,
     PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent,
     DramaDeterministicCheckerService, DramaPromptTemplateService, DramaCalibrationService,
-    DramaUsageService, DramaTaskRecoveryService,
+    DramaTaskRecoveryService,
     MediaQualityGateService, ShotCoherenceValidatorService, EmotionMediaMapperService, GenerationPolicyService,
   ],
-  exports: [DramaTaskService, TaskSubmitterService, DramaRunService, AssetHubService, DramaBillingService],
+  exports: [DramaTaskService, TaskSubmitterService, DramaRunService, AssetHubService],
 })
 export class DramaModule {}

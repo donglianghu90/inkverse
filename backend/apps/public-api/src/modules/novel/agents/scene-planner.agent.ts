@@ -144,7 +144,7 @@ export class ScenePlannerAgent {
       taskName: 'scene-planner',
       schema: chapterScenePlanSchema,
       tags: ['workflow', 'chapter', 'scene-plan'],
-      metadata: { bookId: state.bookId, chapterNumber: intent.chapterNumber, chapterType },
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber: intent.chapterNumber, chapterType },
       systemPrompt: `${playbooks?.['agent:scene-planner:role'] ?? (state.seed.writingMode === 'literary'
         ? '你是一位兼具文学敏感度与场景感的导演。你的任务是把"章节意图"拆成场景，每个场景有明确的叙事/情感/主题任务——可以是外部冲突，也可以是内在探索。'
         : '你是一位擅长场景拆分的网文导演。你的任务是把"章节意图"拆成独立场景，每个场景有明确的叙事任务。')}

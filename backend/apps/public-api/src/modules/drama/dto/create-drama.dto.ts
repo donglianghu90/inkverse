@@ -25,8 +25,12 @@ export class CreateDramaDto {
   @IsOptional() @IsString()
   titleHint?: string; // 剧名灵感
 
-  @IsOptional() @IsEnum(['douyin', 'kuaishou', 'reelshort', 'dramabox', 'generic'])
-  platformTarget?: 'douyin' | 'kuaishou' | 'reelshort' | 'dramabox' | 'generic';
+  @IsOptional() @IsEnum([
+    'douyin', 'kuaishou', 'hongguo', 'wechat_mini', 'bilibili',
+    'tencent_video', 'mango_tv', 'iqiyi', 'reelshort', 'dramabox', 'generic',
+  ])
+  platformTarget?: 'douyin' | 'kuaishou' | 'hongguo' | 'wechat_mini' | 'bilibili'
+    | 'tencent_video' | 'mango_tv' | 'iqiyi' | 'reelshort' | 'dramabox' | 'generic';
 
   @IsOptional() @IsEnum(['9:16', '16:9'])
   aspectRatio?: '9:16' | '16:9';

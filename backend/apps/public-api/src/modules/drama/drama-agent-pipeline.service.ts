@@ -131,6 +131,10 @@ export class DramaAgentPipelineService {
     return entity;
   }
 
+  async deleteByDrama(dramaId: string): Promise<void> {
+    await this.repo.delete({ dramaId });
+  }
+
   private toView(entity: DramaAgentPipelineEntity): DramaPipelineView {
     return {
       dramaId: entity.dramaId,

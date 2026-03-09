@@ -128,6 +128,7 @@ export class WorldExtractorAgent {
       schema: worldExtractionSchema,
       tags: ['workflow', 'chapter', 'record', 'world'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: draft.chapterNumber,
       },

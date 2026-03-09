@@ -76,8 +76,8 @@ export class NovelController {
   @Post('idea/enhance')
   @ApiOperation({ summary: '美化创意', description: '用 AI 将粗略的创意打磨为更具吸引力的故事概念' })
   @ApiResponse({ status: 200, description: '返回美化后的创意和亮点' })
-  async enhanceIdea(@Body() body: EnhanceIdeaDto): Promise<unknown> {
-    return this.novelService.enhanceIdea(body.idea, body.genre);
+  async enhanceIdea(@Body() body: EnhanceIdeaDto, @CurrentUser('id') userId: string): Promise<unknown> {
+    return this.novelService.enhanceIdea(body.idea, body.genre, userId);
   }
 
   @Post('idea/generate-goal')
@@ -85,15 +85,16 @@ export class NovelController {
   @ApiResponse({ status: 200, description: '返回推荐目标和备选方案' })
   async generateStoryGoal(
     @Body() body: GenerateStoryGoalDto,
+    @CurrentUser('id') userId: string,
   ): Promise<unknown> {
-    return this.novelService.generateStoryGoal(body);
+    return this.novelService.generateStoryGoal({ ...body, userId });
   }
 
   @Post('idea/enhance-goal')
   @ApiOperation({ summary: '美化主线目标', description: '用 AI 润色用户手写的主线目标，结合创意、题材和受众信息' })
   @ApiResponse({ status: 200, description: '返回美化后的主线目标和优化亮点' })
-  async enhanceGoal(@Body() body: EnhanceGoalDto): Promise<unknown> {
-    return this.novelService.enhanceGoal(body);
+  async enhanceGoal(@Body() body: EnhanceGoalDto, @CurrentUser('id') userId: string): Promise<unknown> {
+    return this.novelService.enhanceGoal({ ...body, userId });
   }
 
   @Post('books')
@@ -184,7 +185,7 @@ export class NovelController {
   }
 
   @Get('books/:bookId/token-usage')
-  @ApiOperation({ summary: '书籍Token用量', description: '返回书籍所有章节的LLM Token用量汇总与明细' })
+  @ApiOperation({ summary: '书籍消耗统计', description: '返回书籍所有章节的LLM/图片/视频用量汇总与明细' })
   @ApiParam({ name: 'bookId', description: '书籍唯一 ID' })
   @ApiResponse({ status: 200, description: '成功' })
   async getBookTokenUsage(@Param('bookId') bookId: string, @CurrentUser('id') userId: string): Promise<unknown> {
@@ -677,8 +678,8 @@ export class NovelController {
 
   @Post('genre-templates/ai-generate')
   @ApiOperation({ summary: 'AI 生成题材模板', description: '根据题材描述 AI 自动生成完整 Profile + SeedHints' })
-  async aiGenerateGenreTemplate(@Body() dto: AiGenerateProfileDto) {
-    return this.genreTemplateService.aiGenerate(dto);
+  async aiGenerateGenreTemplate(@Body() dto: AiGenerateProfileDto, @CurrentUser('id') userId: string) {
+    return this.genreTemplateService.aiGenerate({ ...dto, userId });
   }
 
   @Get('genre-templates/:id/system-diff')

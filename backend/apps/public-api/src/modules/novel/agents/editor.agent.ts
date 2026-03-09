@@ -50,6 +50,7 @@ export class EditorAgent {
       schema: chapterDraftSchema,
       tags: ['workflow', 'chapter', 'edit'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: intent.chapterNumber,
         issueCount: review.issuesFound.length,

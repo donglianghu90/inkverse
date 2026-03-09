@@ -8,7 +8,6 @@ const MSG_MAP: Array<[string[], ErrorCode]> = [ // 消息关键词→错误码�
   [['not found', '不存在', '404'], 'NOT_FOUND'],
   [['invalid', 'missing', 'required', 'bad request'], 'INVALID_PARAMS'],
   [['rate limit', 'quota', 'throttle', '429'], 'RATE_LIMIT'],
-  [['insufficient balance', '余额不足', '402'], 'INSUFFICIENT_BALANCE'],
   [['sensitive', 'unsafe', 'blocked', '违规', '敏感'], 'SENSITIVE_CONTENT'],
   [['timeout', 'timed out', 'deadline'], 'GENERATION_TIMEOUT'],
   [['503', 'unavailable', 'overloaded'], 'EXTERNAL_ERROR'],

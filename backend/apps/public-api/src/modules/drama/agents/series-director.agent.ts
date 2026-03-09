@@ -5,7 +5,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
-import { seriesOutlineSchema, SeriesOutline, DramaSeed, episodeSynopsisSchema, ContentMode } from '../schemas/drama-state.schemas';
+import { seriesOutlineSchema, SeriesOutline, DramaSeed, episodeSynopsisSchema } from '../schemas/drama-state.schemas';
 import { buildSeriesDirectorSystemPrompt } from '../prompting/drama-playbook';
 
 const DETAIL_SEGMENT = 15; // 首段详细规划集数
@@ -23,7 +23,7 @@ export class SeriesDirectorAgent {
   private readonly logger = new Logger(SeriesDirectorAgent.name);
   constructor(private readonly llm: LlmService) {}
 
-  async plan(seed: DramaSeed, contentMode: ContentMode = 'drama'): Promise<SeriesOutline> {
+  async plan(seed: DramaSeed, dramaId?: string, userId?: string): Promise<SeriesOutline> {
     const epMin = seed.plannedTotalEpisodes.min;
     const epMax = seed.plannedTotalEpisodes.max;
     const targetEp = Math.round((epMin + epMax) / 2);
@@ -32,7 +32,8 @@ export class SeriesDirectorAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-series-director',
       schema: segmentedOutputSchema,
-      systemPrompt: buildSeriesDirectorSystemPrompt({ targetEp, epMin, epMax, durSec, contentMode }),
+      systemPrompt: buildSeriesDirectorSystemPrompt({ targetEp, epMin, epMax, durSec }),
+      metadata: { dramaId, userId },
       userPrompt: `请根据以下内容种子规划全剧大纲：
 
 剧名：${seed.title}
@@ -40,17 +41,17 @@ export class SeriesDirectorAgent {
 梗概：${seed.logline}
 核心主题：${seed.coreConflict}
 核心体验：${seed.catharsisType}
-主角：${seed.protagonistConcept.name} — ${seed.protagonistConcept.situation}（性格：${seed.protagonistConcept.personality}，${contentMode === 'knowledge' ? '历史局限' : '致命弱点'}：${seed.protagonistConcept.fatalFlaw}）
-${seed.antagonistConcept ? `${contentMode === 'knowledge' ? '命运对手' : '反派'}：${seed.antagonistConcept.name} — ${seed.antagonistConcept.motivation}（与主角关系：${seed.antagonistConcept.relationship}）` : ''}
+主角：${seed.protagonistConcept.name} — ${seed.protagonistConcept.situation}（性格：${seed.protagonistConcept.personality}，致命弱点：${seed.protagonistConcept.fatalFlaw}）
+${seed.antagonistConcept ? `对手：${seed.antagonistConcept.name} — ${seed.antagonistConcept.motivation}（与主角关系：${seed.antagonistConcept.relationship}）` : ''}
 调性：${seed.tone}
 底线：${seed.redLines.join('；')}
 
 === 分段式规划 ===
 1. arcOverview：全剧分4-6个段落（含 segmentTitle/startEp/endEp/coreConflict/paywallEpisodes）
 2. detailedEpisodes：仅输出前 ${DETAIL_SEGMENT} 集的详细概要（后续段落由段落导演按需展开）
-3. paywallEpisodes：${contentMode === 'knowledge' ? '知识模式设为空数组 []' : '全剧付费卡点集号列表'}
+3. paywallEpisodes：全剧付费卡点集号列表
 4. mainStoryGoal + endingDirection
-5. 确保前3集足够抓人，首段节奏紧凑${contentMode === 'knowledge' ? '' : '，付费卡点设计致命'}`,
+5. 确保前3集足够抓人，首段节奏紧凑，付费卡点设计致命`,
       temperature: 0.5,
     });
 

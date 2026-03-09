@@ -7,7 +7,7 @@ interface FailedCheck { rule: string; detail: string; severity: CheckSeverity }
 
 const HARD_RULES = new Set([
   'unknown_character', 'empty_visual_prompt', 'too_few_shots', 'shot_index_gap',
-  'no_opening_hook', 'no_ending_cliffhanger', 'too_few_scenes',
+  'too_few_scenes',
 ]);
 const VP_MAX_WORDS = 80; // visualPrompt词数上限（含face描述后放宽）
 const DIALOGUE_MAX_CHARS = 20; // 单句台词中文字符上限（短剧铁律）
@@ -96,7 +96,7 @@ export class DramaDeterministicCheckerService {
 
     // === 短剧内容质量规则（核心新增） ===
     this.checkDialogueLength(script, fails);
-    this.checkSceneStructure(script, fails);
+    this.checkSceneStructure(script, fails, !!state.isSeriesFinale);
     this.checkEmotionalProgression(script, fails);
 
     const hardFails = fails.filter(f => f.severity === 'hard');
@@ -124,8 +124,7 @@ export class DramaDeterministicCheckerService {
     }
   }
 
-  /** 场景结构检查：首场必须有hook、末场必须有悬念、最少2场 */
-  private checkSceneStructure(script: EpisodeScript, fails: FailedCheck[]): void {
+  private checkSceneStructure(script: EpisodeScript, fails: FailedCheck[], isSeriesFinale = false): void {
     const scenes = script.scenes;
     if (scenes.length < 2) {
       fails.push({ rule: 'too_few_scenes', severity: 'hard', detail: `仅${scenes.length}场戏，短剧至少需要2场` });
@@ -136,9 +135,42 @@ export class DramaDeterministicCheckerService {
       fails.push({ rule: 'no_opening_hook', severity: 'soft', detail: `第一场purpose="${firstScene.purpose}"，应为"hook_opening"` });
     }
     const lastScene = scenes[scenes.length - 1];
-    if (lastScene.purpose !== 'cliffhanger' && lastScene.purpose !== 'climax') {
-      fails.push({ rule: 'no_ending_cliffhanger', severity: 'soft', detail: `末场purpose="${lastScene.purpose}"，应为"cliffhanger"或"climax"` });
+    const validEndings = isSeriesFinale
+      ? ['climax', 'emotional', 'closure', 'revelation']
+      : ['cliffhanger', 'climax'];
+    if (!validEndings.includes(lastScene.purpose)) {
+      fails.push({ rule: 'no_ending_cliffhanger', severity: 'soft',
+        detail: isSeriesFinale
+          ? `大结局末场purpose="${lastScene.purpose}"，应为 ${validEndings.join('/')} 之一`
+          : `末场purpose="${lastScene.purpose}"，应为"cliffhanger"或"climax"` });
     }
+  }
+
+  /**
+   * 轻量 Shot 级校验 — 用于 HookCrafter previewShots 等不需要完整 script/storyboard 的场景。
+   * 只检查 visualPrompt 非空、角色合法性、shotIndex 合理性。
+   */
+  checkShots(shots: import('../schemas/drama-state.schemas').Shot[], state: DramaState): FailedCheck[] {
+    const fails: FailedCheck[] = [];
+    const knownCharIds = new Set(state.characters?.map(c => c.characterId) ?? []);
+
+    shots.forEach((s, i) => {
+      if (!s.visualPrompt?.trim()) {
+        fails.push({ rule: 'empty_visual_prompt', severity: 'hard', detail: `previewShot[${i}] 缺少 visualPrompt` });
+      }
+      s.characters.forEach(c => {
+        if (!knownCharIds.has(c.characterId)) {
+          fails.push({ rule: 'unknown_character', severity: 'hard', detail: `previewShot[${i}] 引用未定义角色 ${c.characterId}` });
+        }
+      });
+      if (s.dialogue?.text) {
+        const zhLen = s.dialogue.text.replace(/[^\u4e00-\u9fff]/g, '').length;
+        if (zhLen > DIALOGUE_HARD_MAX) {
+          fails.push({ rule: 'dialogue_too_long', severity: 'hard', detail: `previewShot[${i}] 台词${zhLen}字 > ${DIALOGUE_HARD_MAX}字` });
+        }
+      }
+    });
+    return fails;
   }
 
   /** 情绪进展检查：避免全集情绪扁平（用emotionalEntry/emotionalExit对比） */

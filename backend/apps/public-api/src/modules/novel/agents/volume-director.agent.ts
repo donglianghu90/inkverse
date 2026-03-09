@@ -96,7 +96,7 @@ export class VolumeDirectorAgent {
       taskName: 'volume-director',
       schema: volumeArcSchema,
       tags: ['workflow', 'volume', 'planning'],
-      metadata: { bookId: state.bookId, volumeNumber },
+      metadata: { userId: state.userId, bookId: state.bookId, volumeNumber },
       systemPrompt: `你是一位${profile.generatedForGenre}${isLiterary ? '小说' : '网文'}的宏观架构师，负责规划一个大卷（约${volRange}章，全书预计${totalCh}章）。
 
 === 大卷的作用 ===
@@ -189,7 +189,7 @@ ${openThreads || '（暂无）'}
       taskName: 'volume-foreshadowing',
       schema,
       tags: ['workflow', 'volume', 'foreshadowing'],
-      metadata: { bookId: state.bookId, volumeNumber: volume.volumeNumber },
+      metadata: { userId: state.userId, bookId: state.bookId, volumeNumber: volume.volumeNumber },
       systemPrompt: `你是一位伏笔大师。基于刚规划的大卷，为这个卷预埋5-10条前瞻式伏笔。
 
 === 伏笔设计原则 ===

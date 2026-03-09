@@ -30,7 +30,7 @@ export class DramaCalibrationService {
     this.issueRepeatThreshold = Number(raw.issueRepeatThreshold) || 2;
     this.maxActivePatterns = Number(raw.maxActivePatterns) || 20;
     this.dimensionShiftWindow = Number(raw.dimensionShiftWindow) || 5;
-    this.dimensionShiftThreshold = Number(raw.dimensionShiftThreshold) || 1.5;
+    this.dimensionShiftThreshold = Number(raw.dimensionShiftThreshold) || 5.0;
     this.weightAdjustStep = Number(raw.weightAdjustStep) || 0.1;
   }
 
@@ -95,5 +95,41 @@ export class DramaCalibrationService {
       .filter(p => p.status === 'active')
       .sort((a, b) => b.occurrences - a.occurrences)
       .slice(0, this.maxActivePatterns);
+  }
+
+  /** 从近期 KPI 历史中提取弱势维度及改进建议（供 episode-director 等注入 prompt） */
+  extractWeakDimensionFeedback(
+    kpiHistory: Array<{ episodeNumber?: number; overallScore?: number; dimensions?: Record<string, number> }>,
+    style: 'action' | 'label' = 'action',
+  ): string {
+    if (!kpiHistory.length) return '';
+    const dimSums: Record<string, { total: number; count: number }> = {};
+    kpiHistory.forEach(k => Object.entries(k.dimensions ?? {}).forEach(([dim, score]) => {
+      if (!dimSums[dim]) dimSums[dim] = { total: 0, count: 0 };
+      dimSums[dim].total += score; dimSums[dim].count++;
+    }));
+    const weakOnes = Object.entries(dimSums)
+      .map(([dim, { total, count }]) => ({ dim, avg: total / count }))
+      .filter(d => d.avg < 7)
+      .sort((a, b) => a.avg - b.avg);
+    if (!weakOnes.length) return '';
+    if (style === 'action') {
+      const actionMap: Record<string, string> = {
+        visualImpact: '规划更多视觉冲击场景（特写、对比、空间转换）',
+        dialogueNaturalness: '减少台词密度，增加动作叙事，台词更口语化',
+        pacing: '调整场景节奏，避免信息密度均匀化，制造快慢交替',
+        hookStrength: '设计更强的集末悬念，考虑信息差/反转/新危机',
+        consistency: '注意与前集的情节衔接和角色行为一致性',
+        emotionalImpact: '增加情感爆发点，用沉默/表情/环境渲染情绪',
+      };
+      return weakOnes.map(w =>
+        `⚠ ${w.dim} 平均${w.avg.toFixed(1)}分 → ${actionMap[w.dim] || '请针对性提升'}`,
+      ).join('\n');
+    }
+    const dimNameMap: Record<string, string> = {
+      visualImpact: '画面冲击力', dialogueNaturalness: '台词自然度', pacing: '节奏紧凑度',
+      hookStrength: '悬念强度', consistency: '连续性', emotionalImpact: '情感冲击力',
+    };
+    return weakOnes.map(w => `⚠ ${dimNameMap[w.dim] || w.dim} 平均${w.avg.toFixed(1)}分 — 本集请重点加强`).join('\n');
   }
 }

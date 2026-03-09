@@ -2,7 +2,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, In, LessThan } from 'typeorm';
-import { DramaTaskEntity } from './task.entity';
+import { DramaTaskEntity } from './entities/task.entity';
 import { DramaTaskPayload, DramaTaskStatus, DRAMA_TASK_STATUS, isTerminal } from './types';
 
 @Injectable()
@@ -19,7 +19,7 @@ export class DramaTaskService {
     const task = await this.repo.save(this.repo.create({
       userId: input.userId, dramaId: input.dramaId, episodeNumber: input.episodeNumber,
       type: input.type, targetType: input.targetType, targetId: input.targetId,
-      payload: input.payload, billingInfo: input.billingInfo, priority: input.priority ?? 0,
+      payload: input.payload, priority: input.priority ?? 0,
       maxAttempts: input.maxAttempts ?? 3, dedupeKey: input.payload?.dedupeKey ? String(input.payload.dedupeKey) : null,
     }));
     return { task, deduped: false };
@@ -64,5 +64,14 @@ export class DramaTaskService {
   async cancelTask(taskId: string): Promise<boolean> {
     const r = await this.repo.update({ id: taskId, status: Not(In(['completed', 'failed', 'cancelled'])) }, { status: DRAMA_TASK_STATUS.CANCELLED, finishedAt: new Date() });
     return (r.affected ?? 0) > 0;
+  }
+
+  async cancelAndDeleteByDrama(dramaId: string): Promise<number> {
+    await this.repo.update(
+      { dramaId, status: In([DRAMA_TASK_STATUS.QUEUED, DRAMA_TASK_STATUS.PROCESSING]) },
+      { status: DRAMA_TASK_STATUS.CANCELLED, finishedAt: new Date() },
+    );
+    const r = await this.repo.delete({ dramaId });
+    return r.affected ?? 0;
   }
 }

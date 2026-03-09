@@ -30,22 +30,19 @@ export interface T2VOptimizeOptions {
 }
 
 const QUALITY_BOOSTERS: Record<string, string[]> = {
-  volcengine: ['masterpiece', 'best quality', 'highly detailed', 'sharp focus', 'professional photography'],
+  volcengine: ['cinematic lighting', 'rich color depth'],
   default: ['high quality', 'detailed', 'sharp focus'],
 };
 
-const GOLDEN_EXTRA = ['8K UHD', 'cinematic lighting', 'award winning'];
-const STANDARD_EXTRA = ['high resolution'];
+const GOLDEN_EXTRA = ['cinematic composition', 'dramatic atmosphere'];
+const STANDARD_EXTRA: string[] = [];
 
 const BASE_NEGATIVE = [
-  'blurry', 'low quality', 'deformed face', 'extra fingers', 'watermark',
-  'text', 'logo', 'bad anatomy', 'worst quality', 'jpeg artifacts',
-  'duplicate', 'morbid', 'mutilated', 'poorly drawn face',
+  'blurry', 'low quality', 'watermark', 'text', 'logo',
 ];
 
 const CHARACTER_NEGATIVE_EXTRA = [
-  'extra limbs', 'missing arms', 'missing legs', 'fused fingers',
-  'too many fingers', 'long neck', 'deformed eyes', 'cross-eyed',
+  'deformed face', 'extra fingers', 'extra limbs',
 ];
 
 const CONFLICTING_PAIRS: Array<[RegExp, RegExp]> = [
@@ -134,7 +131,7 @@ const T2V_ROUTE_HINTS: Record<string, string> = {
 export class PromptOptimizerService implements OnModuleInit {
   private readonly logger = new Logger('PromptOptimizer');
   private defaultProvider = 'volcengine';
-  private maxT2ITokens = 150;
+  private maxT2ITokens = 300;
   private maxT2VTokens = 100;
 
   constructor(private readonly configService: ConfigService) {}
@@ -272,6 +269,14 @@ export class PromptOptimizerService implements OnModuleInit {
       }
     }
 
+    if (typeof opts.duration === 'number' && opts.duration <= 3) {
+      const shortHint = 'single action, minimal complexity';
+      if (!prompt.toLowerCase().includes('single action')) {
+        prompt = `${prompt}, ${shortHint}`;
+        added.push(shortHint);
+      }
+    }
+
     if (!opts.hasFirstFrame) {
       const videoBoost = 'cinematic video, smooth motion';
       if (!prompt.toLowerCase().includes('cinematic')) {
@@ -290,11 +295,12 @@ export class PromptOptimizerService implements OnModuleInit {
     const removed: string[] = [];
     let result = prompt;
     for (const [a, b] of CONFLICTING_PAIRS) {
-      const matchA = a.test(result);
-      const matchB = b.test(result);
-      if (matchA && matchB) {
-        result = result.replace(b, '').replace(/,\s*,/g, ',').replace(/,\s*$/, '').trim();
-        removed.push(b.source.replace(/\\b/g, ''));
+      const mA = a.exec(result);
+      const mB = b.exec(result);
+      if (mA && mB) {
+        const drop = mA.index <= mB.index ? b : a;
+        result = result.replace(drop, '').replace(/,\s*,/g, ',').replace(/,\s*$/, '').trim();
+        removed.push(drop.source.replace(/\\b/g, ''));
       }
     }
     return { prompt: result, removed };
@@ -320,8 +326,8 @@ export class PromptOptimizerService implements OnModuleInit {
    * Quality boosters are appended last so they get trimmed first.
    */
   private smartTruncate(prompt: string, maxTokens: number): string {
-    const words = prompt.split(/\s+/);
-    if (words.length <= maxTokens) return prompt;
+    const estimatedTokens = Math.ceil(prompt.split(/\s+/).length * 1.3);
+    if (estimatedTokens <= maxTokens) return prompt;
 
     const segments = prompt.split(',').map(s => s.trim()).filter(Boolean);
     const BOOSTER_SET = new Set([
@@ -336,18 +342,21 @@ export class PromptOptimizerService implements OnModuleInit {
       else core.push(seg);
     }
 
+    const estTokens = (s: string) => Math.ceil(s.split(/\s+/).length * 1.3);
+
     let result = [...core, ...boosters].join(', ');
-    const resultWords = result.split(/\s+/);
-    if (resultWords.length <= maxTokens) return result;
+    if (estTokens(result) <= maxTokens) return result;
 
     result = core.join(', ');
-    const coreWords = result.split(/\s+/);
-    if (coreWords.length > maxTokens) {
-      this.logger.debug(`Prompt core truncated from ${coreWords.length} to ${maxTokens} words`);
-      return coreWords.slice(0, maxTokens).join(' ');
+    const coreTokens = estTokens(result);
+    if (coreTokens > maxTokens) {
+      const coreWords = result.split(/\s+/);
+      const cutAt = Math.floor(maxTokens / 1.3);
+      this.logger.debug(`Prompt core truncated from ${coreWords.length} to ~${cutAt} words`);
+      return coreWords.slice(0, cutAt).join(' ');
     }
 
-    const remaining = maxTokens - coreWords.length;
+    const remaining = maxTokens - coreTokens;
     if (remaining > 0 && boosters.length) {
       const boosterStr = boosters.join(', ');
       const boosterWords = boosterStr.split(/\s+/).slice(0, remaining);

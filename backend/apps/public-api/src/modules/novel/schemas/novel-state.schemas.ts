@@ -1017,6 +1017,7 @@ export const bookStrategySchema = z.object({
 
 export const storyStateSchema = z.object({
   bookId: z.string(),
+  userId: z.string().default(''),
   createdAt: z.string(),
   updatedAt: z.string(),
   version: z.literal(2).default(2),

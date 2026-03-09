@@ -216,23 +216,31 @@ export function selectBestCharacterView(
 
 /** 为指定视角构建 T2I prompt（链式生成用） */
 export function buildViewAnglePrompt(
-  char: { faceReferencePrompt?: string; bodyType?: string; hairStyle?: string; defaultCostume?: string },
+  char: {
+    faceReferencePrompt?: string;
+    bodyType?: string; bodyTypePrompt?: string;
+    hairStyle?: string; hairStylePrompt?: string;
+    defaultCostume?: string; defaultCostumePrompt?: string;
+  },
   viewAngle: CharacterViewAngle,
 ): string {
   const face = char.faceReferencePrompt ?? '';
+  const body = char.bodyTypePrompt || char.bodyType || '';
+  const hair = char.hairStylePrompt || char.hairStyle || '';
+  const costume = char.defaultCostumePrompt || char.defaultCostume || '';
   switch (viewAngle) {
     case 'face_front':
       return face;
     case 'face_three_quarter':
       return `three quarter view portrait, same person, slightly turned, ${face}, neutral background`;
     case 'upper_body_front':
-      return `upper body portrait, same person, ${face}, wearing ${char.defaultCostume ?? ''}, ${char.bodyType ?? ''} build, neutral background`;
+      return `upper body portrait, same person, ${face}, wearing ${costume}, ${body} build, neutral background`;
     case 'full_body_front':
-      return `full body standing portrait, same person, ${face}, ${char.bodyType ?? ''} build, ${char.hairStyle ?? ''} hair, wearing ${char.defaultCostume ?? ''}, neutral studio background`;
+      return `full body standing portrait, same person, ${face}, ${body} build, ${hair} hair, wearing ${costume}, neutral studio background`;
     case 'side_profile':
-      return `side profile portrait, same person, ${face}, ${char.hairStyle ?? ''} hair, neutral background`;
+      return `side profile portrait, same person, ${face}, ${hair} hair, neutral background`;
     case 'back_view':
-      return `back view, same person from behind, ${char.hairStyle ?? ''} hair, ${char.bodyType ?? ''} build, wearing ${char.defaultCostume ?? ''}, neutral background`;
+      return `back view, same person from behind, ${hair} hair, ${body} build, wearing ${costume}, neutral background`;
     default:
       return face;
   }

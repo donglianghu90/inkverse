@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Outlet, history, useLocation } from '@umijs/max';
-import { BookOpen, PenTool, Sun, Moon, LogOut, ChevronDown, Plus, Menu, X, Sparkles, Palette } from 'lucide-react';
+import { BookOpen, PenTool, Sun, Moon, LogOut, ChevronDown, Menu, X, Sparkles, Palette, Film } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useDarkMode } from '@/hooks/useDarkMode';
@@ -40,13 +40,42 @@ function UserAvatar({ name, size = 'sm' }: { name: string; size?: 'sm' | 'md' | 
   );
 }
 
+interface NavItem {
+  label: string;
+  path: string;
+  icon: React.ReactNode;
+  match: (pathname: string) => boolean;
+}
+
 const NovelLayout: React.FC = () => {
   const { isDark, toggle } = useDarkMode();
   const [user, setUser] = useState<UserInfo | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const location = useLocation();
-  const isBookshelf = location.pathname === '/novel';
+
+  const navItems: NavItem[] = useMemo(() => [
+    {
+      label: '我的书架',
+      path: '/novel',
+      icon: <BookOpen className="h-4 w-4" />,
+      match: (p) => p === '/novel' || p.startsWith('/novel/book/'),
+    },
+    {
+      label: '我的短剧',
+      path: '/novel/dramas',
+      icon: <Film className="h-4 w-4" />,
+      match: (p) => p === '/novel/dramas' || p.startsWith('/novel/drama/') || p === '/novel/create-drama',
+    },
+    {
+      label: '题材模板',
+      path: '/novel/templates',
+      icon: <Palette className="h-4 w-4" />,
+      match: (p) => p === '/novel/templates',
+    },
+  ], []);
+
+  const showFooter = ['/novel', '/novel/dramas', '/novel/create', '/novel/create-drama', '/novel/templates'].includes(location.pathname);
 
   const joinDate = useMemo(() => {
     try {
@@ -100,42 +129,21 @@ const NovelLayout: React.FC = () => {
 
             {/* Desktop nav */}
             <nav className="hidden sm:flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => history.push('/novel')}
-                className={cn(
-                  'gap-1.5 transition-colors',
-                  isBookshelf && 'bg-primary/8 text-primary hover:bg-primary/12 hover:text-primary',
-                )}
-              >
-                <BookOpen className="h-4 w-4" />
-                我的书架
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => history.push('/novel/create')}
-                className={cn(
-                  'gap-1.5 transition-colors',
-                  location.pathname === '/novel/create' && 'bg-primary/8 text-primary hover:bg-primary/12 hover:text-primary',
-                )}
-              >
-                <Plus className="h-4 w-4" />
-                创建新书
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => history.push('/novel/templates')}
-                className={cn(
-                  'gap-1.5 transition-colors',
-                  location.pathname === '/novel/templates' && 'bg-primary/8 text-primary hover:bg-primary/12 hover:text-primary',
-                )}
-              >
-                <Palette className="h-4 w-4" />
-                题材模板
-              </Button>
+              {navItems.map((item) => (
+                <Button
+                  key={item.path}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => history.push(item.path)}
+                  className={cn(
+                    'gap-1.5 transition-colors',
+                    item.match(location.pathname) && 'bg-primary/8 text-primary hover:bg-primary/12 hover:text-primary',
+                  )}
+                >
+                  {item.icon}
+                  {item.label}
+                </Button>
+              ))}
 
               <div className="w-px h-5 bg-border mx-1.5" />
 
@@ -167,7 +175,6 @@ const NovelLayout: React.FC = () => {
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)} />
                     <div className="absolute right-0 top-full mt-2 z-50 w-64 rounded-2xl border bg-card shadow-2xl shadow-black/10 dark:shadow-black/30 animate-scale-in overflow-hidden">
-                      {/* Profile header */}
                       <div className="px-4 pt-5 pb-4 bg-gradient-to-b from-primary/5 to-transparent">
                         <div className="flex items-center gap-3">
                           <UserAvatar name={user?.username || '?'} size="lg" />
@@ -185,29 +192,17 @@ const NovelLayout: React.FC = () => {
 
                       <div className="h-px bg-border" />
 
-                      {/* Menu items */}
                       <div className="p-1.5">
-                        <button
-                          onClick={() => { setShowMenu(false); history.push('/novel'); }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-card-foreground hover:bg-accent rounded-lg transition-colors"
-                        >
-                          <BookOpen className="w-4 h-4 text-muted-foreground" />
-                          我的书架
-                        </button>
-                        <button
-                          onClick={() => { setShowMenu(false); history.push('/novel/create'); }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-card-foreground hover:bg-accent rounded-lg transition-colors"
-                        >
-                          <Plus className="w-4 h-4 text-muted-foreground" />
-                          创建新书
-                        </button>
-                        <button
-                          onClick={() => { setShowMenu(false); history.push('/novel/templates'); }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-card-foreground hover:bg-accent rounded-lg transition-colors"
-                        >
-                          <Palette className="w-4 h-4 text-muted-foreground" />
-                          题材模板
-                        </button>
+                        {navItems.map((item) => (
+                          <button
+                            key={item.path}
+                            onClick={() => { setShowMenu(false); history.push(item.path); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-card-foreground hover:bg-accent rounded-lg transition-colors"
+                          >
+                            <span className="w-4 h-4 text-muted-foreground">{item.icon}</span>
+                            {item.label}
+                          </button>
+                        ))}
                         <button
                           onClick={toggle}
                           className="w-full flex items-center justify-between px-3 py-2.5 text-sm text-card-foreground hover:bg-accent rounded-lg transition-colors"
@@ -259,36 +254,19 @@ const NovelLayout: React.FC = () => {
           {mobileNav && (
             <div className="sm:hidden border-t bg-background animate-slide-up">
               <div className="px-4 py-3 space-y-1">
-                <button
-                  onClick={() => history.push('/novel')}
-                  className={cn(
-                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                    isBookshelf ? 'bg-primary/10 text-primary' : 'hover:bg-accent',
-                  )}
-                >
-                  <BookOpen className="h-4 w-4" />
-                  我的书架
-                </button>
-                <button
-                  onClick={() => history.push('/novel/create')}
-                  className={cn(
-                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                    location.pathname === '/novel/create' ? 'bg-primary/10 text-primary' : 'hover:bg-accent',
-                  )}
-                >
-                  <Plus className="h-4 w-4" />
-                  创建新书
-                </button>
-                <button
-                  onClick={() => history.push('/novel/templates')}
-                  className={cn(
-                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                    location.pathname === '/novel/templates' ? 'bg-primary/10 text-primary' : 'hover:bg-accent',
-                  )}
-                >
-                  <Palette className="h-4 w-4" />
-                  题材模板
-                </button>
+                {navItems.map((item) => (
+                  <button
+                    key={item.path}
+                    onClick={() => history.push(item.path)}
+                    className={cn(
+                      'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                      item.match(location.pathname) ? 'bg-primary/10 text-primary' : 'hover:bg-accent',
+                    )}
+                  >
+                    {item.icon}
+                    {item.label}
+                  </button>
+                ))}
                 <div className="border-t my-2" />
                 <div className="flex items-center gap-3 px-3 py-2.5">
                   <UserAvatar name={user?.username || '?'} size="md" />
@@ -316,9 +294,9 @@ const NovelLayout: React.FC = () => {
           <Outlet />
         </main>
 
-        {(isBookshelf || location.pathname === '/novel/create' || location.pathname === '/novel/templates') && (
+        {showFooter && (
           <footer className="border-t py-4 text-center text-xs text-muted-foreground/50">
-            InkVerse &copy; {new Date().getFullYear()} &middot; AI 小说创作平台
+            InkVerse &copy; {new Date().getFullYear()} &middot; AI 创作平台
           </footer>
         )}
       </div>

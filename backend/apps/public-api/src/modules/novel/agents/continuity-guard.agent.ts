@@ -37,6 +37,7 @@ export class ContinuityGuardAgent {
       schema: continuityPreCheckSchema,
       tags: ['workflow', 'chapter', 'continuity'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: intent.chapterNumber,
       },

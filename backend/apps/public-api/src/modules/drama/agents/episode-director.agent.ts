@@ -9,12 +9,17 @@ import {
 } from '../schemas/drama-state.schemas';
 import { buildEpisodeDirectorSystemPrompt } from '../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../prompting/drama-prompt-template.service';
+import { DramaCalibrationService } from '../drama-calibration.service';
 
 const intentOutputSchema = z.object({ intent: episodeIntentSchema });
 
 @Injectable()
 export class EpisodeDirectorAgent {
-  constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
+  constructor(
+    private readonly llm: LlmService,
+    private readonly promptService: DramaPromptTemplateService,
+    private readonly calibration: DramaCalibrationService,
+  ) {}
 
   async direct(state: DramaState, synopsis: EpisodeSynopsis, contextInjections?: string[]): Promise<EpisodeIntent> {
     const epNum = synopsis.episodeNumber;
@@ -24,11 +29,11 @@ export class EpisodeDirectorAgent {
     const mappedKeyChars = synopsis.keyCharacterIds.map(k => nameToId.get(k) ?? k);
 
     // 质量弱项分析：从最近3集的维度评分中提取具体改进方向
-    const qualityFeedback = this.extractQualityFeedback(state.kpiHistory.slice(-3));
+    const qualityFeedback = this.calibration.extractWeakDimensionFeedback(state.kpiHistory.slice(-3), 'action');
 
     // 多巴胺调度提示：告知导演当前观众"爽感亏欠"程度（知识模式下跳过）
     const dopa = state.dopamineSchedule;
-    const dopaHint = dopa && state.contentMode !== 'knowledge' ? (() => {
+    const dopaHint = dopa ? (() => {
       const lines: string[] = [];
       if (dopa.episodesSinceMajor >= 4) lines.push(`⚡ 已连续 ${dopa.episodesSinceMajor} 集无重大爽感释放（打脸/反转/高潮），本集必须安排一个 major 级爽点`);
       else if (dopa.episodesSinceMajor >= 2) lines.push(`注意：距上次重大爽点已 ${dopa.episodesSinceMajor} 集，本集可积累张力，下1-2集需爆发`);
@@ -40,7 +45,7 @@ export class EpisodeDirectorAgent {
     const paywalls = state.seriesOutline?.paywallEpisodes ?? [];
     const nextPaywall = paywalls.find(p => p >= epNum);
     const prePaywallHint = (() => {
-      if (state.contentMode === 'knowledge') return '';
+      
       if (!nextPaywall) return '';
       const dist = nextPaywall - epNum;
       if (dist === 0) return '';
@@ -52,7 +57,8 @@ export class EpisodeDirectorAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-episode-director',
       schema: intentOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-director', buildEpisodeDirectorSystemPrompt({ maxPresentPerEpisode: state.strategy?.characterBudget?.maxPresentPerEpisode, contentMode: state.contentMode })),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-director', buildEpisodeDirectorSystemPrompt({ maxPresentPerEpisode: state.strategy?.characterBudget?.maxPresentPerEpisode, genreArchetype: state.promptProfile?.genreArchetype })),
+      metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: epNum },
       userPrompt: `本集信息：
 第 ${epNum} 集：${synopsis.title}
 核心冲突：${synopsis.coreConflict}
@@ -70,15 +76,15 @@ ${state.currentArcSegment ? `当前段落：${state.currentArcSegment.segmentTit
 ${state.strategy?.coreNarrativeContract ? `叙事契约：${state.strategy.coreNarrativeContract}` : ''}${dopaHint}
 
 ${qualityFeedback ? `=== 质量反馈（前几集弱项，规划意图时务必针对性加强） ===\n${qualityFeedback}` : ''}
-${this.buildCalibrationHint(state)}
+${this.calibration.buildCalibrationHint(state)}
 可用角色：\n${chars}
 可用场景：${state.locations.map(l => `${l.locationId}(${l.name})`).join('、')}
 ${contextInjections?.length ? `\n连续性约束（必须遵守）：\n${contextInjections.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : ''}
 ${prePaywallHint}
 请生成本集的详细意图。activeCharacters 中的 characterId 必须使用上面"可用角色"中的 characterId。
-
+${state.isSeriesFinale ? `\n🏁 【大结局模式】这是全剧最后一集！\n- 本集必须解决所有核心矛盾，给观众完整的叙事闭合\n- hookDirection 改为"余韵式结尾"——不留悬念，而是给观众值得回味的画面/台词\n- 所有主要角色的情感弧线在本集收束\n- 最后2-3个主镜设计为"终章仪式感"——慢节奏、大画面、重要台词\n- 禁止使用 cliffhanger 类悬念` : ''}
 额外要求：
-1. masterShotPlan 至少输出 ${state.contentMode === 'knowledge' ? 4 : 6} 条，按叙事顺序排列。
+1. masterShotPlan 至少输出 6 条，按叙事顺序排列。
 2. 每条主镜都要满足“一镜一动作”，actionVerb 必须是单动词（如 reveal/confront/strike/turn）。
 3. minDurSec <= maxDurSec，且建议落在 1.5-8 秒区间。`,
       temperature: 0.5,
@@ -87,47 +93,12 @@ ${prePaywallHint}
     const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
     const intent = typeof root.intent === 'object' && root.intent ? root.intent : root;
     const parsed = episodeIntentSchema.parse(intent);
-    return this.ensureMasterShotPlan(parsed, synopsis, state.contentMode);
+    return this.ensureMasterShotPlan(parsed, synopsis);
   }
 
-  private buildCalibrationHint(state: DramaState): string {
-    const patterns = (state.recentIssuePatterns ?? []).filter(p => p.status === 'active' && p.occurrences >= 2);
-    if (!patterns.length) return '';
-    const sorted = [...patterns].sort((a, b) => b.occurrences - a.occurrences).slice(0, 5);
-    const lines = ['=== 自校准警示（近期高频问题）==='];
-    for (const p of sorted) lines.push(`⚠ [${p.dimension}] ${p.pattern.split(':').slice(1).join(':')}（已出现${p.occurrences}次）`);
-    return lines.join('\n');
-  }
-
-  /** 从最近KPI中提取持续弱项维度，生成集导演级改进指令 */
-  private extractQualityFeedback(kpiHistory: Array<{ episodeNumber?: number; overallScore?: number; dimensions?: Record<string, number> }>): string {
-    if (!kpiHistory.length) return '';
-    const dimSums: Record<string, { total: number; count: number }> = {};
-    kpiHistory.forEach(k => Object.entries(k.dimensions ?? {}).forEach(([dim, score]) => {
-      if (!dimSums[dim]) dimSums[dim] = { total: 0, count: 0 };
-      dimSums[dim].total += score; dimSums[dim].count++;
-    }));
-    const weakOnes = Object.entries(dimSums)
-      .map(([dim, { total, count }]) => ({ dim, avg: total / count }))
-      .filter(d => d.avg < 7)
-      .sort((a, b) => a.avg - b.avg);
-    if (!weakOnes.length) return '';
-    const actionMap: Record<string, string> = {
-      visualImpact: '规划更多视觉冲击场景（特写、对比、空间转换）',
-      dialogueNaturalness: '减少台词密度，增加动作叙事，台词更口语化',
-      pacing: '调整场景节奏，避免信息密度均匀化，制造快慢交替',
-      hookStrength: '设计更强的集末悬念，考虑信息差/反转/新危机',
-      consistency: '注意与前集的情节衔接和角色行为一致性',
-      emotionalImpact: '增加情感爆发点，用沉默/表情/环境渲染情绪',
-    };
-    return weakOnes.map(w =>
-      `⚠ ${w.dim} 平均${w.avg.toFixed(1)}分 → ${actionMap[w.dim] || '请针对性提升'}`,
-    ).join('\n');
-  }
-
-  private ensureMasterShotPlan(intent: EpisodeIntent, synopsis: EpisodeSynopsis, mode: DramaState['contentMode']): EpisodeIntent {
+  private ensureMasterShotPlan(intent: EpisodeIntent, synopsis: EpisodeSynopsis): EpisodeIntent {
     const current = (intent.masterShotPlan ?? []).filter((s) => s.beatId && s.actionVerb);
-    const minCount = mode === 'knowledge' ? 4 : 6;
+    const minCount = 6;
     if (current.length >= minCount) return intent;
 
     const baseGoals = intent.goals.length

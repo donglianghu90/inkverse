@@ -4,12 +4,12 @@ import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { RunnableConfig } from '@langchain/core/runnables';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { ChatAnthropic } from '@langchain/anthropic';
-import { ChatOpenAI, ChatOpenAIResponses } from '@langchain/openai';
+import { ChatOpenAI, ChatOpenAIResponses, AzureChatOpenAI } from '@langchain/openai';
 import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import { z, ZodTypeAny } from 'zod';
-import { LlmUsageTrackerService } from './llm-usage-tracker.service';
 import { LlmTraceLoggerService } from './llm-trace-logger.service';
 import { ConfigService } from '@packages/modules';
+import { UsageLedgerService } from '../../usage/usage-ledger.service';
 
 export type LlmProvider = 'gemini' | 'claude' | 'openai';
 export type ModelTier = 'creative' | 'standard' | 'lightweight';
@@ -40,6 +40,9 @@ interface ProviderConfig {
   models: Record<ModelTier, string>;
   costRates: Record<ModelTier, CostRates>;
   enabled: boolean;
+  azure?: boolean;
+  azureInstanceName?: string;
+  azureApiVersion?: string;
 }
 
 export interface TaskRoute { provider: LlmProvider; tier: ModelTier; }
@@ -150,9 +153,9 @@ export class LlmService {
   private readonly cfg: LlmCachedConfig;
 
   constructor(
-    private readonly usageTracker: LlmUsageTrackerService,
     private readonly traceLogger: LlmTraceLoggerService,
     private readonly configService: ConfigService,
+    private readonly usageLedger: UsageLedgerService,
   ) {
     const llm = (this.configService.get('llm') ?? {}) as Record<string, unknown>;
     const langsmith = (this.configService.get('langsmith') ?? {}) as Record<string, unknown>;
@@ -204,6 +207,9 @@ export class LlmService {
           },
           costRates: LlmService.parseTierCostRates(costOpenai, { inputRateUsdPer1M: 2, outputRateUsdPer1M: 10 }),
           enabled: Boolean(openaiCfg.apiKey),
+          azure: String(openaiCfg.azure ?? '').toLowerCase() === 'true',
+          azureInstanceName: openaiCfg.azureInstanceName ? String(openaiCfg.azureInstanceName) : undefined,
+          azureApiVersion: String(openaiCfg.azureApiVersion || '2024-12-01-preview'),
         },
       },
       fallbackProvider: (llm.fallbackProvider as LlmProvider) || 'gemini',
@@ -222,7 +228,7 @@ export class LlmService {
       if (endpoint) process.env.LANGSMITH_ENDPOINT = endpoint;
     }
 
-    const ep = Object.entries(this.cfg.providers).filter(([, v]) => v.enabled).map(([k]) => k);
+    const ep = Object.entries(this.cfg.providers).filter(([, v]) => v.enabled).map(([k, v]) => v.azure ? `${k}(azure:${v.azureInstanceName})` : k);
     this.logger.log(`LLM providers initialized: [${ep.join(', ')}]${this.cfg.tracingEnabled ? ' | LangSmith tracing ON' : ''}`);
   }
 
@@ -318,8 +324,8 @@ export class LlmService {
       ? new HumanMessage({ content: humanContent as any })
       : new HumanMessage(input.userPrompt);
     const messages = [new SystemMessage(input.systemPrompt), humanMsg];
-    const wCtx = this.usageTracker.getWorkflowContext();
-    const traceBase = { taskName: input.taskName, provider, model: modelName, tier, temperature, tags, metadata: input.metadata ?? {}, input: { system: input.systemPrompt, user: input.userPrompt }, ...(wCtx ? { workflowId: wCtx.workflowId, bookId: wCtx.bookId, chapterNumber: wCtx.chapterNumber, callSequence: wCtx.callSequence + 1 } : {}) };
+    const meta = input.metadata ?? {};
+    const traceBase = { taskName: input.taskName, provider, model: modelName, tier, temperature, tags, metadata: meta, input: { system: input.systemPrompt, user: input.userPrompt }, ...(meta.bookId ? { bookId: meta.bookId as string, chapterNumber: meta.chapterNumber as number } : {}), ...(meta.workflowId ? { workflowId: meta.workflowId as string } : {}) };
 
     let response: unknown;
     let lastErr: unknown;
@@ -343,7 +349,19 @@ export class LlmService {
           this.logger.error(`[${input.taskName}] ====== LLM 调用失败 (${provider}/${modelName}) ====== ${Date.now() - t0}ms\n  错误: ${(error as Error).message}${retry > 0 ? ` (已重试${retry}次)` : ''}`);
           const errUsage = this.extractUsageFromError(error);
           const errTokens = errUsage ?? { prompt: 0, completion: 0, total: 0, source: 'missing' as const };
-          this.traceLogger.logTrace({ ...traceBase, durationMs: Date.now() - t0, tokens: { prompt: errTokens.prompt, completion: errTokens.completion, total: errTokens.total, source: errTokens.source }, cost: { usd: LlmService.estimateCost(errTokens.prompt, errTokens.completion, rates), inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: null, status: 'error', error: (error as Error).message, retries: retry });
+          const errCost = LlmService.estimateCost(errTokens.prompt, errTokens.completion, rates);
+          this.traceLogger.logTrace({ ...traceBase, durationMs: Date.now() - t0, tokens: { prompt: errTokens.prompt, completion: errTokens.completion, total: errTokens.total, source: errTokens.source }, cost: { usd: errCost, inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: null, status: 'error', error: (error as Error).message, retries: retry });
+          const errMeta = input.metadata ?? {};
+          const errIsDrama = tags.some(t => t.includes('drama'));
+          this.usageLedger.record({
+            userId: String(errMeta.userId ?? ''),
+            module: errIsDrama ? 'drama' : 'novel',
+            resourceId: String(errMeta.dramaId ?? errMeta.bookId ?? ''),
+            scope: errIsDrama ? (errMeta.episodeNumber ? `episode:${errMeta.episodeNumber}` : 'creation') : (errMeta.chapterNumber ? `chapter:${errMeta.chapterNumber}` : 'creation'),
+            action: input.taskName, kind: 'llm', provider, model: modelName,
+            tokensIn: errTokens.prompt, tokensOut: errTokens.completion,
+            costUsd: errCost, ok: false, durationMs: Date.now() - t0,
+          }).catch(() => {});
           throw error;
         }
         const delay = LlmService.CALL_BASE_DELAY_MS * Math.pow(2, retry) * (0.5 + Math.random() * 0.5);
@@ -367,19 +385,25 @@ export class LlmService {
 
     this.traceLogger.logTrace({ ...traceBase, durationMs, tokens: { prompt: usage.promptTokens, completion: usage.completionTokens, total: usage.totalTokens, source: usage.source }, cost: { usd: cost, inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: wrapped.parsed, status: wrapped.parsed == null ? 'error' : 'success', error: wrapped.parsed == null ? '结构化输出解析为 null' : undefined, retries: retryCount });
 
+    const isDrama = tags.some(t => t.includes('drama'));
+    const mod = isDrama ? 'drama' : 'novel';
+    const resourceId = String(meta.dramaId ?? meta.bookId ?? '');
+    const scope = isDrama
+      ? (meta.episodeNumber ? `episode:${meta.episodeNumber}` : 'creation')
+      : (meta.chapterNumber ? `chapter:${meta.chapterNumber}` : 'creation');
+    this.usageLedger.record({
+      userId: String(meta.userId ?? ''),
+      module: mod, resourceId, scope,
+      action: input.taskName, kind: 'llm', provider, model: modelName,
+      tokensIn: usage.promptTokens, tokensOut: usage.completionTokens,
+      costUsd: cost, ok: wrapped.parsed != null, durationMs,
+    }).catch(() => {});
+
     if (wrapped.parsed == null) {
       const err = new Error(`[${input.taskName}] 结构化输出解析为 null (${provider}/${modelName})，模型返回内容无法匹配 schema`);
       (err as any).status = 500;
       throw err;
     }
-
-    this.usageTracker.recordCall({
-      taskName: input.taskName, model: modelName, provider, tier,
-      startedAt: new Date(t0).toISOString(), finishedAt: new Date().toISOString(), durationMs,
-      promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, totalTokens: usage.totalTokens,
-      estimatedCostUsd: cost, inputRateUsdPer1M: rates.inputRateUsdPer1M,
-      outputRateUsdPer1M: rates.outputRateUsdPer1M, tokenSource: usage.source, temperature, tags,
-    });
     return wrapped.parsed;
   }
 
@@ -395,6 +419,15 @@ export class LlmService {
       });
     }
     if (provider === 'openai') {
+      if (cfg.azure && cfg.azureInstanceName) {
+        return new AzureChatOpenAI({
+          azureOpenAIApiKey: cfg.apiKey,
+          azureOpenAIApiInstanceName: cfg.azureInstanceName,
+          azureOpenAIApiDeploymentName: model,
+          azureOpenAIApiVersion: cfg.azureApiVersion || '2024-12-01-preview',
+          temperature, maxRetries: 0, maxTokens: 16384,
+        });
+      }
       return new ChatOpenAIResponses({
         apiKey: cfg.apiKey, model, temperature, maxRetries: 0, timeout: LlmService.LLM_TIMEOUT_MS,
         configuration: {

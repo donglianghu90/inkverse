@@ -338,6 +338,7 @@ export class CreativeWriterAgent {
       schema: chapterDraftSchema,
       tags: ['workflow', 'chapter', 'draft'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: intent.chapterNumber,
         lastHook: state.lastHook,
@@ -526,6 +527,7 @@ ${scene.characterMoment ? `\n=== 角色深度时刻 ===\n${charMap.get(scene.cha
       schema: sceneDraftSchema,
       tags: ['workflow', 'chapter', 'scene', 'draft'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: intent.chapterNumber,
         sceneIndex: scene.sceneIndex,

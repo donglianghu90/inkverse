@@ -216,6 +216,8 @@ const FIX_TARGET_LABELS: Record<ResetFixTarget, string> = {
 const FIX_TARGET_ORDER: QcFixTarget[] = ['identity', 'style', 'camera', 'motion'];
 
 const fmtUsd = (n?: number) => `$${Number(n ?? 0).toFixed(4)}`;
+const bucketCost = (b: { llmCostUsd: number; imageCostUsd: number; videoCostUsd: number; ttsCostUsd?: number; embeddingCostUsd?: number }) =>
+  (b.llmCostUsd ?? 0) + (b.imageCostUsd ?? 0) + (b.videoCostUsd ?? 0) + (b.ttsCostUsd ?? 0) + (b.embeddingCostUsd ?? 0);
 
 const resolveSkippedStepLabel = (input: { nodeId?: string; stepKey?: string; step?: string; message?: string }): string => {
   if (input.nodeId && PIPELINE_NODE_LABELS[input.nodeId]) return PIPELINE_NODE_LABELS[input.nodeId];
@@ -396,7 +398,7 @@ const ShotEditPanel: React.FC<ShotEditPanelProps> = ({ shot, dramaId, episodeNum
         <div className="space-y-2">
           {MOVEMENT_GROUPS.map(group => (
             <div key={group.label}>
-              <p className="text-[9px] text-muted-foreground mb-1">{group.label}</p>
+              <p className="text-[10px] text-muted-foreground mb-1">{group.label}</p>
               <div className="flex flex-wrap gap-1.5">
                 {group.items.map(item => (
                   <button
@@ -456,7 +458,7 @@ const ShotEditPanel: React.FC<ShotEditPanelProps> = ({ shot, dramaId, episodeNum
             onChange={e => setFirstFrameUrl(e.target.value)}
             placeholder="粘贴图片 URL..."
           />
-          <p className="text-[9px] text-muted-foreground">T2V 将以此图为起始帧生成视频</p>
+          <p className="text-[10px] text-muted-foreground">T2V 将以此图为起始帧生成视频</p>
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs">尾帧图片 URL（可选）</Label>
@@ -471,7 +473,7 @@ const ShotEditPanel: React.FC<ShotEditPanelProps> = ({ shot, dramaId, episodeNum
             onChange={e => setLastFrameUrl(e.target.value)}
             placeholder="粘贴图片 URL..."
           />
-          <p className="text-[9px] text-muted-foreground">T2V 将以此图为结束帧</p>
+          <p className="text-[10px] text-muted-foreground">T2V 将以此图为结束帧</p>
         </div>
       </div>
 
@@ -667,7 +669,7 @@ const ShotCard: React.FC<ShotCardProps> = ({
                     { label: '重试次数', value: String(qc.attempts ?? 1) },
                   ].map((item) => (
                     <div key={item.label} className="rounded-md bg-muted/50 px-2 py-1.5">
-                      <p className="text-[9px] text-muted-foreground">{item.label}</p>
+                      <p className="text-[10px] text-muted-foreground">{item.label}</p>
                       <p className="text-[11px] font-medium mt-0.5">{item.value}</p>
                     </div>
                   ))}
@@ -728,7 +730,7 @@ const ShotCard: React.FC<ShotCardProps> = ({
                   shot.specialTechnique ? { label: '特殊手法', value: SPECIAL_TECHNIQUES.find(t => t.value === shot.specialTechnique)?.label } : null,
                 ].map(item => item?.value ? (
                   <div key={item.label} className="rounded-md bg-muted/50 px-2 py-1.5">
-                    <p className="text-[9px] text-muted-foreground">{item.label}</p>
+                    <p className="text-[10px] text-muted-foreground">{item.label}</p>
                     <p className="text-[11px] font-medium mt-0.5">{item.value}</p>
                   </div>
                 ) : null)}
@@ -843,7 +845,7 @@ const CharacterCard: React.FC<{ char: Character; imageUrl?: string; viewImages?:
                       {viewImages.map(vi => (
                         <div key={vi.viewAngle} className="rounded-lg overflow-hidden bg-muted">
                           <img src={vi.imageUrl} alt={`${char.name} ${vi.viewAngle}`} className="w-full aspect-[3/4] object-cover" />
-                          <p className="text-[9px] text-center text-muted-foreground py-0.5">{VIEW_ANGLE_LABELS[vi.viewAngle] ?? vi.viewAngle}</p>
+                          <p className="text-[10px] text-center text-muted-foreground py-0.5">{VIEW_ANGLE_LABELS[vi.viewAngle] ?? vi.viewAngle}</p>
                         </div>
                       ))}
                     </div>
@@ -1229,7 +1231,7 @@ const DramaWorkbench: React.FC = () => {
     <div className="flex h-[60vh] flex-col items-center justify-center gap-3 text-muted-foreground">
       <AlertCircle className="h-10 w-10" />
       <p>短剧不存在</p>
-      <Button variant="outline" onClick={() => history.push('/novel')}>返回书架</Button>
+      <Button variant="outline" onClick={() => history.push('/novel/dramas')}>返回短剧</Button>
     </div>
   );
 
@@ -1286,7 +1288,7 @@ const DramaWorkbench: React.FC = () => {
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
-        <Button variant="ghost" size="sm" className="gap-1.5 -ml-2" onClick={() => history.push('/novel')}>
+        <Button variant="ghost" size="sm" className="gap-1.5 -ml-2" onClick={() => history.push('/novel/dramas')}>
           <ArrowLeft className="h-4 w-4" />返回
         </Button>
         <div className="flex items-center gap-2">
@@ -1310,7 +1312,7 @@ const DramaWorkbench: React.FC = () => {
       </div>
 
       {usage && (
-        <Card className="mb-6 border-primary/20">
+        <Card className="mb-6 border-primary/30 bg-primary/[0.02]">
           <CardContent className="p-3 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-semibold">资源消耗统计</p>
@@ -1328,7 +1330,7 @@ const DramaWorkbench: React.FC = () => {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
               <div className="rounded-md border px-2 py-1.5">
                 <p className="text-muted-foreground">总费用</p>
-                <p className="font-semibold">{fmtUsd(usage.total.llmCostUsd + usage.total.imageCostUsd + usage.total.videoCostUsd)}</p>
+                <p className="font-semibold">{fmtUsd(bucketCost(usage.total))}</p>
               </div>
               <div className="rounded-md border px-2 py-1.5">
                 <p className="text-muted-foreground">LLM Tokens</p>
@@ -1342,6 +1344,12 @@ const DramaWorkbench: React.FC = () => {
                 <p className="text-muted-foreground">视频调用</p>
                 <p className="font-semibold">{usage.total.videoCalls}</p>
               </div>
+              {(usage.total.ttsCalls ?? 0) > 0 && (
+                <div className="rounded-md border px-2 py-1.5">
+                  <p className="text-muted-foreground">TTS 调用</p>
+                  <p className="font-semibold">{usage.total.ttsCalls}</p>
+                </div>
+              )}
             </div>
 
             {usageExpanded && (
@@ -1349,12 +1357,12 @@ const DramaWorkbench: React.FC = () => {
                 <div className="grid sm:grid-cols-2 gap-2 text-xs pt-1">
                   <div className="rounded-md border p-2.5">
                     <p className="text-muted-foreground mb-1">创建阶段</p>
-                    <p className="font-medium">{fmtUsd(usage.creation.llmCostUsd + usage.creation.imageCostUsd + usage.creation.videoCostUsd)}</p>
+                    <p className="font-medium">{fmtUsd(bucketCost(usage.creation))}</p>
                     <p className="text-muted-foreground mt-0.5">tokens {usage.creation.totalTokens.toLocaleString()} · 图片 {usage.creation.imageCalls} · 视频 {usage.creation.videoCalls}</p>
                   </div>
                   <div className="rounded-md border p-2.5">
                     <p className="text-muted-foreground mb-1">集数阶段</p>
-                    <p className="font-medium">{fmtUsd((usage.total.llmCostUsd + usage.total.imageCostUsd + usage.total.videoCostUsd) - (usage.creation.llmCostUsd + usage.creation.imageCostUsd + usage.creation.videoCostUsd))}</p>
+                    <p className="font-medium">{fmtUsd(bucketCost(usage.total) - bucketCost(usage.creation))}</p>
                     <p className="text-muted-foreground mt-0.5">共 {usage.episodes.length} 集有消耗统计</p>
                   </div>
                 </div>
@@ -1366,7 +1374,7 @@ const DramaWorkbench: React.FC = () => {
                       {usage.creation.steps.slice(0, 6).map((s) => (
                         <div key={s.step} className="text-xs flex items-center justify-between text-muted-foreground">
                           <span>{STEP_LABELS[s.step] ?? s.step}</span>
-                          <span>{fmtUsd(s.llmCostUsd + s.imageCostUsd + s.videoCostUsd)} · {s.totalTokens.toLocaleString()} tokens</span>
+                          <span>{fmtUsd(bucketCost(s))} · {s.totalTokens.toLocaleString()} tokens</span>
                         </div>
                       ))}
                     </div>
@@ -1388,7 +1396,7 @@ const DramaWorkbench: React.FC = () => {
                             >
                               <span>第 {epUsage.episodeNumber} 集</span>
                               <span className="text-muted-foreground">
-                                {fmtUsd(epUsage.llmCostUsd + epUsage.imageCostUsd + epUsage.videoCostUsd)} · {epUsage.totalTokens.toLocaleString()} tokens · 图 {epUsage.imageCalls} / 视 {epUsage.videoCalls}
+                                {fmtUsd(bucketCost(epUsage))} · {epUsage.totalTokens.toLocaleString()} tokens · 图 {epUsage.imageCalls} / 视 {epUsage.videoCalls}
                               </span>
                             </button>
                             {open && epUsage.steps.length > 0 && (
@@ -1396,7 +1404,7 @@ const DramaWorkbench: React.FC = () => {
                                 {epUsage.steps.slice(0, 6).map((step) => (
                                   <div key={step.step} className="flex items-center justify-between">
                                     <span>{STEP_LABELS[step.step] ?? step.step}</span>
-                                    <span>{fmtUsd(step.llmCostUsd + step.imageCostUsd + step.videoCostUsd)} · {step.totalTokens.toLocaleString()} tokens</span>
+                                    <span>{fmtUsd(bucketCost(step))} · {step.totalTokens.toLocaleString()} tokens</span>
                                   </div>
                                 ))}
                               </div>
@@ -1746,45 +1754,31 @@ const DramaWorkbench: React.FC = () => {
                   </div>
 
                   {previewEpNum !== undefined && (
-                    <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       {problemShotCount > 0 && (
                         <>
                           <Button
                             size="sm"
                             variant="secondary"
+                            className="h-7 text-xs gap-1"
                             disabled={mediaGenEp !== null || problemResetEp !== null}
                             onClick={() => handleRegenerateProblemShots(previewEpNum, { onlyHighPriority: false, fixTarget: 'all' })}
                           >
-                            {problemResetEp === previewEpNum && problemResetMode === 'all' ? (
-                              <>
-                                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                                全量重置中...
-                              </>
-                            ) : (
-                              <>
-                                <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                                重生全部问题镜头
-                              </>
-                            )}
+                            {problemResetEp === previewEpNum && problemResetMode === 'all'
+                              ? <><Loader2 className="h-3 w-3 animate-spin" />全量重置中…</>
+                              : <><RotateCcw className="h-3 w-3" />重生全部（{problemShotCount}）</>}
                           </Button>
                           {highPriorityProblemShotCount > 0 && (
                             <Button
                               size="sm"
                               variant="outline"
+                              className="h-7 text-xs gap-1"
                               disabled={mediaGenEp !== null || problemResetEp !== null}
                               onClick={() => handleRegenerateProblemShots(previewEpNum, { onlyHighPriority: true, fixTarget: 'all' })}
                             >
-                              {problemResetEp === previewEpNum && problemResetMode === 'high' ? (
-                                <>
-                                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                                  高优先重置中...
-                                </>
-                              ) : (
-                                <>
-                                  <Star className="h-3.5 w-3.5 mr-1.5" />
-                                  仅高优先重生（{highPriorityProblemShotCount}）
-                                </>
-                              )}
+                              {problemResetEp === previewEpNum && problemResetMode === 'high'
+                                ? <><Loader2 className="h-3 w-3 animate-spin" />高优先重置中…</>
+                                : <><Star className="h-3 w-3" />高优先（{highPriorityProblemShotCount}）</>}
                             </Button>
                           )}
                           {FIX_TARGET_ORDER.filter((target) => fixTargetCounts[target] > 0).map((target) => (
@@ -1792,20 +1786,13 @@ const DramaWorkbench: React.FC = () => {
                               key={target}
                               size="sm"
                               variant="outline"
+                              className="h-7 text-xs gap-1"
                               disabled={mediaGenEp !== null || problemResetEp !== null}
                               onClick={() => handleRegenerateProblemShots(previewEpNum, { onlyHighPriority: false, fixTarget: target })}
                             >
-                              {problemResetEp === previewEpNum && problemResetMode === target ? (
-                                <>
-                                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                                  {FIX_TARGET_LABELS[target]}重置中...
-                                </>
-                              ) : (
-                                <>
-                                  <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                                  仅修{FIX_TARGET_LABELS[target]}（{fixTargetCounts[target]}）
-                                </>
-                              )}
+                              {problemResetEp === previewEpNum && problemResetMode === target
+                                ? <><Loader2 className="h-3 w-3 animate-spin" />{FIX_TARGET_LABELS[target]}重置中…</>
+                                : <><RotateCcw className="h-3 w-3" />修{FIX_TARGET_LABELS[target]}（{fixTargetCounts[target]}）</>}
                             </Button>
                           ))}
                         </>
@@ -1813,18 +1800,18 @@ const DramaWorkbench: React.FC = () => {
 
                       {(previewEp as any).mediaStatus !== 'completed' && (
                         !showMediaConfirm ? (
-                          <Button size="sm" variant="outline" disabled={mediaGenEp !== null || problemResetEp !== null} onClick={() => setShowMediaConfirm(true)}>
-                            <Film className="h-3.5 w-3.5 mr-1.5" />生成媒体
+                          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" disabled={mediaGenEp !== null || problemResetEp !== null} onClick={() => setShowMediaConfirm(true)}>
+                            <Film className="h-3 w-3" />生成媒体
                           </Button>
                         ) : (
-                          <div className="flex items-center gap-2">
-                            <p className="text-xs text-muted-foreground">确认生成？将消耗积分</p>
-                            <Button size="sm" disabled={mediaGenEp !== null || problemResetEp !== null} onClick={() => handleGenerateMedia(previewEpNum)}>
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-xs text-muted-foreground">确认？</p>
+                            <Button size="sm" className="h-7 text-xs" disabled={mediaGenEp !== null || problemResetEp !== null} onClick={() => handleGenerateMedia(previewEpNum)}>
                               {mediaGenEp === previewEpNum
                                 ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />{mediaGenProgress}%</>
                                 : '确认'}
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setShowMediaConfirm(false)}>取消</Button>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowMediaConfirm(false)}>取消</Button>
                           </div>
                         )
                       )}
@@ -1832,21 +1819,21 @@ const DramaWorkbench: React.FC = () => {
                   )}
                 </div>
 
-	                {previewSkippedSteps.length > 0 && (
-	                  <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-900/15 p-2.5">
-	                    <p className="text-[11px] font-medium text-amber-800 dark:text-amber-300 mb-1.5">流程跳过记录</p>
-	                    <div className="flex flex-wrap gap-1.5">
-	                      {previewSkippedSteps.slice(0, 12).map((step, idx) => (
-	                        <Badge key={`${step.stepKey ?? 'step'}-${step.nodeId ?? ''}-${idx}`} variant="outline" className="text-[10px] border-amber-300 text-amber-700 dark:text-amber-300">
-	                          {resolveSkippedStepLabel({ nodeId: step.nodeId, stepKey: step.stepKey, message: step.message })} · {resolveSkipReasonLabel(step.skipReason)}
-	                        </Badge>
-	                      ))}
-	                    </div>
-	                  </div>
-	                )}
+                {previewSkippedSteps.length > 0 && (
+                  <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-900/15 p-2.5">
+                    <p className="text-[11px] font-medium text-amber-800 dark:text-amber-300 mb-1.5">流程跳过记录</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {previewSkippedSteps.slice(0, 12).map((step, idx) => (
+                        <Badge key={`${step.stepKey ?? 'step'}-${step.nodeId ?? ''}-${idx}`} variant="outline" className="text-[10px] border-amber-300 text-amber-700 dark:text-amber-300">
+                          {resolveSkippedStepLabel({ nodeId: step.nodeId, stepKey: step.stepKey, message: step.message })} · {resolveSkipReasonLabel(step.skipReason)}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
-	                {(previewEp as any).videoUrl && (
-	                  <div className="rounded-lg overflow-hidden bg-black">
+                {(previewEp as any).videoUrl && (
+                  <div className="rounded-lg overflow-hidden bg-black">
                     <video src={(previewEp as any).videoUrl} controls className="w-full max-h-56" />
                   </div>
                 )}
@@ -1879,7 +1866,7 @@ const DramaWorkbench: React.FC = () => {
                     <div className="grid grid-cols-3 gap-1.5">
                       {Object.entries((previewEp as any).review.dimensions || {}).map(([k, v]) => (
                         <div key={k} className="text-center p-2 rounded-lg bg-muted/50">
-                          <p className="text-[9px] text-muted-foreground leading-tight">
+                          <p className="text-[10px] text-muted-foreground leading-tight">
                             {k === 'visualImpact' ? '画面冲击' : k === 'dialogueNaturalness' ? '台词自然' :
                              k === 'pacing' ? '节奏' : k === 'hookStrength' ? '悬念强度' :
                              k === 'consistency' ? '连续性' : k === 'emotionalImpact' ? '情感冲击' : k}

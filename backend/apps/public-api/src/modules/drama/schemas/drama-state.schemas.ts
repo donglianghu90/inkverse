@@ -25,7 +25,10 @@ export const dramaAudienceDirectiveSchema = z.object({
   audienceTags: na(z.string()),
   protagonistFocus: z.enum(['female_lead', 'male_lead', 'dual_lead', 'ensemble']).default('female_lead'),
   tonePreference: ns(),
-  platformTarget: z.enum(['douyin', 'kuaishou', 'reelshort', 'dramabox', 'generic']).default('generic'),
+  platformTarget: z.enum([
+    'douyin', 'kuaishou', 'hongguo', 'wechat_mini', 'bilibili',
+    'tencent_video', 'mango_tv', 'iqiyi', 'reelshort', 'dramabox', 'generic',
+  ]).default('generic'),
   aspectRatio: z.enum(['9:16', '16:9']).default('9:16'),
   hardConstraints: na(z.string()),
   softPreferences: na(z.string()),
@@ -37,7 +40,7 @@ export const dramaAudienceDirectiveSchema = z.object({
 
 export const dramaSeedSchema = z.object({
   title: z.string(),
-  genre: z.string(), // 题材类型：霸总/甜宠/战神/穿越/宫斗/复仇/重生/历史教育/人物传记/神话传说/科普知识 等
+  genre: z.string(), // 题材类型：霸总/甜宠/战神/穿越/宫斗/复仇/重生/传记剧/历史剧/神话传说/科幻 等
   targetAudience: z.string(),
   logline: z.string(), // 一句话概括
   protagonistConcept: z.object({
@@ -53,8 +56,8 @@ export const dramaSeedSchema = z.object({
     relationship: z.string(), // 与主角的关系
   }).optional(),
   tone: z.string(), // 风格调性
-  coreConflict: z.string(), // 核心矛盾/核心主题（知识类：核心叙事主线）
-  catharsisType: z.string(), // 核心体验类型（商业：打脸/逆袭/真相揭露；知识：知识震撼/认知颠覆/情感共鸣）
+  coreConflict: z.string(), // 核心矛盾
+  catharsisType: z.string(), // 核心体验类型：打脸逆袭/真相揭露/身份反转/命运震撼/认知颠覆 等
   redLines: na(z.string()), // 绝对不可触碰的底线
   targetEpisodeDurationSec: z.number().int().min(30).max(600).default(180), // 每集目标时长（秒）
   plannedTotalEpisodes: z.object({
@@ -68,16 +71,27 @@ export const dramaSeedSchema = z.object({
 // ---------------------------------------------------------------------------
 const weightClamp = (v: number, def: number) => { const n = Number(v); return isNaN(n) ? def : Math.max(0.5, Math.min(2.0, n)); };
 
+export const genreArchetypeSchema = z.object({
+  narrativeArc: z.enum(['conflict_resolution', 'life_journey', 'mystery_reveal', 'quest', 'rise_and_fall']).default('conflict_resolution'),
+  narrationRatio: z.number().min(0).max(0.5).default(0),
+  factConstraint: z.enum(['none', 'inspired_by', 'period_accurate']).default('none'),
+  hookMechanism: z.enum(['plot_cliffhanger', 'revelation', 'emotional_peak', 'mystery', 'curiosity']).default('plot_cliffhanger'),
+  conflictType: z.enum(['interpersonal', 'fate_vs_will', 'good_vs_evil', 'internal', 'society']).default('interpersonal'),
+  characterEvolution: z.enum(['costume_only', 'age_progression', 'power_level', 'relationship', 'status']).default('costume_only'),
+  visualTone: z.enum(['glamorous', 'gritty', 'ethereal', 'period', 'dark', 'whimsical', 'epic']).default('glamorous'),
+});
+
 export const dramaPromptProfileSchema = z.object({
   generatedForGenre: z.string(),
   generatedForAudience: z.string(),
+  genreArchetype: genreArchetypeSchema.optional(),
   scriptwriterGuide: z.object({
-    coreIdentity: z.string(), // "你是一位擅长霸总甜宠的编剧..."
+    coreIdentity: z.string(),
     genreRules: na(z.string()),
-    dialogueGuide: z.string(), // 台词风格指南
-    pacingGuide: z.string(), // 节奏指南
-    visualNarrativeGuide: z.string(), // 视觉叙事指南（如何用画面代替文字叙述）
-    forbiddenPatterns: na(z.string()), // 禁止的叙事模式
+    dialogueGuide: z.string(),
+    pacingGuide: z.string(),
+    visualNarrativeGuide: z.string(),
+    forbiddenPatterns: na(z.string()),
   }),
   cameraStyleGuide: z.object({
     preferredAngles: na(z.string()), // 偏好镜头角度
@@ -130,13 +144,15 @@ export const characterIdentitySchema = z.object({
   characterId: z.string(),
   name: z.string(),
   role: z.enum(['protagonist', 'antagonist', 'supporting', 'minor', 'narrator', 'historical_figure']),
-  faceDescription: z.string(), // 面部描述（锁脸用，全剧恒定）
+  faceDescription: z.string(),
   bodyType: z.string(),
   hairStyle: z.string(),
   skinTone: z.string(),
-  distinguishingFeatures: z.string(), // 标志性特征（如：左眼角痣）
+  distinguishingFeatures: z.string(),
   age: z.string(),
-  faceReferencePrompt: z.string(), // T2I 面部参考提示词（英文）
+  faceReferencePrompt: z.string(),
+  bodyTypePrompt: z.string().optional().default(''),
+  hairStylePrompt: z.string().optional().default(''),
   voiceProfile: z.object({
     ttsVoiceId: ns(),
     pitch: z.enum(['low', 'medium', 'high']).default('medium'),
@@ -146,7 +162,8 @@ export const characterIdentitySchema = z.object({
     catchphrase: ns(),
   }),
   defaultCostume: z.string(),
-  variations: na(characterVariationSchema), // 角色外观变体列表
+  defaultCostumePrompt: z.string().optional().default(''),
+  variations: na(characterVariationSchema),
 });
 
 export const sceneLocationSchema = z.object({
@@ -282,7 +299,7 @@ export const scriptSceneSchema = z.object({
   purpose: z.enum([
     'hook_opening', 'conflict', 'revelation', 'emotional',
     'action', 'confrontation', 'romantic', 'transition', 'climax', 'cliffhanger',
-    'exposition', 'narrative', 'montage',
+    'exposition', 'narrative', 'montage', 'closure',
   ]),
   objective: z.string(),
   turningPoint: z.string(),
@@ -503,13 +520,14 @@ export const episodeLoreRecordSchema = z.object({
     knownBy: na(z.string()),
     hiddenFrom: na(z.string()),
   })),
+  resolvedSecretIds: na(z.string()),
   flashbackCandidates: na(z.object({
     shotId: z.string(),
-    reason: z.string(), // 为什么这个镜头适合被后续引用为闪回
+    reason: z.string(),
     emotionalWeight: z.enum(['low', 'medium', 'high', 'iconic']),
   })),
-  cliffhangerResolution: ns(), // 上集悬念的解决方式
-  newCliffhanger: ns(), // 本集留下的新悬念
+  cliffhangerResolution: ns(),
+  newCliffhanger: ns(),
 });
 
 // ---------------------------------------------------------------------------
@@ -524,6 +542,7 @@ export const dramaContinuityCheckSchema = z.object({
       'costume_inconsistency', 'emotion_jump', 'timeline_violation',
       'secret_leak', 'dead_character_active', 'relationship_contradiction',
       'character_name_inconsistency', 'addressing_inconsistency', 'duplicate_name_confusion',
+      'prop_continuity_break',
     ]),
     description: z.string(),
     severity: z.enum(['warning', 'block']),
@@ -598,6 +617,7 @@ export type ContentMode = 'drama' | 'knowledge';
 
 export const dramaStateSchema = z.object({
   dramaId: z.string(),
+  userId: z.string().default(''),
   createdAt: z.string(),
   updatedAt: z.string(),
   version: z.literal(1).default(1),
@@ -667,6 +687,8 @@ export const dramaStateSchema = z.object({
     lastSeenEpisode: z.number().int().min(1),
     status: z.enum(['active', 'resolved', 'expired']).default('active'),
   })),
+
+  isSeriesFinale: z.boolean().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -674,6 +696,7 @@ export const dramaStateSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export type DramaAudienceDirective = z.infer<typeof dramaAudienceDirectiveSchema>;
+export type GenreArchetype = z.infer<typeof genreArchetypeSchema>;
 export type DramaSeed = z.infer<typeof dramaSeedSchema>;
 export type DramaPromptProfile = z.infer<typeof dramaPromptProfileSchema>;
 export type CharacterVariation = z.infer<typeof characterVariationSchema>;

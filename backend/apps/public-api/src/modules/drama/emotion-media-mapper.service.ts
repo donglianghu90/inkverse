@@ -87,9 +87,7 @@ export class EmotionMediaMapperService {
       ? (TECHNIQUE_SPEED_MAP[shot.specialTechnique] ?? 1.0)
       : 1.0;
 
-    const stabilize = !shot.specialTechnique || !['handheld', 'fpv'].includes(
-      shot.camera?.movement ?? '',
-    );
+    const stabilize = !['handheld', 'fpv'].includes(shot.camera?.movement ?? '');
 
     const kenBurns = shot.qualityTier === 'filler'
       ? this.generateKenBurns(shot)
@@ -100,7 +98,7 @@ export class EmotionMediaMapperService {
 
     const bgmVolume = shot.audio?.bgm?.intensity ?? 0.3;
     const hasTts = !!shot.dialogue?.text;
-    const bgmVolumeMultiplier = hasTts ? Math.min(bgmVolume, 0.25) / 0.3 : 1.0;
+    const bgmVolumeMultiplier = hasTts ? Math.max(0.3, 1.0 - bgmVolume * 0.5) : 1.0;
 
     return {
       colorGrade,

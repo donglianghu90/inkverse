@@ -127,7 +127,7 @@ export class MemoryRetrieverService implements OnModuleInit {
 
     if (this.vectorReady && this.embeddingService.available) {
       const embText = [summary, ...keywords.slice(0, 10), ...planted].join(' ');
-      const vec = await this.embeddingService.embed(embText);
+      const vec = await this.embeddingService.embed(embText, { bookId, chapterNumber, userId: state.userId });
       if (vec) {
         await this.dataSource.query(
           `UPDATE chapter_memories SET embedding = $1::vector WHERE book_id = $2 AND chapter_number = $3`,
@@ -141,11 +141,11 @@ export class MemoryRetrieverService implements OnModuleInit {
   // 持久化：弧级摘要
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async persistArcSummary(bookId: string, arc: ArcSummaryEntity): Promise<void> {
+  async persistArcSummary(bookId: string, arc: ArcSummaryEntity, userId?: string): Promise<void> {
     await this.arcSumRepo.upsert(arc, ['bookId', 'arcId']);
     if (this.vectorReady && this.embeddingService.available) {
       const embText = [arc.summary, arc.emotionalArc, ...arc.keywords.slice(0, 10)].filter(Boolean).join(' ');
-      const vec = await this.embeddingService.embed(embText);
+      const vec = await this.embeddingService.embed(embText, { bookId, userId });
       if (vec) {
         await this.dataSource.query(
           `UPDATE arc_summaries SET embedding = $1::vector WHERE book_id = $2 AND arc_id = $3`,
@@ -159,11 +159,11 @@ export class MemoryRetrieverService implements OnModuleInit {
   // 持久化：卷级摘要
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async persistVolumeSummary(bookId: string, vol: VolumeSummaryEntity): Promise<void> {
+  async persistVolumeSummary(bookId: string, vol: VolumeSummaryEntity, userId?: string): Promise<void> {
     await this.volSumRepo.upsert(vol, ['bookId', 'volumeId']);
     if (this.vectorReady && this.embeddingService.available) {
       const embText = [vol.summary, vol.powerProgression, vol.worldExpansion, ...vol.keywords.slice(0, 10)].filter(Boolean).join(' ');
-      const vec = await this.embeddingService.embed(embText);
+      const vec = await this.embeddingService.embed(embText, { bookId, userId });
       if (vec) {
         await this.dataSource.query(
           `UPDATE volume_summaries SET embedding = $1::vector WHERE book_id = $2 AND volume_id = $3`,
@@ -196,7 +196,7 @@ export class MemoryRetrieverService implements OnModuleInit {
     const vectorScores = new Map<number, number>();
     const vectorChapterNums: number[] = [];
     if (useVector) {
-      const vec = await this.embeddingService.embed(query.semanticQuery!);
+      const vec = await this.embeddingService.embed(query.semanticQuery!, { bookId });
       if (vec) {
         const rows: { chapter_number: number; distance: number }[] = await this.dataSource.query(
           `SELECT chapter_number, embedding <=> $1::vector AS distance
@@ -313,7 +313,7 @@ export class MemoryRetrieverService implements OnModuleInit {
     if (candidates.length === 0) return [];
 
     if (this.vectorReady && this.embeddingService.available && semanticQuery) {
-      const vec = await this.embeddingService.embed(semanticQuery);
+      const vec = await this.embeddingService.embed(semanticQuery, { bookId });
       if (vec) {
         const rows: { arc_id: string; distance: number }[] = await this.dataSource.query(
           `SELECT arc_id, embedding <=> $1::vector AS distance FROM arc_summaries WHERE book_id = $2 AND embedding IS NOT NULL${excludeArcId ? ' AND arc_id != $3' : ''} ORDER BY distance ASC LIMIT $${excludeArcId ? '4' : '3'}`,
@@ -338,7 +338,7 @@ export class MemoryRetrieverService implements OnModuleInit {
     if (all.length === 0) return [];
 
     if (this.vectorReady && this.embeddingService.available && semanticQuery) {
-      const vec = await this.embeddingService.embed(semanticQuery);
+      const vec = await this.embeddingService.embed(semanticQuery, { bookId });
       if (vec) {
         const rows: { volume_id: string; distance: number }[] = await this.dataSource.query(
           `SELECT volume_id, embedding <=> $1::vector AS distance FROM volume_summaries WHERE book_id = $2 AND embedding IS NOT NULL ORDER BY distance ASC LIMIT $3`,

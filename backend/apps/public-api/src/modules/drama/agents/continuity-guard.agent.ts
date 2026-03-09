@@ -27,6 +27,7 @@ export class ContinuityGuardAgent {
       taskName: 'drama-continuity-guard',
       schema: checkOutputSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'continuity-guard', buildContinuityGuardSystemPrompt()),
+      metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: intent.episodeNumber },
       userPrompt: `第 ${intent.episodeNumber} 集连续性检查：
 
 本集意图：

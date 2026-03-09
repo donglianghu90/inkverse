@@ -102,6 +102,7 @@ export class TextAnalyzerAgent {
       schema: textAnalysisSchema,
       tags: ['workflow', 'chapter', 'record', 'text'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: draft.chapterNumber,
       },

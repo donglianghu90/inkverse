@@ -42,6 +42,7 @@ export interface ProfileInput {
   audienceTags?: string[];
   writingMode?: 'commercial' | 'literary';
   mainStoryGoal?: string;
+  userId?: string;
   targetChapterWordCount?: number;
   plannedTotalChapters?: { min: number; max: number };
   referenceProfile?: BookPromptProfile;
@@ -97,6 +98,7 @@ export class PromptProfilerAgent {
       taskName: 'prompt-profiler',
       schema: bookPromptProfileSchema,
       tags: ['setup', 'profile'],
+      metadata: { userId: input.userId ?? '' },
       systemPrompt: `${input.writingMode === 'literary'
         ? '你是一位兼具文学素养与编辑经验的创作顾问，精通各类题材的写作规律和文学创新。'
         : '你是一位资深的网文编辑总监，同时精通各类网文题材的写作规律。'}

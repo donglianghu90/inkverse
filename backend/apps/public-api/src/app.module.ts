@@ -13,6 +13,7 @@ import { NovelModule } from "./modules/novel/novel.module";
 import { DramaModule } from "./modules/drama/drama.module";
 import { MediaModule } from "./modules/media/media.module";
 import { AuthModule } from "./modules/auth/auth.module";
+import { UsageModule } from "./modules/usage/usage.module";
 
 @Module({
   imports: [
@@ -135,6 +136,7 @@ import { AuthModule } from "./modules/auth/auth.module";
     // 业务模块
     AuthModule,
     LlmModule,
+    UsageModule,
     NovelModule,
     DramaModule,
     MediaModule,

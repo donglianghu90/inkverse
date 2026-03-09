@@ -59,14 +59,17 @@ export class StoryboardDirectorAgent {
       `${c.characterId}(${c.name}): face="${c.faceReferencePrompt}" body=${c.bodyType} hair=${c.hairStyle} costume=${c.defaultCostume}` +
       (c.variations?.length ? ` variations=[${c.variations.map(v => `${v.variationId}:${v.name}`).join(',')}]` : ''),
     ).join('\n');
+
+    // 闪回候选：提供给分镜导演，支持标记 isFlashback + flashbackSourceShotId
+    const flashbackCandidates = (state.flashbackBank ?? []).slice(-8);
+    const flashbackCtx = flashbackCandidates.length > 0
+      ? `\n可用闪回素材（如果场景需要回忆/闪回，设置 isFlashback=true 和 flashbackSourceShotId）：\n${flashbackCandidates.map(fb => `E${fb.episodeNumber} ${fb.shotId}: ${fb.reason} [${fb.emotionalWeight}]${fb.visualPromptSnapshot ? ` visual="${fb.visualPromptSnapshot.slice(0, 60)}"` : ''}`).join('\n')}`
+      : '';
+
     const loc = state.locations.find(l => l.locationId === scene.locationId);
     const locDesc = loc ? `${loc.locationId}(${loc.name}): "${loc.visualPrompt}" lighting=${loc.lightingDefault}` : scene.sceneHeading;
 
-    // 黄金场景：提高镜头密度；过场：减少镜头数量
-    // 知识模式下 exposition/narrative 也算标准场景（非filler）
-    const effectiveGolden = state.contentMode === 'knowledge'
-      ? new Set([...GOLDEN_PURPOSES, 'exposition', 'narrative'])
-      : GOLDEN_PURPOSES;
+    const effectiveGolden = GOLDEN_PURPOSES;
     const targetDur = scene.estimatedDurationSec;
     const isGolden = effectiveGolden.has(scenePurpose);
     const isFiller = FILLER_PURPOSES.has(scenePurpose);
@@ -80,6 +83,7 @@ export class StoryboardDirectorAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-storyboard-director',
       schema: sceneShotsOutputSchema,
+      metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: epNum },
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'storyboard-director', buildStoryboardDirectorSystemPrompt({
         camGuide,
         visualStyle: state.visualStyle,
@@ -91,14 +95,20 @@ export class StoryboardDirectorAgent {
       })),
       userPrompt: `场景 ${scene.sceneIndex + 1}【${scenePurpose}${isGolden ? ' ⭐黄金场景' : ''}${isLastScene ? ' 🎬全集结尾' : ''}】:
 ${JSON.stringify(scene, null, 0)}
-
+${epNum === 1 && scene.sceneIndex === 0 ? `
+🔥 第1集开场分镜铁律：
+- 第1个Shot必须是视觉冲击力最强的画面（特写/低角度/动态构图），qualityTier=golden
+- 前3个Shot必须建立核心视觉张力，禁止平庸构图
+- 角色首次亮相的Shot要突出"记忆锚点"（标志性外貌+环境对比）
+` : ''}
 角色档案（firstFramePrompt/lastFramePrompt中必须包含出场角色的完整face描述，visualPrompt中禁止包含face描述）：
 ${chars}
 
 场景视觉：
 ${locDesc}
 
-要求：shots数组，每个Shot必须包含firstFramePrompt、lastFramePrompt 和 qualityTier。visualPrompt专注描述运动/动作（禁止face描述），firstFramePrompt/lastFramePrompt专注描述静态画面（必须含face描述）`,
+要求：shots数组，每个Shot必须包含firstFramePrompt、lastFramePrompt 和 qualityTier。visualPrompt专注描述运动/动作（禁止face描述），firstFramePrompt/lastFramePrompt专注描述静态画面（必须含face描述）
+${flashbackCtx}`,
       temperature: 0.5,
     });
 

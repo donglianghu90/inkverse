@@ -15,7 +15,7 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 - **断点续跑**：逐集和创建流程（6步）每步完成后写入checkpoint，中断后自动从上次中断处恢复，跳过已完成步骤，节省LLM调用；创建失败后点击「重试」从上次 checkpoint 继续（`POST /drama/:dramaId/retry-create`），不会重新创建短剧；**逐集生成失败**时再次点击「生成下一集」或「从断点重试」，会从失败节点续跑（`findResumableRun` 查找 failed 运行，`reopenRun` 恢复后跳过已完成步骤）
 - **短剧调试日志**：创建+逐集全流程日志输出到 `logs/llm-drama.jsonl`（JSONL 格式），含 LLM 调用 trace 与 workflow 步骤事件，便于排查问题；需 `llm.trace.enabled=true`（默认开启）
 - **T2I 追踪日志**：图片生成（角色定妆照/变体/场景）每次调用追加到 `logs/llm-drama.jsonl`，含 prompt/model/durationMs/输出 URL；需 `media.trace.enabled=true`（默认开启）
-- **T2I 404 排查**：火山引擎文生图若返回 404，请检查 `media.volcengine.image.model` 是否为控制台创建的推理接入点 ID（格式如 `ep-xxxxxxxx` 或 `doubao-seedream-5-0-lite-t2i-250901`）；参考图生成失败不会阻断创建流程，可设置 `media.pipeline.skipImageGeneration=true` 跳过图片生成
+- **T2I 404 排查**：火山引擎文生图若返回 404，请检查 `media.volcengine.image.model` 是否为控制台创建的推理接入点 ID（格式如 `doubao-seedream-5-0-260128`）；参考图生成失败不会阻断创建流程，可设置 `media.pipeline.skipImageGeneration=true` 跳过图片生成
 - **T2I image 参数无效**：若返回 `The parameter 'image' specified in the request is not valid`，Provider 已做两项修复：(1) 按火山 API 规范将 `image` 改为 URL/base64 字符串或字符串数组；(2) 参考图无效时自动降级为纯 T2I 重试，保证生成可继续
 - **启动恢复**：服务重启时自动扫描超过5分钟仍处于 `running` 的创建流程，有checkpoint数据的尝试恢复，无数据的标记失败
 - **WorkflowParams可配置**：精修轮数(`maxEditRounds`)、连续性重试次数(`maxContinuityRetries`)、质量通过分数(`qualityPassScore`)、台词润色/节奏分析/悬念设计开关均通过 Pipeline 配置动态读取
@@ -84,31 +84,16 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 - **投影同步**：事件追加时同事务内更新 Run/Step 投影状态，保证一致性
 
 ### 统一错误归一化
-- **16 种错误码**：client类（INVALID_PARAMS/NOT_FOUND/UNAUTHORIZED/FORBIDDEN/CONFLICT）、provider类（RATE_LIMIT/GENERATION_FAILED/GENERATION_TIMEOUT/SENSITIVE_CONTENT/EXTERNAL_ERROR/NETWORK_ERROR）、system类（INTERNAL_ERROR/DB_ERROR/QUEUE_ERROR/TASK_TERMINATED/OWNERSHIP_LOST）、billing类（INSUFFICIENT_BALANCE/BILLING_FAILED）
+- **14 种错误码**：client类（INVALID_PARAMS/NOT_FOUND/UNAUTHORIZED/FORBIDDEN/CONFLICT）、provider类（RATE_LIMIT/GENERATION_FAILED/GENERATION_TIMEOUT/SENSITIVE_CONTENT/EXTERNAL_ERROR/NETWORK_ERROR）、system类（INTERNAL_ERROR/DB_ERROR/QUEUE_ERROR/TASK_TERMINATED/OWNERSHIP_LOST）
 - **多策略推断**：已知错误码直通→HTTP状态码映射→消息关键词推断→上下文降级
 - **每个错误**包含：`code/message/httpStatus/retryable/category/details/provider`
 - Worker 据此自动判断是否重试，前端据此展示分类错误信息
-
-### 计费系统（冻结→结算→回滚）
-- **三阶段事务**：预冻结（`freeze`）→执行→成功结算（`settle`）/失败回滚（`rollback`）
-- **三种模式**：`OFF`（不计费，默认）、`SHADOW`（记录不扣费）、`ENFORCE`（强制扣费）
-- **悲观锁保证**：余额操作使用 `pessimistic_write` 锁，并发安全
-- **幂等冻结**：`idempotencyKey` 唯一约束防重复冻结
-- **精确结算**：实际扣费不超过冻结额，差额自动退还
-- 实体：`drama_user_balances`（余额）、`drama_balance_freezes`（冻结记录）、`drama_balance_transactions`（流水）
 
 ### 全局资产中心（Asset Hub）
 - **跨剧复用**：角色/场景/风格模板从单剧绑定升级为全局资产库
 - **实体**：`drama_global_asset_folders`（文件夹）、`drama_global_characters`（角色）、`drama_global_locations`（场景）、`drama_global_styles`（风格）
 - **双向同步**：`copyCharacterToDrama()`（全局→剧集）、`extractFromDrama()`（剧集→全局），资产溯源通过 `sourceGlobalCharacterId` 追踪
 - **文件夹管理**：一层扁平目录，按用户隔离
-
-### Orchestrator 纯函数编排
-- **核心逻辑与 IO 解耦**：`creation-orchestrator.ts` 和 `episode-orchestrator.ts` 为纯函数，通过 `runStep` 回调注入 LLM 执行
-- **Agent 退化为薄包装**：各 Agent 仅负责组装 prompt + 调用 Orchestrator，不再承担编排逻辑
-- **内置重试**：`runWithRetry()` 指数退避 + 可配重试次数，JSON 解析容错
-- **并行优化**：编剧手册和策略生成并行执行
-- **可测试性**：纯函数可直接单元测试，mock `runStep` 即可
 
 ### SSE 实时进度
 - **创建阶段**：`GET /api/drama/:dramaId/create-sse` — 订阅 6 步创建流程进度（种子分析→大纲→视觉设计→参考图生成→编剧手册+策略→完成）
@@ -171,7 +156,7 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 ### 当前 Provider
 | 能力 | Provider | 平台 | 说明 |
 |------|----------|------|------|
-| T2I | Seedream | 火山方舟 | 文生图/图生图/多图融合，角色定妆照+场景参考图 |
+| T2I | Seedream 5.0 Lite | 火山方舟 | 文生图/图生图/多图融合，角色定妆照+场景参考图，支持联网检索+文字渲染+HEX 色彩 |
 | T2V | Seedance | 火山方舟 | 文生视频/图生视频，支持参考图锁脸 |
 | TTS | 豆包 TTS | openspeech.bytedance.com | 多音色语音合成，支持情感/语速控制 |
 - 统一鉴权 + 自动重试（HTTP 客户端层 `VolcengineClient`）
@@ -195,8 +180,9 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 |--------|------|--------|
 | `media.volcengine.apiKey` | 方舟 API Key | — |
 | `media.volcengine.baseUrl` | API 基础地址 | `https://ark.cn-beijing.volces.com/api/v3` |
-| `media.volcengine.image.model` | Seedream 模型名 | `seedream-5-0-lite-250901` |
-| `media.volcengine.image.defaultSize` | 默认图片尺寸 | `1024x1024` |
+| `media.volcengine.image.model` | Seedream 模型名 | `doubao-seedream-5-0-260128` |
+| `media.volcengine.image.defaultSize` | 默认图片宽高比 | `1:1` |
+| `media.volcengine.image.defaultResolution` | 默认分辨率 | `2K` |
 | `media.volcengine.video.model` | Seedance 模型名 | `seedance-2-0-250901` |
 | `media.volcengine.video.defaultDuration` | 默认视频时长(秒) | `5` |
 | `media.volcengine.video.defaultQuality` | 默认视频质量 | `720p` |

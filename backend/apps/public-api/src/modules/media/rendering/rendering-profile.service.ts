@@ -13,9 +13,9 @@ import { RenderingProfile } from './rendering-profile';
 
 const SEEDREAM_PROFILE: RenderingProfile = {
   modelFamily: 'seedream',
-  displayName: 'Volcengine Seedream',
+  displayName: 'Volcengine Seedream 5.0',
   refImage: {
-    maxCount: 2,
+    maxCount: 10,
     supportsWeight: false,
     priorityByScenario: {
       closeUp: ['character_face', 'prev_frame', 'scene', 'style'],
@@ -26,11 +26,13 @@ const SEEDREAM_PROFILE: RenderingProfile = {
   },
   negativePrompt: {
     supported: true,
-    defaultValue: 'blurry, low quality, deformed face, extra fingers, watermark, text, logo, bad anatomy',
+    defaultValue: 'blurry, low quality, watermark, text, logo',
   },
   prompt: {
-    maxLength: 1500,
+    maxLength: 2000,
     styleInjection: 'prefix',
+    qualityPrefix: '',
+    qualitySuffix: '',
   },
   characterViews: {
     viewsByRole: {

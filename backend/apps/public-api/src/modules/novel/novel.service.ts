@@ -20,8 +20,8 @@ import { Queue } from 'bullmq';
 import { WorkflowExecutionEntity } from './entities/workflow-execution.entity';
 import { randomUUID } from 'crypto';
 import { LlmService } from './llm/llm.service';
-import { LlmUsageTrackerService } from './llm/llm-usage-tracker.service';
 import { LlmTraceLoggerService } from './llm/llm-trace-logger.service';
+import { UsageLedgerService } from '../usage/usage-ledger.service';
 import { SeedAnalyzerAgent } from './agents/seed-analyzer.agent';
 import { PromptProfilerAgent } from './agents/prompt-profiler.agent';
 import { RecorderAgent } from './agents/recorder.agent';
@@ -211,7 +211,6 @@ export class NovelService {
     private readonly voiceCoach: CharacterVoiceCoachAgent,
     private readonly deepMaintenance: DeepMaintenanceService,
     private readonly loreService: LoreApplicationService,
-    private readonly llmUsageTracker: LlmUsageTrackerService,
     private readonly llm: LlmService,
     private readonly pipelineService: BookAgentPipelineService,
     private readonly promptTplService: BookPromptTemplateService,
@@ -222,6 +221,7 @@ export class NovelService {
     private readonly bookStrategyAgent: BookStrategyAgent,
     private readonly genreTemplateService: GenreProfileTemplateService,
     private readonly traceLogger: LlmTraceLoggerService,
+    private readonly usageLedger: UsageLedgerService,
     private readonly calibrationService: ChapterCalibrationService,
   ) {}
 
@@ -316,7 +316,7 @@ export class NovelService {
   /**
    * Enhance a raw idea into a richer, more compelling concept.
    */
-  async enhanceIdea(rawIdea: string, genre?: string) {
+  async enhanceIdea(rawIdea: string, genre?: string, userId?: string) {
     const enhanceSchema = z.object({
       enhanced: z.string(),
       highlights: z.array(z.string()).min(2).max(5),
@@ -326,6 +326,7 @@ export class NovelService {
       taskName: 'idea-enhancer',
       schema: enhanceSchema,
       tags: ['setup', 'idea'],
+      metadata: { userId: userId ?? '' },
       systemPrompt: `你是一位兼具创意天赋和市场嗅觉的网文策划编辑，擅长把粗糙的灵感打磨成让读者一眼心动的故事概念。
 
 核心任务：对用户的原始创意进行"美化"——保留内核，提升表达，让它读起来像一段让人想追更的故事简介。
@@ -362,6 +363,7 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
     tonePreference?: string;
     audienceTags?: string[];
     titleHint?: string;
+    userId?: string;
   }) {
     const goalSchema = z.object({
       goal: z.string(),
@@ -378,6 +380,7 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
       taskName: 'story-goal-generator',
       schema: goalSchema,
       tags: ['setup', 'goal'],
+      metadata: { userId: input.userId ?? '' },
       systemPrompt: `你是一位资深的网文策划，擅长从核心创意中提炼出令人欲罢不能的长篇主线目标。
 
 主线目标是贯穿全书的终极目标——读者一直追读就是想知道主角能否达成它。
@@ -401,6 +404,7 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
   async enhanceGoal(input: {
     goal: string; mainIdea: string; genre: string; targetAudience: string;
     protagonistFocus?: string; tonePreference?: string; audienceTags?: string[]; titleHint?: string;
+    userId?: string;
   }) {
     const schema = z.object({ enhanced: z.string(), highlights: z.array(z.string()).min(2).max(5) });
     const ctx: string[] = [];
@@ -414,6 +418,7 @@ ${genre ? `\n题材方向：${genre}\n请结合该题材的核心吸引力调整
       taskName: 'goal-enhancer',
       schema,
       tags: ['setup', 'goal-enhance'],
+      metadata: { userId: input.userId ?? '' },
       systemPrompt: `你是一位资深的网文策划编辑，擅长把粗糙的主线目标打磨为让读者欲罢不能的终极悬念。
 
 核心任务：对用户手写的主线目标进行"美化"——保留内核方向，提升表达力和悬念感。
@@ -449,7 +454,7 @@ ${input.goal}
     let createdBookId = '';
     const logCreate = (step: string, status: 'ok' | 'error', meta?: Record<string, unknown>, error?: string) =>
       this.traceLogger.logWorkflowEvent({ bookId: createdBookId || '__creating__', chapterNumber: 0, step: `createBook:${step}`, status, error, meta });
-    return this.llmUsageTracker.runWithChapterScope({ bookId: '__creating__', chapterNumber: 0 }, async () => {
+    {
       const t0 = Date.now();
       try {
     logCreate('start', 'ok', { genre: dto.genre, mainIdea: dto.mainIdea?.slice(0, 100) });
@@ -508,11 +513,12 @@ ${input.goal}
     let analysis: Awaited<ReturnType<typeof this.seedAnalyzer.analyze>>;
     let bookPromptProfile: BookPromptProfile;
     const writingMode = dto.writingMode ?? 'commercial';
+    const createUserId = options?.userId;
     if (hasTemplateProfile) { // 模板提供完整 Profile → 只做种子分析，省掉 promptProfiler.generate()
       analysis = await this.seedAnalyzer.analyze({
         mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
         protagonistFocus: dto.protagonistFocus, tonePreference: dto.tonePreference, audienceTags: dto.audienceTags,
-        titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal,
+        titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal, userId: createUserId,
         targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters, seedHints,
         writingMode,
       });
@@ -521,14 +527,14 @@ ${input.goal}
       const seedPromise = this.seedAnalyzer.analyze({
         mainIdea: dto.mainIdea, genre: dto.genre, targetAudience: dto.targetAudience,
         protagonistFocus: dto.protagonistFocus, tonePreference: dto.tonePreference, audienceTags: dto.audienceTags,
-        titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal,
+        titleHint: dto.titleHint, mainStoryGoal: dto.mainStoryGoal, userId: createUserId,
         targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters, seedHints,
         writingMode,
       });
       const profilePromise = this.promptProfiler.generate({
         genre: dto.genre, targetAudience: dto.targetAudience, mainIdea: dto.mainIdea,
         protagonistFocus: dto.protagonistFocus, tonePreference: dto.tonePreference, audienceTags: dto.audienceTags,
-        mainStoryGoal: dto.mainStoryGoal, writingMode,
+        mainStoryGoal: dto.mainStoryGoal, writingMode, userId: createUserId,
         targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters,
         referenceProfile: tpl?.profileJson as unknown as BookPromptProfile | undefined,
       }).catch((e) => {
@@ -539,7 +545,7 @@ ${input.goal}
       analysis = a;
       if (p) { bookPromptProfile = p; } else {
         bookPromptProfile = await this.promptProfiler.generate({
-          genre: dto.genre, targetAudience: dto.targetAudience, mainIdea: dto.mainIdea, writingMode,
+          genre: dto.genre, targetAudience: dto.targetAudience, mainIdea: dto.mainIdea, writingMode, userId: createUserId,
           targetChapterWordCount: sharedChapterWordCount, plannedTotalChapters: sharedPlannedChapters,
         });
       }
@@ -559,6 +565,7 @@ ${input.goal}
         outline: analysis.outline,
         audienceDirective,
         profile: bookPromptProfile,
+        userId: createUserId,
       });
     } catch (e) {
       this.logger.warn(`[createBook] BookStrategy 生成失败，首章时补充: ${e instanceof Error ? e.message : String(e)}`);
@@ -621,6 +628,7 @@ ${input.goal}
 
     let state: StoryState = {
       bookId,
+      userId: options?.userId ?? '',
       createdAt: now,
       updatedAt: now,
       version: 2,
@@ -703,14 +711,8 @@ ${input.goal}
           this.logger.warn(`[createBook] 创建失败，孤儿记录 bookId=${createdBookId} 待清理`);
         }
         throw e;
-      } finally {
-        const usage = this.llmUsageTracker.consumeCurrentSummary();
-        if (usage && createdBookId) {
-          usage.bookId = createdBookId;
-          try { await this.persistArtifact(createdBookId, 0, 'llm_usage_summary', usage); } catch {}
-        }
-      }
-    });
+      } finally {}
+    }
   }
 
   async assertBookOwnership(bookId: string, userId: string): Promise<void> {
@@ -728,10 +730,12 @@ ${input.goal}
         const latestKpi = kpi[kpi.length - 1] ?? null;
         const generatedByCursor = Math.max(0, (s.chapterCursor ?? 1) - 1);
         const generatedByTable = chapterCountMap.get(b.bookId) ?? 0;
+        const rawIdea: string = s.seed?.mainIdea ?? s.seed?.concept ?? '';
         return {
           bookId: b.bookId,
           title: s.seed?.title ?? '',
           genre: s.seed?.genre ?? '',
+          mainIdea: rawIdea.length > 80 ? rawIdea.slice(0, 80) + '…' : rawIdea,
           chaptersGenerated: Math.max(generatedByCursor, generatedByTable),
           latestKpi: latestKpi
             ? { qualityScore: latestKpi.qualityScore, overallScore: latestKpi.overallScore }
@@ -745,10 +749,16 @@ ${input.goal}
   async deleteBook(bookId: string): Promise<{ deleted: true; bookId: string }> {
     const exists = await this.bookStateRepo.exists(bookId);
     if (!exists) throw new NotFoundException(`Book not found: ${bookId}`);
+    if (this.progressService.isGenerating(bookId).generating) {
+      throw new Error('该书籍正在生成中，请先等待完成后再删除');
+    }
+
+    this.progressService.clearGenerating(bookId);
+
     await this.cleanBullMqJobs(bookId);
     await this.dataSource.transaction(async (em) => {
-      await em.delete(WorkflowExecutionEntity, { bookId }); // 无 FK CASCADE，手动删
-      await em.remove(await em.findOneByOrFail(BookEntity, { bookId })); // CASCADE 自动清理其余关联表
+      await em.delete(WorkflowExecutionEntity, { bookId });
+      await em.remove(await em.findOneByOrFail(BookEntity, { bookId }));
     });
     this.logger.log(`[deleteBook] bookId=${bookId} 已永久删除（含全部关联数据）`);
     return { deleted: true, bookId };
@@ -769,45 +779,49 @@ ${input.goal}
 
   async getBookTokenUsage(bookId: string): Promise<unknown> {
     await this.loadBookState(bookId);
-    const artifacts = await this.artifactRepo.find({ where: { bookId, name: 'llm_usage_summary' }, order: { chapterNumber: 'ASC' } });
-    let totalPromptTokens = 0, totalCompletionTokens = 0, totalTokens = 0, totalCostUsd = 0, totalCalls = 0;
-    const providerAgg = new Map<string, { calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number }>();
-    const modelAgg = new Map<string, { provider: string; tier: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number; totalDurationMs: number }>();
+    const detail = await this.usageLedger.resourceDetail('novel', bookId);
 
-    const chapters = artifacts.map((a) => {
-      const p = a.payload as Record<string, any>;
-      const pt = typeof p.promptTokens === 'number' ? p.promptTokens : 0;
-      const ct = typeof p.completionTokens === 'number' ? p.completionTokens : 0;
-      const tt = typeof p.totalTokens === 'number' ? p.totalTokens : 0;
-      const cost = typeof p.estimatedCostUsd === 'number' ? p.estimatedCostUsd : 0;
-      const calls = typeof p.totalCalls === 'number' ? p.totalCalls : 0;
-      totalPromptTokens += pt; totalCompletionTokens += ct; totalTokens += tt; totalCostUsd += cost; totalCalls += calls;
-      // 聚合per-provider（从已持久化的byProvider字段）
-      if (Array.isArray(p.byProvider)) {
-        for (const bp of p.byProvider) {
-          const k = bp.provider ?? 'unknown';
-          const cur = providerAgg.get(k) ?? { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 };
-          cur.calls += bp.calls ?? 0; cur.promptTokens += bp.promptTokens ?? 0; cur.completionTokens += bp.completionTokens ?? 0;
-          cur.totalTokens += bp.totalTokens ?? 0; cur.estimatedCostUsd += bp.estimatedCostUsd ?? 0;
-          providerAgg.set(k, cur);
-        }
-      }
-      if (Array.isArray(p.byModel)) {
-        for (const bm of p.byModel) {
-          const k = bm.model ?? 'unknown';
-          const cur = modelAgg.get(k) ?? { provider: bm.provider ?? '', tier: bm.tier ?? '', calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0, totalDurationMs: 0 };
-          cur.calls += bm.calls ?? 0; cur.promptTokens += bm.promptTokens ?? 0; cur.completionTokens += bm.completionTokens ?? 0;
-          cur.totalTokens += bm.totalTokens ?? 0; cur.estimatedCostUsd += bm.estimatedCostUsd ?? 0; cur.totalDurationMs += (bm.avgDurationMs ?? 0) * (bm.calls ?? 1);
-          modelAgg.set(k, cur);
-        }
-      }
-      return { chapterNumber: a.chapterNumber, promptTokens: pt, completionTokens: ct, totalTokens: tt, estimatedCostUsd: Number(cost.toFixed(6)), totalCalls: calls, byProvider: p.byProvider ?? [], byModel: p.byModel ?? [] };
-    });
+    const llm = detail.total.llm;
+    const totalPromptTokens = llm.tokensIn;
+    const totalCompletionTokens = llm.tokensOut;
+    const totalTokens = llm.tokensIn + llm.tokensOut;
+    const totalCostUsd = detail.total.costUsd;
+    const totalCalls = llm.calls + detail.total.image.calls + detail.total.video.calls
+      + detail.total.embedding.calls + detail.total.tts.calls;
 
-    const byProvider = [...providerAgg.entries()].map(([provider, b]) => ({ provider, ...b, estimatedCostUsd: Number(b.estimatedCostUsd.toFixed(6)) })).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
-    const byModel = [...modelAgg.entries()].map(([model, b]) => ({ model, provider: b.provider, tier: b.tier, calls: b.calls, promptTokens: b.promptTokens, completionTokens: b.completionTokens, totalTokens: b.totalTokens, estimatedCostUsd: Number(b.estimatedCostUsd.toFixed(6)), avgDurationMs: Number((b.totalDurationMs / Math.max(1, b.calls)).toFixed(2)) })).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
+    const providerMap = new Map<string, { calls: number; tokensIn: number; tokensOut: number; costUsd: number }>();
+    for (const m of detail.byModel) {
+      const p = providerMap.get(m.provider) ?? { calls: 0, tokensIn: 0, tokensOut: 0, costUsd: 0 };
+      p.calls += m.calls; p.tokensIn += m.tokensIn; p.tokensOut += m.tokensOut; p.costUsd += m.costUsd;
+      providerMap.set(m.provider, p);
+    }
+    const byProvider = [...providerMap.entries()].map(([provider, p]) => ({
+      provider, calls: p.calls,
+      promptTokens: p.tokensIn, completionTokens: p.tokensOut,
+      totalTokens: p.tokensIn + p.tokensOut, estimatedCostUsd: p.costUsd,
+    }));
 
-    return { bookId, totalPromptTokens, totalCompletionTokens, totalTokens, totalCostUsd: Number(totalCostUsd.toFixed(6)), totalCalls, byProvider, byModel, chapters };
+    const byModel = detail.byModel.map(m => ({
+      model: m.model, provider: m.provider, tier: m.kind,
+      calls: m.calls, promptTokens: m.tokensIn, completionTokens: m.tokensOut,
+      totalTokens: m.tokensIn + m.tokensOut, estimatedCostUsd: m.costUsd, avgDurationMs: 0,
+    }));
+
+    const chapters = detail.byScope.map(s => {
+      const m = s.scope.match(/^chapter:(\d+)$/);
+      const chapterNumber = m ? +m[1] : 0;
+      return {
+        chapterNumber,
+        promptTokens: s.llm.tokensIn, completionTokens: s.llm.tokensOut,
+        totalTokens: s.llm.tokensIn + s.llm.tokensOut,
+        estimatedCostUsd: s.costUsd, totalCalls: s.llm.calls,
+      };
+    }).sort((a, b) => a.chapterNumber - b.chapterNumber);
+
+    return {
+      bookId, totalPromptTokens, totalCompletionTokens, totalTokens,
+      totalCostUsd, totalCalls, byProvider, byModel, chapters,
+    };
   }
 
   async getBook(bookId: string): Promise<unknown> {
@@ -1524,9 +1538,7 @@ ${input.goal}
     state = await this.healChapterCursorIfBehind(bookId, state);
     const chapterNumber = state.chapterCursor;
 
-    return this.llmUsageTracker.runWithChapterScope(
-      { bookId, chapterNumber },
-      async () => {
+    {
         try {
           if (!state.currentArc) {
             state = await this.runPreStep(bookId, chapterNumber, 'bootstrapInitialArc',
@@ -1539,6 +1551,7 @@ ${input.goal}
               outline: state.roughOutline,
               audienceDirective: state.audienceDirective,
               profile: state.bookPromptProfile,
+              userId: state.userId,
             });
             await this.persistBookState(state);
           }
@@ -1605,6 +1618,7 @@ ${input.goal}
             bookId,
             result.finalDraft,
             result.loreRecord,
+            { userId: state.userId },
           );
 
           // Persist structured chapter memory for long-range retrieval.
@@ -1686,18 +1700,8 @@ ${input.goal}
           await this.persistBookState(state); // 保存最终 state（含伏笔/维护更新）
           await this.persistArtifact(bookId, chapterNumber, 'state_snapshot', state);
           return result;
-        } finally {
-          const usage = this.llmUsageTracker.consumeCurrentSummary();
-          if (usage) {
-            try {
-              await this.persistArtifact(bookId, chapterNumber, 'llm_usage_summary', usage);
-            } catch {
-              // ignore non-critical artifact persistence failure
-            }
-          }
-        }
-      },
-    );
+        } finally {}
+    }
   }
 
   /**
@@ -2026,7 +2030,7 @@ ${input.goal}
           bookId,
           out.draft,
           out.loreRecord,
-          { enableSensoryExtraction: false },
+          { enableSensoryExtraction: false, userId: currentState.userId },
         );
       }
     } catch (err) {
@@ -2205,7 +2209,7 @@ ${input.goal}
     bookId: string,
     draft: ChapterDraft,
     lore: LoreRecord,
-    options?: { enableSensoryExtraction?: boolean },
+    options?: { enableSensoryExtraction?: boolean; userId?: string },
   ): Promise<void> {
     const chapterNumber = draft.chapterNumber;
     const enableSensoryExtraction = options?.enableSensoryExtraction ?? true;
@@ -2309,6 +2313,7 @@ ${input.goal}
         extractedAnchors = await this.extractSensoryAnchorsFromChapter(
           draft.content.slice(0, 3200),
           locationLabel,
+          { bookId, userId: options?.userId },
         );
       } catch (err) {
         this.logger.warn(
@@ -2372,6 +2377,7 @@ ${input.goal}
           const out = await this.extractItemSensoryFromChapter(
             draft.content.slice(0, 3200),
             itemHint,
+            { bookId, userId: options?.userId },
           );
           if (out.sensorySignature && Object.keys(out.sensorySignature).length > 0) {
             extractedSensory = out.sensorySignature;
@@ -2430,6 +2436,7 @@ ${input.goal}
   private async extractItemSensoryFromChapter(
     contentExcerpt: string,
     itemHint: string,
+    meta?: { bookId?: string; userId?: string },
   ): Promise<{
     sensorySignature?: Partial<ItemSensorySignature>;
     activationEffect?: { description: string };
@@ -2440,7 +2447,7 @@ ${input.goal}
       taskName: 'item-sensory-extract',
       schema: itemSensoryExtractionSchema,
       tags: ['workflow', 'detail-store', 'item'],
-      metadata: { itemHint: itemHint.slice(0, 50) },
+      metadata: { itemHint: itemHint.slice(0, 50), bookId: meta?.bookId, userId: meta?.userId },
       systemPrompt: `你是道具/武器/异火描写提炼专家。从给定的章节正文摘录中，针对「与道具相关的描写」（提示：${itemHint}），抽取：
 1. sensorySignature：该道具的 1～2 个感官维度具体描写（视觉/触感/听觉/气味/重量），只提炼正文中已出现的，不要编造。每个维度一句话即可。
 2. activationEffect：若正文中有该道具被使用、激活、催动的一次具体效果描写，提炼为一句话（如「青莲在掌心绽放，方圆三尺温度骤升」）。若无则省略。
@@ -2476,6 +2483,7 @@ ${input.goal}
   private async extractSensoryAnchorsFromChapter(
     contentExcerpt: string,
     locationLabel: string,
+    meta?: { bookId?: string; userId?: string },
   ): Promise<LocationSensoryAnchor[]> {
     if (!contentExcerpt?.trim()) return [];
 
@@ -2483,7 +2491,7 @@ ${input.goal}
       taskName: 'location-sensory-extract',
       schema: locationSensoryExtractionSchema,
       tags: ['workflow', 'detail-store', 'location'],
-      metadata: { locationLabel },
+      metadata: { locationLabel, bookId: meta?.bookId, userId: meta?.userId },
       systemPrompt: `你是环境描写提炼专家。从给定的章节正文摘录中，针对「${locationLabel}」这一地点，抽取 1～2 个具体、可记忆的感官细节作为「锚点」。
 要求：
 - 只提炼正文中已出现的描写，不要编造。

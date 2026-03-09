@@ -1,4 +1,4 @@
-export { DramaTaskEntity } from './task.entity';
+export { DramaTaskEntity } from './entities/task.entity';
 export { DramaTaskService } from './task.service';
 export { TaskSubmitterService } from './task-submitter.service';
 export { DramaTextProcessor } from './drama-text.processor';

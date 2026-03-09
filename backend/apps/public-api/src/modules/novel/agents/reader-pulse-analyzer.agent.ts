@@ -26,7 +26,7 @@ export class ReaderPulseAnalyzerAgent {
       taskName: 'reader-pulse-analyzer',
       schema: readerFeedbackAnalysisSchema,
       tags: ['feedback', 'reader', 'analysis'],
-      metadata: { bookId: state.bookId, feedbackChapters: feedbacks.map((f) => f.chapterNumber) },
+      metadata: { userId: state.userId, bookId: state.bookId, feedbackChapters: feedbacks.map((f) => f.chapterNumber) },
       systemPrompt: `你是一位读者行为分析专家 + 编辑顾问。你的任务是从真实读者评论中提炼**分层的、有条件的**写作改进建议。
 ${state.seed.writingMode === 'literary' ? '\n⚠ 本书为文学探索模式。平台留存/完读率等商业指标仅作参考，不应作为主要决策依据。重点关注对叙事深度、文学品质、情感真实度的反馈。\n' : ''}
 

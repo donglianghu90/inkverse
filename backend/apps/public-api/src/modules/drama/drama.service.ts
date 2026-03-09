@@ -25,8 +25,17 @@ import { MediaOrchestratorService } from './media-orchestrator.service';
 import { DramaProgressService } from './drama-progress.service';
 import { MediaService } from '../media/media.service';
 import { RenderingProfileService } from '../media/rendering/rendering-profile.service';
-import { CharacterViewAngle, buildViewAnglePrompt } from '../media/rendering/rendering-profile';
+import { CharacterViewAngle, buildViewAnglePrompt, assembleT2iPrompt } from '../media/rendering/rendering-profile';
+import { PromptOptimizerService } from '../media/prompt-optimizer.service';
 import { DramaGenreTemplateService } from './drama-genre-template.service';
+import { DramaTaskService } from './task/task.service';
+import { DramaRunService } from './run/run.service';
+import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
+import { MediaJobService } from '../media/media-job.service';
+import { LocalStorageService } from '../media/local-storage.service';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
+import { DRAMA_QUEUE } from './task/types';
 
 interface CreateDramaOptions { userId?: string; progressDramaId?: string; }
 type ProblemFixTarget = 'all' | 'identity' | 'style' | 'camera' | 'motion';
@@ -60,9 +69,19 @@ export class DramaService implements OnModuleInit {
     private readonly progressService: DramaProgressService,
     private readonly mediaService: MediaService,
     private readonly renderingProfileService: RenderingProfileService,
+    private readonly promptOptimizer: PromptOptimizerService,
     private readonly genreTemplateService: DramaGenreTemplateService,
     private readonly llm: LlmService,
     private readonly traceLogger: LlmTraceLoggerService,
+    private readonly dramaTaskService: DramaTaskService,
+    private readonly dramaRunService: DramaRunService,
+    private readonly pipelineService: DramaAgentPipelineService,
+    private readonly mediaJobService: MediaJobService,
+    private readonly localStorage: LocalStorageService,
+    @InjectQueue(DRAMA_QUEUE.TEXT) private readonly textQueue: Queue,
+    @InjectQueue(DRAMA_QUEUE.IMAGE) private readonly imageQueue: Queue,
+    @InjectQueue(DRAMA_QUEUE.VIDEO) private readonly videoQueue: Queue,
+    @InjectQueue(DRAMA_QUEUE.VOICE) private readonly voiceQueue: Queue,
   ) {}
 
   async onModuleInit() { // 恢复卡在 creating 状态超过5分钟的创建流程
@@ -165,8 +184,7 @@ export class DramaService implements OnModuleInit {
       await this.wfExecRepo.update(wfExec!.id, { lastCheckpoint: name, stepOutputs: { ...out, _dto: dto } });
     };
 
-    const KNOWLEDGE_GENRES = ['历史教育', '人物传记', '神话传说', '科普知识'];
-    const contentMode: ContentMode = KNOWLEDGE_GENRES.some(g => dto.genre.includes(g)) ? 'knowledge' : 'drama';
+    const contentMode: ContentMode = 'drama';
 
     try {
       logDrama('pipeline_start', 'ok', '创建流程开始', { resumeFrom, genre: dto.genre, contentMode, mainIdea: dto.mainIdea?.slice(0, 80) });
@@ -185,7 +203,8 @@ export class DramaService implements OnModuleInit {
           plannedTotalEpisodes: dto.plannedMinEpisodes || dto.plannedMaxEpisodes
             ? { min: dto.plannedMinEpisodes ?? 60, max: dto.plannedMaxEpisodes ?? 100 } : undefined,
           seedHints: seedHints ?? undefined,
-          contentMode,
+          dramaId,
+          userId: opts.userId,
         });
         out.seed = seed;
         out.seedHints = seedHints ?? null;
@@ -197,7 +216,7 @@ export class DramaService implements OnModuleInit {
       if (resumeFrom <= 1) {
         logDrama('outline_plan_start', 'ok', '总导演规划全剧大纲');
         emitCreate(1, '总导演规划全剧大纲...');
-        out.outline = await this.seriesDirector.plan(out.seed, contentMode);
+        out.outline = await this.seriesDirector.plan(out.seed, dramaId, opts.userId);
         logDrama('outline_plan_done', 'ok', '全剧大纲完成', { totalEpisodes: out.outline?.totalPlannedEpisodes });
         emitCreate(1, '全剧大纲完成', true);
         await saveCP('outline_planned', { outline: out.outline });
@@ -209,7 +228,7 @@ export class DramaService implements OnModuleInit {
         const mergedStyleHint = dto.visualStyleHint
           || (out.seedHints as any)?.visualStyleHints
           || undefined;
-        const { characters, locations, visualStyle } = await this.visualDesigner.design(out.seed, out.outline, mergedStyleHint, contentMode);
+        const { characters, locations, visualStyle } = await this.visualDesigner.design(out.seed, out.outline, mergedStyleHint, dramaId, opts.userId);
         Object.assign(out, { characters, locations, visualStyle });
         logDrama('visual_design_done', 'ok', '视觉资产设计完成', { charCount: out.characters?.length, locCount: out.locations?.length });
         emitCreate(2, '视觉资产设计完成', true);
@@ -220,7 +239,7 @@ export class DramaService implements OnModuleInit {
         logDrama('assets_generate_start', 'ok', '生成角色定妆照+场景参考图');
         emitCreate(3, '生成角色定妆照 + 场景参考图...');
         const assetEntities = await this.persistVisualAssets(dramaId, out.characters, out.locations, out.visualStyle);
-        await this.generateReferenceImages(dramaId, assetEntities, out.characters, out.locations);
+        await this.generateReferenceImages(dramaId, assetEntities, out.characters, out.locations, opts.userId);
         out.visualAssets = assetEntities;
         logDrama('assets_generate_done', 'ok', '参考图生成完成');
         emitCreate(3, '参考图生成完成', true);
@@ -231,8 +250,8 @@ export class DramaService implements OnModuleInit {
         logDrama('profile_strategy_start', 'ok', '编剧手册+策略生成');
         emitCreate(4, '编剧手册 + 策略...');
         const [promptProfile, strategy] = await Promise.all([
-          this.profiler.generate(out.seed, out.visualStyle, out.outline, contentMode),
-          this.strategist.generate(out.seed, out.outline, contentMode),
+          this.profiler.generate(out.seed, out.visualStyle, out.outline, dramaId, opts.userId),
+          this.strategist.generate(out.seed, out.outline, dramaId, opts.userId),
         ]);
         Object.assign(out, { promptProfile, strategy });
         logDrama('profile_strategy_done', 'ok', '编剧手册完成');
@@ -325,7 +344,15 @@ export class DramaService implements OnModuleInit {
       });
     }
     if (!entities.length) return [];
-    return this.visualAssetRepo.save(entities.map(e => this.visualAssetRepo.create(e)));
+    const existing = await this.visualAssetRepo.find({ where: { dramaId } });
+    const existingMap = new Map(existing.map(e => [`${e.assetType}:${e.refId}`, e]));
+    const toSave = entities.map(e => {
+      const key = `${e.assetType}:${e.refId}`;
+      const prev = existingMap.get(key);
+      if (prev) return this.visualAssetRepo.merge(prev, e);
+      return this.visualAssetRepo.create(e);
+    });
+    return this.visualAssetRepo.save(toSave);
   }
 
   /**
@@ -335,9 +362,22 @@ export class DramaService implements OnModuleInit {
    * Phase 2: 按角色重要性链式生成额外视角（以 face_front 为参考图）
    * Phase 3: 角色外观变体参考图
    */
+  private static readonly CHAR_IMAGE_SIZE = '2:3';
+  private static readonly SCENE_IMAGE_SIZE = '3:2';
+
+  private optimizeAssetPrompt(rawPrompt: string, shotType: 'character' | 'location'): { prompt: string; negativePrompt: string } {
+    const profile = this.renderingProfileService.getImageProfile();
+    const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, profile.negativePrompt.defaultValue, {
+      shotType,
+      qualityTier: 'golden',
+    });
+    return { prompt: assembleT2iPrompt(optimized.prompt, profile), negativePrompt: optimized.negativePrompt };
+  }
+
   private async generateReferenceImages(
     dramaId: string, assets: VisualAssetEntity[],
     characters: DramaState['characters'], locations: DramaState['locations'],
+    userId?: string,
   ): Promise<void> {
     const profile = this.renderingProfileService.getImageProfile();
     const charAssets = assets.filter(a => a.assetType === 'character');
@@ -351,9 +391,10 @@ export class DramaService implements OnModuleInit {
         if (!ch?.faceReferencePrompt) return;
         try {
           this.logger.log(`[Phase1] face_front: ${ch.name}(${asset.refId})`);
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(ch.faceReferencePrompt, 'character');
           const result = await this.mediaService.generateImage({
-            prompt: ch.faceReferencePrompt, size: '720x1280', count: 1,
-            dramaId, assetType: 'character_image', refId: asset.refId,
+            prompt, negativePrompt, size: DramaService.CHAR_IMAGE_SIZE, count: 1,
+            dramaId, assetType: 'character_image', refId: asset.refId, userId,
           });
           if (result.images?.[0]?.url) {
             asset.referenceImageUrl = result.images[0].url;
@@ -370,9 +411,10 @@ export class DramaService implements OnModuleInit {
         if (!loc?.visualPrompt) return;
         try {
           this.logger.log(`[Phase1] 场景参考图: ${loc.name}`);
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(loc.visualPrompt, 'location');
           const result = await this.mediaService.generateImage({
-            prompt: loc.visualPrompt, size: '1280x720', count: 1,
-            dramaId, assetType: 'location_image', refId: asset.refId,
+            prompt, negativePrompt, size: DramaService.SCENE_IMAGE_SIZE, count: 1,
+            dramaId, assetType: 'location_image', refId: asset.refId, userId,
           });
           if (result.images?.[0]?.url) {
             asset.referenceImageUrl = result.images[0].url;
@@ -393,13 +435,16 @@ export class DramaService implements OnModuleInit {
         if (!parts.length) return;
         try {
           this.logger.log(`[Phase1] 风格参考图: ${asset.refId}`);
+          const rawPrompt = `${parts.join(', ')}, concept art mood board, consistent style sheet`;
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'location');
           const result = await this.mediaService.generateImage({
-            prompt: `${parts.join(', ')}, concept art mood board, consistent style sheet`,
-            size: '1280x720',
+            prompt, negativePrompt,
+            size: DramaService.SCENE_IMAGE_SIZE,
             count: 1,
             dramaId,
             assetType: 'style_guide_image',
             refId: asset.refId,
+            userId,
           });
           if (result.images?.[0]?.url) {
             asset.referenceImageUrl = result.images[0].url;
@@ -417,7 +462,7 @@ export class DramaService implements OnModuleInit {
     // ═══ Phase 2: 多角度链式生成（以 face_front 为参考图保持同一人脸） ═══
     const chainWeight = profile.characterViews.chainReferenceWeight;
     const phase2Tasks = charAssets.map(asset => async () => {
-      if (!asset.referenceImageUrl) return; // Phase 1 失败则跳过
+      if (!asset.referenceImageUrl) return;
       const ch = characters.find(c => c.characterId === asset.refId);
       if (!ch) return;
       const role = ch.role as 'protagonist' | 'antagonist' | 'supporting' | 'minor';
@@ -428,12 +473,13 @@ export class DramaService implements OnModuleInit {
       const images = [...(asset.referenceImages ?? [])];
       for (const viewAngle of extraViews) {
         try {
-          const prompt = buildViewAnglePrompt(ch, viewAngle);
+          const rawPrompt = buildViewAnglePrompt(ch, viewAngle);
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'character');
           const refImages = [{ url: asset.referenceImageUrl, weight: chainWeight }];
           this.logger.log(`[Phase2] ${viewAngle}: ${ch.name}(${asset.refId})`);
           const result = await this.mediaService.generateImage({
-            prompt, size: '720x1280', count: 1, referenceImages: refImages,
-            dramaId, assetType: `character_${viewAngle}`, refId: asset.refId,
+            prompt, negativePrompt, size: DramaService.CHAR_IMAGE_SIZE, count: 1, referenceImages: refImages,
+            dramaId, assetType: `character_${viewAngle}`, refId: asset.refId, userId,
           });
           if (result.images?.[0]?.url) {
             images.push({ viewAngle, imageUrl: result.images[0].url });
@@ -447,11 +493,11 @@ export class DramaService implements OnModuleInit {
     await this.runConcurrent(phase2Tasks, 3);
 
     // ═══ Phase 3: 角色外观变体参考图 ═══
-    await this.generateVariationImages(dramaId, characters);
+    await this.generateVariationImages(dramaId, characters, userId);
   }
 
   /** 为角色外观变体生成参考图（以 face_front 为参考保持面部一致） */
-  private async generateVariationImages(dramaId: string, characters: DramaState['characters']): Promise<void> {
+  private async generateVariationImages(dramaId: string, characters: DramaState['characters'], userId?: string): Promise<void> {
     const baseAssets = await this.visualAssetRepo.find({ where: { dramaId, assetType: 'character' as any } });
     const baseMap = new Map(baseAssets.filter(a => a.referenceImageUrl).map(a => [a.refId, a.referenceImageUrl]));
     for (const ch of characters) {
@@ -461,10 +507,12 @@ export class DramaService implements OnModuleInit {
         if (v.referenceImageUrl) continue;
         try {
           const refImages = baseImg ? [{ url: baseImg, weight: 0.6 }] : [];
+          const rawPrompt = `${v.visualPromptOverride}, same person as reference, ${ch.faceReferencePrompt}`;
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'character');
           const result = await this.mediaService.generateImage({
-            prompt: `${v.visualPromptOverride}, same person as reference, ${ch.faceReferencePrompt}`,
-            size: '720x1280', count: 1, referenceImages: refImages,
-            dramaId, assetType: 'character_variation', refId: `${ch.characterId}_${v.variationId}`,
+            prompt, negativePrompt,
+            size: DramaService.CHAR_IMAGE_SIZE, count: 1, referenceImages: refImages,
+            dramaId, assetType: 'character_variation', refId: `${ch.characterId}_${v.variationId}`, userId,
           });
           if (result.images?.[0]?.url) v.referenceImageUrl = result.images[0].url;
           this.logger.log(`变体参考图完成: ${ch.characterId}/${v.variationId}`);
@@ -474,7 +522,7 @@ export class DramaService implements OnModuleInit {
   }
 
   /** 重新生成单个视觉资产的参考图 */
-  async regenerateAssetImage(dramaId: string, assetId: string): Promise<VisualAssetEntity> {
+  async regenerateAssetImage(dramaId: string, assetId: string, userId?: string): Promise<VisualAssetEntity> {
     const asset = await this.visualAssetRepo.findOne({ where: { id: assetId, dramaId } });
     if (!asset) throw new NotFoundException(`视觉资产 ${assetId} 不存在`);
     const data = asset.data as Record<string, unknown>;
@@ -491,9 +539,12 @@ export class DramaService implements OnModuleInit {
             String(data.referenceStyle ?? ''),
           ].map(p => p.trim()).filter(Boolean).join(', ');
     if (!prompt) throw new Error(`资产 ${assetId} 缺少生成提示词`);
-    const size = asset.assetType === 'character' ? '720x1280' : '1280x720';
+    const isChar = asset.assetType === 'character';
+    const size = isChar ? DramaService.CHAR_IMAGE_SIZE : DramaService.SCENE_IMAGE_SIZE;
+    const optimized = this.optimizeAssetPrompt(prompt, isChar ? 'character' : 'location');
     const result = await this.mediaService.generateImage({
-      prompt, size, count: 1, dramaId, assetType: `${asset.assetType}_image`, refId: asset.refId,
+      prompt: optimized.prompt, negativePrompt: optimized.negativePrompt,
+      size, count: 1, dramaId, assetType: `${asset.assetType}_image`, refId: asset.refId, userId,
     });
     if (result.images?.[0]?.url) {
       asset.referenceImageUrl = result.images[0].url;
@@ -586,6 +637,66 @@ export class DramaService implements OnModuleInit {
     const drama = await this.dramaRepo.findOne({ where: { id: dramaId } });
     if (!drama) throw new NotFoundException(`短剧 ${dramaId} 不存在`);
     return drama;
+  }
+
+  async deleteDrama(dramaId: string, userId?: string): Promise<{ success: boolean }> {
+    const drama = await this.dramaRepo.findOne({ where: { id: dramaId } });
+    if (!drama) throw new NotFoundException(`短剧 ${dramaId} 不存在`);
+    if (userId && drama.userId !== userId) throw new NotFoundException(`短剧 ${dramaId} 不存在`);
+    if (this.generatingDramas.has(dramaId)) {
+      throw new Error('该短剧正在生成中，请先暂停后再删除');
+    }
+
+    // 1. 清除内存状态（进度追踪 / 暂停标记）
+    this.pausedDramas.delete(dramaId);
+    this.progressService.clearGenerating(`${dramaId}:generate`);
+    const episodes = await this.episodeRepo.find({ where: { dramaId }, select: ['episodeNumber'] });
+    for (const ep of episodes) {
+      this.progressService.clearGenerating(`${dramaId}:media:${ep.episodeNumber}`);
+      this.progressService.clearGenerating(`${dramaId}:images:${ep.episodeNumber}`);
+    }
+
+    // 2. 取消并清除 BullMQ 队列中该 drama 的待执行任务
+    await this.purgeQueueJobs(dramaId);
+
+    // 3. 取消并删除 drama_tasks
+    await this.dramaTaskService.cancelAndDeleteByDrama(dramaId);
+
+    // 4. 删除 graph runs / steps / events
+    await this.dramaRunService.deleteByDrama(dramaId);
+
+    // 5. 删除 agent pipeline 配置
+    await this.pipelineService.deleteByDrama(dramaId);
+
+    // 6. 删除 media_jobs
+    await this.mediaJobService.deleteByDrama(dramaId);
+
+    // 7. 删除本地存储文件 (images/videos/audio)
+    this.localStorage.deleteDramaFiles(dramaId);
+
+    // 8. 删除核心表
+    await this.episodeRepo.delete({ dramaId });
+    await this.visualAssetRepo.delete({ dramaId });
+    await this.wfExecRepo.delete({ dramaId });
+    await this.dramaRepo.remove(drama);
+
+    this.logger.log(`短剧已完整删除 dramaId=${dramaId}`);
+    return { success: true };
+  }
+
+  private async purgeQueueJobs(dramaId: string): Promise<void> {
+    for (const queue of [this.textQueue, this.imageQueue, this.videoQueue, this.voiceQueue]) {
+      try {
+        const waiting = await queue.getJobs(['waiting', 'delayed', 'prioritized']);
+        for (const job of waiting) {
+          if (job.data?.dramaId === dramaId) {
+            await job.remove().catch(() => {});
+          }
+        }
+      } catch (err) {
+        this.logger.warn(`清理队列 ${queue.name} 中 dramaId=${dramaId} 的任务失败: ${(err as Error).message}`);
+      }
+    }
   }
 
   /** 异步启动逐集生成（含并发互斥），立即返回任务信息 */
@@ -951,125 +1062,189 @@ export class DramaService implements OnModuleInit {
     }));
   }
 
-  async enhanceIdea(rawIdea: string, genre?: string) {
+  async enhanceIdea(rawIdea: string, genre?: string, userId?: string) {
     return this.llm.generateStructured({
       taskName: 'drama-idea-enhancer',
       schema: z.object({ enhanced: z.string(), highlights: z.array(z.string()).min(2).max(5) }),
       tags: ['setup', 'drama-idea'],
-      systemPrompt: `你是一位顶尖短视频内容策划编辑，擅长把粗糙的内容灵感打磨成让观众一眼上头的概念。
+      metadata: { userId },
+      systemPrompt: `你是一位顶尖短剧策划编辑，擅长把粗糙的创意打磨成让观众一眼上头的短剧概念。
 
-你需要先判断创意的内容类型，再按对应策略美化：
+=== 核心理念 ===
+所有创意最终都将制作成"短剧"——有角色、有对白、有戏剧冲突的竖屏微剧集。
+无论素材是虚构故事、历史人物、神话传说还是科幻设定，美化方向都是"如何让它成为一部好看的剧"。
 
-【内容类型判断】
-A. 商业短剧（霸总/甜宠/战神/复仇/重生/宫斗/穿越/都市/悬疑/古装等虚构剧情）
-B. 历史教育（历史人物/事件介绍、历史故事、朝代科普等）
-C. 人物传记（真实人物的生平故事、成就介绍等）
-D. 神话传说（神话故事、民间传说、文化传承等）
-E. 科普知识（知识解说、科学故事、趣味百科等）
-F. 其他
+=== 美化原则 ===
+1. 冲突前置：埋入核心矛盾和身份反差，产生"接下来会怎样"的好奇。
+2. 角色驱动：赋予主角有趣的困境或身份反差，让观众代入。
+3. 爽点/情感钩子明确：突出让观众上头的核心体验（打脸逆袭/命运震撼/身份反转/甜蜜暴击/认知颠覆等）。
+4. 视觉化：描述要有画面感——观众能想象出具体的场景和冲突。
 
-【A类-商业短剧美化原则】
-1. 忠于原意：保留核心方向和情感基调。
-2. 冲突前置：埋入核心矛盾和身份反差，产生"接下来会怎样"的好奇。
-3. 爽点明确：突出打脸/逆袭/甜蜜暴击等爽点。
-4. 角色立体化：赋予主角有趣的困境或身份反差。
+=== 题材适配 ===
+- 霸总/甜宠/复仇/重生等：聚焦爽点反转、冲突升级、身份反差。
+- 传记剧（真实人物）：以人物视角演绎传奇一生，聚焦命运转折和人性抉择。保留历史框架，但以戏剧手法呈现（如李白醉酒对峙杨国忠，而非旁白介绍李白生平）。
+- 历史剧：以特定历史事件/时代为背景的权谋/战争/命运剧，聚焦人物在历史洪流中的抗争。
+- 神话传说：就是奇幻短剧，突出瑰丽想象和角色魅力（哪吒闹海、孙悟空大闹天宫本身就是好剧本）。
+- 科幻：聚焦未来世界的人性困境和高概念冲突。
 
-【B/C类-历史/传记美化原则】
-1. 忠于史实：保留历史准确性，不编造虚假细节。
-2. 叙事生动：用故事化手法呈现历史，有画面感和代入感。
-3. 知识亮点：突出让人"涨知识"的历史细节和冷门知识。
-4. 人物鲜活：展现历史人物的性格、情感和人性面。
-5. 时代感：描述要有时代氛围和文化底蕴。
-
-【D类-神话传说美化原则】
-1. 忠于原典：保留经典情节，不过度魔改。
-2. 奇幻想象：突出神话的瑰丽想象和视觉震撼。
-3. 文化内涵：体现背后的文化寓意和民族精神。
-4. 角色魅力：让神话人物的性格鲜明动人。
-
-【E类-科普知识美化原则】
-1. 知识准确：确保科学事实的准确性。
-2. 趣味叙事：像讲故事一样引人入胜。
-3. 视觉化：描述要有画面感，便于转化为漫画/视频。
-4. 悬念感：设置"你知道为什么吗？"式的知识悬念。
-
-【通用原则】
-- 视觉化：内容是视觉媒介，描述要有画面感——能想象出具体的场景。
+=== 通用约束 ===
 - 文案质感：简短有力、节奏紧凑，控制在100-200字。
-- 适度原则：如果原始创意已足够精彩，润色即可。
-- 严禁把历史/教育/科普内容强行改成商业短剧风格。`,
-      userPrompt: `原始创意：\n${rawIdea}${genre ? `\n题材方向：${genre}` : ''}\n\n请先判断内容类型，然后按对应策略美化。输出美化后的创意和核心卖点（highlights 应体现该类型的核心价值：商业短剧→爽点卖点，历史/传记→知识亮点，科普→认知价值）。`,
+- 忠于原意：保留核心方向和情感基调，润色而非改写。
+- 适度原则：如果原始创意已足够精彩，微调即可。`,
+      userPrompt: `原始创意：\n${rawIdea}${genre ? `\n题材方向：${genre}` : ''}\n\n请将这个创意美化为一个有吸引力的短剧概念。输出美化后的创意和 2-5 个核心卖点（highlights 应体现让观众追看的核心驱动力）。`,
       temperature: 0.75,
     });
   }
 
-  async recommendGenreAndAudience(mainIdea: string) {
-    const COMMERCIAL_GENRES = ['霸总', '甜宠', '战神', '穿越', '宫斗', '复仇', '重生', '悬疑', '都市', '古装'] as const;
-    const KNOWLEDGE_GENRES = ['历史教育', '人物传记', '神话传说', '科普知识'] as const;
-    const GENRE_OPTS = [...COMMERCIAL_GENRES, ...KNOWLEDGE_GENRES] as const;
-    const PLATFORM_OPTS = ['douyin', 'kuaishou', 'reelshort', 'dramabox', 'generic'] as const;
+  async recommendGenreAndAudience(mainIdea: string, userId?: string) {
+    const GENRE_OPTS = ['霸总', '甜宠', '战神', '穿越', '宫斗', '复仇', '重生', '悬疑', '都市', '古装', '传记剧', '神话传说', '历史剧', '科幻'] as const;
+    const PLATFORM_OPTS = ['douyin', 'kuaishou', 'hongguo', 'wechat_mini', 'bilibili', 'tencent_video', 'mango_tv', 'iqiyi', 'reelshort', 'dramabox', 'generic'] as const;
     const AUDIENCE_OPTS = ['18-30 岁女性', '18-30 岁男性', '25-40 岁女性', '全年龄'] as const;
     const FOCUS_OPTS = ['female_lead', 'male_lead', 'dual_lead', 'ensemble'] as const;
+    const VISUAL_STYLE_OPTS = [
+      '3d_fantasy', '3d_british', '3d_chibi', '3d_realistic', '3d_voxel', '3d_mobile_game', '3d_toon_render', '3d_japanese_npr', '3d_cyberpunk', '3d_disney',
+      '2d_anime', '2d_film', '2d_fantasy_anime', '2d_retro_anime', '2d_british_anime', '2d_ghibli', '2d_korean_anime', '2d_action', '2d_cybercity', '2d_sports', '2d_tezuka', '2d_thick_line', '2d_death_note', '2d_shoujo', '2d_horror', '2d_chibi',
+      'chinese_ink', 'chinese_style', '2d_gongbi', '2d_watercolor', '2d_pixel', '2d_simple', '2d_sketch', '2d_british_comic', '2d_rubber_hose', '2d_golden',
+      'live_action', 'period_live', 'hk_film', 'retro_wuxia', 'western_film',
+      'stop_motion', 'clay_stop', 'lego_stop', 'felt_stop', 'paper_stop',
+    ] as const;
+    const ASPECT_RATIO_OPTS = ['9:16', '16:9'] as const;
+    const DURATION_OPTS = [120, 180, 300] as const;
+    const SCALE_OPTS = [
+      { min: 40, max: 60 },
+      { min: 60, max: 100 },
+      { min: 100, max: 150 },
+    ];
     return this.llm.generateStructured({
       taskName: 'drama-genre-audience-recommender',
+      metadata: { userId },
       schema: z.object({
         genreDisplayName: z.enum(GENRE_OPTS),
         platformTarget: z.enum(PLATFORM_OPTS),
         targetAudience: z.enum(AUDIENCE_OPTS),
         protagonistFocus: z.enum(FOCUS_OPTS),
+        suggestedVisualStyle: z.enum(VISUAL_STYLE_OPTS),
+        aspectRatio: z.enum(ASPECT_RATIO_OPTS),
+        targetEpisodeDurationSec: z.number().int(),
+        plannedEpisodes: z.object({ min: z.number().int(), max: z.number().int() }),
         reason: z.string().optional(),
       }),
       tags: ['setup', 'drama-recommend'],
-      systemPrompt: `你是一位资深内容策划，根据用户的核心创意推荐最匹配的题材、平台、受众和叙事聚焦。
+      systemPrompt: `你是一位资深短剧策划，根据用户的核心创意推荐最匹配的题材、平台、受众、叙事聚焦、视觉风格和规模配置。
 
-可选题材分两大类：
-A. 商业短剧类：${COMMERCIAL_GENRES.join('、')}
-B. 知识/教育类：${KNOWLEDGE_GENRES.join('、')}
+=== 题材判断 ===
+可选题材：${GENRE_OPTS.join('、')}
+- 豪门逆袭/霸道总裁 → 霸总；甜蜜恋爱 → 甜宠；战力碾压 → 战神；穿越时空 → 穿越
+- 宫廷权谋 → 宫斗；复仇打脸 → 复仇；重活一世 → 重生；推理悬疑 → 悬疑
+- 都市生活/职场 → 都市；古装爱情/武侠 → 古装
+- 真实人物传奇（李白/武则天/爱因斯坦） → 传记剧
+- 神话故事/民间传说/仙侠 → 神话传说
+- 历史事件/朝代兴亡/战争 → 历史剧
+- 科幻/未来/太空 → 科幻
 
-判断逻辑：
-- 虚构故事、爽点反转、情感纠葛 → 选A类中最匹配的（豪门逆袭→都市/霸总，宫斗权谋→宫斗，复仇打脸→复仇/霸总）
-- 真实历史人物/事件介绍、历史科普 → 历史教育
-- 真实人物的生平/传记故事 → 人物传记
-- 神话故事、民间传说、仙侠 → 神话传说
-- 知识科普、科学解说 → 科普知识
+=== 平台判断（按题材×受众×内容调性综合决定）===
+| 平台 | 用户画像 | 适合题材 | 内容偏好 | 画幅 |
+|------|---------|---------|---------|------|
+| douyin | 国内年轻用户(18-35)，女性略多 | 霸总/甜宠/复仇/重生/都市 | 快节奏、强情绪、前3秒必须抓人 | 9:16竖屏 |
+| kuaishou | 国内下沉市场(25-45)，男性占比高 | 战神/复仇/古装/历史剧/传记剧 | 接地气、热血、家国情怀、朴实共情 | 9:16竖屏 |
+| hongguo | 国内全年龄，日活过亿，免费+广告分账 | 全题材覆盖，强情感向/反转 | 强留存hook、完播率优先 | 9:16竖屏 |
+| wechat_mini | 微信生态用户，付费+免费混合 | 霸总/甜宠/复仇/重生/悬疑 | 分销生态，悬念卡点驱动 | 9:16竖屏 |
+| bilibili | 年轻用户(16-30)，二次元+精品向 | 悬疑/科幻/古装/都市/校园 | 精品化、有深度、弹幕友好、可动漫化 | 16:9横屏 |
+| tencent_video | 全年龄偏女性，精品长视频用户 | 甜宠/都市/古装/宫斗/悬疑 | 精品化、制作感强、故事完整 | 16:9横屏 |
+| mango_tv | 年轻女性(18-35)，湖南卫视生态 | 甜宠/都市/古装/青春 | 甜蜜、青春、年轻态 | 16:9横屏 |
+| iqiyi | 全年龄偏女性，影视品质用户 | 悬疑/都市/古装/科幻 | 精品化、悬疑向表现好 | 16:9横屏 |
+| reelshort | 海外英语用户，年轻女性 | 霸总/复仇/甜宠/穿越 | 强反转、灰姑娘叙事、英文内容 | 9:16竖屏 |
+| dramabox | 海外多语种用户，年龄范围广 | 悬疑/科幻/古装/神话传说 | 高概念、视觉奇观、多语种 | 9:16竖屏 |
+| generic | 通用/不确定 | 所有题材 | 当创意无法明确归属某平台时使用 | 9:16竖屏 |
 
-平台：douyin/快手节奏快，reelshort/dramabox偏海外，generic通用。
-受众：女性向偏情感选18-30岁女性或25-40岁女性，男性向偏战力/科技选18-30岁男性，知识/教育类通常选全年龄。
-叙事聚焦：女主为主→female_lead，男主为主→male_lead，男女均衡→dual_lead，多角色/知识类→ensemble。
-输出必须严格匹配上述枚举值。`,
-      userPrompt: `核心创意：\n${mainIdea}\n\n请推荐最匹配的题材、平台、受众和叙事聚焦，输出 JSON。`,
+决策权重：题材匹配(40%) > 受众画像(30%) > 内容调性(30%)
+- 传记剧/历史剧：偏正能量和家国叙事 → kuaishou；偏年轻化戏剧改编 → douyin
+- 神话传说：偏视觉奇观 → dramabox；偏国内热血 → kuaishou
+- 霸总/甜宠：国内向 → douyin/hongguo；海外向 → reelshort
+- 悬疑/科幻：高概念叙事 → dramabox/bilibili；快节奏反转 → douyin
+- 精品深度向：bilibili/tencent_video/iqiyi
+- 免费流量向：hongguo > douyin > kuaishou
+- 甜宠青春向：mango_tv/douyin
+
+=== 受众判断 ===
+- 女性向偏情感（霸总/甜宠/宫斗/重生/少女漫画风）→ 18-30 岁女性
+- 女性向偏成熟（都市/职场/复仇/宫斗权谋）→ 25-40 岁女性
+- 男性向偏战力/热血（战神/军事/体育）→ 18-30 岁男性
+- 传记剧/历史剧/神话传说/科普教育 → 全年龄
+
+=== 叙事聚焦 ===
+女主为主 → female_lead，男主为主 → male_lead，男女均衡 → dual_lead，多角色群像 → ensemble
+
+=== 视觉风格推荐（从可选值中选一个最匹配的）===
+可选值：${VISUAL_STYLE_OPTS.join(', ')}
+
+视觉风格映射参考：
+- 霸总/都市/职场/现代题材 → live_action / 2d_korean_anime / 3d_realistic
+- 甜宠/少女向 → 2d_shoujo / 2d_korean_anime / 2d_ghibli / 3d_disney
+- 战神/热血/格斗 → 2d_action / 3d_realistic / 2d_thick_line
+- 古装/宫斗 → period_live / chinese_style / 2d_gongbi / chinese_ink
+- 传记剧（中国历史人物）→ chinese_style / period_live / 2d_gongbi / chinese_ink
+- 传记剧（西方人物）→ live_action / 3d_realistic / western_film
+- 历史剧（中国）→ period_live / chinese_style / 2d_gongbi
+- 历史剧（非中国）→ live_action / western_film / 3d_realistic
+- 神话传说（东方）→ 3d_fantasy / chinese_style / chinese_ink / 2d_fantasy_anime
+- 神话传说（西方/通用）→ 3d_fantasy / 2d_fantasy_anime / 3d_toon_render
+- 穿越 → 根据穿越目标时代选择（穿越古代 → chinese_style；穿越未来 → 2d_cybercity）
+- 复仇 → live_action / 2d_film / hk_film
+- 重生 → 与原题材风格一致
+- 悬疑/惊悚 → 2d_death_note / live_action / 2d_film
+- 科幻 → 2d_cybercity / 3d_cyberpunk / 3d_realistic / western_film
+- 武侠/江湖 → retro_wuxia / chinese_ink / 2d_action
+- 轻松/搞笑/全年龄 → 3d_chibi / 2d_chibi / clay_stop / 3d_disney
+核心原则：视觉风格应与题材调性、目标受众审美偏好、平台内容生态三者一致。
+
+=== 画面比例 ===
+可选值：${ASPECT_RATIO_OPTS.join('、')}
+- 竖屏短剧平台（douyin/kuaishou/reelshort）→ 9:16
+- 横屏平台或电影感内容 → 16:9
+- 绝大多数短剧选 9:16；仅当创意明确指向电影/横屏体验时才选 16:9
+
+=== 每集时长（秒）===
+可选值：${DURATION_OPTS.join('、')}
+- 120秒(2分钟)：极快节奏，适合 douyin/reelshort 上的纯爽剧（霸总/战神/甜宠等高密度情绪输出题材）
+- 180秒(3分钟)：标准时长，适合大多数题材的最佳平衡点
+- 300秒(5分钟)：深度叙事，适合传记剧/历史剧/悬疑等需要铺陈背景和角色深度的题材，或 dramabox 等偏长内容平台
+决策逻辑：平台节奏偏好(40%) + 题材叙事密度(40%) + 受众耐心阈值(20%)
+
+=== 总集数规模 ===
+可选规模档位：${SCALE_OPTS.map(s => `${s.min}-${s.max}集`).join('、')}
+- 40-60集（紧凑型）：适合单线冲突、高密度反转（霸总/甜宠/战神/短线复仇）或海外平台(reelshort)
+- 60-100集（标准型）：适合多线交织、冲突层层递进（穿越/宫斗/都市/重生/科幻）
+- 100-150集（长线型）：适合史诗级叙事、人物一生跨度（传记剧/历史剧/长篇神话传说/大型宫斗权谋）
+决策逻辑：创意体量(50%) + 题材叙事容量(30%) + 平台用户追剧习惯(20%)
+- 创意描述涉及"一生""多个时代""多条线"等大体量关键词 → 倾向长线型
+- 创意聚焦单一事件/单一冲突 → 倾向紧凑型
+
+输出必须严格匹配上述各字段的枚举值。plannedEpisodes 的 min/max 必须匹配以上三个档位之一。targetEpisodeDurationSec 必须为 ${DURATION_OPTS.join('/')} 之一。`,
+      userPrompt: `核心创意：\n${mainIdea}\n\n请推荐最匹配的题材、平台、受众、叙事聚焦、视觉风格和规模配置，输出 JSON。`,
       temperature: 0.3,
     });
   }
 
-  async generateStoryGoal(input: { mainIdea: string; genre: string; targetAudience: string }) {
-    const KNOWLEDGE_GENRES = ['历史教育', '人物传记', '神话传说', '科普知识'];
-    const isKnowledge = KNOWLEDGE_GENRES.some(g => input.genre.includes(g));
-
-    const commercialSystemPrompt = `你是一位资深短剧策划，擅长从核心创意中提炼出让观众欲罢不能的主线冲突目标。
-
-生成原则：
-1. 主线目标必须从核心创意中自然延伸，聚焦核心冲突。
-2. 目标要有视觉冲击力——观众能直接"看到"冲突（打脸/揭露/反转）。
-3. 目标要有足够的延展性——能支撑 60-100 集的叙事。
-4. 语言简洁有力，20-60 字，要有悬念感和爽感。
-5. 同时给出 2-3 个备选目标，风格/方向不同。`;
-
-    const knowledgeSystemPrompt = `你是一位资深内容策划，擅长从知识/教育类创意中提炼出引人入胜的叙事主线。
-
-生成原则：
-1. 主线必须从核心创意中自然延伸，聚焦叙事脉络（如人物的一生、一个时代的兴衰、一个知识体系的脉络）。
-2. 主线要有吸引力——通过知识悬念、人物命运、时代变迁让观众想一集集看下去。
-3. 主线要有清晰的结构——按时间线、主题或成长线展开，能支撑多集叙事。
-4. 语言简洁有感染力，20-60 字，体现知识价值和情感深度。
-5. 同时给出 2-3 个备选主线，用不同的切入角度（如时间线叙事 vs 主题叙事 vs 人物关系线）。`;
-
+  async generateStoryGoal(input: { mainIdea: string; genre: string; targetAudience: string }, userId?: string) {
     return this.llm.generateStructured({
       taskName: 'drama-goal-generator',
       schema: z.object({ goal: z.string(), alternatives: z.array(z.string()).min(2).max(3) }),
       tags: ['setup', 'drama-goal'],
-      systemPrompt: isKnowledge ? knowledgeSystemPrompt : commercialSystemPrompt,
-      userPrompt: `核心创意：${input.mainIdea}\n题材：${input.genre}\n目标观众：${input.targetAudience}\n\n请生成一个最佳${isKnowledge ? '叙事主线' : '主线目标'}和 2-3 个备选方案。`,
+      metadata: { userId },
+      systemPrompt: `你是一位资深短剧策划，擅长从核心创意中提炼出让观众欲罢不能的主线目标。
+
+生成原则：
+1. 主线目标必须从核心创意中自然延伸，聚焦核心冲突或叙事脉络。
+2. 目标要有视觉冲击力和悬念感——观众能直接"看到"冲突/命运转折。
+3. 目标要有足够的延展性——能支撑多集的叙事。
+4. 语言简洁有力，20-60 字。
+5. 同时给出 2-3 个备选目标，风格/方向不同。
+6. 针对不同题材调整策略：
+   - 商业短剧（霸总/甜宠/复仇等）→ 聚焦爽点反转、冲突升级
+   - 传记剧/历史剧 → 聚焦人物命运弧线、时代碰撞
+   - 神话传说 → 聚焦使命/考验/成长`,
+      userPrompt: `核心创意：${input.mainIdea}\n题材：${input.genre}\n目标观众：${input.targetAudience}\n\n请生成一个最佳主线目标和 2-3 个备选方案。`,
       temperature: 0.8,
     });
   }

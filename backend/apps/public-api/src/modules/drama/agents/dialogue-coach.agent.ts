@@ -24,8 +24,8 @@ export class DialogueCoachAgent {
       `${c.characterId}(${c.name}): 音色=${c.voiceProfile.timbre}, 风格=${c.voiceProfile.speakingStyle}, 口癖="${c.voiceProfile.catchphrase}", 语速=${c.voiceProfile.speed}`
     ).join('\n');
     const sysPrompt = dramaId
-      ? await this.promptService.buildPrompt(dramaId, 'dialogue-coach', buildDialogueCoachSystemPrompt({ dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide, contentMode: state?.contentMode }))
-      : buildDialogueCoachSystemPrompt({ dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide, contentMode: state?.contentMode });
+      ? await this.promptService.buildPrompt(dramaId, 'dialogue-coach', buildDialogueCoachSystemPrompt({ dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide }))
+      : buildDialogueCoachSystemPrompt({ dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide });
 
     const activeSecrets = (state?.secretLedger ?? []).filter(s => !s.resolved).map(s => ({
       id: s.id ?? '', secret: s.secret ?? '', knownBy: s.knownBy ?? [], hiddenFrom: s.hiddenFrom ?? [], resolved: !!s.resolved,
@@ -47,6 +47,7 @@ export class DialogueCoachAgent {
           taskName: 'drama-dialogue-coach',
           schema: sceneCoachOutputSchema,
           systemPrompt: sysPrompt,
+          metadata: { dramaId, userId: state?.userId, episodeNumber: script.episodeNumber },
           userPrompt: `润色第 ${script.episodeNumber} 集场景 ${i + 1}（${scene.purpose}）的台词：
 
 角色配音档案：

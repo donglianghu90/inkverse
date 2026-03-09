@@ -85,8 +85,9 @@ export class ProviderRegistryService implements OnModuleInit {
     const imgCfg = (vc.image ?? {}) as Record<string, unknown>;
     if (imgCfg.model || imgCfg.enabled !== false) {
       const imageProvider = new VolcengineImageProvider(client, {
-        model: String(imgCfg.model || 'seedream-5-0-lite-250901'),
-        defaultSize: String(imgCfg.defaultSize || '1024x1024'),
+        model: String(imgCfg.model || 'doubao-seedream-5-0-260128'),
+        defaultSize: String(imgCfg.defaultSize || '1:1'),
+        defaultResolution: String(imgCfg.defaultResolution || '2K'),
         watermark: String(imgCfg.watermark) === 'true',
       });
       this.registerImageProvider(imageProvider);

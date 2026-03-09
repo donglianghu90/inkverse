@@ -25,7 +25,7 @@ export class EpisodeRecorderAgent {
       taskName: 'drama-episode-recorder',
       schema: recorderOutputSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-recorder', buildEpisodeRecorderSystemPrompt()),
-
+      metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: script.episodeNumber },
       userPrompt: `记录第 ${script.episodeNumber} 集知识：
 
 本集剧本场景：
@@ -38,9 +38,9 @@ ${script.scenes.map(s => `[${s.purpose}] ${s.objective} — 角色:${s.presentCh
 上集悬念：${state.lastCliffhanger || '无'}
 
 已知秘密：
-${state.secretLedger.filter(s => !s.resolved).map(s => `"${s.secret}" 知情:${s.knownBy.join(',')} 隐瞒:${s.hiddenFrom.join(',')}`).join('\n') || '（无）'}
+${state.secretLedger.filter(s => !s.resolved).map(s => `[${s.id}] "${s.secret}" 知情:${s.knownBy.join(',')} 隐瞒:${s.hiddenFrom.join(',')}`).join('\n') || '（无）'}
 
-请提取完整的知识记录。`,
+请提取完整的知识记录。如果本集中某个秘密已经被揭露/解决，请在 resolvedSecretIds 中填写对应的秘密 id。`,
       temperature: 0.3,
     });
 

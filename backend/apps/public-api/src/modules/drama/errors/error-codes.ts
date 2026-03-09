@@ -8,7 +8,6 @@ export const ERROR_CODES = {
   SENSITIVE_CONTENT: 'SENSITIVE_CONTENT', EXTERNAL_ERROR: 'EXTERNAL_ERROR', NETWORK_ERROR: 'NETWORK_ERROR', // provider 类
   INTERNAL_ERROR: 'INTERNAL_ERROR', DB_ERROR: 'DB_ERROR', QUEUE_ERROR: 'QUEUE_ERROR',
   TASK_TERMINATED: 'TASK_TERMINATED', OWNERSHIP_LOST: 'OWNERSHIP_LOST', // system 类
-  INSUFFICIENT_BALANCE: 'INSUFFICIENT_BALANCE', BILLING_FAILED: 'BILLING_FAILED', // billing 类
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
@@ -30,8 +29,6 @@ const SPEC: Record<ErrorCode, ErrorSpec> = {
   QUEUE_ERROR:          { httpStatus: 500, retryable: true,  category: 'system',   defaultMessage: '队列服务异常' },
   TASK_TERMINATED:      { httpStatus: 409, retryable: false, category: 'system',   defaultMessage: '任务已终止' },
   OWNERSHIP_LOST:       { httpStatus: 409, retryable: false, category: 'system',   defaultMessage: '执行权已转移' },
-  INSUFFICIENT_BALANCE: { httpStatus: 402, retryable: false, category: 'billing',  defaultMessage: '余额不足' },
-  BILLING_FAILED:       { httpStatus: 500, retryable: false, category: 'billing',  defaultMessage: '计费失败' },
 };
 
 export function getErrorSpec(code: ErrorCode): ErrorSpec { return SPEC[code] ?? SPEC.INTERNAL_ERROR; }

@@ -1,8 +1,8 @@
 /** 运行时服务 — Run 创建/状态流转/事件追加（事务内 seq 递增保证有序） */
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, MoreThan } from 'typeorm';
-import { DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity } from './run.entity';
+import { Repository, DataSource, MoreThan, In } from 'typeorm';
+import { DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity } from './entities/run.entity';
 
 export type RunEventType = 'run.start' | 'step.start' | 'step.chunk' | 'step.complete' | 'step.error' | 'run.complete' | 'run.error' | 'run.canceled';
 
@@ -62,5 +62,14 @@ export class DramaRunService {
   async listRuns(dramaId: string, episodeNumber?: number): Promise<DramaGraphRunEntity[]> {
     const where: any = { dramaId }; if (episodeNumber !== undefined) where.episodeNumber = episodeNumber;
     return this.runRepo.find({ where, order: { createdAt: 'DESC' }, take: 50 });
+  }
+
+  async deleteByDrama(dramaId: string): Promise<void> {
+    const runs = await this.runRepo.find({ where: { dramaId }, select: ['id'] });
+    if (!runs.length) return;
+    const runIds = runs.map(r => r.id);
+    await this.eventRepo.delete({ runId: In(runIds) });
+    await this.stepRepo.delete({ runId: In(runIds) });
+    await this.runRepo.delete({ dramaId });
   }
 }

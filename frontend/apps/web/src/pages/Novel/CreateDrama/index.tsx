@@ -215,11 +215,17 @@ const GENRE_ICONS: Record<string, string> = {
 };
 
 const PLATFORM_PRESETS = [
-  { value: 'douyin' as const, label: '抖音' },
-  { value: 'kuaishou' as const, label: '快手' },
-  { value: 'reelshort' as const, label: 'ReelShort' },
-  { value: 'dramabox' as const, label: 'DramaBox' },
-  { value: 'generic' as const, label: '通用' },
+  { value: 'douyin' as const, label: '抖音', defaultAspect: '9:16' as const, defaultDuration: 120, desc: '竖屏·60-120秒' },
+  { value: 'kuaishou' as const, label: '快手', defaultAspect: '9:16' as const, defaultDuration: 120, desc: '竖屏·60-120秒' },
+  { value: 'hongguo' as const, label: '红果短剧', defaultAspect: '9:16' as const, defaultDuration: 180, desc: '竖屏·2-3分钟' },
+  { value: 'wechat_mini' as const, label: '微信小程序', defaultAspect: '9:16' as const, defaultDuration: 180, desc: '竖屏·2-3分钟' },
+  { value: 'bilibili' as const, label: 'B站', defaultAspect: '16:9' as const, defaultDuration: 300, desc: '横屏·3-5分钟' },
+  { value: 'tencent_video' as const, label: '腾讯视频', defaultAspect: '16:9' as const, defaultDuration: 300, desc: '横屏·3-5分钟' },
+  { value: 'mango_tv' as const, label: '芒果TV', defaultAspect: '16:9' as const, defaultDuration: 300, desc: '横屏·3-5分钟' },
+  { value: 'iqiyi' as const, label: '爱奇艺', defaultAspect: '16:9' as const, defaultDuration: 300, desc: '横屏·3-5分钟' },
+  { value: 'reelshort' as const, label: 'ReelShort', defaultAspect: '9:16' as const, defaultDuration: 120, desc: '竖屏·海外付费' },
+  { value: 'dramabox' as const, label: 'DramaBox', defaultAspect: '9:16' as const, defaultDuration: 180, desc: '竖屏·海外付费' },
+  { value: 'generic' as const, label: '通用', defaultAspect: '9:16' as const, defaultDuration: 180, desc: '默认竖屏配置' },
 ];
 
 const DURATION_PRESETS = [
@@ -354,11 +360,22 @@ const CreateDrama: React.FC = () => {
       const r = await recommendGenreAndAudience(form.mainIdea);
       const tpl = templates.find(t => t.displayName === r.genreDisplayName);
       const audienceTags = AUDIENCE_PRESETS.find(a => a.label === r.targetAudience)?.tags ?? [];
+      const matchedVisualStyle = r.suggestedVisualStyle && ALL_STYLES.find(s => s.value === r.suggestedVisualStyle)
+        ? r.suggestedVisualStyle : '';
+      const matchedDuration = r.targetEpisodeDurationSec && DURATION_PRESETS.find(d => d.value === r.targetEpisodeDurationSec)
+        ? r.targetEpisodeDurationSec : 0;
+      const matchedScale = r.plannedEpisodes && SCALE_PRESETS.find(s => s.min === r.plannedEpisodes!.min && s.max === r.plannedEpisodes!.max)
+        ? r.plannedEpisodes : null;
       setForm(prev => ({
         ...prev, genre: r.genreDisplayName, genreTemplateId: tpl?.id ?? prev.genreTemplateId,
         platformTarget: r.platformTarget as FormState['platformTarget'],
         targetAudience: r.targetAudience, audienceTags,
         protagonistFocus: r.protagonistFocus as FormState['protagonistFocus'],
+        selectedVisualStyle: matchedVisualStyle || prev.selectedVisualStyle,
+        aspectRatio: r.aspectRatio ?? prev.aspectRatio,
+        targetEpisodeDurationSec: matchedDuration || prev.targetEpisodeDurationSec,
+        plannedMinEpisodes: matchedScale?.min ?? prev.plannedMinEpisodes,
+        plannedMaxEpisodes: matchedScale?.max ?? prev.plannedMaxEpisodes,
       }));
       message.success('已根据创意智能推荐');
     } catch { message.error('推荐失败'); }
@@ -514,7 +531,7 @@ const CreateDrama: React.FC = () => {
   const goBack = () => {
     if (isGenerating) return;
     if (step > 0) setStep(step - 1);
-    else history.push('/novel');
+    else history.push('/novel/dramas');
   };
 
   // ─── Style thumbnail card ─────────────────────────────────────────
@@ -574,7 +591,7 @@ const CreateDrama: React.FC = () => {
   return (
     <div className="mx-auto max-w-3xl px-4 sm:px-6 py-6 sm:py-8 pb-24 sm:pb-8">
       <Button variant="ghost" size="sm" className="mb-4 gap-1.5 -ml-2" onClick={goBack} disabled={loading}>
-        <ArrowLeft className="h-4 w-4" />{step > 0 && !isGenerating ? '上一步' : '返回书架'}
+        <ArrowLeft className="h-4 w-4" />{step > 0 && !isGenerating ? '上一步' : '返回'}
       </Button>
 
       {!isGenerating && (
@@ -710,13 +727,16 @@ const CreateDrama: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            <div><Label>目标平台</Label><p className="text-xs text-muted-foreground mt-0.5">不同平台用户偏好不同，影响节奏和风格</p></div>
+            <div><Label>主投平台</Label><p className="text-xs text-muted-foreground mt-0.5">自动匹配画幅和推荐时长，后续可投多平台</p></div>
             <div className="flex flex-wrap gap-2">
               {PLATFORM_PRESETS.map(p => (
                 <Badge key={p.value} variant={form.platformTarget === p.value ? 'default' : 'outline'}
                   className={cn('cursor-pointer px-3 py-1.5 text-xs', form.platformTarget === p.value && 'ring-2 ring-primary/20')}
-                  onClick={() => setForm({ ...form, platformTarget: p.value })}
-                >{p.label}</Badge>
+                  onClick={() => {
+                    const nearest = DURATION_PRESETS.reduce((a, b) => Math.abs(b.value - p.defaultDuration) < Math.abs(a.value - p.defaultDuration) ? b : a);
+                    setForm(prev => ({ ...prev, platformTarget: p.value, aspectRatio: p.defaultAspect, targetEpisodeDurationSec: nearest.value }));
+                  }}
+                >{p.label}<span className="ml-1 opacity-60 text-[10px]">{p.desc}</span></Badge>
               ))}
             </div>
           </div>

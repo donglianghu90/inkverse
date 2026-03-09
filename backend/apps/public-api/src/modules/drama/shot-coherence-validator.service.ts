@@ -101,13 +101,13 @@ export class ShotCoherenceValidatorService {
     let score = 1.0;
 
     if (sameScene) {
-      const charsA = new Set(shotA.characters.map(c => c.characterId));
-      const charsB = new Set(shotB.characters.map(c => c.characterId));
+      const charsA = new Set((shotA.characters ?? []).map(c => c.characterId));
+      const charsB = new Set((shotB.characters ?? []).map(c => c.characterId));
       const commonChars = [...charsA].filter(c => charsB.has(c));
 
       for (const cid of commonChars) {
-        const charA = shotA.characters.find(c => c.characterId === cid)!;
-        const charB = shotB.characters.find(c => c.characterId === cid)!;
+        const charA = (shotA.characters ?? []).find(c => c.characterId === cid)!;
+        const charB = (shotB.characters ?? []).find(c => c.characterId === cid)!;
         const varA = shotA.characterVariationIds?.[cid];
         const varB = shotB.characterVariationIds?.[cid];
         if (varA !== varB) {
@@ -193,9 +193,12 @@ export class ShotCoherenceValidatorService {
   }
 
   private isBadAxisJump(a: string, b: string): boolean {
+    if (a === b) return false;
     const AXIS_CONFLICTS = new Map([
-      ['over_shoulder', new Set(['over_shoulder'])],
-      ['pov', new Set(['bird_eye', 'extreme_wide'])],
+      ['over_shoulder', new Set(['pov', 'bird_eye'])],
+      ['pov', new Set(['bird_eye', 'extreme_wide', 'over_shoulder'])],
+      ['low_angle', new Set(['high_angle'])],
+      ['high_angle', new Set(['low_angle'])],
     ]);
     return AXIS_CONFLICTS.get(a)?.has(b) === true;
   }

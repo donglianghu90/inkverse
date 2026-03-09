@@ -1615,7 +1615,7 @@ export class GenreProfileTemplateService implements OnModuleInit {
 
   async aiGenerate(dto: {
     genreName: string; styleDescription?: string; referenceWorks?: string[];
-    targetAudience?: string; baseTemplateId?: string;
+    targetAudience?: string; baseTemplateId?: string; userId?: string;
   }): Promise<{ profileJson: Record<string, unknown>; seedHints: SeedAnalyzerHints; ruleAtoms: RuleAtom[]; cachedAgentSections: CachedAgentSections | null }> {
     let baseRef: string | null = null;
     if (dto.baseTemplateId) {
@@ -1638,6 +1638,7 @@ export class GenreProfileTemplateService implements OnModuleInit {
       taskName: 'genre-portrait',
       schema: portraitSchema,
       tags: ['setup', 'genre-portrait'],
+      metadata: { userId: dto.userId },
       systemPrompt: `你是一位资深网文编辑，精通各类题材的写作规律。请根据用户描述的题材生成一份"题材画像"——提炼该题材最核心的特征。`,
       userPrompt: `题材：${dto.genreName}
 ${dto.styleDescription ? `风格描述：${dto.styleDescription}` : ''}
@@ -1686,6 +1687,7 @@ ${baseRef ? `=== 参考范例 ===\n${baseRef}\n` : ''}
       taskName: 'genre-profile-ai-generate',
       schema: bookPromptProfileSchema,
       tags: ['setup', 'profile', 'ai-generate'],
+      metadata: { userId: dto.userId },
       systemPrompt: enrichedSystemPrompt,
       userPrompt: `题材：${dto.genreName}\n目标读者：${dto.targetAudience ?? '通用网文读者'}\n\n请生成完整 BookPromptProfile JSON。generatedForGenre 填 "${dto.genreName}"，generatedForAudience 填目标读者描述。`,
       temperature: 0.6,
@@ -1712,6 +1714,7 @@ ${baseRef ? `=== 参考范例 ===\n${baseRef}\n` : ''}
       taskName: 'genre-playbook-generate',
       schema: playbookSchema,
       tags: ['setup', 'playbook', 'ai-generate'],
+      metadata: { userId: dto.userId },
       systemPrompt: `你是一位资深网文编辑总监。请为「${dto.genreName}」题材生成7个 Playbook 的题材定制版。
 
 写手身份：${portrait.coreIdentitySummary}

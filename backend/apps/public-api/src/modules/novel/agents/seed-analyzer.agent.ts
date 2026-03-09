@@ -27,6 +27,7 @@ export interface SeedAnalysisInput {
   writingMode?: WritingMode;
   titleHint?: string;
   mainStoryGoal?: string;
+  userId?: string;
   targetChapterWordCount?: number;
   plannedTotalChapters?: { min: number; max: number };
   seedHints?: { // 来自 DB 模板的题材定制提示
@@ -69,6 +70,7 @@ export class SeedAnalyzerAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'seed-analyzer',
       schema: seedAnalysisOutputSchema,
+      metadata: { userId: input.userId ?? '' },
       systemPrompt: `${isLiterary ? '你是一位兼具文学素养与商业直觉的故事架构师。你的目标是设计一个有深度、有独创性的故事——主题内核、人物深度和叙事创新是核心。' : '你是一位资深网文策划+读者心理专家。你的目标是设计一个让读者欲罢不能的故事引擎——核心循环、情感锚点和节奏呼吸缺一不可。'}
 
 === 核心原则 ===

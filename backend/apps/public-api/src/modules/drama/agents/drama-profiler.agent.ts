@@ -7,7 +7,7 @@ import { LlmService } from '../../novel/llm/llm.service';
 import { z } from 'zod';
 import {
   dramaPromptProfileSchema, DramaPromptProfile,
-  DramaSeed, SeriesOutline, VisualStyleGuide, ContentMode,
+  DramaSeed, SeriesOutline, VisualStyleGuide,
 } from '../schemas/drama-state.schemas';
 import { buildProfilerSystemPrompt } from '../prompting/drama-playbook';
 
@@ -17,7 +17,7 @@ const profilerOutputSchema = z.object({ profile: dramaPromptProfileSchema });
 export class DramaProfilerAgent {
   constructor(private readonly llm: LlmService) {}
 
-  async generate(seed: DramaSeed, visualStyle?: VisualStyleGuide, outline?: SeriesOutline, contentMode: ContentMode = 'drama'): Promise<DramaPromptProfile> {
+  async generate(seed: DramaSeed, visualStyle?: VisualStyleGuide, outline?: SeriesOutline, dramaId?: string, userId?: string): Promise<DramaPromptProfile> {
     const arcSummary = outline?.episodes
       ? (() => {
           const paywallEps = outline.paywallEpisodes ?? [];
@@ -29,8 +29,8 @@ export class DramaProfilerAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-profiler',
       schema: profilerOutputSchema,
-      systemPrompt: buildProfilerSystemPrompt({ contentMode }),
-
+      systemPrompt: buildProfilerSystemPrompt(),
+      metadata: { dramaId, userId },
       userPrompt: `请为以下短剧生成编剧手册：
 
 剧名：${seed.title}

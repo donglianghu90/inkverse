@@ -52,6 +52,7 @@ export class ReviewerAgent {
       schema: chapterReviewSchema,
       tags: ['workflow', 'chapter', 'review'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: intent.chapterNumber,
         chapterType,

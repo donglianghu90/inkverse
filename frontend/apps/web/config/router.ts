@@ -13,7 +13,7 @@ export default [
     layout: false,
     component: '@/layouts/NovelLayout',
     routes: [
-      { path: '/novel', component: './Novel/Bookshelf' },
+      { path: '/novel/dramas', component: './Novel/DramaShelf' },
       { path: '/novel/create', component: './Novel/CreateBook' },
       { path: '/novel/create-drama', component: './Novel/CreateDrama' },
       { path: '/novel/templates', component: './Novel/GenreTemplates' },
@@ -23,6 +23,7 @@ export default [
       { path: '/novel/book/:bookId/pipeline', component: './Novel/Pipeline' },
       { path: '/novel/drama/:dramaId', component: './Novel/DramaWorkbench' },
       { path: '/novel/drama/:dramaId/episodes/:episodeNumber', component: './Novel/EpisodeProductionBoard' },
+      { path: '/novel', component: './Novel/Bookshelf' },
     ],
   },
   {

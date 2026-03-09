@@ -54,6 +54,7 @@ export class SceneStitcherAgent {
       schema: chapterDraftSchema,
       tags: ['workflow', 'chapter', 'stitch'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: intent.chapterNumber,
         sceneCount: sceneDrafts.length,

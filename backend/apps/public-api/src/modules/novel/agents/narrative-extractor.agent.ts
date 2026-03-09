@@ -88,6 +88,7 @@ export class NarrativeExtractorAgent {
       schema: narrativeExtractionSchema,
       tags: ['workflow', 'chapter', 'record', 'narrative'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: draft.chapterNumber,
       },

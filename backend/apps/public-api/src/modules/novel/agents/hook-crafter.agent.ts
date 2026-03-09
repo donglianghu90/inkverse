@@ -70,6 +70,7 @@ export class HookCrafterAgent {
       schema: chapterDraftSchema,
       tags: ['workflow', 'chapter', 'hook'],
       metadata: {
+        userId: state.userId,
         bookId: state.bookId,
         chapterNumber: intent.chapterNumber,
       },

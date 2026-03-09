@@ -75,7 +75,7 @@ export class CharacterVoiceCoachAgent {
       taskName: 'character-voice-coach',
       schema: voiceAuditSchema,
       tags: ['workflow', 'chapter', 'voice'],
-      metadata: { bookId: state.bookId, chapterNumber: draft.chapterNumber },
+      metadata: { userId: state.userId, bookId: state.bookId, chapterNumber: draft.chapterNumber },
       systemPrompt: (() => {
         const isLiterary = state.seed.writingMode === 'literary';
         return `你是一位角色声音教练。核心标准：遮住名字能猜出是谁说的。
@@ -131,7 +131,7 @@ ${draft.content}
         taskName: 'voice-evolution-extract',
         schema: voiceEvolutionExtractSchema,
         tags: ['workflow', 'chapter', 'voice-evolution'],
-        metadata: { bookId: state.bookId, chapterNumber: draft.chapterNumber },
+        metadata: { userId: state.userId, bookId: state.bookId, chapterNumber: draft.chapterNumber },
         systemPrompt: `你是声音进化分析师。从刚写完的章节中提取角色声音的"进化素材"：
 1. **经典语录**：本章中某角色说的特别精彩/有记忆点的一句话（不是每章都有，宁缺毋滥）
 2. **新招牌动作**：本章中首次出现的、能代表角色性格的标志性动作/习惯

@@ -1,5 +1,5 @@
 /** 统一错误类型定义 — 参考 waoowaoo-main/src/lib/errors/ */
-export type ErrorCategory = 'client' | 'provider' | 'system' | 'billing'; // 错误分类
+export type ErrorCategory = 'client' | 'provider' | 'system';
 export type ErrorContext = 'api' | 'worker' | 'pipeline'; // 错误发生上下文
 
 export interface NormalizedError {

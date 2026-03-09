@@ -22,6 +22,8 @@ export interface QualityGateOptions {
   characterRefs?: string[];
   styleRefs?: string[];
   candidateCount?: number;
+  dramaId?: string;
+  userId?: string;
 }
 
 export interface QualityGateResult {
@@ -34,7 +36,7 @@ export interface QualityGateResult {
 export type QualityFixType = 'identity' | 'style' | 'camera' | 'motion';
 
 const TIER_CONFIG: Record<string, { maxAttempts: number; minScore: number; candidateCount: number }> = {
-  golden: { maxAttempts: 3, minScore: 6, candidateCount: 2 },
+  golden: { maxAttempts: 3, minScore: 7.5, candidateCount: 2 },
   standard: { maxAttempts: 2, minScore: 4, candidateCount: 1 },
   filler: { maxAttempts: 1, minScore: 0, candidateCount: 1 },
 };
@@ -56,15 +58,17 @@ const assessmentSchema = z.object({
 @Injectable()
 export class MediaQualityGateService {
   private readonly logger = new Logger('MediaQualityGate');
+  private assessmentErrorCount = 0;
 
   constructor(private readonly llm: LlmService) {}
 
-  /** 评估单张图片质量（使用 LLM 视觉能力看图打分） */
-  async assessImage(imageUrl: string, opts: {
+  private async assessImage(imageUrl: string, opts: {
     prompt: string;
     qualityTier: string;
     characterRefs?: string[];
     styleRefs?: string[];
+    dramaId?: string;
+    userId?: string;
   }): Promise<QualityAssessment> {
     if (!imageUrl) return { score: 0, pass: false, issues: ['empty image URL'] };
 
@@ -73,6 +77,7 @@ export class MediaQualityGateService {
       const result = await this.llm.generateStructured({
         taskName: 'media-quality-assessment',
         schema: assessmentSchema,
+        metadata: { dramaId: opts.dramaId, userId: opts.userId },
         systemPrompt: `你是一位AI生成图片质量评估专家。请仔细观察提供的图片，评估维度：
 1. aestheticScore (0-10): 构图、色彩、光影的美学品质
 2. promptAdherence (0-10): 图片内容与提示词的吻合度
@@ -121,14 +126,19 @@ AI生成图常见问题：多余手指、面部扭曲、文字水印、比例失
         recommendedFix,
       };
     } catch (err) {
-      this.logger.warn(`质量评估失败，默认通过: ${(err as Error).message}`);
-      return { score: 5, pass: true, issues: ['assessment_failed'] };
+      this.assessmentErrorCount++;
+      if (this.assessmentErrorCount >= 3) {
+        this.logger.error(`质量评估连续失败${this.assessmentErrorCount}次，熔断: ${(err as Error).message}`);
+      } else {
+        this.logger.warn(`质量评估失败(${this.assessmentErrorCount}/3)，降级通过: ${(err as Error).message}`);
+      }
+      return { score: 4, pass: true, issues: ['assessment_failed'] };
     }
   }
 
   /** 带质量关卡的图片生成：不合格自动重试，golden Shot 多候选选优 */
   async generateWithQualityGate(
-    genFn: () => Promise<string>,
+    genFn: (prevAssessment?: QualityAssessment) => Promise<string>,
     opts: QualityGateOptions,
   ): Promise<QualityGateResult> {
     const tierCfg = TIER_CONFIG[opts.qualityTier] ?? TIER_CONFIG.standard;
@@ -142,23 +152,28 @@ AI生成图常见问题：多余手指、面部扭曲、文字水印、比例失
     }
 
     let bestResult: QualityGateResult | null = null;
+    let lastAssessment: QualityAssessment | undefined;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         let bestInAttempt: QualityGateResult | null = null;
         for (let i = 0; i < candidateCount; i++) {
-          const imageUrl = await genFn();
+          const imageUrl = await genFn(attempt > 1 ? lastAssessment : undefined);
           if (!imageUrl) continue;
           const assessment = await this.assessImage(imageUrl, {
             prompt: opts.prompt,
             qualityTier: opts.qualityTier,
             characterRefs: opts.characterRefs,
             styleRefs: opts.styleRefs,
+            dramaId: opts.dramaId,
+            userId: opts.userId,
           });
           const candidate: QualityGateResult = { imageUrl, score: assessment.score, attempts: attempt, assessment };
           if (!bestInAttempt || candidate.score > bestInAttempt.score) bestInAttempt = candidate;
         }
         if (!bestInAttempt) continue;
+
+        lastAssessment = bestInAttempt.assessment;
 
         if (bestInAttempt.score >= minScore) {
           this.logger.debug(
@@ -171,7 +186,7 @@ AI生成图常见问题：多余手指、面部扭曲、文字水印、比例失
 
         if (attempt < maxAttempts) {
           this.logger.debug(
-            `质量不达标(${bestInAttempt.score}<${minScore})，重试 ${attempt + 1}/${maxAttempts}`,
+            `质量不达标(${bestInAttempt.score}<${minScore})，重试 ${attempt + 1}/${maxAttempts} fix=${lastAssessment.recommendedFix ?? 'none'}`,
           );
         }
       } catch (err) {
@@ -186,11 +201,6 @@ AI生成图常见问题：多余手指、面部扭曲、文字水印、比例失
 
     const fallbackUrl = await genFn();
     return { imageUrl: fallbackUrl, score: 0, attempts: maxAttempts + 1, assessment: { score: 0, pass: false, issues: ['all attempts failed'] } };
-  }
-
-  /** 获取指定质量层级的默认配置 */
-  getTierConfig(tier: string): { maxAttempts: number; minScore: number; candidateCount: number } {
-    return TIER_CONFIG[tier] ?? TIER_CONFIG.standard;
   }
 
   private normalizeFixReasons(

@@ -73,4 +73,12 @@ export class LocalStorageService implements OnModuleInit {
     fs.writeFileSync(destPath, Buffer.from(base64Data, 'base64'));
     return destPath;
   }
+
+  deleteDramaFiles(dramaId: string): void {
+    for (const type of ['images', 'videos', 'audio'] as const) {
+      const dir = path.join(this.baseDir, type, dramaId);
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    }
+    this.logger.log(`已删除本地文件 dramaId=${dramaId}`);
+  }
 }

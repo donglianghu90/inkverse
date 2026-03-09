@@ -18,99 +18,99 @@ const SYSTEM_TEMPLATES: Array<{
     genreKey: 'boss', displayName: '霸总', description: '霸道总裁+身份反差+打脸逆袭',
     genreKeywords: ['霸总', '总裁', '豪门'], audienceTags: ['女性向', '18-35岁'],
     protagonistFocusTags: ['female_lead'], toneTags: ['爽快', '反转'],
-    platformTags: ['douyin', 'kuaishou', 'reelshort'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'reelshort', 'wechat_mini'],
     seedHints: { catharsisPresets: ['打脸', '身份揭露', '逆袭归来'], conflictPatterns: ['阶级对立', '身份反差', '前任纠葛'], paywallStrategyHints: '第3集男女主误会加深处设卡，第10集身份揭露前设卡' },
   },
   {
     genreKey: 'sweet', displayName: '甜宠', description: '高甜互动+甜蜜暴击+宠溺日常',
     genreKeywords: ['甜宠', '恋爱', '撒糖'], audienceTags: ['女性向', '18-30岁'],
     protagonistFocusTags: ['female_lead', 'dual_lead'], toneTags: ['甜蜜', '治愈'],
-    platformTags: ['douyin', 'kuaishou'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'mango_tv', 'wechat_mini'],
     seedHints: { catharsisPresets: ['甜蜜反转', '宠溺升级', '守护'], conflictPatterns: ['误会消解', '竞争者介入', '家庭阻碍'], paywallStrategyHints: '每次甜蜜高潮前一刻设卡' },
   },
   {
     genreKey: 'warrior', displayName: '战神', description: '归来战神+震撼全场+实力碾压',
     genreKeywords: ['战神', '归来', '兵王'], audienceTags: ['男性向', '18-40岁'],
     protagonistFocusTags: ['male_lead'], toneTags: ['热血', '爽快'],
-    platformTags: ['douyin', 'kuaishou'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'wechat_mini'],
     seedHints: { catharsisPresets: ['实力碾压', '身份揭露', '打脸'], conflictPatterns: ['身份隐藏', '被轻视', '势力冲突'], paywallStrategyHints: '第2集主角被羞辱还未反击时设卡' },
   },
   {
     genreKey: 'timetravel', displayName: '穿越', description: '现代知识+古代碾压+改写命运',
     genreKeywords: ['穿越', '重生', '时空'], audienceTags: ['女性向', '18-35岁'],
     protagonistFocusTags: ['female_lead', 'male_lead'], toneTags: ['爽快', '智斗'],
-    platformTags: ['douyin', 'kuaishou', 'dramabox'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'dramabox', 'wechat_mini'],
     seedHints: { catharsisPresets: ['先知碾压', '命运改写', '逆袭'], conflictPatterns: ['蝴蝶效应', '历史纠葛', '身份暴露风险'], paywallStrategyHints: '主角关键先知决策前设卡' },
   },
   {
     genreKey: 'palace', displayName: '宫斗', description: '权谋博弈+后宫争锋+步步为营',
     genreKeywords: ['宫斗', '后宫', '权谋'], audienceTags: ['女性向', '25-40岁'],
     protagonistFocusTags: ['female_lead'], toneTags: ['紧张', '智斗'],
-    platformTags: ['douyin', 'kuaishou'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'tencent_video', 'wechat_mini'],
     seedHints: { catharsisPresets: ['计中计', '反将一军', '真相大白'], conflictPatterns: ['后宫争宠', '派系斗争', '忠奸难辨'], paywallStrategyHints: '每次反转前夕设卡，真正幕后黑手揭露前设卡' },
   },
   {
     genreKey: 'revenge', displayName: '复仇', description: '真相追查+绝地反击+快意恩仇',
     genreKeywords: ['复仇', '逆袭', '反击'], audienceTags: ['女性向', '男性向'],
     protagonistFocusTags: ['female_lead', 'male_lead'], toneTags: ['爽快', '紧张'],
-    platformTags: ['douyin', 'kuaishou', 'reelshort'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'reelshort', 'wechat_mini'],
     seedHints: { catharsisPresets: ['真相揭露', '逆袭反杀', '当众打脸'], conflictPatterns: ['冤屈洗白', '身份反差', '势力对抗'], paywallStrategyHints: '主角准备反击但尚未出手时设卡' },
   },
   {
     genreKey: 'rebirth', displayName: '重生', description: '前世记忆+改写命运+步步先机',
     genreKeywords: ['重生', '前世', '逆天改命'], audienceTags: ['女性向', '18-35岁'],
     protagonistFocusTags: ['female_lead'], toneTags: ['爽快', '虐中带甜'],
-    platformTags: ['douyin', 'kuaishou'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'wechat_mini'],
     seedHints: { catharsisPresets: ['命运改写', '先知碾压', '仇人末路'], conflictPatterns: ['前世悲剧重现', '命运惯性', '新变量介入'], paywallStrategyHints: '关键命运分叉点前设卡' },
   },
   {
     genreKey: 'suspense', displayName: '悬疑', description: '层层谜团+反转不断+烧脑推理',
     genreKeywords: ['悬疑', '推理', '反转'], audienceTags: ['男女通吃', '20-40岁'],
     protagonistFocusTags: ['male_lead', 'dual_lead'], toneTags: ['紧张', '烧脑'],
-    platformTags: ['douyin', 'reelshort'],
+    platformTags: ['douyin', 'hongguo', 'bilibili', 'iqiyi', 'reelshort'],
     seedHints: { catharsisPresets: ['真相反转', '意外揭露', '逻辑闭环'], conflictPatterns: ['多重嫌疑人', '不可靠叙事', '时间线谜题'], paywallStrategyHints: '关键线索发现前、真相即将揭露前设卡' },
   },
   {
     genreKey: 'urban', displayName: '都市', description: '都市生活+情感纠葛+现实冲突',
     genreKeywords: ['都市', '职场', '生活'], audienceTags: ['女性向', '25-40岁'],
     protagonistFocusTags: ['female_lead', 'dual_lead'], toneTags: ['现实', '温暖'],
-    platformTags: ['douyin', 'kuaishou'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'tencent_video', 'bilibili'],
     seedHints: { catharsisPresets: ['情感共鸣', '逆袭成长', '真爱胜出'], conflictPatterns: ['职场竞争', '家庭矛盾', '价值观冲突'], paywallStrategyHints: '感情升温关键时刻设卡' },
   },
   {
     genreKey: 'ancient', displayName: '古装', description: '古代背景+爱恨情仇+家国天下',
     genreKeywords: ['古装', '古代', '古风'], audienceTags: ['女性向', '18-35岁'],
     protagonistFocusTags: ['female_lead', 'dual_lead'], toneTags: ['唯美', '虐恋'],
-    platformTags: ['douyin', 'kuaishou'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'tencent_video', 'mango_tv'],
     seedHints: { catharsisPresets: ['虐后团圆', '身世真相', '逆袭封后'], conflictPatterns: ['家族仇恨', '朝堂争斗', '身份错认'], paywallStrategyHints: '男女主情感考验最高潮处设卡' },
   },
   {
-    genreKey: 'history_edu', displayName: '历史教育', description: '历史人物/事件+知识传递+故事化叙事',
-    genreKeywords: ['历史', '朝代', '历史人物', '历史事件', '历史故事'], audienceTags: ['全年龄', '知识向'],
-    protagonistFocusTags: ['ensemble'], toneTags: ['知性', '厚重', '趣味'],
-    platformTags: ['douyin', 'kuaishou', 'generic'],
-    seedHints: { catharsisPresets: ['知识震撼', '历史感悟', '文化共鸣', '命运唏嘘'], conflictPatterns: ['理想与现实', '时代变迁', '命运抉择', '文化碰撞'], paywallStrategyHints: '在关键历史转折点或人物命运转变前设置悬念衔接，引导观众继续观看' },
+    genreKey: 'history', displayName: '历史剧', description: '历史背景+权谋/战争/命运+人物在时代洪流中的抗争',
+    genreKeywords: ['历史', '朝代', '历史人物', '历史事件', '历史故事', '三国', '战争'], audienceTags: ['全年龄'],
+    protagonistFocusTags: ['male_lead', 'female_lead', 'ensemble'], toneTags: ['厚重', '紧张', '壮烈'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'bilibili', 'tencent_video'],
+    seedHints: { catharsisPresets: ['命运震撼', '权谋反转', '英雄壮举', '忠义抉择'], conflictPatterns: ['权力斗争', '时代变迁', '命运抗争', '忠奸对立'], paywallStrategyHints: '在关键历史转折点前设卡——如战役胜负将揭晓、忠臣即将被陷害、命运抉择的前一刻', dialogueStyleHints: '对白要有时代感和文化底蕴，可适度使用文言句式' },
   },
   {
-    genreKey: 'biography', displayName: '人物传记', description: '真实人物+生平故事+时代画卷',
-    genreKeywords: ['传记', '人物', '生平', '名人', '伟人'], audienceTags: ['全年龄', '知识向'],
+    genreKey: 'biography', displayName: '传记剧', description: '真实人物+传奇人生+以角色视角演绎命运转折',
+    genreKeywords: ['传记', '人物', '生平', '名人', '伟人'], audienceTags: ['全年龄'],
     protagonistFocusTags: ['male_lead', 'female_lead'], toneTags: ['感人', '励志', '厚重'],
-    platformTags: ['douyin', 'kuaishou', 'generic'],
-    seedHints: { catharsisPresets: ['人生感悟', '成就震撼', '命运共情', '精神传承'], conflictPatterns: ['逆境成长', '时代洪流', '理想坚守', '人性抉择'], paywallStrategyHints: '在人物命运重大转折前设置悬念，如成名前的最后考验、人生低谷的关键抉择' },
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'bilibili', 'tencent_video'],
+    seedHints: { catharsisPresets: ['命运逆转', '抉择震撼', '成就巅峰', '身份揭露'], conflictPatterns: ['逆境抗争', '时代洪流', '理想与现实', '人性抉择'], paywallStrategyHints: '在人物命运重大转折前设卡——如成名前最后的考验、人生低谷的关键抉择、与命运对手的正面对决', dialogueStyleHints: '台词需展现人物性格弧线，关键场景用对白而非旁白推进' },
   },
   {
-    genreKey: 'mythology', displayName: '神话传说', description: '神话故事+奇幻想象+文化传承',
-    genreKeywords: ['神话', '传说', '民间故事', '神仙', '上古'], audienceTags: ['全年龄'],
-    protagonistFocusTags: ['male_lead', 'female_lead', 'ensemble'], toneTags: ['奇幻', '壮丽', '感人'],
-    platformTags: ['douyin', 'kuaishou', 'generic'],
-    seedHints: { catharsisPresets: ['奇幻震撼', '英雄壮举', '情感动人', '文化共鸣'], conflictPatterns: ['善恶对抗', '天命抗争', '人神冲突', '守护牺牲'], paywallStrategyHints: '在重大战斗前、真相揭示前、命运抉择前设置悬念' },
+    genreKey: 'mythology', displayName: '神话传说', description: '奇幻短剧+神话角色+瑰丽想象+使命与考验',
+    genreKeywords: ['神话', '传说', '民间故事', '神仙', '上古', '仙侠'], audienceTags: ['全年龄'],
+    protagonistFocusTags: ['male_lead', 'female_lead', 'ensemble'], toneTags: ['奇幻', '壮丽', '热血'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'bilibili', 'dramabox'],
+    seedHints: { catharsisPresets: ['战力碾压', '英雄壮举', '身份揭露', '命运反转'], conflictPatterns: ['善恶对抗', '天命抗争', '人神冲突', '守护牺牲'], paywallStrategyHints: '在重大战斗前、真实身份即将揭露前、命运抉择前设卡', dialogueStyleHints: '台词可兼具古风与热血感，战斗场面用动作和对白推进' },
   },
   {
-    genreKey: 'science', displayName: '科普知识', description: '知识解说+趣味叙事+视觉化演绎',
-    genreKeywords: ['科普', '知识', '科学', '百科', '解说'], audienceTags: ['全年龄', '知识向'],
-    protagonistFocusTags: ['ensemble'], toneTags: ['趣味', '烧脑', '震撼'],
-    platformTags: ['douyin', 'kuaishou', 'generic'],
-    seedHints: { catharsisPresets: ['知识震撼', '认知颠覆', '恍然大悟', '视觉奇观'], conflictPatterns: ['常识挑战', '未解之谜', '科学探索', '思维实验'], paywallStrategyHints: '在关键知识揭示前设置悬念，用"你知道为什么吗？"式的问题引导继续观看' },
+    genreKey: 'scifi', displayName: '科幻', description: '未来/太空/高概念设定+人性困境+科技冲突',
+    genreKeywords: ['科幻', '未来', '太空', '机器人', 'AI', '赛博', '末日'], audienceTags: ['男女通吃', '18-40岁'],
+    protagonistFocusTags: ['male_lead', 'dual_lead'], toneTags: ['烧脑', '震撼', '紧张'],
+    platformTags: ['douyin', 'hongguo', 'bilibili', 'iqiyi', 'reelshort'],
+    seedHints: { catharsisPresets: ['认知颠覆', '真相反转', '科技震撼', '人性抉择'], conflictPatterns: ['人机对立', '科技失控', '生存危机', '道德困境'], paywallStrategyHints: '在关键真相即将揭露前设卡、主角面临不可逆抉择前设卡', dialogueStyleHints: '台词要有未来感但避免过度术语堆砌' },
   },
 ];
 
@@ -247,7 +247,7 @@ export class DramaGenreTemplateService implements OnModuleInit {
 
   async aiGenerate(dto: {
     genreName: string; styleDescription?: string; referenceWorks?: string[];
-    targetAudience?: string; platformTarget?: string;
+    targetAudience?: string; platformTarget?: string; userId?: string;
   }): Promise<{
     displayName: string; description: string; genreKeywords: string[];
     audienceTags: string[]; protagonistFocusTags: string[]; toneTags: string[];
@@ -268,6 +268,7 @@ export class DramaGenreTemplateService implements OnModuleInit {
       taskName: 'drama-genre-portrait',
       schema: portraitSchema,
       tags: ['setup', 'drama-genre-portrait'],
+      metadata: { userId: dto.userId },
       systemPrompt: `你是一位资深短剧编剧总监，精通各类短剧题材的创作规律和平台特点。请根据用户描述的短剧题材生成一份"题材画像"。`,
       userPrompt: `短剧题材：${dto.genreName}
 ${dto.styleDescription ? `风格描述：${dto.styleDescription}` : ''}
@@ -304,6 +305,7 @@ ${dto.platformTarget ? `目标平台：${dto.platformTarget}` : ''}
       taskName: 'drama-genre-seed-hints',
       schema: seedHintsSchema,
       tags: ['setup', 'drama-seed-hints', 'ai-generate'],
+      metadata: { userId: dto.userId },
       systemPrompt: `你是一位短剧运营专家。根据题材画像，生成短剧创作引导配置。
 
 === 题材画像 ===
@@ -343,6 +345,7 @@ ${dto.platformTarget ? `目标平台：${dto.platformTarget}` : ''}
       taskName: 'drama-genre-profile-ai-generate',
       schema: profileSchema,
       tags: ['setup', 'drama-profile', 'ai-generate'],
+      metadata: { userId: dto.userId },
       systemPrompt: `你是一位短剧编剧培训专家。为「${dto.genreName}」题材生成编剧手册核心配置。
 
 === 题材画像 ===

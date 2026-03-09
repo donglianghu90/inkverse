@@ -20,7 +20,6 @@ export class DramaTaskEntity {
   @Column({ type: 'jsonb', nullable: true }) result: Record<string, unknown> | null;
   @Column({ type: 'varchar', nullable: true }) errorCode: string | null;
   @Column({ type: 'text', nullable: true }) errorMessage: string | null;
-  @Column({ type: 'jsonb', nullable: true }) billingInfo: Record<string, unknown> | null;
   @Column({ type: 'timestamptz', nullable: true }) heartbeatAt: Date | null; // 心跳时间戳，检测僵死任务
   @Column({ type: 'timestamptz', nullable: true }) startedAt: Date | null;
   @Column({ type: 'timestamptz', nullable: true }) finishedAt: Date | null;

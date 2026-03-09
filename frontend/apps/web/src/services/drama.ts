@@ -13,7 +13,8 @@ export interface CreateDramaParams {
   audienceTags?: string[];
   titleHint?: string;
   mainStoryGoal?: string;
-  platformTarget?: 'douyin' | 'kuaishou' | 'reelshort' | 'dramabox' | 'generic';
+  platformTarget?: 'douyin' | 'kuaishou' | 'hongguo' | 'wechat_mini' | 'bilibili'
+    | 'tencent_video' | 'mango_tv' | 'iqiyi' | 'reelshort' | 'dramabox' | 'generic';
   aspectRatio?: '9:16' | '16:9';
   targetEpisodeDurationSec?: number;
   plannedMinEpisodes?: number;
@@ -69,6 +70,11 @@ export interface DramaUsageBucket {
   imageCostUsd: number;
   videoCalls: number;
   videoCostUsd: number;
+  ttsCalls: number;
+  ttsCostUsd: number;
+  embeddingCalls: number;
+  embeddingTokens: number;
+  embeddingCostUsd: number;
   apiSuccessCalls: number;
   apiFailedCalls: number;
 }
@@ -107,12 +113,21 @@ export async function generateDramaGoal(mainIdea: string, genre: string, targetA
   return request(`${BASE}/idea/generate-goal`, { method: 'POST', data: { mainIdea, genre, targetAudience } });
 }
 
-export async function recommendGenreAndAudience(mainIdea: string): Promise<{ genreDisplayName: string; platformTarget: string; targetAudience: string; protagonistFocus: string; reason?: string }> {
+export async function recommendGenreAndAudience(mainIdea: string): Promise<{
+  genreDisplayName: string; platformTarget: string; targetAudience: string; protagonistFocus: string;
+  suggestedVisualStyle?: string; aspectRatio?: '9:16' | '16:9';
+  targetEpisodeDurationSec?: number; plannedEpisodes?: { min: number; max: number };
+  reason?: string;
+}> {
   return request(`${BASE}/idea/recommend-genre-audience`, { method: 'POST', data: { mainIdea } });
 }
 
 export async function listDramas(): Promise<{ dramas: DramaListItem[] }> {
   return request(BASE);
+}
+
+export async function deleteDrama(dramaId: string): Promise<{ success: boolean }> {
+  return request(`${BASE}/${dramaId}`, { method: 'DELETE' });
 }
 
 export async function getDrama(dramaId: string): Promise<Record<string, unknown>> {

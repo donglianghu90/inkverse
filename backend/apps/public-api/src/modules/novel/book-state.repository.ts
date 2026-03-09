@@ -46,6 +46,7 @@ export class BookStateRepository {
     ]);
     return storyStateSchema.parse({
       ...book.stateJson,
+      userId: (book.stateJson as any)?.userId || book.userId || '',
       characters: chars.map((c) => c.data),
       plotThreadLedger: threads.map((t) => t.data),
       timelineEvents: events.map((e) => e.data),

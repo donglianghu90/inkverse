@@ -29,7 +29,6 @@ export interface DramaTaskPayload {
   targetType: string; // drama / episode / asset
   targetId: string;
   payload?: Record<string, unknown>;
-  billingInfo?: Record<string, unknown> | null;
   priority?: number;
   maxAttempts?: number;
 }

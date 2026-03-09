@@ -2,7 +2,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { GlobalAssetFolderEntity, GlobalCharacterEntity, GlobalLocationEntity, GlobalStyleEntity } from './asset-hub.entity';
+import { GlobalAssetFolderEntity, GlobalCharacterEntity, GlobalLocationEntity, GlobalStyleEntity } from './entities/asset-hub.entity';
 import { VisualAssetEntity } from '../entities/visual-asset.entity';
 
 @Injectable()

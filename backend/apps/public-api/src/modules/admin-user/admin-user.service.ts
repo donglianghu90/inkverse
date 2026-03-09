@@ -2,7 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { AdminUserEntity } from './admin-user.entity';
+import { AdminUserEntity } from './entities/admin-user.entity';
 import { AdminRole, AdminStatus } from '../../common/enums';
 
 const SALT_ROUNDS = 10;
