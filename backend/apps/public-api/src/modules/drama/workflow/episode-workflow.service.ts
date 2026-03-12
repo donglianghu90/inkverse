@@ -26,7 +26,7 @@ import {
 } from '../agents/scripting';
 import { StoryboardDirectorAgent, AudioDirectorAgent } from '../agents/production';
 import { ScriptReviewerAgent, ScriptEditorAgent, PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent } from '../agents/review';
-import { VisualAssetDesignerAgent } from '../agents/visual-asset-designer.agent';
+import { VisualAssetDesignerAgent } from '../agents/preparation/visual-asset-designer.agent';
 import { DramaDeterministicCheckerService } from './deterministic-checker.service';
 import { DramaProgressService } from '../drama-progress.service';
 import { DramaAgentPipelineService } from './drama-agent-pipeline.service';

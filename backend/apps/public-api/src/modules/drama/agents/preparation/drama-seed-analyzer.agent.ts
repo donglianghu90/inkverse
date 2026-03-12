@@ -3,10 +3,10 @@
  * 与小说 SeedAnalyzer 的核心差异：聚焦视觉冲突、打脸节奏、付费卡点、情绪密度。
  */
 import { Injectable } from '@nestjs/common';
-import { LlmService } from '../../novel/llm/llm.service';
+import { LlmService } from '../../../novel/llm/llm.service';
 import { z } from 'zod';
-import { dramaSeedSchema, DramaSeed } from '../schemas/drama-state.schemas';
-import { buildSeedAnalyzerSystemPrompt } from '../prompting/drama-playbook';
+import { dramaSeedSchema, DramaSeed } from '../../schemas/drama-state.schemas';
+import { buildSeedAnalyzerSystemPrompt } from '../../prompting/drama-playbook';
 import { DramaSeedHints } from '../entities/drama-genre-template.entity';
 
 export interface DramaSeedInput {

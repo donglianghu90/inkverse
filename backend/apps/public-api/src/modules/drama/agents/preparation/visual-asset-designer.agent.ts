@@ -11,13 +11,13 @@
  *           VisualAssetDesignerAgent 关心"从哪里来 / 长什么样"（视觉资产）。
  */
 import { Injectable, Logger } from '@nestjs/common';
-import { LlmService } from '../../novel/llm/llm.service';
+import { LlmService } from '../../../novel/llm/llm.service';
 import { z } from 'zod';
 import {
   characterIdentitySchema, characterVariationSchema, sceneLocationSchema, visualStyleGuideSchema,
   DramaSeed, SeriesOutline, DramaState, CharacterIdentity, EpisodeIntent,
-} from '../schemas/drama-state.schemas';
-import { buildVisualAssetDesignerSystemPrompt } from '../prompting/drama-playbook';
+} from '../../schemas/drama-state.schemas';
+import { buildVisualAssetDesignerSystemPrompt } from '../../prompting/drama-playbook';
 
 const designerOutputSchema = z.object({
   characters: z.array(characterIdentitySchema),

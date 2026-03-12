@@ -31,12 +31,12 @@ import { DramaTextProcessor } from './task/drama-text.processor';
 import { DramaImageProcessor, DramaVideoProcessor, DramaVoiceProcessor } from './task/drama-media.processor';
 import { DramaRunService } from './run/run.service'; // 运行时服务
 import { AssetHubService } from './asset-hub/asset-hub.service'; // 资产中心
-// ── 创建链路 Agents（preparation 类，根目录保留含完整功能的 VisualAssetDesigner）──
-import { DramaSeedAnalyzerAgent } from './agents/drama-seed-analyzer.agent';
-import { SeriesDirectorAgent } from './agents/series-director.agent';
-import { VisualAssetDesignerAgent } from './agents/visual-asset-designer.agent'; // 根目录版含 resolveEpisodeCharacters/designNewCharacters
-import { DramaProfilerAgent } from './agents/drama-profiler.agent';
-import { DramaStrategyAgent } from './agents/drama-strategy.agent';
+// ── 创建链路 Agents（preparation/ 子目录）──
+import { DramaSeedAnalyzerAgent } from './agents/preparation/drama-seed-analyzer.agent';
+import { SeriesDirectorAgent } from './agents/preparation/series-director.agent';
+import { VisualAssetDesignerAgent } from './agents/preparation/visual-asset-designer.agent';
+import { DramaProfilerAgent } from './agents/preparation/drama-profiler.agent';
+import { DramaStrategyAgent } from './agents/preparation/drama-strategy.agent';
 // ── 逐集 Agents（scripting/ 子目录）──
 import { ArcDirectorAgent } from './agents/scripting/arc-director.agent';
 import { EpisodeDirectorAgent } from './agents/scripting/episode-director.agent';

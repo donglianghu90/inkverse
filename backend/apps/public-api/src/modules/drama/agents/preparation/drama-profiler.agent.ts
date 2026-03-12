@@ -3,13 +3,13 @@
  * 编剧手册指导后续所有 Agent 的风格/规则/审核维度。
  */
 import { Injectable } from '@nestjs/common';
-import { LlmService } from '../../novel/llm/llm.service';
+import { LlmService } from '../../../novel/llm/llm.service';
 import { z } from 'zod';
 import {
   dramaPromptProfileSchema, DramaPromptProfile,
   DramaSeed, SeriesOutline, VisualStyleGuide,
-} from '../schemas/drama-state.schemas';
-import { buildProfilerSystemPrompt } from '../prompting/drama-playbook';
+} from '../../schemas/drama-state.schemas';
+import { buildProfilerSystemPrompt } from '../../prompting/drama-playbook';
 
 const profilerOutputSchema = z.object({ profile: dramaPromptProfileSchema });
 

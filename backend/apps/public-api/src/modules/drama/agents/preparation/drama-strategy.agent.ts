@@ -3,10 +3,10 @@
  * 会在创建时首次生成，每个段落结束时可刷新。
  */
 import { Injectable } from '@nestjs/common';
-import { LlmService } from '../../novel/llm/llm.service';
+import { LlmService } from '../../../novel/llm/llm.service';
 import { z } from 'zod';
-import { dramaStrategySchema, DramaStrategy, DramaSeed, SeriesOutline } from '../schemas/drama-state.schemas';
-import { buildStrategySystemPrompt } from '../prompting/drama-playbook';
+import { dramaStrategySchema, DramaStrategy, DramaSeed, SeriesOutline } from '../../schemas/drama-state.schemas';
+import { buildStrategySystemPrompt } from '../../prompting/drama-playbook';
 
 const strategyOutputSchema = z.object({ strategy: dramaStrategySchema });
 
