@@ -9,6 +9,7 @@ import { BullModule } from "@nestjs/bullmq";
 import { JwtAuthGuard } from "@packages/common/guards";
 import { JwtModule } from "@nestjs/jwt";
 import { LlmModule } from "./modules/novel/llm/llm.module";
+import { LlmModule as DramaLlmModule } from "./modules/llm/llm.module"; // 新版多Provider网关，供短剧引擎新架构 agents 使用
 import { NovelModule } from "./modules/novel/novel.module";
 import { DramaModule } from "./modules/drama/drama.module";
 import { MediaModule } from "./modules/media/media.module";
@@ -136,6 +137,7 @@ import { UsageModule } from "./modules/usage/usage.module";
     // 业务模块
     AuthModule,
     LlmModule,
+    DramaLlmModule, // 新版多Provider LLM网关（供短剧引擎新版 agents 使用）
     UsageModule,
     NovelModule,
     DramaModule,

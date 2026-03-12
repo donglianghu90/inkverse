@@ -97,9 +97,9 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 
 ### SSE 实时进度
 - **创建阶段**：`GET /api/drama/:dramaId/create-sse` — 订阅 6 步创建流程进度（种子分析→大纲→视觉设计→参考图生成→编剧手册+策略→完成）
-- **逐集生成**：`GET /api/drama/:dramaId/episodes/generate-sse?count=N` — 触发生成并推送 13 步 Pipeline 进度，完成后返回结果
+- **逐集生成**：`GET /api/drama/:dramaId/episode-generate-sse?count=N` — 触发生成并推送 13 步 Pipeline 进度，完成后返回结果
 - **媒体生成**：`GET /api/drama/:dramaId/episodes/:episodeNumber/generate-media-sse` — 触发单集媒体生成并推送 `phase: 'media'` 进度，完成后返回结果
-- **纯监听**：`GET /api/drama/:dramaId/episodes/progress-sse` — 只监听不触发，用于多端观察
+- **纯监听**：`GET /api/drama/:dramaId/episode-progress-sse` — 只监听不触发，用于多端观察
 - `DramaProgressService`：EventEmitter 驱动，支持 `create`/`episode`/`media` 三种 phase，15 秒心跳保活
 - **增量回放**：结合 `DramaRunService.getEventsSince()` 支持断线后补拉持久化事件，不再依赖纯内存 SSE
 - 前端 CreateDrama 页面在第 5 步展示实时进度条和步骤状态
@@ -117,9 +117,9 @@ inkverse 是一个基于大语言模型（LLM）的 AI 创作引擎，支持**�
 - `POST /api/drama/:dramaId/episodes/:episodeNumber/generate-media` — 触发单集 Shot 视频生成
 - `GET /api/drama/:dramaId/episodes/:episodeNumber/media-status` — 查询单集媒体生成进度
 - `GET /api/drama/:dramaId/create-sse` — 创建进度 SSE
-- `GET /api/drama/:dramaId/episodes/generate-sse?count=N` — 生成进度 SSE
+- `GET /api/drama/:dramaId/episode-generate-sse?count=N` — 生成进度 SSE
 - `GET /api/drama/:dramaId/episodes/:episodeNumber/generate-media-sse` — 媒体生成进度 SSE（触发+推送）
-- `GET /api/drama/:dramaId/episodes/progress-sse` — 纯监听进度 SSE
+- `GET /api/drama/:dramaId/episode-progress-sse` — 纯监听进度 SSE
 - `GET /api/drama/:dramaId/pipeline` — 获取Pipeline配置（含草稿/发布节点+WorkflowParams）
 - `PUT /api/drama/:dramaId/pipeline/draft` — 保存Pipeline草稿（body: `{ nodes: [...] }`）
 - `POST /api/drama/:dramaId/pipeline/publish` — 发布Pipeline草稿到生效版本

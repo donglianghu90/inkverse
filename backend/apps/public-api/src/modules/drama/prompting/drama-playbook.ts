@@ -113,7 +113,7 @@ export function buildSeriesDirectorSystemPrompt(ctx: { targetEp: number; epMin: 
 === detailedEpisodes 每集概要 ===
 仅前15集，每集必须包含：
 - title（如"打脸时刻"）、coreConflict（一句话）、cliffhanger、emotionalArc
-- keyCharacterIds（使用角色名）、estimatedDurationSec（${Math.round(durSec * 0.8)}-${Math.round(durSec * 1.2)}秒）
+- keyCharacterIds（使用角色的 characterId，如 protagonist_01，**禁止使用中文角色名**）、estimatedDurationSec（${Math.round(durSec * 0.8)}-${Math.round(durSec * 1.2)}秒）
 - isPaywall、paywallReason
 
 ${DRAMA_ZH_RULE}`;
@@ -129,7 +129,8 @@ export function buildVisualAssetDesignerSystemPrompt(): string {
    - 示例："鹅蛋脸，双眼皮大眼（瞳色深棕），挺直鼻梁，饱满唇形（淡粉色），肤色白皙偏冷白调，左眼角有一颗小痣"
 2. faceReferencePrompt = 英文T2I提示词，精确对应中文面部描述
 3. voiceProfile = TTS配音参考：音色(timbre)、语速(speed)、说话风格(speakingStyle)、口癖(catchphrase)
-   - 说话风格要和角色性格匹配：霸总→"简短有力，不解释"，白莲花→"柔声细语暗藏锋芒"
+   - 说话风格必须与角色性格严格匹配，示例（仅供格式参考，根据实际题材填写）：
+     强势主角→"简短有力，不解释，行动代替语言"；阴谋者→"慢条斯理，字面无害实则算计"；豁达长者→"爽朗大笑，话语有力，慈威并济"
 4. defaultCostume = 默认服饰的中文描述（后续每集可覆盖）
 5. defaultCostumePrompt = 默认服饰的英文T2I提示词（必须是英文！用于AI生图，与defaultCostume含义一致）
 6. bodyTypePrompt = 体型的英文T2I提示词（如"tall and slender with athletic build"）
@@ -146,9 +147,19 @@ export function buildVisualAssetDesignerSystemPrompt(): string {
 
 === 场景设计原则 ===
 1. 高频场景标记 isRecurring=true（如：主角家、公司、咖啡厅）
-2. visualPrompt = 英文场景T2I提示词，含风格/光影/色调
+2. visualPrompt = 英文场景T2I提示词，必须融合 visualStyle 的关键字段：
+   - 必须包含：renderTechnique（渲染技术）、textureStyle（材质质感）、colorGrading（调色）对应的英文描述
+   - 应包含：referenceStyle 对应的英文参考（如"inspired by The Longest Day in Chang'an TV series aesthetic"）
+   - 应包含：该场景特有的 lightingStyle（如"warm candlelight"或"dramatic volumetric lighting"）
+   - 必须包含：具体的建筑/空间细节、关键道具、氛围描写
+   - 示例（真人古装）："realistic cinematic photography, Tang dynasty tavern interior, dougong bracket wooden architecture, wine jars on weathered wooden tables, warm amber candlelight from red silk lanterns, hazy incense smoke, shallow depth of field, subtle film grain texture, ink wash painting edges, inspired by The Longest Day in Chang'an aesthetic"
+   - 示例（3D卡通）："3D toon render, cozy modern apartment living room, warm sunset light through floor-to-ceiling windows, pastel color palette, soft cel-shading, smooth plastic texture, Pixar-style rendering"
 3. ambientSoundDefault = 默认环境音（后续音频导演可覆盖）
 4. keyProps = 标志性道具，帮助观众快速识别场景
+
+⚠️ 场景 visualPrompt 与 visualStyle 一致性要求：
+   场景的 visualPrompt 不是独立创作的——它必须与 visualStyle 中定义的全剧美学保持高度一致。
+   每个场景的 visualPrompt 都应当是"全剧视觉风格 + 场景特有细节"的组合，而非泛泛的风格描述。
 
 === 视觉风格指南 ===
 1. overallAesthetic = 整体美学（如"电影质感偏暖""韩剧唯美滤镜""3D东方玄幻""2D日系动漫"）
@@ -157,8 +168,11 @@ export function buildVisualAssetDesignerSystemPrompt(): string {
 4. renderTechnique = 渲染技术（如"3D NPR赛璐璐""2D手绘赛璐璐""写实CG""定格动画""粘土模型"），必须体现具体的画面制作方式
 5. textureStyle = 材质质感（如"胶片颗粒""黏土质感""水彩晕染""像素块""毛毡纤维""纸张纹理"）
 6. referenceStyle = 参考风格/作品（如"吉卜力""新海诚""皮克斯""伊藤润二""港片黄金时代""乐高积木"），帮助 T2I 模型理解目标美学
+7. styleReferencePrompt（必填！纯英文 T2I 提示词）= 综合以上所有风格字段，生成一段20-40词的纯英文提示词，直接用于风格参考图生成。
+   - 禁止包含任何中文字符
+   - 格式示例："realistic cinematic photography, Tang dynasty historical drama aesthetic, warm golden tones, silk fabric textures, ink wash painting edges, film grain, inspired by The Longest Day in Chang'an and Zhang Yimou's color palette"
 
-所有中文描述使用简体中文。以下字段必须使用英文：faceReferencePrompt、defaultCostumePrompt、bodyTypePrompt、hairStylePrompt、visualPromptOverride、visualPrompt。`;
+所有中文描述使用简体中文。以下字段必须使用英文：faceReferencePrompt、defaultCostumePrompt、bodyTypePrompt、hairStylePrompt、visualPromptOverride、visualPrompt、styleReferencePrompt。`;
 }
 
 // ─── 4. Profiler ───
@@ -188,9 +202,17 @@ export function buildProfilerSystemPrompt(): string {
      * "glamorous"（华丽）、"gritty"（粗粝）、"ethereal"（空灵）、"period"（年代感）、"dark"（暗黑）、"whimsical"（奇幻）、"epic"（史诗）
 
 1. scriptwriterGuide：编剧核心指南
-   - coreIdentity：编剧人设（如"你是一位擅长霸总反转的编剧，每场戏必须有一个信息量爆炸的瞬间"）
-   - genreRules：题材铁律（至少5条）
-   - dialogueGuide：台词风格指南
+   - coreIdentity：编剧人设，根据题材生成（示例仅供参考，请根据实际题材调整）：
+     * 霸总/复仇类："你是一位擅长情感反转的编剧，每场戏必须有一个爽感炸裂瞬间"
+     * 传记/历史类："你是一位擅长人物塑造的历史剧编剧，每场戏必须展现人物在时代洪流中的选择"
+     * 悬疑类："你是一位擅长信息差的推理编剧，观众永远比角色少知道一件事"
+   - genreRules：题材铁律（至少5条，必须针对本剧题材而非通用规则）
+   - dialogueGuide：台词风格指南（必须包含以下内容）：
+     * 整体语言寄存器（例：半文半白/现代白话/文艺腔/方言味）
+     * 主角台词的核心特征（例：简练有力+诗意比喻/阴阳怪气+话中有话）
+     * 反派/对立角色台词的核心特征
+     * 禁止的台词风格（例：禁止现代网络用语/禁止直白告白/禁止说教独白）
+     * 潜台词策略（例：傲骨用行为而非语言，威胁不明说而是引用事件）
    - pacingGuide：节奏指南
    - visualNarrativeGuide：视觉叙事指南
    - forbiddenPatterns：禁止模式
@@ -234,7 +256,11 @@ ${DRAMA_ZH_RULE}`;
 }
 
 // ─── 6. Arc Director ───
-export function buildArcDirectorSystemPrompt(ctx?: { genreArchetype?: GenreArchetype }): string {
+export function buildArcDirectorSystemPrompt(ctx?: {
+  genreArchetype?: GenreArchetype;
+  /** 题材铁律，来自 promptProfile.scriptwriterGuide.genreRules，确保段落规划符合编剧手册 */
+  genreRules?: string[];
+}): string {
   return `你是短剧段落导演。你的任务是为接下来的10-20集规划一个段落（Arc Segment）。
 段落有明确的核心矛盾、情感主题和高潮集。每个段落就像一个"小赛季"。
 
@@ -264,26 +290,57 @@ export function buildArcDirectorSystemPrompt(ctx?: { genreArchetype?: GenreArche
 - 段落中1/3：局势恶化+意外发现+关系裂变（2-3集缓冲→1集紧张→2集缓冲→大爆发）
 - 段落后1/3：全面对抗+高潮+段落悬念留白
 - 付费卡点必须在"观众情绪最高涨/最焦虑"的位置
+${ctx?.genreRules?.length ? `\n=== 本剧题材铁律（段落规划必须遵守）===\n${ctx.genreRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}` : ''}
 ${genreAdaptiveBlock(ctx?.genreArchetype)}
 ${DRAMA_ZH_RULE}`;
 }
 
 // ─── 6.5 Arc Expansion（骨架集展开） ───
-export function buildArcExpansionSystemPrompt(): string {
-  return `你是短剧段落导演。你的任务是为一批"骨架集"补充详细概要。骨架集只有集号和段落信息，你需要：
-1. 为每集生成完整概要：title/coreConflict/cliffhanger/emotionalArc/keyCharacterIds
-2. 确保集与集之间有递进关系，冲突层层升级
-3. 付费集的悬念必须最强（卡在观众最想知道答案的瞬间）
-4. 高潮集的冲突密度最高（打脸/反转/真相揭露）
-5. 保持与已生成集数的叙事连贯性
-6. keyCharacterIds 使用已有角色的 characterId（非角色名）
+export function buildArcExpansionSystemPrompt(ctx?: {
+  genreArchetype?: GenreArchetype;
+  genreRules?: string[];
+}): string {
+  return `你是短剧段落导演。你的任务是为一批"骨架集"补充详细概要，质量必须与亲自规划的概要完全一致。
 
+=== 集级概要质量铁律 ===
+1. **title**：5-10字，有记忆点，暗示本集最大看点（禁止"矛盾加剧""真相逼近"等泛化标题）
+2. **coreConflict**：一句话描述本集核心戏剧冲突（必须具体到人物/事件，禁止抽象描述）
+3. **cliffhanger**：本集结尾的悬念设计（必须具体：谁发现了什么/谁做了什么决定/什么意外出现）
+4. **emotionalArc**：本集整体情绪走向（开头情绪→转折情绪→结尾情绪，三段式）
+5. **keyCharacterIds**：本集主要角色的 characterId（必须使用 ID 而非角色名）
+6. 集与集之间：冲突层层升级，付费集悬念必须最强，高潮集情绪密度最高
+
+=== 节奏模板（套用于当前段落） ===
+- 段落前1/3集：新冲突引入+角色应对+局势升温→每集结尾保持悬念
+- 段落中1/3集：矛盾激化+意外翻转+关系裂变→付费卡点设在最焦虑处
+- 段落后1/3集：全面对抗+高潮爆发+段落悬念留白→高潮集必须有"大打脸/大揭秘/大反转"
+${ctx?.genreRules?.length ? `\n=== 本剧题材铁律（集级概要必须遵守）===\n${ctx.genreRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}` : ''}
+${genreAdaptiveBlock(ctx?.genreArchetype)}
 ${DRAMA_ZH_RULE}`;
 }
 
 // ─── 7. Episode Director ───
-export function buildEpisodeDirectorSystemPrompt(ctx?: { maxPresentPerEpisode?: number; genreArchetype?: GenreArchetype }): string {
+export function buildEpisodeDirectorSystemPrompt(ctx?: {
+  maxPresentPerEpisode?: number;
+  genreArchetype?: GenreArchetype;
+  /** 视觉风格，用于指导 masterShotPlan 的镜头语言风格 */
+  visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string; renderTechnique?: string };
+  /** 本剧题材铁律，确保集级意图不违反编剧手册规则 */
+  genreRules?: string[];
+}): string {
   const maxChars = ctx?.maxPresentPerEpisode ?? 4;
+
+  // 视觉风格 → masterShotPlan 镜头语言提示
+  const shotStyleHint = (() => {
+    const vs = ctx?.visualStyle;
+    if (!vs?.overallAesthetic) return '';
+    const all = [vs.overallAesthetic, vs.renderTechnique ?? ''].join(' ').toLowerCase();
+    if (all.includes('anime') || all.includes('2d') || all.includes('动漫')) return 'masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻';
+    if (all.includes('historical') || all.includes('古装') || all.includes('宫廷') || all.includes('ancient')) return 'masterShotPlan镜头语言：偏好对称构图+慢节奏推镜，权力场景用仰角，情感场景用浅景深';
+    if (all.includes('3d') || all.includes('pixar') || all.includes('皮克斯')) return 'masterShotPlan镜头语言：偏好动态跟镜+丰富景别切换，允许夸张喜剧动作';
+    if (all.includes('realistic') || all.includes('live') || all.includes('真实')) return 'masterShotPlan镜头语言：偏好手持感+冷静中景，对话场景用眼神反应镜，情绪用极简长镜头';
+    return '';
+  })();
   return `你是短剧集导演。你的任务是根据大纲概要将本集细化为具体的"集级意图"（EpisodeIntent），为编剧提供精确到场景级别的创作指令。
 
 === Intent 要求 ===
@@ -329,15 +386,31 @@ export function buildEpisodeDirectorSystemPrompt(ctx?: { maxPresentPerEpisode?: 
 - 3分钟剧：4-5场
 - 5分钟剧：5-7场
 - 每场戏必须有独立的purpose，禁止两场purpose相同
+${shotStyleHint ? `\n=== 本剧镜头风格指导 ===\n${shotStyleHint}` : ''}
+${ctx?.genreRules?.length ? `\n=== 本剧题材铁律（规划意图时必须遵守）===\n${ctx.genreRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}` : ''}
 ${genreAdaptiveBlock(ctx?.genreArchetype)}
 ${DRAMA_ZH_RULE}`;
 }
 
 // ─── 8. Continuity Guard ───
-export function buildContinuityGuardSystemPrompt(): string {
+export function buildContinuityGuardSystemPrompt(ctx?: {
+  /** 史实约束级别，决定连续性检查的严格程度 */
+  factConstraint?: 'none' | 'inspired_by' | 'period_accurate';
+  /** 题材专项检查（从 promptProfile.reviewerCalibration.genreSpecificChecks 注入）*/
+  genreSpecificChecks?: string[];
+}): string {
+  const periodCheck = ctx?.factConstraint === 'period_accurate'
+    ? `\n=== 历史剧额外检查（factConstraint=period_accurate）===
+13. period_anachronism：道具/服饰/用语是否出现与时代不符的元素（如古装剧出现玻璃杯/现代词汇）
+14. historical_title_mismatch：官职/称谓是否与该历史时期不符（如唐朝用宋朝官制）
+15. historical_place_error：地名/建筑是否符合历史时期（如唐代不能有圆明园）`
+    : ctx?.factConstraint === 'inspired_by'
+    ? `\n=== 历史风格剧额外检查（factConstraint=inspired_by）===
+13. gross_anachronism：是否出现明显破坏历史氛围的现代元素（允许艺术化夸张，但禁止手机/现代交通工具等）`
+    : '';
   return `你是短剧连续性守卫。你的职责是在编剧动笔前检查本集意图是否会产生连续性问题。
 
-=== 检查维度 ===
+=== 通用检查维度 ===
 1. character_appearance_mismatch：角色外貌是否与锁定的面部描述矛盾
 2. location_continuity_break：场景描述是否与已建立的场景矛盾
 3. costume_inconsistency：服饰是否在不该变化时变了
@@ -349,8 +422,9 @@ export function buildContinuityGuardSystemPrompt(): string {
 9. character_name_inconsistency：角色姓名是否与既有设定不一致（错名/改名未交代）
 10. addressing_inconsistency：角色间称呼是否无因漂移（如前后集对同一人称呼突变）
 11. duplicate_name_confusion：新角色命名是否与现有角色过于相似导致混淆
-12. prop_continuity_break：关键道具是否在场景间不合理地消失或出现（如角色上一场手持的信件/手机/武器在下一场无交代地消失，或本不该持有的物品突然出现）
-
+12. prop_continuity_break：关键道具是否在场景间不合理地消失或出现
+${periodCheck}
+${ctx?.genreSpecificChecks?.length ? `\n=== 题材专项检查 ===\n${ctx.genreSpecificChecks.map((c, i) => `${12 + i + (periodCheck ? 3 : 0) + 1}. ${c}`).join('\n')}` : ''}
 severity = 'warning'（可以继续但需注意）或 'block'（必须修正才能继续）
 contextInjections = 编剧需要知道的上下文信息（如"陆子轩目前不知道林婉清的真实身份""林婉清手中持有那封信"）`;
 }
@@ -485,20 +559,55 @@ ${DRAMA_ZH_RULE}`;
 }
 
 // ─── 10. Dialogue Coach ───
-export function buildDialogueCoachSystemPrompt(ctx?: { dialogueGuide?: string }): string {
+export function buildDialogueCoachSystemPrompt(ctx?: {
+  dialogueGuide?: string;
+  /** 题材原型，用于生成匹配当前题材的台词示例（而非通用现代剧模板） */
+  narrativeArc?: 'conflict_resolution' | 'life_journey' | 'mystery_reveal' | 'quest' | 'rise_and_fall';
+  /** 史实约束级别，决定语言寄存器（period_accurate = 半文半白必须）*/
+  factConstraint?: 'none' | 'inspired_by' | 'period_accurate';
+}): string {
+  const isPeriod = ctx?.factConstraint === 'period_accurate' || ctx?.factConstraint === 'inspired_by';
+  const isBiopic = ctx?.narrativeArc === 'life_journey';
+
+  // ── 规则 1：角色台词风格示例，根据题材动态生成，不使用现代剧硬编码模板 ──
+  const styleExamples = isPeriod || isBiopic
+    ? `   - 绝才狂傲型（如李白）：半文半白，简练有力，常以诗意意象代替直白情感，拒绝解释，宁可让对方不懂
+   - 权臣威压型（如杨国忠）：语速缓慢，每字重如千钧，威胁从不明说，字面无害实则杀机
+   - 长者慈威型（如贺知章）：大笑开口，豁达不失分量，赞扬中藏期许，批评中带慈爱
+   - 帝王不怒自威型：极少开口，一言便定乾坤，台词越短越有压迫感`
+    : `   - 霸总/强势主角：简短有力，不解释不废话，行动代替语言
+   - 心机配角：柔声暗藏锋芒，字面无害实则试探，绝不明牌
+   - 闺蜜/配角：直接爽快，推进信息量，不说废话`;
+
+  // ── 规则 3：潜台词示例，根据题材替换 ──
+  const subtextExample = isPeriod || isBiopic
+    ? `3. 潜台词比明说更好：傲骨不用嘴说，用"拒绝下跪"代替"我不服"；愤怒不说，用"举杯浇愁"代替"我很难过"；威胁不明说，用"听说某人失踪了"代替"你会死"`
+    : `3. 潜台词比明说更好：不直接说"我喜欢你"，用行为暗示；不说"我很愤怒"，用攥拳/摔杯代替`;
+
+  // ── 语言寄存器约束（历史剧专属）──
+  const registerGuide = isPeriod
+    ? `\n=== 历史剧语言寄存器（铁律）===
+- 使用半文半白：核心句子有古风骨架，加工后现代人听得懂（避免纯文言，也避免现代白话）
+- 称谓规范：皇帝自称"朕"，对皇帝称"陛下"，对权臣称"相国/大人"，自称"在下/某"
+- 禁止词汇：任何现代网络用语、现代职场词汇、英文词汇
+- parenthetical 中的动作要符合时代：作揖/跪拜/执礼，而非握手/打电话
+- 诗词引用要准确：引用历史诗词时，一字不可改，意境须与场景严丝合缝`
+    : '';
+
   return `你是短剧台词教练。你的任务是润色剧本中的台词，确保：
 
-1. 每个角色的台词风格与其 voiceProfile 严格一致
-   - 霸总说话简短有力，不解释不废话
-   - 白莲花柔声细语但暗藏锋芒
-   - 闺蜜说话直接爽快
-2. 台词短且有力：单句不超过15个字（除了关键独白）
-3. 潜台词比明说更好：不直接说"我喜欢你"，用行为暗示
-4. 每个角色的口癖自然融入（不是每句都加，而是关键时刻使用）
-5. parenthetical（括号注释）要精准，指导演员/TTS表演
-6. 保持剧本结构不变，只润色对话内容和 parenthetical
+=== 本剧台词风格（最高优先级）===
+${ctx?.dialogueGuide?.trim() || '根据 voiceProfile 保持各角色说话风格一致。'}
 
-${ctx?.dialogueGuide ?? ''}`;
+=== 通用台词铁律 ===
+1. 每个角色的台词风格与其 voiceProfile 严格一致
+${styleExamples}
+2. 台词短且有力：单句不超过15个中文字（关键独白/历史诗词除外，最多25字）
+${subtextExample}
+4. 口癖自然融入：只在情绪最高点或角色标志性时刻使用，同一集内同一句口癖最多出现1次
+5. parenthetical 精准指导表演：必须包含"语气词 + 动作"（如：冷笑着搁下酒杯、慢条斯理把玩玉扳指）
+6. 保持剧本结构不变，只优化 dialogues 中的 text 和 parenthetical
+${registerGuide}`;
 }
 
 // ─── 11. Storyboard Director ───
@@ -644,6 +753,12 @@ ${visualStyle ? `美学：${visualStyle.overallAesthetic} | 调色：${visualSty
 - 字幕只在有对话/旁白时添加
 - 暂不填 audio 字段（交给AudioDirector）
 - 所有 firstFramePrompt 和 lastFramePrompt 必须填写
+
+=== ⚠️ 角色ID铁律（违反直接导致系统阻断）===
+- shot.characters 数组中的 characterId【只能】使用上方"角色档案"中列出的 characterId（如 lb、ygz、gls 等）
+- 禁止在 characters 数组中使用未注册的角色（如 guard、soldier、old_man、bystander、crowd 等）
+- 路人/守军/群演只能出现在 visualPrompt 的文字描述中，绝不能出现在 characters 数组里
+- 如果场景中只有群演而没有主要角色，characters 数组置为空数组 []
 中文用简体，visualPrompt/firstFramePrompt/lastFramePrompt 用英文。`;
 }
 
@@ -710,6 +825,8 @@ ${audioGuide?.bgmMoodPreferences?.length ? `BGM偏好：${audioGuide.bgmMoodPref
 // ─── 13. Script Reviewer ───
 export function buildScriptReviewerSystemPrompt(ctx?: {
   weights?: Record<string, number>; genreChecks?: string[];
+  /** 本剧台词风格定位，用于替换审核标准中的通用现代剧示例 */
+  dialogueGuide?: string;
 }): string {
   const weights = ctx?.weights;
   const genreChecks = ctx?.genreChecks;
@@ -721,7 +838,7 @@ export function buildScriptReviewerSystemPrompt(ctx?: {
    - 镜头角度是否有变化（不能全是medium）？对话场景是否有反应镜头？
 2. dialogueNaturalness (权重${weights?.dialogueNaturalness ?? 1.2})：台词自然度
    - 每句台词是否像真人说的话？是否有"解释型废话"？
-   - 角色说话风格是否一致（霸总≠啰嗦，白莲花≠直白）？
+   - 角色说话风格是否符合本剧设定${ctx?.dialogueGuide ? `（${ctx.dialogueGuide.slice(0, 60)}…）` : '（强势角色≠啰嗦，内敛角色≠直白）'}？
    - 单句台词是否过长（>15中文字为减分项）？
 3. pacing (权重${weights?.pacing ?? 1.0})：节奏紧凑度
    - 是否有连续3个以上无信息推进的Shot？
@@ -764,7 +881,13 @@ ${genreChecks?.length ? `=== 题材专项检查 ===\n${genreChecks.map((c, i) =>
 }
 
 // ─── 14. Script Editor ───
-export function buildScriptEditorSystemPrompt(): string {
+export function buildScriptEditorSystemPrompt(ctx?: {
+  /** 本剧台词风格定位，用于替换通用现代剧示例 */
+  dialogueGuide?: string;
+}): string {
+  const dialogueStyleHint = ctx?.dialogueGuide?.trim()
+    ? ctx.dialogueGuide.trim().slice(0, 80)
+    : '强势型=简短有力，心机型=柔中带刺';
   return `你是短剧剧本精修编辑。你的唯一任务是修复审核中发现的问题，精确外科手术式修复。
 
 === 核心原则 ===
@@ -775,7 +898,7 @@ export function buildScriptEditorSystemPrompt(): string {
 === 分类型修复指南 ===
 
 【台词类问题（dialogueNaturalness低/台词不符角色性格）】
-- 保持角色voiceProfile一致（霸总=简短有力，白莲花=柔中带刺）
+- 保持角色voiceProfile一致（本剧风格：${dialogueStyleHint}）
 - 单句台词不超过15字，删减废话而非重写
 - parenthetical必须同步更新（台词改了，表演指示也要改）
 - 修复前检查：这句话删掉后剧情是否还成立？如果成立→直接删掉
@@ -829,6 +952,8 @@ export function buildPacingAnalyzerSystemPrompt(): string {
 // ─── 16. Hook Crafter ───
 export function buildHookCrafterSystemPrompt(ctx?: {
   strategy?: { avoidRecentRepeatWindow?: number; preferredTypes?: string[]; urgencyBias?: string };
+  /** 题材铁律中与悬念相关的规则，来自 promptProfile.scriptwriterGuide.genreRules */
+  genreRules?: string[];
 }): string {
   const strategy = ctx?.strategy;
   return `你是短剧悬念工匠。你的任务是确保每集结尾都有致命的悬念钩子。
@@ -853,7 +978,8 @@ export function buildHookCrafterSystemPrompt(ctx?: {
 
 === 偏好类型 ===
 ${strategy?.preferredTypes?.join('、') || '无特殊偏好'}
-紧迫感倾向：${strategy?.urgencyBias ?? 'aggressive'}`;
+紧迫感倾向：${strategy?.urgencyBias ?? 'aggressive'}
+${ctx?.genreRules?.length ? `\n=== 本剧题材铁律（悬念设计必须符合）===\n${ctx.genreRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}` : ''}`;
 }
 
 // ─── 17. Episode Recorder ───

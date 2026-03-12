@@ -232,14 +232,14 @@ export class LlmService {
 
   private static parseTierCostRates(costObj: Record<string, unknown>, fallback: CostRates): Record<ModelTier, CostRates> {
     const tiers: ModelTier[] = ['creative', 'standard', 'lightweight'];
-    const globalIn = LlmService.num(costObj.inputUsdPer1M, fallback.inputRateUsdPer1M);
-    const globalOut = LlmService.num(costObj.outputUsdPer1M, fallback.outputRateUsdPer1M);
+    const globalIn = LlmService.num(costObj.inputPer1M ?? costObj.inputUsdPer1M, fallback.inputRateUsdPer1M);
+    const globalOut = LlmService.num(costObj.outputPer1M ?? costObj.outputUsdPer1M, fallback.outputRateUsdPer1M);
     const result = {} as Record<ModelTier, CostRates>;
     for (const tier of tiers) {
       const tierObj = (costObj[tier] ?? {}) as Record<string, unknown>;
       result[tier] = {
-        inputRateUsdPer1M: LlmService.num(tierObj.inputUsdPer1M, globalIn),
-        outputRateUsdPer1M: LlmService.num(tierObj.outputUsdPer1M, globalOut),
+        inputRateUsdPer1M: LlmService.num(tierObj.inputPer1M ?? tierObj.inputUsdPer1M, globalIn),
+        outputRateUsdPer1M: LlmService.num(tierObj.outputPer1M ?? tierObj.outputUsdPer1M, globalOut),
       };
     }
     return result;

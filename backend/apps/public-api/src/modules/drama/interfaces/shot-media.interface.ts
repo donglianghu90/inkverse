@@ -8,6 +8,9 @@ export interface ShotMediaEntry {
   lastFrameImageUrl?: string;
   status: string;
   kenBurnsFallback?: boolean;
+  t2iPrompt?: string;
+  t2iNegativePrompt?: string;
+  lastFrameT2iPrompt?: string;
   qc?: {
     identityScore?: number;
     styleScore?: number;

@@ -115,6 +115,8 @@ AI生成图常见问题：多余手指、面部扭曲、文字水印、比例失
       const failReasons = this.normalizeFixReasons(result.failReasons, inferredReasons);
       const recommendedFix = this.resolveRecommendedFix(result.recommendedFix, failReasons);
 
+      // 成功后重置错误计数，区分"偶发"与"持续"异常
+      if (this.assessmentErrorCount > 0) this.assessmentErrorCount = 0;
       return {
         score: Math.round(avgScore * 10) / 10,
         pass: avgScore >= tierCfg.minScore,

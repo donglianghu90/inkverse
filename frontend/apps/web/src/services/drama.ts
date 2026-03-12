@@ -60,6 +60,22 @@ export interface VisualAssetItem {
   createdAt: string;
 }
 
+export type VisualAssetRefineSyncScope = 'single' | 'group' | 'all';
+export type VisualAssetRefineStrength = 'light' | 'balanced' | 'strong';
+
+export interface RefineVisualAssetParams {
+  instruction: string;
+  viewAngle?: string;
+  syncScope?: VisualAssetRefineSyncScope;
+  strength?: VisualAssetRefineStrength;
+  preserveIdentity?: boolean;
+}
+
+export interface RefineVisualAssetResult {
+  asset: VisualAssetItem;
+  affectedViews: string[];
+}
+
 export interface DramaUsageBucket {
   llmCalls: number;
   promptTokens: number;
@@ -146,6 +162,8 @@ export interface DbRunningItem {
   startedAt: string;
   progressPct: number;     // 0-100，基于 checkpoint 推算
   stepLabel: string;       // 中文步骤名
+  status?: string;         // running / failed / interrupted
+  errorMessage?: string;   // 失败原因（仅 status=failed 时有值）
 }
 
 export interface GenerationStatus {
@@ -216,6 +234,28 @@ export async function getVisualAssets(dramaId: string): Promise<{ assets: Visual
   return request(`${BASE}/${dramaId}/visual-assets`);
 }
 
+export async function regenerateVisualAssetImage(
+  dramaId: string,
+  assetId: string,
+  opts?: { viewAngle?: string },
+): Promise<VisualAssetItem> {
+  return request(`${BASE}/${dramaId}/visual-assets/${assetId}/regenerate`, {
+    method: 'POST',
+    data: opts?.viewAngle ? { viewAngle: opts.viewAngle } : undefined,
+  });
+}
+
+export async function refineVisualAssetImage(
+  dramaId: string,
+  assetId: string,
+  data: RefineVisualAssetParams,
+): Promise<RefineVisualAssetResult> {
+  return request(`${BASE}/${dramaId}/visual-assets/${assetId}/refine-image`, {
+    method: 'POST',
+    data,
+  });
+}
+
 /* ─── SSE URLs ─── */
 
 export type DramaSseType = 'heartbeat' | 'progress' | 'result' | 'error' | 'info';
@@ -252,7 +292,7 @@ export function getCreateDramaSseUrl(dramaId: string): string {
 
 export function getGenerateEpisodeSseUrl(dramaId: string, count = 1): string {
   const token = getToken();
-  return `${BASE}/${dramaId}/episodes/generate-sse?count=${count}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+  return `${BASE}/${dramaId}/episode-generate-sse?count=${count}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
 }
 
 export interface ShotPatch {
@@ -331,7 +371,7 @@ export async function generateShotImage(dramaId: string, episodeNumber: number, 
 
 export function getEpisodeProgressSseUrl(dramaId: string): string {
   const token = getToken();
-  return `${BASE}/${dramaId}/episodes/progress-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return `${BASE}/${dramaId}/episode-progress-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 /* ─── 题材模板 ─── */
@@ -375,6 +415,59 @@ export async function deleteDramaGenreTemplate(id: string): Promise<{ success: b
 
 export async function cloneDramaGenreTemplate(id: string): Promise<DramaGenreTemplate> {
   return request(`${BASE}/genre-templates/${id}/clone`, { method: 'POST' });
+}
+
+// ─── Pipeline / 提示词工坊 ────────────────────────────────────────────────────
+
+export interface DramaAgentNodeConfig {
+  id: string;
+  type: string;
+  label: string;
+  description: string;
+  isEnabled: boolean;
+  isDeletable: boolean;
+  isCore: boolean;
+  position: number;
+  additionalSystemPrompt: string;
+  customConfig?: { systemPrompt?: string; temperature?: number };
+}
+
+export interface DramaWorkflowParams {
+  maxEditRounds?: number;
+  maxContinuityRetries?: number;
+  qualityPassScore?: number;
+  enableDialogueCoach?: boolean;
+  enablePacingAnalyzer?: boolean;
+  enableHookCrafter?: boolean;
+}
+
+export interface DramaPipeline {
+  dramaId: string;
+  draftNodes: DramaAgentNodeConfig[];
+  publishedNodes: DramaAgentNodeConfig[] | null;
+  publishedAt: string | null;
+  workflowParams: DramaWorkflowParams | null;
+  hasDraft: boolean; // draft !== published (from backend)
+}
+
+export async function getDramaPipeline(dramaId: string): Promise<DramaPipeline> {
+  return request(`${BASE}/${dramaId}/pipeline`);
+}
+
+export async function saveDramaPipelineDraft(dramaId: string, nodes: DramaAgentNodeConfig[]): Promise<DramaPipeline> {
+  return request(`${BASE}/${dramaId}/pipeline/draft`, { method: 'PUT', data: { nodes } });
+}
+
+export async function publishDramaPipeline(dramaId: string): Promise<DramaPipeline> {
+  return request(`${BASE}/${dramaId}/pipeline/publish`, { method: 'POST' });
+}
+
+export async function saveDramaWorkflowParams(dramaId: string, params: Partial<DramaWorkflowParams>): Promise<DramaPipeline> {
+  return request(`${BASE}/${dramaId}/pipeline/params`, { method: 'PUT', data: params });
+}
+
+export async function getDramaNodePreview(dramaId: string, nodeId: string): Promise<{ nodeId: string; basePrompt: string }> {
+  return request(`${BASE}/${dramaId}/pipeline/node-preview/${nodeId}`);
 }
 
 export interface AiGenerateDramaTemplateParams {

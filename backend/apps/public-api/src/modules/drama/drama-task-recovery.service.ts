@@ -1,6 +1,6 @@
 /** 短剧任务恢复服务 — 启动时清理中断运行，关闭时优雅标记进行中运行 */
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { DramaWorkflowExecutionService } from './drama-workflow-execution.service';
+import { DramaWorkflowExecutionService } from './workflow/drama-workflow-execution.service';
 
 const STARTUP_STALE_TIMEOUT_MS = 5 * 60 * 1000; // 启动时5分钟未完成即判定为残留running
 

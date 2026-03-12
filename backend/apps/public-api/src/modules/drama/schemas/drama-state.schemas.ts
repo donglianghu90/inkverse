@@ -144,6 +144,7 @@ export const characterIdentitySchema = z.object({
   characterId: z.string(),
   name: z.string(),
   role: z.enum(['protagonist', 'antagonist', 'supporting', 'minor', 'narrator', 'historical_figure']),
+  scope: z.enum(['series', 'arc', 'episode']).default('series'), // 角色生命周期：series=全剧常驻 arc=段落级 episode=本集临时
   faceDescription: z.string(),
   bodyType: z.string(),
   hairStyle: z.string(),
@@ -166,6 +167,19 @@ export const characterIdentitySchema = z.object({
   variations: na(characterVariationSchema),
 });
 
+/**
+ * 可复用临时角色池条目 — 有名有姓的 episode 级角色在归档时加入此池，
+ * 集导演可在后续集通过相同 characterId 直接复用，避免重复设计和生图。
+ */
+export const minorRolePoolEntrySchema = z.object({
+  characterId: z.string(),
+  name: z.string(),
+  identity: characterIdentitySchema, // 完整 CharacterIdentity，含视觉提示词，可直接推入 state.characters
+  referenceImageUrl: ns(),           // 最佳已生成图片URL（媒体生成后异步写入）
+  lastUsedEpisode: z.number().int().min(1),
+  usedInEpisodes: na(z.number().int()),
+});
+
 export const sceneLocationSchema = z.object({
   locationId: z.string(),
   name: z.string(), // 如 "男主总裁办公室"
@@ -186,6 +200,8 @@ export const visualStyleGuideSchema = z.object({
   renderTechnique: ns(), // 渲染技术（如"3D NPR赛璐璐""2D手绘赛璐璐""写实CG""定格动画""粘土模型"）
   textureStyle: ns(), // 材质质感（如"胶片颗粒""黏土质感""水彩晕染""像素块""毛毡纤维"）
   referenceStyle: ns(), // 参考风格/作品（如"吉卜力""新海诚""皮克斯""伊藤润二""港片黄金时代"）
+  // 纯英文 T2I 提示词（用于风格参考图生成，避免中英混杂降低图片质量）
+  styleReferencePrompt: ns(), // English-only T2I style prompt for image generation
 });
 
 export const visualBibleSchema = z.object({
@@ -279,8 +295,18 @@ export const episodeIntentSchema = z.object({
   activeCharacters: na(z.object({
     characterId: z.string(),
     costumeOverride: z.string().nullish().transform(v => v ?? ''), // AI 可能输出 null
-    emotionalState: z.string(), // 本集情绪基调
+    emotionalState: z.string(), // 本集情绪基调（静态快照，用于兼容）
+    emotionalJourney: z.string().optional(), // 本集情绪旅程（三段式，如"从假装平静→内心崩溃→决定反击"）
     role: z.string(), // 本集角色定位（如"被揭穿者""复仇者""旁观者"）
+  })),
+  proposedNewCharacters: na(z.object({
+    characterId: z.string(), // 建议的角色ID（如 guard / old_man）
+    name: z.string(), // 角色名称（如 "宫门侍卫" / "街头老者"）
+    role: z.enum(['supporting', 'minor']).default('minor'),
+    scope: z.enum(['episode', 'arc']).default('episode'), // 复用范围：episode=本集结束归档，arc=弧段内常驻
+    narrativePurpose: z.string(), // 叙事作用（如 "阻拦主角进入宫殿" / "提供关键线索"）
+    appearanceHint: z.string(), // 外观提示（如 "身穿铠甲的高大士兵" / "佝偻的白发老人"）
+    hasDialogue: z.boolean().default(false), // 是否有台词（决定是否需要配音设计）
   })),
   locationIds: na(z.string()), // 本集使用的场景
   durationTargetSec: z.number().int().min(30),
@@ -367,11 +393,12 @@ export const shotDialogueSchema = z.object({
 });
 
 export const shotAudioSchema = z.object({
+  // .nullable() 确保兼容 OpenAI structured outputs（不允许纯 .optional()）
   bgm: z.object({
     mood: z.string(), // 情绪标签（如 tension_building / romantic_sweet / epic_reveal）
     intensity: z.number().min(0).max(1).default(0.5),
     action: z.enum(['continue', 'fade_in', 'fade_out', 'cut', 'swell', 'drop_to_silence']).default('continue'),
-  }).optional(),
+  }).nullable().optional(),
   sfx: na(z.object({
     trigger: z.string(), // 触发描述（如"摔门""玻璃碎裂"）
     sound: z.string(), // 音效标识
@@ -601,12 +628,22 @@ export const dramaDeterministicCheckSchema = z.object({
   failedChecks: na(z.object({
     rule: z.string(),
     detail: z.string(),
+    severity: z.enum(['hard', 'soft']).optional(),
   })),
   hardFails: na(z.object({
     rule: z.string(),
     detail: z.string(),
     severity: z.enum(['hard', 'soft']),
   })),
+  /** 自动修复的规则（如 shot_index_gap），断点续传时保留记录 */
+  autoFixedRules: z.array(z.string()).default([]),
+  /** 超长台词详情，供 ScriptEditor 定向修复；断点续传时保留以避免跳过修复 */
+  dialogueFixes: z.array(z.object({
+    sceneId: z.string(),
+    characterId: z.string(),
+    text: z.string(),
+    zhLen: z.number(),
+  })).default([]),
 });
 
 // ---------------------------------------------------------------------------
@@ -633,6 +670,8 @@ export const dramaStateSchema = z.object({
   visualStyle: visualStyleGuideSchema.optional(),
   visualBible: visualBibleSchema.optional(),
   characters: na(characterIdentitySchema),
+  episodeCharacterArchive: z.record(z.string(), z.array(characterIdentitySchema)).optional(), // key = episodeNumber，归档每集 scope='episode' 的临时角色
+  minorRolePool: na(minorRolePoolEntrySchema), // 可复用临时角色池，供后续集导演选角
   locations: na(sceneLocationSchema),
 
   seriesOutline: seriesOutlineSchema.optional(),
@@ -722,4 +761,5 @@ export type DramaContinuityCheck = z.infer<typeof dramaContinuityCheckSchema>;
 export type DramaStrategy = z.infer<typeof dramaStrategySchema>;
 export type DramaDopamineSchedule = z.infer<typeof dramaDopamineScheduleSchema>;
 export type DramaDeterministicCheck = z.infer<typeof dramaDeterministicCheckSchema>;
+export type MinorRolePoolEntry = z.infer<typeof minorRolePoolEntrySchema>;
 export type DramaState = z.infer<typeof dramaStateSchema>;

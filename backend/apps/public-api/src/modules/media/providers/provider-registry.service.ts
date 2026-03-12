@@ -83,9 +83,12 @@ export class ProviderRegistryService implements OnModuleInit {
     const client = new VolcengineClient(clientCfg);
 
     const imgCfg = (vc.image ?? {}) as Record<string, unknown>;
-    if (imgCfg.model || imgCfg.enabled !== false) {
+    const modelsRaw = String(imgCfg.models || '');
+    const models = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
+    if (models.length || imgCfg.enabled !== false) {
+      if (!models.length) models.push('doubao-seedream-5-0-260128');
       const imageProvider = new VolcengineImageProvider(client, {
-        model: String(imgCfg.model || 'doubao-seedream-5-0-260128'),
+        models,
         defaultSize: String(imgCfg.defaultSize || '1:1'),
         defaultResolution: String(imgCfg.defaultResolution || '2K'),
         watermark: String(imgCfg.watermark) === 'true',

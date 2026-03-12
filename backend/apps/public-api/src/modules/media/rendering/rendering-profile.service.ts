@@ -84,7 +84,17 @@ const PROFILE_REGISTRY: Array<{
   match: (model: string, provider: string) => boolean;
   profile: RenderingProfile;
 }> = [
-  { match: (_m, p) => p === 'volcengine', profile: SEEDREAM_PROFILE },
+  {
+    match: (m, p) => {
+      const provider = String(p || '').toLowerCase();
+      const model = String(m || '').toLowerCase();
+      return provider === 'volcengine'
+        || provider.startsWith('volcengine.')
+        || model.includes('doubao-seedream')
+        || model.includes('seedream');
+    },
+    profile: SEEDREAM_PROFILE,
+  },
 ];
 
 @Injectable()
@@ -97,15 +107,26 @@ export class RenderingProfileService implements OnModuleInit {
   onModuleInit() {
     const media = (this.configService.get('media') ?? {}) as Record<string, unknown>;
     const defaultProvider = String(media.defaultImageProvider || 'volcengine');
-    const providerCfg = (media[defaultProvider] ?? {}) as Record<string, unknown>;
+    const providerNamespace = defaultProvider.split('.')[0] || defaultProvider;
+    const providerCfg = (
+      media[defaultProvider]
+      ?? media[providerNamespace]
+      ?? {}
+    ) as Record<string, unknown>;
     const imageCfg = (providerCfg.image ?? {}) as Record<string, unknown>;
-    const model = String(imageCfg.model || '');
+    const modelsRaw = String(imageCfg.models || '');
+    const primaryModel = modelsRaw.split(',')[0]?.trim() || '';
+    const model = primaryModel
+      || String(providerCfg.model || '')
+      || defaultProvider.split('.').slice(1).join('.')
+      || '';
 
-    const found = PROFILE_REGISTRY.find(r => r.match(model, defaultProvider));
+    const found = PROFILE_REGISTRY.find((r) => r.match(model, defaultProvider));
     this.imageProfile = found?.profile ?? GENERIC_PROFILE;
 
     this.logger.log(
       `图片渲染配置: ${this.imageProfile.displayName} | ` +
+      `provider=${defaultProvider} model=${model || '-'} ` +
       `refMax=${this.imageProfile.refImage.maxCount} ` +
       `negPrompt=${this.imageProfile.negativePrompt.supported} ` +
       `face=${this.imageProfile.refImage.faceConsistencyMethod} ` +

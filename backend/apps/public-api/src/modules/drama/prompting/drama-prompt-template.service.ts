@@ -1,6 +1,6 @@
 /** Drama Prompt 模板服务 — 包装 Playbook 函数，叠加 Pipeline 的 additionalSystemPrompt */
 import { Injectable } from '@nestjs/common';
-import { DramaAgentPipelineService } from '../drama-agent-pipeline.service';
+import { DramaAgentPipelineService } from '../workflow/drama-agent-pipeline.service';
 
 @Injectable()
 export class DramaPromptTemplateService {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, history } from '@umijs/max';
 import { message } from 'antd';
 import {
@@ -19,11 +19,14 @@ import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import {
   getDrama, listEpisodes, getEpisode, getVisualAssets,
+  regenerateVisualAssetImage, refineVisualAssetImage,
   getGenerateEpisodeSseUrl, getGenerateMediaSseUrl, getEpisodeProgressSseUrl,
   getGenerationStatus, pauseEpisodeGeneration, type DbRunningItem,
   getDramaUsage, updateShot, listDramaExecutions, resetProblemShots,
-  type EpisodeListItem, type ShotPatch, type DramaUsageSummary, type DramaSseEvent, type DramaExecutionListItem,
-  type ResetFixTarget,
+  getDramaPipeline, saveDramaPipelineDraft, publishDramaPipeline, saveDramaWorkflowParams, getDramaNodePreview,
+  type EpisodeListItem, type ShotPatch, type DramaUsageSummary, type DramaSseEvent, type DramaExecutionListItem, type VisualAssetItem,
+  type VisualAssetRefineStrength, type VisualAssetRefineSyncScope,
+  type ResetFixTarget, type DramaPipeline, type DramaAgentNodeConfig, type DramaWorkflowParams,
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
 
@@ -32,6 +35,56 @@ import { getToken } from '@/services/auth';
 const VIEW_ANGLE_LABELS: Record<string, string> = {
   face_front: '正面', face_three_quarter: '3/4侧面', upper_body_front: '半身',
   full_body_front: '全身', side_profile: '侧面', back_view: '背面',
+};
+const VIEW_ANGLE_ORDER = ['face_front', 'face_three_quarter', 'side_profile', 'back_view', 'upper_body_front', 'full_body_front'];
+const VIEW_ANGLE_GROUP: Record<string, 'core' | 'face' | 'framing'> = {
+  face_front: 'core',
+  face_three_quarter: 'face',
+  side_profile: 'face',
+  back_view: 'face',
+  upper_body_front: 'framing',
+  full_body_front: 'framing',
+};
+type ViewSyncScope = 'single' | 'group' | 'all';
+type ViewEditStrength = 'light' | 'balanced' | 'strong';
+
+const VIEW_SYNC_SCOPE_OPTIONS: Array<{ value: ViewSyncScope; label: string; hint: string }> = [
+  { value: 'single', label: '仅当前', hint: '只影响当前选中的视角图。' },
+  { value: 'group', label: '同组联动', hint: '影响同一视角组，避免误改无关图。' },
+  { value: 'all', label: '全角色', hint: '影响该角色全部视角，统一风格。' },
+];
+
+const VIEW_EDIT_STRENGTH_OPTIONS: Array<{ value: ViewEditStrength; label: string }> = [
+  { value: 'light', label: '保守' },
+  { value: 'balanced', label: '均衡' },
+  { value: 'strong', label: '激进' },
+];
+
+const VIEW_EDIT_STRENGTH_HINTS: Record<ViewEditStrength, string> = {
+  light: '轻微修正细节，优先保持人物身份一致性与五官稳定。',
+  balanced: '在一致性与风格变化间折中，适合常规精修。',
+  strong: '允许较大变化，适合重做质感或明显重构构图。',
+};
+
+const sortViewImages = (items: Array<{ viewAngle: string; imageUrl: string }>): Array<{ viewAngle: string; imageUrl: string }> => (
+  [...items].sort((a, b) => {
+    const ai = VIEW_ANGLE_ORDER.indexOf(a.viewAngle);
+    const bi = VIEW_ANGLE_ORDER.indexOf(b.viewAngle);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  })
+);
+
+const resolveAffectedViews = (
+  targetView: string,
+  scope: ViewSyncScope,
+  availableViews: string[],
+): string[] => {
+  if (!targetView) return [];
+  if (scope === 'all') return availableViews;
+  if (scope === 'single') return availableViews.filter((angle) => angle === targetView);
+  if (targetView === 'face_front') return availableViews;
+  const group = VIEW_ANGLE_GROUP[targetView];
+  return availableViews.filter((angle) => angle === targetView || VIEW_ANGLE_GROUP[angle] === group);
 };
 
 const ANGLE_LABELS: Record<string, string> = {
@@ -119,6 +172,15 @@ const ROLE_STYLES: Record<string, { label: string; className: string }> = {
   supporting: { label: '配角', className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' },
   minor: { label: '路人', className: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' },
 };
+const CHARACTER_ROLE_ORDER: Record<string, number> = { protagonist: 0, antagonist: 1, supporting: 2, minor: 3 };
+
+type ShotFilterMode = 'all' | 'problem' | 'locked' | 'flashback';
+const SHOT_FILTER_LABELS: Record<ShotFilterMode, string> = {
+  all: '全部',
+  problem: '问题镜头',
+  locked: '已锁定',
+  flashback: '闪回',
+};
 
 const STEP_LABELS: Record<string, string> = {
   seed_analyze: '种子分析',
@@ -184,6 +246,20 @@ const SKIP_REASON_LABELS: Record<string, string> = {
   workflow_param_disabled: '工作流参数关闭',
 };
 
+const NARRATIVE_ARC_LABELS: Record<string, string> = {
+  conflict_resolution: '冲突化解',
+  life_journey: '人生旅程',
+  mystery_reveal: '悬谜揭秘',
+  quest: '征途追寻',
+  rise_and_fall: '兴衰沉浮',
+};
+
+const FACT_CONSTRAINT_LABELS: Record<string, string> = {
+  none: '纯虚构',
+  inspired_by: '历史灵感',
+  period_accurate: '史实严格',
+};
+
 const CONTINUITY_WARNING_LABELS: Record<string, string> = {
   character_appearance_mismatch: '角色外貌与设定不一致',
   location_continuity_break: '场景连续性断裂',
@@ -237,11 +313,13 @@ interface Character {
   characterId: string; name: string; role: string; faceDescription: string;
   bodyType: string; hairStyle: string; skinTone: string; age: string;
   defaultCostume: string; distinguishingFeatures: string;
+  faceReferencePrompt?: string;
   voiceProfile: { timbre: string; speakingStyle: string; catchphrase?: string };
 }
 interface Location {
   locationId: string; name: string; description: string; lightingDefault: string;
   colorTone: string; keyProps: string[]; isRecurring: boolean; ambientSoundDefault: string;
+  visualPrompt?: string;
 }
 interface ShotCamera { angle: string; movement: string; composition: string; depthOfField: string; }
 interface ShotChar { characterId: string; action: string; emotion: string; position: string; }
@@ -254,6 +332,7 @@ interface Shot {
   visualPrompt: string; subtitle?: { text: string; style: string } | null;
   estimatedDurationSec: number; transitionToNext: string;
   firstFrameImageUrl?: string | null; lastFrameImageUrl?: string | null;
+  firstFramePrompt?: string | null; lastFramePrompt?: string | null;
   isMasterShot?: boolean;
   regenPriority?: 'high' | 'medium' | 'low';
   qualityTier?: 'golden' | 'standard' | 'filler';
@@ -281,6 +360,9 @@ interface ShotMedia {
   lastFrameImageUrl?: string;
   status?: string;
   qc?: ShotMediaQc;
+  t2iPrompt?: string;
+  t2iNegativePrompt?: string;
+  lastFrameT2iPrompt?: string;
 }
 interface ContinuityWarning {
   type: string;
@@ -657,6 +739,45 @@ const ShotCard: React.FC<ShotCardProps> = ({
               </div>
             )}
 
+            {/* T2I 提示词 */}
+            {(mediaItem?.t2iPrompt || shot.firstFramePrompt || shot.lastFramePrompt) && (
+              <div>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">图片生成提示词</p>
+                <div className="space-y-2">
+                  {mediaItem?.t2iPrompt && (
+                    <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/50 px-2.5 py-2">
+                      <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400 mb-1">首帧 T2I（最终发送）</p>
+                      <p className="text-[11px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all">{mediaItem.t2iPrompt}</p>
+                    </div>
+                  )}
+                  {mediaItem?.t2iNegativePrompt && (
+                    <div className="rounded-md bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 px-2.5 py-2">
+                      <p className="text-[10px] font-medium text-red-600 dark:text-red-400 mb-1">Negative Prompt</p>
+                      <p className="text-[11px] text-red-900 dark:text-red-200 leading-relaxed break-all select-all">{mediaItem.t2iNegativePrompt}</p>
+                    </div>
+                  )}
+                  {mediaItem?.lastFrameT2iPrompt && (
+                    <div className="rounded-md bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/50 px-2.5 py-2">
+                      <p className="text-[10px] font-medium text-indigo-600 dark:text-indigo-400 mb-1">尾帧 T2I（最终发送）</p>
+                      <p className="text-[11px] text-indigo-900 dark:text-indigo-200 leading-relaxed break-all select-all">{mediaItem.lastFrameT2iPrompt}</p>
+                    </div>
+                  )}
+                  {shot.firstFramePrompt && (
+                    <div className="rounded-md bg-muted/50 px-2.5 py-2">
+                      <p className="text-[10px] font-medium text-muted-foreground mb-1">首帧原始 Prompt（分镜）</p>
+                      <p className="text-[11px] text-foreground/80 leading-relaxed break-all select-all">{shot.firstFramePrompt}</p>
+                    </div>
+                  )}
+                  {shot.lastFramePrompt && (
+                    <div className="rounded-md bg-muted/50 px-2.5 py-2">
+                      <p className="text-[10px] font-medium text-muted-foreground mb-1">尾帧原始 Prompt（分镜）</p>
+                      <p className="text-[11px] text-foreground/80 leading-relaxed break-all select-all">{shot.lastFramePrompt}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {qc && (
               <div>
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">画面质检</p>
@@ -814,115 +935,962 @@ const ShotCard: React.FC<ShotCardProps> = ({
   );
 };
 
+// ─── CharacterPromptPanel ─────────────────────────────────────────────────────
+
+const CharacterPromptPanel: React.FC<{ char: Character }> = ({ char }) => {
+  const [expanded, setExpanded] = useState(false);
+  const anyChar = char as any;
+  const prompts: Array<{ label: string; value: string; hint: string }> = [
+    { label: '面部生成提示词', value: char.faceReferencePrompt ?? '', hint: '注入：所有角色参考图生成' },
+    { label: '体型提示词', value: anyChar.bodyTypePrompt ?? '', hint: '注入：全身图 / storyboard T2I' },
+    { label: '发型提示词', value: anyChar.hairStylePrompt ?? '', hint: '注入：角色参考图生成' },
+    { label: '服装提示词', value: anyChar.defaultCostumePrompt ?? '', hint: '注入：全身图 / storyboard T2I' },
+    { label: '综合外貌提示词', value: anyChar.appearanceHint ?? '', hint: '注入：episode-director 新角色声明' },
+  ].filter((p) => p.value);
+
+  if (prompts.length === 0) return null;
+
+  return (
+    <div className="rounded-md border border-blue-200 dark:border-blue-800/50 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center justify-between px-2.5 py-1.5 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+      >
+        <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400 flex items-center gap-1">
+          <Lock className="h-3 w-3" />
+          图片生成提示词（{prompts.length} 项）
+        </span>
+        {expanded
+          ? <ChevronUp className="h-3 w-3 text-blue-500" />
+          : <ChevronDown className="h-3 w-3 text-blue-500" />}
+      </button>
+      {expanded && (
+        <div className="bg-blue-50/50 dark:bg-blue-950/20 px-2.5 py-2 space-y-2.5">
+          <p className="text-[10px] text-blue-500/80 dark:text-blue-400/60">由 Profiler Agent 建剧时自动生成，注入图像生成管线。如需调整，请通过「精修」功能指定自定义提示词。</p>
+          {prompts.map(({ label, value, hint }) => (
+            <div key={label}>
+              <div className="flex items-center justify-between mb-0.5">
+                <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400">{label}</p>
+                <span className="text-[9px] text-blue-400/70">{hint}</span>
+              </div>
+              <p className="text-[11px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all font-mono">{value}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── CharacterCard ────────────────────────────────────────────────────────────
 
-const CharacterCard: React.FC<{ char: Character; imageUrl?: string; viewImages?: Array<{ viewAngle: string; imageUrl: string }> }> = ({ char, imageUrl, viewImages }) => {
+const CharacterCard: React.FC<{
+  char: Character;
+  imageUrl?: string;
+  viewImages?: Array<{ viewAngle: string; imageUrl: string }>;
+  busy?: boolean;
+  onRegenerate: (viewAngle?: string) => void;
+  onRefine: (input: {
+    viewAngle?: string;
+    syncScope: VisualAssetRefineSyncScope;
+    strength: VisualAssetRefineStrength;
+    instruction: string;
+  }) => void;
+}> = ({ char, imageUrl, viewImages, busy = false, onRegenerate, onRefine }) => {
   const [expanded, setExpanded] = useState(false);
+  const [activeViewAngle, setActiveViewAngle] = useState('');
+  const [refineOpen, setRefineOpen] = useState(false);
+  const [refineInstruction, setRefineInstruction] = useState('');
+  const [refineViewAngle, setRefineViewAngle] = useState('');
+  const [syncScope, setSyncScope] = useState<ViewSyncScope>('group');
+  const [editStrength, setEditStrength] = useState<ViewEditStrength>('balanced');
   const roleStyle = ROLE_STYLES[char.role] ?? ROLE_STYLES.minor;
+  const resolvedViews = useMemo(() => {
+    if (viewImages?.length) return sortViewImages(viewImages);
+    return imageUrl ? [{ viewAngle: 'face_front', imageUrl }] : [];
+  }, [imageUrl, viewImages]);
+  const viewImageMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of resolvedViews) {
+      if (item?.viewAngle && item?.imageUrl) map.set(item.viewAngle, item.imageUrl);
+    }
+    if (imageUrl && !map.has('face_front')) map.set('face_front', imageUrl);
+    return map;
+  }, [imageUrl, resolvedViews]);
+  const availableViews = useMemo(() => resolvedViews.map((vi) => vi.viewAngle), [resolvedViews]);
+  const selectedView = activeViewAngle || resolvedViews[0]?.viewAngle || '';
+  const selectedViewLabel = selectedView ? (VIEW_ANGLE_LABELS[selectedView] ?? selectedView) : '未选择';
+  const anchorView = availableViews.includes('face_front') ? 'face_front' : (availableViews[0] ?? '');
+  const anchorViewLabel = anchorView ? (VIEW_ANGLE_LABELS[anchorView] ?? anchorView) : '未定义';
+
+  useEffect(() => {
+    if (resolvedViews.length === 0) {
+      if (activeViewAngle) setActiveViewAngle('');
+      return;
+    }
+    if (!activeViewAngle || !availableViews.includes(activeViewAngle)) {
+      setActiveViewAngle(resolvedViews[0].viewAngle);
+    }
+  }, [activeViewAngle, availableViews, resolvedViews]);
+
+  const openRefineDialog = () => {
+    const targetView = selectedView || 'face_front';
+    setRefineViewAngle(targetView);
+    setRefineInstruction('');
+    setRefineOpen(true);
+  };
+
+  const submitRefine = () => {
+    const instruction = refineInstruction.trim();
+    if (!instruction) {
+      message.warning('请先输入精修要求');
+      return;
+    }
+    const targetView = refineViewAngle || selectedView || 'face_front';
+    onRefine({
+      viewAngle: targetView,
+      syncScope,
+      strength: editStrength,
+      instruction,
+    });
+    setRefineOpen(false);
+  };
+
+  const refineTargetView = refineViewAngle || selectedView || 'face_front';
+  const refinePreviewUrl = viewImageMap.get(refineTargetView) || imageUrl || '';
+  const refinePreviewLabel = VIEW_ANGLE_LABELS[refineTargetView] ?? refineTargetView;
+  const plannedViews = resolveAffectedViews(
+    refineTargetView,
+    syncScope,
+    availableViews.length ? availableViews : [refineTargetView],
+  );
+
   return (
-    <Card className="overflow-hidden">
-      <button type="button" className="w-full text-left" onClick={() => setExpanded(e => !e)}>
-        <CardContent className="p-3 flex items-start gap-3">
-          {imageUrl ? (
-            <img src={imageUrl} alt={char.name} className="w-9 h-9 rounded-full object-cover shrink-0 ring-2 ring-violet-200 dark:ring-violet-800" />
-          ) : (
-            <div className="flex items-center justify-center w-9 h-9 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 text-sm font-bold shrink-0">
-              {char.name.charAt(0)}
-            </div>
-          )}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <p className="text-sm font-semibold">{char.name}</p>
-              <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium', roleStyle.className)}>{roleStyle.label}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{char.faceDescription}</p>
-            {expanded && (
-              <div className="mt-2 space-y-1.5 text-xs">
-                {viewImages && viewImages.length > 1 ? (
-                  <div className="mb-2">
-                    <p className="text-[10px] font-semibold text-muted-foreground mb-1.5">多角度参考图</p>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {viewImages.map(vi => (
-                        <div key={vi.viewAngle} className="rounded-lg overflow-hidden bg-muted">
-                          <img src={vi.imageUrl} alt={`${char.name} ${vi.viewAngle}`} className="w-full aspect-[3/4] object-cover" />
-                          <p className="text-[10px] text-center text-muted-foreground py-0.5">{VIEW_ANGLE_LABELS[vi.viewAngle] ?? vi.viewAngle}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : imageUrl ? (
-                  <div className="rounded-lg overflow-hidden bg-muted mb-2">
-                    <img src={imageUrl} alt={char.name} className="w-full object-cover max-h-52" />
-                  </div>
-                ) : null}
-                {char.age && <p><span className="text-muted-foreground">年龄：</span>{char.age}</p>}
-                {char.hairStyle && <p><span className="text-muted-foreground">发型：</span>{char.hairStyle}</p>}
-                {char.skinTone && <p><span className="text-muted-foreground">肤色：</span>{char.skinTone}</p>}
-                {char.bodyType && <p><span className="text-muted-foreground">体型：</span>{char.bodyType}</p>}
-                {char.defaultCostume && <p><span className="text-muted-foreground">默认服装：</span>{char.defaultCostume}</p>}
-                {char.distinguishingFeatures && <p><span className="text-muted-foreground">标志特征：</span>{char.distinguishingFeatures}</p>}
-                {char.voiceProfile?.timbre && <p><span className="text-muted-foreground">音色：</span>{char.voiceProfile.timbre}</p>}
-                {char.voiceProfile?.speakingStyle && <p><span className="text-muted-foreground">配音风格：</span>{char.voiceProfile.speakingStyle}</p>}
-                {char.voiceProfile?.catchphrase && (
-                  <p><span className="text-muted-foreground">口头禅：</span><span className="italic">&quot;{char.voiceProfile.catchphrase}&quot;</span></p>
-                )}
+    <>
+      <Card className="overflow-hidden">
+        <CardContent className="p-3 space-y-2">
+          <button type="button" className="w-full text-left flex items-start gap-3" onClick={() => setExpanded(e => !e)}>
+            {imageUrl ? (
+              <img src={imageUrl} alt={char.name} className="w-9 h-9 rounded-full object-cover shrink-0 ring-2 ring-violet-200 dark:ring-violet-800" />
+            ) : (
+              <div className="flex items-center justify-center w-9 h-9 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 text-sm font-bold shrink-0">
+                {char.name.charAt(0)}
               </div>
             )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-sm font-semibold">{char.name}</p>
+                <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium', roleStyle.className)}>{roleStyle.label}</span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{char.faceDescription}</p>
+            </div>
+            <div className="shrink-0 mt-0.5">
+              {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+            </div>
+          </button>
+
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs gap-1"
+              disabled={busy}
+              onClick={() => onRegenerate(selectedView || 'face_front')}
+            >
+              {busy
+                ? <><Loader2 className="h-3 w-3 animate-spin" />生成中</>
+                : <><RotateCcw className="h-3 w-3" />重新生成</>}
+            </Button>
+            <Button
+              size="sm"
+              className="h-7 text-xs gap-1"
+              disabled={busy}
+              onClick={openRefineDialog}
+            >
+              <Pencil className="h-3 w-3" />精修
+            </Button>
+            {selectedView && (
+              <span className="text-[10px] text-muted-foreground">
+                当前视角：{VIEW_ANGLE_LABELS[selectedView] ?? selectedView}
+              </span>
+            )}
           </div>
-          <div className="shrink-0 mt-0.5">
-            {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-          </div>
+
+          {expanded && (
+            <div className="pt-2 border-t border-border/40 space-y-2 text-xs">
+              {resolvedViews.length > 1 ? (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground">多角度参考图（点击选择当前视角）</p>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {resolvedViews.map((vi) => (
+                      <button
+                        key={vi.viewAngle}
+                        type="button"
+                        onClick={() => setActiveViewAngle(vi.viewAngle)}
+                        className={cn(
+                          'rounded-lg overflow-hidden border text-left transition-colors',
+                          selectedView === vi.viewAngle
+                            ? 'border-violet-500 ring-1 ring-violet-300 dark:ring-violet-700'
+                            : 'border-border/60 hover:border-violet-300',
+                        )}
+                      >
+                        {vi.imageUrl ? (
+                          <img src={vi.imageUrl} alt={`${char.name} ${vi.viewAngle}`} className="w-full aspect-[3/4] object-cover" />
+                        ) : (
+                          <div className="w-full aspect-[3/4] bg-muted/50 flex items-center justify-center text-[10px] text-muted-foreground">
+                            待生成
+                          </div>
+                        )}
+                        <p className="text-[10px] text-center text-muted-foreground py-0.5 bg-background">
+                          {VIEW_ANGLE_LABELS[vi.viewAngle] ?? vi.viewAngle}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : imageUrl ? (
+                <div className="rounded-lg overflow-hidden bg-muted mb-1.5">
+                  <img src={imageUrl} alt={char.name} className="w-full object-cover max-h-52" />
+                </div>
+              ) : null}
+
+              {resolvedViews.length > 0 && (
+                <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground">
+                    锚点：{anchorViewLabel} · 当前视角：{selectedViewLabel}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">
+                    点击「精修」进入编辑面板；展示区仅用于查看与选中视角。
+                  </p>
+                </div>
+              )}
+
+              {(char.faceReferencePrompt || (char as any).bodyTypePrompt || (char as any).hairStylePrompt || (char as any).defaultCostumePrompt || (char as any).appearanceHint) && (
+                <CharacterPromptPanel char={char} />
+              )}
+              {char.age && <p><span className="text-muted-foreground">年龄：</span>{char.age}</p>}
+              {char.hairStyle && <p><span className="text-muted-foreground">发型：</span>{char.hairStyle}</p>}
+              {char.skinTone && <p><span className="text-muted-foreground">肤色：</span>{char.skinTone}</p>}
+              {char.bodyType && <p><span className="text-muted-foreground">体型：</span>{char.bodyType}</p>}
+              {char.defaultCostume && <p><span className="text-muted-foreground">默认服装：</span>{char.defaultCostume}</p>}
+              {char.distinguishingFeatures && <p><span className="text-muted-foreground">标志特征：</span>{char.distinguishingFeatures}</p>}
+              {char.voiceProfile?.timbre && <p><span className="text-muted-foreground">音色：</span>{char.voiceProfile.timbre}</p>}
+              {char.voiceProfile?.speakingStyle && <p><span className="text-muted-foreground">配音风格：</span>{char.voiceProfile.speakingStyle}</p>}
+              {char.voiceProfile?.catchphrase && (
+                <p><span className="text-muted-foreground">口头禅：</span><span className="italic">&quot;{char.voiceProfile.catchphrase}&quot;</span></p>
+              )}
+            </div>
+          )}
         </CardContent>
-      </button>
-    </Card>
+      </Card>
+
+      <Dialog
+        open={refineOpen}
+        onOpenChange={(open) => {
+          if (busy) return;
+          setRefineOpen(open);
+        }}
+      >
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>精修角色图：{char.name}</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_240px] gap-4 items-start">
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">目标视角</Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {(availableViews.length ? availableViews : ['face_front']).map((view) => (
+                    <button
+                      key={view}
+                      type="button"
+                      onClick={() => setRefineViewAngle(view)}
+                      className={cn(
+                        'px-2 py-1 rounded-md border text-xs transition-colors',
+                        refineTargetView === view
+                          ? 'bg-violet-600 text-white border-violet-600'
+                          : 'bg-background text-muted-foreground border-border hover:text-foreground',
+                      )}
+                    >
+                      {VIEW_ANGLE_LABELS[view] ?? view}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs">精修要求</Label>
+                <Textarea
+                  className="min-h-[88px] text-xs"
+                  value={refineInstruction}
+                  onChange={(e) => setRefineInstruction(e.target.value)}
+                  placeholder="例如：衣服改为墨绿色丝绸，保持脸型和发型不变，光线更自然"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">同步范围</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {VIEW_SYNC_SCOPE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setSyncScope(opt.value)}
+                        className={cn(
+                          'px-2 py-1 rounded-md border text-xs transition-colors',
+                          syncScope === opt.value
+                            ? 'bg-violet-600 text-white border-violet-600'
+                            : 'bg-background text-muted-foreground border-border hover:text-foreground',
+                        )}
+                        title={opt.hint}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs">修改强度</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {VIEW_EDIT_STRENGTH_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setEditStrength(opt.value)}
+                        className={cn(
+                          'px-2 py-1 rounded-md border text-xs transition-colors',
+                          editStrength === opt.value
+                            ? 'bg-emerald-600 text-white border-emerald-600'
+                            : 'bg-background text-muted-foreground border-border hover:text-foreground',
+                        )}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <p className="text-[11px] text-muted-foreground">
+                预计影响：{plannedViews.map((v) => VIEW_ANGLE_LABELS[v] ?? v).join('、') || '仅当前'} · {VIEW_EDIT_STRENGTH_HINTS[editStrength]}
+              </p>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => setRefineOpen(false)}>
+                  取消
+                </Button>
+                <Button size="sm" disabled={busy || !refineInstruction.trim()} onClick={submitRefine}>
+                  {busy ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />提交中</> : '提交精修'}
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">当前预览：{refinePreviewLabel}</p>
+              <div className="rounded-lg border border-border/70 overflow-hidden bg-muted aspect-[3/4]">
+                {refinePreviewUrl ? (
+                  <img
+                    src={refinePreviewUrl}
+                    alt={`${char.name} ${refinePreviewLabel}`}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
+                    当前视角暂无图片
+                  </div>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                切换左侧“目标视角”时，右侧预览会同步切换，避免盲改。
+              </p>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 };
 
 // ─── LocationCard ─────────────────────────────────────────────────────────────
 
-const LocationCard: React.FC<{ loc: Location; imageUrl?: string }> = ({ loc, imageUrl }) => {
+const LocationCard: React.FC<{
+  loc: Location;
+  imageUrl?: string;
+  busy?: boolean;
+  onRegenerate: () => void;
+  onRefine: (instruction: string) => void;
+}> = ({ loc, imageUrl, busy = false, onRegenerate, onRefine }) => {
   const [expanded, setExpanded] = useState(false);
+  const [refineOpen, setRefineOpen] = useState(false);
+  const [instruction, setInstruction] = useState('');
+  const openRefineDialog = () => {
+    setInstruction('');
+    setRefineOpen(true);
+  };
+  const handleRefine = () => {
+    const text = instruction.trim();
+    if (!text) {
+      message.warning('请先输入场景精修要求');
+      return;
+    }
+    onRefine(text);
+    setRefineOpen(false);
+  };
+
   return (
-    <Card className="overflow-hidden">
-      <button type="button" className="w-full text-left" onClick={() => setExpanded(e => !e)}>
-        <CardContent className="p-3 flex items-start gap-3">
-          {imageUrl ? (
-            <img src={imageUrl} alt={loc.name} className="w-9 h-9 rounded-lg object-cover shrink-0 ring-2 ring-emerald-200 dark:ring-emerald-800" />
-          ) : (
-            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 shrink-0">
-              <MapPin className="h-4 w-4" />
-            </div>
-          )}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <p className="text-sm font-semibold">{loc.name}</p>
-              {loc.isRecurring && (
-                <span className="text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded">常用</span>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{loc.description}</p>
-            {expanded && (
-              <div className="mt-2 space-y-1.5 text-xs">
-                {imageUrl && (
-                  <div className="rounded-lg overflow-hidden bg-muted mb-2">
-                    <img src={imageUrl} alt={loc.name} className="w-full object-cover max-h-40" />
-                  </div>
-                )}
-                {loc.lightingDefault && <p><span className="text-muted-foreground">光线：</span>{loc.lightingDefault}</p>}
-                {loc.colorTone && <p><span className="text-muted-foreground">色调：</span>{loc.colorTone}</p>}
-                {loc.ambientSoundDefault && <p><span className="text-muted-foreground">环境音：</span>{loc.ambientSoundDefault}</p>}
-                {loc.keyProps?.length > 0 && (
-                  <p><span className="text-muted-foreground">标志道具：</span>{loc.keyProps.join('、')}</p>
-                )}
+    <>
+      <Card className="overflow-hidden">
+        <button type="button" className="w-full text-left" onClick={() => setExpanded(e => !e)}>
+          <CardContent className="p-3 flex items-start gap-3">
+            {imageUrl ? (
+              <img src={imageUrl} alt={loc.name} className="w-9 h-9 rounded-lg object-cover shrink-0 ring-2 ring-emerald-200 dark:ring-emerald-800" />
+            ) : (
+              <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 shrink-0">
+                <MapPin className="h-4 w-4" />
               </div>
             )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-sm font-semibold">{loc.name}</p>
+                {loc.isRecurring && (
+                  <span className="text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded">常用</span>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{loc.description}</p>
+              {expanded && (
+                <div className="mt-2 space-y-1.5 text-xs">
+                  {imageUrl && (
+                    <div className="rounded-lg overflow-hidden bg-muted mb-2">
+                      <img src={imageUrl} alt={loc.name} className="w-full object-cover max-h-40" />
+                    </div>
+                  )}
+                  {loc.visualPrompt && (
+                    <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/50 px-2.5 py-2">
+                      <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400 mb-1">图片生成提示词</p>
+                      <p className="text-[11px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all">{loc.visualPrompt}</p>
+                    </div>
+                  )}
+                  {loc.lightingDefault && <p><span className="text-muted-foreground">光线：</span>{loc.lightingDefault}</p>}
+                  {loc.colorTone && <p><span className="text-muted-foreground">色调：</span>{loc.colorTone}</p>}
+                  {loc.ambientSoundDefault && <p><span className="text-muted-foreground">环境音：</span>{loc.ambientSoundDefault}</p>}
+                  {loc.keyProps?.length > 0 && (
+                    <p><span className="text-muted-foreground">标志道具：</span>{loc.keyProps.join('、')}</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="shrink-0 mt-0.5">
+              {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+            </div>
+          </CardContent>
+        </button>
+        <div className="px-3 pb-3 pt-0 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs gap-1"
+            disabled={busy}
+            onClick={onRegenerate}
+          >
+            {busy
+              ? <><Loader2 className="h-3 w-3 animate-spin" />生成中</>
+              : <><RotateCcw className="h-3 w-3" />重新生成</>}
+          </Button>
+          <Button
+            size="sm"
+            className="h-7 text-xs gap-1"
+            disabled={busy}
+            onClick={openRefineDialog}
+          >
+            <Pencil className="h-3 w-3" />精修
+          </Button>
+        </div>
+      </Card>
+
+      <Dialog
+        open={refineOpen}
+        onOpenChange={(open) => {
+          if (busy) return;
+          setRefineOpen(open);
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>精修场景图：{loc.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">精修要求</Label>
+              <Textarea
+                className="min-h-[88px] text-xs"
+                placeholder="例如：改为黄昏暖色调，增加窗外雨丝与地面反光"
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => setRefineOpen(false)}>
+                取消
+              </Button>
+              <Button size="sm" disabled={busy || !instruction.trim()} onClick={handleRefine}>
+                {busy ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />提交中</> : '提交精修'}
+              </Button>
+            </div>
           </div>
-          <div className="shrink-0 mt-0.5">
-            {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+};
+
+// ─── WorkshopTab — 创作工坊 ───────────────────────────────────────────────────
+
+
+interface WorkshopTabProps {
+  dramaId: string;
+  drama: Record<string, unknown> | null;
+  draftNodes: DramaAgentNodeConfig[];
+  setDraftNodes: React.Dispatch<React.SetStateAction<DramaAgentNodeConfig[]>>;
+  workflowParams: DramaWorkflowParams;
+  setWorkflowParams: React.Dispatch<React.SetStateAction<DramaWorkflowParams>>;
+  pipeline: DramaPipeline | null;
+  setPipeline: React.Dispatch<React.SetStateAction<DramaPipeline | null>>;
+  selectedNodeId: string | null;
+  setSelectedNodeId: React.Dispatch<React.SetStateAction<string | null>>;
+  nodeAdditional: string;
+  setNodeAdditional: React.Dispatch<React.SetStateAction<string>>;
+  nodeAdditionalSaved: string;
+  setNodeAdditionalSaved: React.Dispatch<React.SetStateAction<string>>;
+  pipelineSaving: boolean;
+  setPipelineSaving: React.Dispatch<React.SetStateAction<boolean>>;
+  pipelinePublishing: boolean;
+  setPipelinePublishing: React.Dispatch<React.SetStateAction<boolean>>;
+  paramsSaving: boolean;
+  setParamsSaving: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+const WorkshopTab: React.FC<WorkshopTabProps> = ({
+  dramaId, drama, draftNodes, setDraftNodes, workflowParams, setWorkflowParams,
+  pipeline, setPipeline, selectedNodeId, setSelectedNodeId,
+  nodeAdditional, setNodeAdditional, nodeAdditionalSaved, setNodeAdditionalSaved,
+  pipelineSaving, setPipelineSaving, pipelinePublishing, setPipelinePublishing,
+  paramsSaving, setParamsSaving,
+}) => {
+  const selectedNode = draftNodes.find((n) => n.id === selectedNodeId) ?? null;
+  const promptProfile = (drama as any)?.state?.promptProfile as Record<string, unknown> | undefined;
+  const scriptwriterGuide = promptProfile?.scriptwriterGuide as Record<string, unknown> | undefined;
+  const genreArchetype = promptProfile?.genreArchetype as Record<string, unknown> | undefined;
+  const visualStyle = (drama as any)?.state?.visualStyle as Record<string, unknown> | undefined;
+
+  const isDirty = nodeAdditional !== nodeAdditionalSaved;
+  const hasUnpublished = pipeline?.hasDraft ?? false;
+
+  // 基础提示词预览
+  const [basePromptCache, setBasePromptCache] = useState<Record<string, string>>({});
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  useEffect(() => {
+    if (!selectedNodeId || !dramaId) return;
+    if (basePromptCache[selectedNodeId]) return; // 已缓存
+    setPreviewLoading(true);
+    getDramaNodePreview(dramaId, selectedNodeId)
+      .then(({ basePrompt }) => setBasePromptCache((prev) => ({ ...prev, [selectedNodeId]: basePrompt })))
+      .catch(() => setBasePromptCache((prev) => ({ ...prev, [selectedNodeId]: '提示词加载失败' })))
+      .finally(() => setPreviewLoading(false));
+  }, [dramaId, selectedNodeId, basePromptCache]);
+
+  const handleSelectNode = (node: DramaAgentNodeConfig) => {
+    if (isDirty) {
+      if (!window.confirm('当前补充指令有未保存的修改，切换节点会丢弃，确认切换吗？')) return;
+    }
+    setSelectedNodeId(node.id);
+    setNodeAdditional(node.additionalSystemPrompt ?? '');
+    setNodeAdditionalSaved(node.additionalSystemPrompt ?? '');
+  };
+
+  const handleToggleNode = async (node: DramaAgentNodeConfig) => {
+    if (node.isCore) return;
+    const updated = draftNodes.map((n) => n.id === node.id ? { ...n, isEnabled: !n.isEnabled } : n);
+    setDraftNodes(updated);
+    try {
+      const pl = await saveDramaPipelineDraft(dramaId, updated);
+      setPipeline(pl);
+    } catch {
+      setDraftNodes(draftNodes);
+      message.error('保存失败');
+    }
+  };
+
+  const handleSaveAdditional = async () => {
+    if (!selectedNodeId) return;
+    const updated = draftNodes.map((n) => n.id === selectedNodeId ? { ...n, additionalSystemPrompt: nodeAdditional } : n);
+    setPipelineSaving(true);
+    try {
+      const pl = await saveDramaPipelineDraft(dramaId, updated);
+      setDraftNodes(updated);
+      setPipeline(pl);
+      setNodeAdditionalSaved(nodeAdditional);
+      message.success('已保存草稿');
+    } catch {
+      message.error('保存失败');
+    } finally {
+      setPipelineSaving(false);
+    }
+  };
+
+  const handleDiscardAdditional = () => {
+    setNodeAdditional(nodeAdditionalSaved);
+  };
+
+  const handlePublish = async () => {
+    setPipelinePublishing(true);
+    try {
+      const pl = await publishDramaPipeline(dramaId);
+      setPipeline(pl);
+      message.success('已发布，下次生成将使用新配置');
+    } catch {
+      message.error('发布失败');
+    } finally {
+      setPipelinePublishing(false);
+    }
+  };
+
+  const handleSaveParams = async () => {
+    setParamsSaving(true);
+    try {
+      const pl = await saveDramaWorkflowParams(dramaId, workflowParams);
+      setPipeline(pl);
+      message.success('参数已保存');
+    } catch {
+      message.error('保存失败');
+    } finally {
+      setParamsSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* 发布横幅 */}
+      <div className={cn(
+        'flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-4 overflow-hidden transition-all duration-200',
+        hasUnpublished ? 'py-2.5 opacity-100 max-h-20' : 'py-0 opacity-0 max-h-0 border-transparent bg-transparent pointer-events-none',
+      )}>
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <p className="text-sm text-amber-700 dark:text-amber-300">草稿有未发布的修改，发布后下次生成将使用新配置</p>
           </div>
-        </CardContent>
-      </button>
-    </Card>
+          <Button size="sm" onClick={handlePublish} disabled={pipelinePublishing} className="h-7 text-xs">
+            {pipelinePublishing ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1" />}
+            发布
+          </Button>
+      </div>
+
+      {/* Agent 节点配置 */}
+      <div>
+        <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+          <Clapperboard className="h-4 w-4 text-violet-500" />
+          Agent 节点配置
+          <span className="text-xs text-muted-foreground font-normal">— 灰色区域为系统基础提示词（只读），补充指令可自由编辑</span>
+        </h3>
+        <div className="grid grid-cols-[240px_1fr] gap-4 min-h-[400px]">
+          {/* 节点列表 */}
+          <div className="space-y-1 border rounded-lg p-2 bg-muted/30">
+            {draftNodes.map((node) => (
+              <button
+                key={node.id}
+                type="button"
+                onClick={() => handleSelectNode(node)}
+                className={cn(
+                  'w-full text-left rounded-md px-3 py-2 transition-colors',
+                  selectedNodeId === node.id
+                    ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300'
+                    : 'hover:bg-muted',
+                  !node.isEnabled && 'opacity-50',
+                )}
+              >
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-xs font-medium truncate">{node.label}</span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {node.isCore && (
+                      <Badge variant="outline" className="text-[9px] h-4 px-1 border-violet-300 text-violet-600 dark:text-violet-400">核心</Badge>
+                    )}
+                    {!node.isEnabled && (
+                      <Badge variant="outline" className="text-[9px] h-4 px-1 text-muted-foreground">已关</Badge>
+                    )}
+                    {node.additionalSystemPrompt?.trim() && (
+                      <div className="w-1.5 h-1.5 rounded-full bg-amber-400" title="有补充指令" />
+                    )}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* 节点编辑面板 */}
+          {selectedNode ? (
+            <div className="space-y-4">
+              {/* 节点信息头 */}
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                    {selectedNode.label}
+                    {selectedNode.isCore ? (
+                      <Badge variant="outline" className="text-[10px] h-4 border-violet-300 text-violet-600">核心节点</Badge>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleNode(selectedNode)}
+                        className={cn(
+                          'text-[10px] h-5 px-2 rounded border transition-colors',
+                          selectedNode.isEnabled
+                            ? 'border-green-300 text-green-700 bg-green-50 dark:bg-green-900/30 hover:bg-green-100'
+                            : 'border-muted text-muted-foreground bg-muted hover:bg-muted/80',
+                        )}
+                      >
+                        {selectedNode.isEnabled ? '已启用 · 点击关闭' : '已关闭 · 点击启用'}
+                      </button>
+                    )}
+                  </h4>
+                  <p className="text-xs text-muted-foreground mt-0.5">{selectedNode.description}</p>
+                </div>
+              </div>
+
+              {/* 基础提示词（只读） */}
+              <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2 border-b border-dashed border-muted-foreground/20">
+                  <div className="flex items-center gap-1.5">
+                    <Lock className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-xs font-medium text-muted-foreground">基础提示词（只读）</span>
+                  </div>
+                  {basePromptCache[selectedNode.id] && (
+                    <span className="text-[10px] text-muted-foreground/60">{basePromptCache[selectedNode.id].length} 字符</span>
+                  )}
+                </div>
+                {previewLoading && !basePromptCache[selectedNode.id] ? (
+                  <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />加载中…
+                  </div>
+                ) : (
+                  <div className="h-56 overflow-y-auto">
+                    <pre className="px-3 py-2.5 text-[11px] text-muted-foreground/80 leading-relaxed whitespace-pre-wrap font-mono break-words">
+                      {basePromptCache[selectedNode.id] ?? '加载中…'}
+                    </pre>
+                  </div>
+                )}
+              </div>
+
+              {/* 补充指令（可编辑） */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Unlock className="h-3.5 w-3.5 text-violet-500" />
+                    <Label className="text-xs font-medium">补充指令</Label>
+                    <span className="text-[10px] text-muted-foreground">（追加到基础提示词末尾，优先级最高）</span>
+                  </div>
+                  <div className={cn('flex gap-1.5 transition-opacity duration-150', isDirty ? 'opacity-100' : 'opacity-0 pointer-events-none')}>
+                    <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleDiscardAdditional}>
+                      <RotateCcw className="h-3 w-3 mr-1" />撤销
+                    </Button>
+                    <Button size="sm" className="h-7 text-xs" onClick={handleSaveAdditional} disabled={pipelineSaving}>
+                      {pipelineSaving ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Save className="h-3 w-3 mr-1" />}
+                      保存草稿
+                    </Button>
+                  </div>
+                </div>
+                <Textarea
+                  value={nodeAdditional}
+                  onChange={(e) => setNodeAdditional(e.target.value)}
+                  placeholder={`为「${selectedNode.label}」添加额外的创作指令，例如：\n- 对话中优先保留台词的古韵感\n- 钩子必须出现在最后1个镜头`}
+                  className="min-h-[160px] font-mono text-xs resize-y"
+                />
+                <p className="text-right text-[10px] text-muted-foreground">{nodeAdditional.length} 字符</p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full text-sm text-muted-foreground border rounded-lg border-dashed">
+              从左侧选择一个 Agent 节点进行配置
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 工作流参数 */}
+      <div>
+        <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+          <Star className="h-4 w-4 text-amber-500" />
+          工作流参数
+        </h3>
+        <Card>
+          <CardContent className="pt-4 space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label className="text-xs">质量门槛评分（0–10）</Label>
+                <Input
+                  type="number" min={0} max={10} step={0.5}
+                  value={workflowParams.qualityPassScore ?? 7.0}
+                  onChange={(e) => setWorkflowParams((p) => ({ ...p, qualityPassScore: parseFloat(e.target.value) || 7.0 }))}
+                  className="h-8 text-xs"
+                />
+                <p className="text-[10px] text-muted-foreground">低于此分数触发精修编辑，建议 6.5–8.5</p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">最大精修轮数</Label>
+                <Input
+                  type="number" min={0} max={5}
+                  value={workflowParams.maxEditRounds ?? 2}
+                  onChange={(e) => setWorkflowParams((p) => ({ ...p, maxEditRounds: parseInt(e.target.value, 10) || 2 }))}
+                  className="h-8 text-xs"
+                />
+                <p className="text-[10px] text-muted-foreground">script-editor 最多循环次数，建议 1–3</p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">连续性重试次数</Label>
+                <Input
+                  type="number" min={0} max={3}
+                  value={workflowParams.maxContinuityRetries ?? 1}
+                  onChange={(e) => setWorkflowParams((p) => ({ ...p, maxContinuityRetries: parseInt(e.target.value, 10) }))}
+                  className="h-8 text-xs"
+                />
+                <p className="text-[10px] text-muted-foreground">continuity-guard 失败时重试次数</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3 pt-1">
+              {([
+                { key: 'enableDialogueCoach', label: '台词润色', desc: 'dialogue-coach 节点' },
+                { key: 'enablePacingAnalyzer', label: '节奏分析', desc: 'pacing-analyzer 节点' },
+                { key: 'enableHookCrafter', label: '悬念设计', desc: 'hook-crafter 节点' },
+              ] as Array<{ key: keyof DramaWorkflowParams; label: string; desc: string }>).map(({ key, label, desc }) => (
+                <label key={key} className="flex items-center gap-2 cursor-pointer rounded-lg border px-3 py-2 hover:bg-muted transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={workflowParams[key] !== false}
+                    onChange={(e) => setWorkflowParams((p) => ({ ...p, [key]: e.target.checked }))}
+                    className="h-3.5 w-3.5 accent-violet-600"
+                  />
+                  <div>
+                    <p className="text-xs font-medium">{label}</p>
+                    <p className="text-[10px] text-muted-foreground">{desc}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end pt-1">
+              <Button size="sm" className="h-7 text-xs" onClick={handleSaveParams} disabled={paramsSaving}>
+                {paramsSaving ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Save className="h-3 w-3 mr-1" />}
+                保存参数
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 本剧编剧手册（只读） */}
+      {promptProfile && (
+        <div>
+          <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+            <Eye className="h-4 w-4 text-sky-500" />
+            本剧编剧手册
+            <span className="text-xs text-muted-foreground font-normal">— 由 Profiler Agent 在建剧时自动生成，动态注入各 Agent，只读</span>
+          </h3>
+          <div className="space-y-3">
+            {/* 题材规则 */}
+            {genreArchetype && (
+              <Card className="border-sky-100 dark:border-sky-900">
+                <CardContent className="pt-3 pb-3">
+                  <p className="text-xs font-medium text-sky-700 dark:text-sky-300 mb-2 flex items-center gap-1.5">
+                    <Lock className="h-3 w-3" /> 题材原型
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {([
+                      genreArchetype.coreIdentity as string,
+                      NARRATIVE_ARC_LABELS[genreArchetype.narrativeArc as string] ?? genreArchetype.narrativeArc as string,
+                    ])
+                      .filter(Boolean)
+                      .map((v, i) => (
+                        <Badge key={i} variant="secondary" className="text-[10px] bg-sky-50 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300">{v}</Badge>
+                      ))}
+                  </div>
+                  {typeof genreArchetype.factConstraint === 'string' && genreArchetype.factConstraint && genreArchetype.factConstraint !== 'none' && (
+                    <p className="text-xs text-muted-foreground leading-relaxed border-t pt-2 mt-1">
+                      <span className="font-medium">史实约束：</span>{FACT_CONSTRAINT_LABELS[genreArchetype.factConstraint as string] ?? genreArchetype.factConstraint}
+                    </p>
+                  )}
+                  {Array.isArray(genreArchetype.forbiddenClichés) && (genreArchetype.forbiddenClichés as string[]).length > 0 && (
+                    <div className="border-t pt-2 mt-2">
+                      <p className="text-[10px] text-muted-foreground mb-1">禁用老梗</p>
+                      <div className="flex flex-wrap gap-1">
+                        {(genreArchetype.forbiddenClichés as string[]).map((c: string, i: number) => (
+                          <Badge key={i} variant="outline" className="text-[10px] border-red-200 text-red-600 dark:text-red-400">{c}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* 台词风格指南 */}
+            {typeof scriptwriterGuide?.dialogueGuide === 'string' && scriptwriterGuide.dialogueGuide && (
+              <Card className="border-sky-100 dark:border-sky-900">
+                <CardContent className="pt-3 pb-3">
+                  <p className="text-xs font-medium text-sky-700 dark:text-sky-300 mb-2 flex items-center gap-1.5">
+                    <Lock className="h-3 w-3" /> 台词风格指南
+                    <span className="text-[10px] text-muted-foreground font-normal">— 注入：台词润色 / 质量审核 / 精修编辑</span>
+                  </p>
+                  <pre className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap font-sans bg-muted/30 rounded p-2.5">
+                    {scriptwriterGuide.dialogueGuide}
+                  </pre>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* 题材规则 */}
+            {typeof scriptwriterGuide?.genreRules === 'string' && scriptwriterGuide.genreRules && (
+              <Card className="border-sky-100 dark:border-sky-900">
+                <CardContent className="pt-3 pb-3">
+                  <p className="text-xs font-medium text-sky-700 dark:text-sky-300 mb-2 flex items-center gap-1.5">
+                    <Lock className="h-3 w-3" /> 题材创作规则
+                    <span className="text-[10px] text-muted-foreground font-normal">— 注入：卷导演 / 悬念设计</span>
+                  </p>
+                  <pre className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap font-sans bg-muted/30 rounded p-2.5">
+                    {scriptwriterGuide.genreRules}
+                  </pre>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* 视觉风格 */}
+            {visualStyle && (
+              <Card className="border-sky-100 dark:border-sky-900">
+                <CardContent className="pt-3 pb-3">
+                  <p className="text-xs font-medium text-sky-700 dark:text-sky-300 mb-2 flex items-center gap-1.5">
+                    <Lock className="h-3 w-3" /> 视觉风格
+                    <span className="text-[10px] text-muted-foreground font-normal">— 注入：分镜导演 / 集导演</span>
+                  </p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    {([
+                      ['整体美学', 'overallAesthetic'],
+                      ['色调调色板', 'colorGrading'],
+                      ['灯光风格', 'lightingStyle'],
+                      ['镜头语言', 'cameraLanguage'],
+                      ['视角比例', 'aspectRatio'],
+                    ] as [string, string][]).map(([label, key]) => typeof visualStyle[key] === 'string' && visualStyle[key] ? (
+                      <div key={key}>
+                        <span className="text-[10px] text-muted-foreground">{label}：</span>
+                        <span className="text-xs">{visualStyle[key] as string}</span>
+                      </div>
+                    ) : null)}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -941,6 +1909,7 @@ const DramaWorkbench: React.FC = () => {
   const [paused, setPaused] = useState(false);
   const [pauseLoading, setPauseLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const pipelineInitialized = useRef(false);
   const [previewEp, setPreviewEp] = useState<Record<string, unknown> | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [mediaGenEp, setMediaGenEp] = useState<number | null>(null);
@@ -954,8 +1923,24 @@ const DramaWorkbench: React.FC = () => {
   const [expandedEpisodeUsage, setExpandedEpisodeUsage] = useState<number | null>(null);
   const [latestExecByEpisode, setLatestExecByEpisode] = useState<Map<number, DramaExecutionListItem>>(new Map());
   const [dbRunning, setDbRunning] = useState<DbRunningItem[]>([]);
+  const [assetByKey, setAssetByKey] = useState<Map<string, VisualAssetItem>>(new Map());
   const [assetImages, setAssetImages] = useState<Map<string, string>>(new Map());
   const [assetViewImages, setAssetViewImages] = useState<Map<string, Array<{ viewAngle: string; imageUrl: string }>>>(new Map());
+  const [assetGeneratingKeys, setAssetGeneratingKeys] = useState<Set<string>>(new Set());
+  const [assetTypeFilter, setAssetTypeFilter] = useState<'all' | 'character' | 'location'>('all');
+  const [assetQuery, setAssetQuery] = useState('');
+  // ── 提示词工坊 Pipeline ──
+  const [pipeline, setPipeline] = useState<DramaPipeline | null>(null);
+  const [draftNodes, setDraftNodes] = useState<DramaAgentNodeConfig[]>([]);
+  const [workflowParams, setWorkflowParams] = useState<DramaWorkflowParams>({});
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [nodeAdditional, setNodeAdditional] = useState(''); // 当前编辑中的 additionalSystemPrompt
+  const [nodeAdditionalSaved, setNodeAdditionalSaved] = useState(''); // 已保存的值，用于 dirty 判断
+  const [pipelineSaving, setPipelineSaving] = useState(false);
+  const [pipelinePublishing, setPipelinePublishing] = useState(false);
+  const [paramsSaving, setParamsSaving] = useState(false);
+  const [shotFilterMode, setShotFilterMode] = useState<ShotFilterMode>('all');
+  const [shotQuery, setShotQuery] = useState('');
 
   useEffect(() => () => { abortRef.current?.abort(); mediaAbortRef.current?.abort(); }, []);
 
@@ -964,7 +1949,8 @@ const DramaWorkbench: React.FC = () => {
     try {
       setLoading(true);
       const [d, epRes, usageRes, assetsRes, execRes] = await Promise.all([
-        getDrama(dramaId), listEpisodes(dramaId), getDramaUsage(dramaId),
+        getDrama(dramaId), listEpisodes(dramaId),
+        getDramaUsage(dramaId).catch(() => null),
         getVisualAssets(dramaId).catch(() => ({ assets: [] as any[] })),
         listDramaExecutions(dramaId, { latestPerEpisode: true, limit: 80, includeCreation: false }).catch(() => ({ executions: [] as DramaExecutionListItem[] })),
       ]);
@@ -976,20 +1962,131 @@ const DramaWorkbench: React.FC = () => {
         if (exec.episodeNumber > 0 && !execMap.has(exec.episodeNumber)) execMap.set(exec.episodeNumber, exec);
       });
       setLatestExecByEpisode(execMap);
+      const assetMap = new Map<string, VisualAssetItem>();
       const imgMap = new Map<string, string>();
       const viewMap = new Map<string, Array<{ viewAngle: string; imageUrl: string }>>();
-      (assetsRes.assets ?? []).forEach((a: any) => {
-        if (a.referenceImageUrl) imgMap.set(`${a.assetType}:${a.refId}`, a.referenceImageUrl);
-        if (a.referenceImages?.length) viewMap.set(`${a.assetType}:${a.refId}`, a.referenceImages);
+      (assetsRes.assets ?? []).forEach((a: VisualAssetItem) => {
+        const key = `${a.assetType}:${a.refId}`;
+        assetMap.set(key, a);
+        if (a.referenceImageUrl) imgMap.set(key, a.referenceImageUrl);
+        if (a.referenceImages?.length) viewMap.set(key, a.referenceImages);
       });
+      setAssetByKey(assetMap);
       setAssetImages(imgMap);
       setAssetViewImages(viewMap);
+      // 加载 pipeline 配置（懒加载，不阻塞主界面）
+      getDramaPipeline(dramaId).then((pl) => {
+        setPipeline(pl);
+        const nodes = pl.draftNodes ?? [];
+        setDraftNodes(nodes);
+        setWorkflowParams(pl.workflowParams ?? {});
+        if (!pipelineInitialized.current && nodes.length > 0) {
+          pipelineInitialized.current = true;
+          setSelectedNodeId(nodes[0].id);
+          setNodeAdditional(nodes[0].additionalSystemPrompt ?? '');
+          setNodeAdditionalSaved(nodes[0].additionalSystemPrompt ?? '');
+        }
+      }).catch(() => {});
     } catch (e: any) {
       message.error(e?.message ?? '加载失败');
     } finally {
       setLoading(false);
     }
-  }, [dramaId]);
+  }, [dramaId]); // selectedNodeId intentionally excluded — initial selection is set only once on first load
+
+  const applyUpdatedAsset = useCallback((asset: VisualAssetItem) => {
+    const key = `${asset.assetType}:${asset.refId}`;
+    setAssetByKey((prev) => {
+      const next = new Map(prev);
+      next.set(key, asset);
+      return next;
+    });
+    setAssetImages((prev) => {
+      const next = new Map(prev);
+      if (asset.referenceImageUrl) next.set(key, asset.referenceImageUrl);
+      else next.delete(key);
+      return next;
+    });
+    setAssetViewImages((prev) => {
+      const next = new Map(prev);
+      if (asset.referenceImages?.length) next.set(key, asset.referenceImages);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+
+  const setAssetBusy = useCallback((key: string, busy: boolean) => {
+    setAssetGeneratingKeys((prev) => {
+      const next = new Set(prev);
+      if (busy) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+
+  const handleRegenerateAsset = useCallback(async (
+    assetType: 'character' | 'location',
+    refId: string,
+    viewAngle?: string,
+  ) => {
+    if (!dramaId) return;
+    const key = `${assetType}:${refId}`;
+    const asset = assetByKey.get(key);
+    if (!asset) {
+      message.warning('未找到可重生资产');
+      return;
+    }
+    setAssetBusy(key, true);
+    try {
+      const updated = await regenerateVisualAssetImage(dramaId, asset.id, viewAngle ? { viewAngle } : undefined);
+      applyUpdatedAsset(updated);
+      message.success(`${asset.name} 已重新生成`);
+    } catch (e: any) {
+      message.error(e?.message ?? '重生失败');
+    } finally {
+      setAssetBusy(key, false);
+    }
+  }, [applyUpdatedAsset, assetByKey, dramaId, setAssetBusy]);
+
+  const handleRefineAsset = useCallback(async (
+    assetType: 'character' | 'location',
+    refId: string,
+    payload: {
+      instruction: string;
+      viewAngle?: string;
+      syncScope?: VisualAssetRefineSyncScope;
+      strength?: VisualAssetRefineStrength;
+    },
+  ) => {
+    if (!dramaId) return;
+    const key = `${assetType}:${refId}`;
+    const asset = assetByKey.get(key);
+    if (!asset) {
+      message.warning('未找到可精修资产');
+      return;
+    }
+    if (!payload.instruction.trim()) {
+      message.warning('请输入修改要求');
+      return;
+    }
+    setAssetBusy(key, true);
+    try {
+      const result = await refineVisualAssetImage(dramaId, asset.id, {
+        instruction: payload.instruction,
+        viewAngle: payload.viewAngle,
+        syncScope: payload.syncScope,
+        strength: payload.strength,
+        preserveIdentity: true,
+      });
+      applyUpdatedAsset(result.asset);
+      const affected = result.affectedViews?.length ? `（影响 ${result.affectedViews.length} 个视角）` : '';
+      message.success(`精修完成${affected}`);
+    } catch (e: any) {
+      message.error(e?.message ?? '精修失败');
+    } finally {
+      setAssetBusy(key, false);
+    }
+  }, [applyUpdatedAsset, assetByKey, dramaId, setAssetBusy]);
 
   // ─── 通用 SSE 读取循环 ────────────────────────────────────────────────────────
   const readSseStream = useCallback(async (url: string, onResult?: (msg: string) => void) => {
@@ -1221,6 +2318,11 @@ const DramaWorkbench: React.FC = () => {
     });
   }, []);
 
+  useEffect(() => {
+    setShotFilterMode('all');
+    setShotQuery('');
+  }, [previewEp]);
+
   if (loading) return (
     <div className="flex h-[60vh] items-center justify-center">
       <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -1244,6 +2346,31 @@ const DramaWorkbench: React.FC = () => {
   const locations = (state?.locations as Location[]) ?? [];
   const charNames = new Map<string, string>(characters.map(c => [c.characterId, c.name]));
   const locNames = new Map<string, string>(locations.map(l => [l.locationId, l.name]));
+  const normalizedAssetQuery = assetQuery.trim().toLowerCase();
+  const sortedCharacters = [...characters].sort((a, b) => (CHARACTER_ROLE_ORDER[a.role] ?? 9) - (CHARACTER_ROLE_ORDER[b.role] ?? 9));
+  const filteredCharacters = sortedCharacters.filter((char) => {
+    if (!normalizedAssetQuery) return true;
+    const haystack = [
+      char.name,
+      ROLE_STYLES[char.role]?.label ?? char.role,
+      char.faceDescription,
+      char.defaultCostume,
+      char.distinguishingFeatures,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes(normalizedAssetQuery);
+  });
+  const sortedLocations = [...locations].sort((a, b) => (b.isRecurring ? 1 : 0) - (a.isRecurring ? 1 : 0));
+  const filteredLocations = sortedLocations.filter((loc) => {
+    if (!normalizedAssetQuery) return true;
+    const haystack = [loc.name, loc.description, loc.colorTone, loc.lightingDefault, ...(loc.keyProps ?? [])]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(normalizedAssetQuery);
+  });
+  const missingCharacterImageCount = characters.filter((char) => !assetImages.get(`character:${char.characterId}`)).length;
+  const missingLocationImageCount = locations.filter((loc) => !assetImages.get(`location:${loc.locationId}`)).length;
+  const missingAssetCount = missingCharacterImageCount + missingLocationImageCount;
 
   const shots = ((previewEp as any)?.storyboard?.shots as Shot[]) ?? [];
   const shotMediaMap = ((previewEp as any)?.shotMediaMap as Record<string, ShotMedia>) ?? {};
@@ -1283,6 +2410,32 @@ const DramaWorkbench: React.FC = () => {
   const continuityResult = ((previewEp as any)?.continuity ?? (previewEp as any)?.continuityCheck ?? null) as
     { pass?: boolean; warnings?: ContinuityWarning[]; contextInjections?: string[] } | null;
   const continuityWarnings = continuityResult?.warnings ?? [];
+  const flashbackShotCount = shots.filter((shot) => !!shot.isFlashback).length;
+  const shotOrderById = new Map(shots.map((shot, idx) => [shot.shotId, idx]));
+  const normalizedShotQuery = shotQuery.trim().toLowerCase();
+  const filteredShots = shots.filter((shot, idx) => {
+    if (shotFilterMode === 'problem' && !problemShotSet.has(shot.shotId)) return false;
+    if (shotFilterMode === 'locked' && !shot.isHumanEdited) return false;
+    if (shotFilterMode === 'flashback' && !shot.isFlashback) return false;
+    if (!normalizedShotQuery) return true;
+
+    const relatedCharacters = (shot.characters ?? [])
+      .map((item) => charNames.get(item.characterId) ?? item.characterId)
+      .join(' ');
+    const sceneName = shot.sceneId ? (locNames.get(shot.sceneId) ?? shot.sceneId) : '';
+    const haystack = [
+      shot.shotId,
+      String(idx + 1),
+      shot.visualPrompt,
+      shot.dialogue?.text ?? '',
+      relatedCharacters,
+      sceneName,
+    ].join(' ').toLowerCase();
+    return haystack.includes(normalizedShotQuery);
+  });
+  const showCharacterAssets = assetTypeFilter !== 'location' && filteredCharacters.length > 0;
+  const showLocationAssets = assetTypeFilter !== 'character' && filteredLocations.length > 0;
+  const showAssetEmptyState = !showCharacterAssets && !showLocationAssets;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
@@ -1440,6 +2593,10 @@ const DramaWorkbench: React.FC = () => {
               </Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="workshop" className="gap-1.5">
+            <Pencil className="h-3.5 w-3.5" />
+            创作工坊
+          </TabsTrigger>
         </TabsList>
 
         {/* ── 分集列表 ── */}
@@ -1516,35 +2673,41 @@ const DramaWorkbench: React.FC = () => {
             </Card>
           )}
 
-          {/* 后端生成被中断（心跳超时，服务器曾重启）→ 仅此时才显示提示 */}
+          {/* 后端生成被中断/失败 → 显示恢复提示 */}
           {!generating && dbRunning.length > 0 && (
             <Card className="mb-4 border-amber-200 dark:border-amber-800 bg-amber-50/30 dark:bg-amber-900/10">
               <CardContent className="p-4 space-y-2">
-                {dbRunning.map(r => (
-                  <div key={r.episodeNumber} className="space-y-2">
-                    <div className="flex items-center gap-2 text-sm">
-                      <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
-                      <span className="font-medium text-amber-800 dark:text-amber-200">
-                        E{r.episodeNumber} 生成被中断
-                      </span>
-                      <span className="text-muted-foreground ml-auto tabular-nums text-xs">{r.progressPct}%</span>
+                {dbRunning.map(r => {
+                  const isFailed = r.status === 'failed';
+                  return (
+                    <div key={r.episodeNumber} className="space-y-2">
+                      <div className="flex items-center gap-2 text-sm">
+                        <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
+                        <span className="font-medium text-amber-800 dark:text-amber-200">
+                          E{r.episodeNumber} {isFailed ? '生成失败' : '生成被中断'}
+                        </span>
+                        <span className="text-muted-foreground ml-auto tabular-nums text-xs">{r.progressPct}%</span>
+                      </div>
+                      {isFailed && r.errorMessage && (
+                        <p className="text-xs text-amber-700 dark:text-amber-300 truncate">{r.errorMessage}</p>
+                      )}
+                      <Progress value={r.progressPct} className="h-1.5" />
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-amber-700 dark:text-amber-300">
+                          上次进度：{r.stepLabel}
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 text-xs px-2 border-amber-300 hover:bg-amber-100"
+                          onClick={() => handleGenerate(1)}
+                        >
+                          {isFailed ? '从断点重试' : '从断点继续'}
+                        </Button>
+                      </div>
                     </div>
-                    <Progress value={r.progressPct} className="h-1.5" />
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs text-amber-700 dark:text-amber-300">
-                        上次进度：{r.stepLabel}
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-6 text-xs px-2 border-amber-300 hover:bg-amber-100"
-                        onClick={() => handleGenerate(1)}
-                      >
-                        从断点继续
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </CardContent>
             </Card>
           )}
@@ -1624,7 +2787,7 @@ const DramaWorkbench: React.FC = () => {
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-7 text-xs gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="h-7 text-xs gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                           onClick={() => handlePreview(ep)}
                         >
                           <Eye className="h-3 w-3" />脚本
@@ -1652,43 +2815,122 @@ const DramaWorkbench: React.FC = () => {
             <Card><CardContent className="py-12 text-center text-muted-foreground">角色和场景数据将在短剧创建后自动生成</CardContent></Card>
           ) : (
             <div className="space-y-6">
-              {characters.length > 0 && (
+              <Card className="border-border/70 bg-muted/20">
+                <CardContent className="p-3 space-y-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(['all', 'character', 'location'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setAssetTypeFilter(mode)}
+                        className={cn(
+                          'h-7 px-2.5 rounded-md text-xs border transition-colors',
+                          assetTypeFilter === mode
+                            ? 'bg-violet-600 text-white border-violet-600'
+                            : 'bg-background text-muted-foreground border-border hover:text-foreground',
+                        )}
+                      >
+                        {mode === 'all' ? '全部资产' : mode === 'character' ? `角色 ${characters.length}` : `场景 ${locations.length}`}
+                      </button>
+                    ))}
+                    {missingAssetCount > 0 && (
+                      <Badge variant="secondary" className="text-[10px] text-amber-700 bg-amber-100 dark:bg-amber-900/30 dark:text-amber-300">
+                        <AlertCircle className="h-3 w-3 mr-1" />缺图 {missingAssetCount}
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <Input
+                      className="h-8 text-xs sm:max-w-sm"
+                      value={assetQuery}
+                      onChange={(e) => setAssetQuery(e.target.value)}
+                      placeholder="搜索角色/场景：名称、描述、服装、道具..."
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      当前显示：角色 {filteredCharacters.length}/{characters.length} · 场景 {filteredLocations.length}/{locations.length}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {showCharacterAssets && (
                 <div>
                   <div className="flex items-center gap-2 mb-3">
                     <Users className="h-4 w-4 text-violet-500" />
                     <h3 className="text-base font-semibold">角色</h3>
-                    <Badge variant="secondary" className="text-xs">{characters.length}</Badge>
+                    <Badge variant="secondary" className="text-xs">{filteredCharacters.length}</Badge>
                   </div>
                   <div className="space-y-2">
-                    {[...characters].sort((a, b) => {
-                      const order: Record<string, number> = { protagonist: 0, antagonist: 1, supporting: 2, minor: 3 };
-                      return (order[a.role] ?? 9) - (order[b.role] ?? 9);
-                    }).map(char => (
+                    {filteredCharacters.map(char => (
                       <CharacterCard
                         key={char.characterId}
                         char={char}
                         imageUrl={assetImages.get(`character:${char.characterId}`)}
                         viewImages={assetViewImages.get(`character:${char.characterId}`)}
+                        busy={assetGeneratingKeys.has(`character:${char.characterId}`)}
+                        onRegenerate={(viewAngle) => handleRegenerateAsset('character', char.characterId, viewAngle)}
+                        onRefine={(input) => handleRefineAsset('character', char.characterId, input)}
                       />
                     ))}
                   </div>
                 </div>
               )}
-              {locations.length > 0 && (
+              {showLocationAssets && (
                 <div>
                   <div className="flex items-center gap-2 mb-3">
                     <MapPin className="h-4 w-4 text-emerald-500" />
                     <h3 className="text-base font-semibold">场景</h3>
-                    <Badge variant="secondary" className="text-xs">{locations.length}</Badge>
+                    <Badge variant="secondary" className="text-xs">{filteredLocations.length}</Badge>
                   </div>
                   <div className="space-y-2">
-                    {[...locations].sort((a, b) => (b.isRecurring ? 1 : 0) - (a.isRecurring ? 1 : 0))
-                      .map(loc => <LocationCard key={loc.locationId} loc={loc} imageUrl={assetImages.get(`location:${loc.locationId}`)} />)}
+                    {filteredLocations.map(loc => (
+                      <LocationCard
+                        key={loc.locationId}
+                        loc={loc}
+                        imageUrl={assetImages.get(`location:${loc.locationId}`)}
+                        busy={assetGeneratingKeys.has(`location:${loc.locationId}`)}
+                        onRegenerate={() => handleRegenerateAsset('location', loc.locationId)}
+                        onRefine={(instruction) => handleRefineAsset('location', loc.locationId, { instruction })}
+                      />
+                    ))}
                   </div>
                 </div>
               )}
+              {showAssetEmptyState ? (
+                <Card className="border-dashed">
+                  <CardContent className="py-8 text-center text-xs text-muted-foreground">
+                    未找到符合筛选条件的角色或场景
+                  </CardContent>
+                </Card>
+              ) : null}
             </div>
           )}
+        </TabsContent>
+
+        {/* ── 创作工坊 ── */}
+        <TabsContent value="workshop">
+          <WorkshopTab
+            dramaId={dramaId ?? ''}
+            drama={drama}
+            draftNodes={draftNodes}
+            setDraftNodes={setDraftNodes}
+            workflowParams={workflowParams}
+            setWorkflowParams={setWorkflowParams}
+            pipeline={pipeline}
+            setPipeline={setPipeline}
+            selectedNodeId={selectedNodeId}
+            setSelectedNodeId={setSelectedNodeId}
+            nodeAdditional={nodeAdditional}
+            setNodeAdditional={setNodeAdditional}
+            nodeAdditionalSaved={nodeAdditionalSaved}
+            setNodeAdditionalSaved={setNodeAdditionalSaved}
+            pipelineSaving={pipelineSaving}
+            setPipelineSaving={setPipelineSaving}
+            pipelinePublishing={pipelinePublishing}
+            setPipelinePublishing={setPipelinePublishing}
+            paramsSaving={paramsSaving}
+            setParamsSaving={setParamsSaving}
+          />
         </TabsContent>
       </Tabs>
 
@@ -1946,25 +3188,66 @@ const DramaWorkbench: React.FC = () => {
                 {/* Shot browser */}
                 {shots.length > 0 && (
                   <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <Camera className="h-4 w-4 text-muted-foreground" />
-                        <h3 className="text-sm font-semibold">分镜脚本</h3>
-                        <Badge variant="secondary" className="text-[10px]">{shots.length} 镜</Badge>
-                        {humanEditedCount > 0 && (
-                          <Badge variant="secondary" className="text-[10px] text-violet-600 bg-violet-100 dark:bg-violet-900/30">
-                            {humanEditedCount} 锁定
-                          </Badge>
-                        )}
+                    <div className="space-y-2.5 mb-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Camera className="h-4 w-4 text-muted-foreground" />
+                          <h3 className="text-sm font-semibold">分镜脚本</h3>
+                          <Badge variant="secondary" className="text-[10px]">{shots.length} 镜</Badge>
+                          {humanEditedCount > 0 && (
+                            <Badge variant="secondary" className="text-[10px] text-violet-600 bg-violet-100 dark:bg-violet-900/30">
+                              {humanEditedCount} 锁定
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground">点击铅笔图标编辑并锁定</p>
                       </div>
-                      <p className="text-xs text-muted-foreground">点击铅笔图标编辑并锁定</p>
+                      <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 space-y-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {(['all', 'problem', 'locked', 'flashback'] as ShotFilterMode[]).map((mode) => {
+                            const count = mode === 'all'
+                              ? shots.length
+                              : mode === 'problem'
+                                ? problemShotCount
+                                : mode === 'locked'
+                                  ? humanEditedCount
+                                  : flashbackShotCount;
+                            return (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => setShotFilterMode(mode)}
+                                className={cn(
+                                  'h-7 px-2.5 rounded-md text-xs border transition-colors',
+                                  shotFilterMode === mode
+                                    ? 'bg-violet-600 text-white border-violet-600'
+                                    : 'bg-background text-muted-foreground border-border hover:text-foreground',
+                                )}
+                              >
+                                {SHOT_FILTER_LABELS[mode]} {count}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <Input
+                            className="h-8 text-xs sm:max-w-sm"
+                            value={shotQuery}
+                            onChange={(e) => setShotQuery(e.target.value)}
+                            placeholder="搜索镜头：镜号、角色、场景、台词、画面描述..."
+                          />
+                          <p className="text-[11px] text-muted-foreground">
+                            当前显示 {filteredShots.length}/{shots.length} 镜
+                          </p>
+                        </div>
+                      </div>
                     </div>
                     <div className="space-y-2">
-                      {shots.map((shot, idx) => (
+                      {filteredShots.map((shot, idx) => (
                         <ShotCard
                           key={shot.shotId ?? idx}
                           shot={shot}
-                          index={idx}
+                          index={shotOrderById.get(shot.shotId) ?? idx}
                           charNames={charNames}
                           locNames={locNames}
                           mediaItem={shotMediaMap[shot.shotId] ?? null}
@@ -1973,6 +3256,13 @@ const DramaWorkbench: React.FC = () => {
                           onShotUpdated={handleShotUpdated}
                         />
                       ))}
+                      {filteredShots.length === 0 && (
+                        <Card className="border-dashed">
+                          <CardContent className="py-8 text-center text-xs text-muted-foreground">
+                            当前筛选条件下没有匹配镜头
+                          </CardContent>
+                        </Card>
+                      )}
                     </div>
                   </div>
                 )}

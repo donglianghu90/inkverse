@@ -256,6 +256,8 @@ export class MediaOrchestratorService implements OnModuleInit {
                   imageUrl: imgUrl,
                   status: shotMediaMap[sid]?.status ?? 'image_done',
                   qc: gateQc ?? shotMediaMap[sid]?.qc,
+                  t2iPrompt: optimized.prompt,
+                  t2iNegativePrompt: optimized.negativePrompt || undefined,
                 };
                 if (shot.sceneId && !sceneCache.has(shot.sceneId)) sceneCache.set(shot.sceneId, imgUrl);
                 prevFrameCache.set(shot.shotIndex, imgUrl);
@@ -289,7 +291,7 @@ export class MediaOrchestratorService implements OnModuleInit {
               });
               const res = await withMediaRetry(() => this.mediaService.generateImage({ prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: lastRefs, dramaId, assetType: 'shot_last_frame', refId: `${sid}_last`, userId, episodeNumber }), `${sid} 尾帧`);
               const lastUrl = res.images?.[0]?.url ?? '';
-              if (lastUrl) shotMediaMap[sid] = { ...shotMediaMap[sid], lastFrameImageUrl: lastUrl };
+              if (lastUrl) shotMediaMap[sid] = { ...shotMediaMap[sid], lastFrameImageUrl: lastUrl, lastFrameT2iPrompt: optLast.prompt };
               emit(phaseOff + orderedShots.length + i, `${sid} 尾帧完成`, true);
             } catch (err) { this.logger.warn(`${sid} 尾帧失败: ${(err as Error).message}`); }
           }
@@ -344,7 +346,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                 }), `${sid} 连贯性重生成`);
                 const newUrl = res.images?.[0]?.url ?? '';
                 if (newUrl) {
-                  shotMediaMap[sid] = { ...shotMediaMap[sid], imageUrl: newUrl, status: 'image_done' };
+                  shotMediaMap[sid] = { ...shotMediaMap[sid], imageUrl: newUrl, status: 'image_done', t2iPrompt: optimized.prompt, t2iNegativePrompt: optimized.negativePrompt || undefined };
                   prevFrameCache.set(shot.shotIndex, newUrl);
                   if (shot.sceneId) sceneCache.set(shot.sceneId, newUrl);
                   this.logger.log(`${sid} 连贯性重生成完成`);
@@ -512,10 +514,10 @@ export class MediaOrchestratorService implements OnModuleInit {
                 colorGrade: mp.colorGrade,
                 speedFactor,
                 stabilize: mp.stabilize,
-                kenBurns: shotMediaMap[s.shotId]?.kenBurnsFallback ? { enabled: true, direction: 'zoom_in' as const } : mp.kenBurns,
+                kenBurns: shotMediaMap[s.shotId]?.kenBurnsFallback ? { direction: 'zoom_in' as const, zoomFactor: 1.1 } : mp.kenBurns,
                 specialTechnique: s.specialTechnique ?? undefined,
               } : shotMediaMap[s.shotId]?.kenBurnsFallback ? {
-                kenBurns: { enabled: true, direction: 'zoom_in' as const },
+                kenBurns: { direction: 'zoom_in' as const, zoomFactor: 1.1 },
               } : undefined,
             };
           });
@@ -661,6 +663,8 @@ export class MediaOrchestratorService implements OnModuleInit {
           imageUrl: imgUrl,
           status: 'image_done',
           qc: gateQc ?? raw[shotId]?.qc,
+          t2iPrompt: optimized.prompt,
+          t2iNegativePrompt: optimized.negativePrompt || undefined,
         },
       };
       await this.episodeRepo.update(episode.id, { shotMediaMap: newMap });
@@ -813,6 +817,8 @@ export class MediaOrchestratorService implements OnModuleInit {
             imageUrl: imgUrl,
             status: 'image_done',
             qc: gateQc ?? shotMediaMap[sid]?.qc,
+            t2iPrompt: optimized.prompt,
+            t2iNegativePrompt: optimized.negativePrompt || undefined,
           };
           if (shot.sceneId && !sceneCache.has(shot.sceneId)) sceneCache.set(shot.sceneId, imgUrl);
           prevFrameCache.set(shot.shotIndex, imgUrl);

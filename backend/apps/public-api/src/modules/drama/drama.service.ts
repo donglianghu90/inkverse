@@ -20,17 +20,25 @@ import { SeriesDirectorAgent } from './agents/series-director.agent';
 import { VisualAssetDesignerAgent } from './agents/visual-asset-designer.agent';
 import { DramaProfilerAgent } from './agents/drama-profiler.agent';
 import { DramaStrategyAgent } from './agents/drama-strategy.agent';
-import { EpisodeWorkflowService } from './episode-workflow.service';
+import { EpisodeWorkflowService } from './workflow/episode-workflow.service';
 import { MediaOrchestratorService } from './media-orchestrator.service';
 import { DramaProgressService } from './drama-progress.service';
 import { MediaService } from '../media/media.service';
 import { RenderingProfileService } from '../media/rendering/rendering-profile.service';
-import { CharacterViewAngle, buildViewAnglePrompt, assembleT2iPrompt } from '../media/rendering/rendering-profile';
+import { CHARACTER_VIEW_ANGLES, CharacterViewAngle, buildViewAnglePrompt, assembleT2iPrompt } from '../media/rendering/rendering-profile';
 import { PromptOptimizerService } from '../media/prompt-optimizer.service';
 import { DramaGenreTemplateService } from './drama-genre-template.service';
 import { DramaTaskService } from './task/task.service';
 import { DramaRunService } from './run/run.service';
-import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
+import { DramaAgentPipelineService } from './workflow/drama-agent-pipeline.service';
+import {
+  buildArcDirectorSystemPrompt, buildEpisodeDirectorSystemPrompt,
+  buildContinuityGuardSystemPrompt, buildScriptwriterSystemPrompt,
+  buildDialogueCoachSystemPrompt, buildStoryboardDirectorSystemPrompt,
+  buildAudioDirectorSystemPrompt, buildScriptReviewerSystemPrompt,
+  buildScriptEditorSystemPrompt, buildPacingAnalyzerSystemPrompt,
+  buildHookCrafterSystemPrompt, buildEpisodeRecorderSystemPrompt,
+} from './prompting/drama-playbook';
 import { MediaJobService } from '../media/media-job.service';
 import { LocalStorageService } from '../media/local-storage.service';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -39,6 +47,8 @@ import { DRAMA_QUEUE } from './task/types';
 
 interface CreateDramaOptions { userId?: string; progressDramaId?: string; }
 type ProblemFixTarget = 'all' | 'identity' | 'style' | 'camera' | 'motion';
+type RefineSyncScope = 'single' | 'group' | 'all';
+type RefineStrength = 'light' | 'balanced' | 'strong';
 
 interface ReviewRiskShotSets {
   all: Set<string>;
@@ -239,7 +249,7 @@ export class DramaService implements OnModuleInit {
         logDrama('assets_generate_start', 'ok', '生成角色定妆照+场景参考图');
         emitCreate(3, '生成角色定妆照 + 场景参考图...');
         const assetEntities = await this.persistVisualAssets(dramaId, out.characters, out.locations, out.visualStyle);
-        await this.generateReferenceImages(dramaId, assetEntities, out.characters, out.locations, opts.userId);
+        await this.generateReferenceImages(dramaId, assetEntities, out.characters, out.locations, out.visualStyle, opts.userId);
         out.visualAssets = assetEntities;
         logDrama('assets_generate_done', 'ok', '参考图生成完成');
         emitCreate(3, '参考图生成完成', true);
@@ -324,35 +334,88 @@ export class DramaService implements OnModuleInit {
     locations: DramaState['locations'],
     visualStyle?: DramaState['visualStyle'],
   ): Promise<VisualAssetEntity[]> {
+    const existing = await this.visualAssetRepo.find({ where: { dramaId } });
+    const existingMap = new Map(existing.map((e) => [`${e.assetType}:${e.refId}`, e]));
     const entities: Partial<VisualAssetEntity>[] = [
-      ...characters.map(c => ({
-        dramaId, assetType: 'character' as const, refId: c.characterId,
-        name: c.name, data: c as unknown as Record<string, unknown>,
-        referenceImageUrl: '', referenceImages: [],
-      })),
-      ...locations.map(l => ({
-        dramaId, assetType: 'location' as const, refId: l.locationId,
-        name: l.name, data: l as unknown as Record<string, unknown>,
-        referenceImageUrl: '', referenceImages: [],
-      })),
+      ...characters.map((c) => {
+        const prev = existingMap.get(`character:${c.characterId}`);
+        const referenceImages = this.buildCharacterReferenceSlots(c, prev);
+        const faceFront = referenceImages.find((item) => item.viewAngle === 'face_front')?.imageUrl || '';
+        return {
+          dramaId,
+          assetType: 'character' as const,
+          refId: c.characterId,
+          name: c.name,
+          data: c as unknown as Record<string, unknown>,
+          referenceImageUrl: faceFront || prev?.referenceImageUrl || '',
+          referenceImages,
+        };
+      }),
+      ...locations.map((l) => {
+        const prev = existingMap.get(`location:${l.locationId}`);
+        return {
+          dramaId,
+          assetType: 'location' as const,
+          refId: l.locationId,
+          name: l.name,
+          data: l as unknown as Record<string, unknown>,
+          referenceImageUrl: prev?.referenceImageUrl || '',
+          referenceImages: prev?.referenceImages ?? [],
+        };
+      }),
     ];
     if (visualStyle) {
+      const prev = existingMap.get('style_guide:global');
       entities.push({
-        dramaId, assetType: 'style_guide' as const, refId: 'global',
-        name: 'Visual Style Guide', data: visualStyle as unknown as Record<string, unknown>,
-        referenceImageUrl: '', referenceImages: [],
+        dramaId,
+        assetType: 'style_guide' as const,
+        refId: 'global',
+        name: 'Visual Style Guide',
+        data: visualStyle as unknown as Record<string, unknown>,
+        referenceImageUrl: prev?.referenceImageUrl || '',
+        referenceImages: prev?.referenceImages ?? [],
       });
     }
     if (!entities.length) return [];
-    const existing = await this.visualAssetRepo.find({ where: { dramaId } });
-    const existingMap = new Map(existing.map(e => [`${e.assetType}:${e.refId}`, e]));
-    const toSave = entities.map(e => {
+    const toSave = entities.map((e) => {
       const key = `${e.assetType}:${e.refId}`;
       const prev = existingMap.get(key);
       if (prev) return this.visualAssetRepo.merge(prev, e);
       return this.visualAssetRepo.create(e);
     });
     return this.visualAssetRepo.save(toSave);
+  }
+
+  private normalizeCharacterRole(role: unknown): 'protagonist' | 'antagonist' | 'supporting' | 'minor' {
+    const normalized = String(role ?? '').trim();
+    if (normalized === 'protagonist' || normalized === 'antagonist' || normalized === 'supporting' || normalized === 'minor') {
+      return normalized;
+    }
+    return 'minor';
+  }
+
+  private buildCharacterReferenceSlots(
+    character: DramaState['characters'][number],
+    prev?: VisualAssetEntity,
+  ): Array<{ viewAngle: string; imageUrl: string }> {
+    const profile = this.renderingProfileService.getImageProfile();
+    const required = profile.characterViews.viewsByRole[this.normalizeCharacterRole(character.role)] ?? ['face_front'];
+    const slotMap = new Map<string, string>();
+    for (const item of prev?.referenceImages ?? []) {
+      if (!item?.viewAngle) continue;
+      slotMap.set(item.viewAngle, item.imageUrl || '');
+    }
+    if (prev?.referenceImageUrl && !slotMap.has('face_front')) {
+      slotMap.set('face_front', prev.referenceImageUrl);
+    }
+    for (const view of required) {
+      if (!slotMap.has(view)) slotMap.set(view, '');
+    }
+    if (!slotMap.has('face_front')) slotMap.set('face_front', '');
+    const order = new Map<string, number>(CHARACTER_VIEW_ANGLES.map((view, idx) => [view, idx]));
+    return Array.from(slotMap.entries())
+      .sort((a, b) => (order.get(a[0]) ?? 99) - (order.get(b[0]) ?? 99))
+      .map(([viewAngle, imageUrl]) => ({ viewAngle, imageUrl: imageUrl || '' }));
   }
 
   /**
@@ -365,18 +428,30 @@ export class DramaService implements OnModuleInit {
   private static readonly CHAR_IMAGE_SIZE = '2:3';
   private static readonly SCENE_IMAGE_SIZE = '3:2';
 
-  private optimizeAssetPrompt(rawPrompt: string, shotType: 'character' | 'location'): { prompt: string; negativePrompt: string } {
+  private optimizeAssetPrompt(rawPrompt: string, shotType: 'character' | 'location', stylePrefix?: string): { prompt: string; negativePrompt: string } {
     const profile = this.renderingProfileService.getImageProfile();
     const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, profile.negativePrompt.defaultValue, {
       shotType,
       qualityTier: 'golden',
     });
-    return { prompt: assembleT2iPrompt(optimized.prompt, profile), negativePrompt: optimized.negativePrompt };
+    return { prompt: assembleT2iPrompt(optimized.prompt, profile, { stylePrefix }), negativePrompt: optimized.negativePrompt };
+  }
+
+  private buildAssetStylePrefix(vs?: DramaState['visualStyle']): string | undefined {
+    if (!vs?.overallAesthetic) return undefined;
+    const parts = [vs.overallAesthetic];
+    if (vs.renderTechnique) parts.push(vs.renderTechnique);
+    if (vs.textureStyle) parts.push(vs.textureStyle);
+    if (vs.colorGrading) parts.push(vs.colorGrading);
+    if (vs.lightingStyle) parts.push(vs.lightingStyle);
+    if (vs.referenceStyle) parts.push(vs.referenceStyle);
+    return parts.join(', ') + ', ';
   }
 
   private async generateReferenceImages(
     dramaId: string, assets: VisualAssetEntity[],
     characters: DramaState['characters'], locations: DramaState['locations'],
+    visualStyle?: DramaState['visualStyle'],
     userId?: string,
   ): Promise<void> {
     const profile = this.renderingProfileService.getImageProfile();
@@ -385,20 +460,22 @@ export class DramaService implements OnModuleInit {
     const styleAssets = assets.filter(a => a.assetType === 'style_guide');
 
     // ═══ Phase 1: face_front + 场景参考图（并发） ═══
+    const assetStylePrefix = this.buildAssetStylePrefix(visualStyle);
     const phase1Tasks = [
       ...charAssets.map(asset => async () => {
         const ch = characters.find(c => c.characterId === asset.refId);
         if (!ch?.faceReferencePrompt) return;
         try {
           this.logger.log(`[Phase1] face_front: ${ch.name}(${asset.refId})`);
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(ch.faceReferencePrompt, 'character');
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(ch.faceReferencePrompt, 'character', assetStylePrefix);
           const result = await this.mediaService.generateImage({
             prompt, negativePrompt, size: DramaService.CHAR_IMAGE_SIZE, count: 1,
             dramaId, assetType: 'character_image', refId: asset.refId, userId,
           });
           if (result.images?.[0]?.url) {
-            asset.referenceImageUrl = result.images[0].url;
-            asset.referenceImages = [{ viewAngle: 'face_front', imageUrl: result.images[0].url }];
+            const updated = this.upsertReferenceByView(asset, 'face_front', result.images[0].url);
+            asset.referenceImageUrl = updated.referenceImageUrl;
+            asset.referenceImages = updated.referenceImages;
             await this.visualAssetRepo.update(asset.id, {
               referenceImageUrl: asset.referenceImageUrl,
               referenceImages: asset.referenceImages,
@@ -411,7 +488,7 @@ export class DramaService implements OnModuleInit {
         if (!loc?.visualPrompt) return;
         try {
           this.logger.log(`[Phase1] 场景参考图: ${loc.name}`);
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(loc.visualPrompt, 'location');
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(loc.visualPrompt, 'location', assetStylePrefix);
           const result = await this.mediaService.generateImage({
             prompt, negativePrompt, size: DramaService.SCENE_IMAGE_SIZE, count: 1,
             dramaId, assetType: 'location_image', refId: asset.refId, userId,
@@ -424,18 +501,28 @@ export class DramaService implements OnModuleInit {
       }),
       ...styleAssets.map(asset => async () => {
         const style = asset.data as Record<string, unknown>;
-        const parts = [
-          String(style.overallAesthetic ?? ''),
-          String(style.renderTechnique ?? ''),
-          String(style.textureStyle ?? ''),
-          String(style.colorGrading ?? ''),
-          String(style.lightingStyle ?? ''),
-          String(style.referenceStyle ?? ''),
-        ].map(p => p.trim()).filter(Boolean);
-        if (!parts.length) return;
+        // 优先使用视觉设计师生成的纯英文 styleReferencePrompt，避免中英混杂降低 T2I 质量
+        const styleRefPrompt = String(style.styleReferencePrompt ?? '').trim();
+        let rawPrompt: string;
+        if (styleRefPrompt && !/[\u4e00-\u9fff]/.test(styleRefPrompt)) {
+          // 使用纯英文的 styleReferencePrompt
+          rawPrompt = `${styleRefPrompt}, concept art mood board, consistent style sheet`;
+        } else {
+          // 回退：从各字段中过滤出英文部分（移除中文）
+          const parts = [
+            String(style.overallAesthetic ?? ''),
+            String(style.renderTechnique ?? ''),
+            String(style.textureStyle ?? ''),
+            String(style.colorGrading ?? ''),
+            String(style.lightingStyle ?? ''),
+            String(style.referenceStyle ?? ''),
+          ].map(p => p.replace(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufa2f]+/g, ' ').replace(/[，。！？、：；""''（）【】《》]/g, ' ').trim())
+           .filter(Boolean);
+          if (!parts.length) return;
+          rawPrompt = `${parts.join(', ')}, concept art mood board, consistent style sheet`;
+        }
         try {
           this.logger.log(`[Phase1] 风格参考图: ${asset.refId}`);
-          const rawPrompt = `${parts.join(', ')}, concept art mood board, consistent style sheet`;
           const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'location');
           const result = await this.mediaService.generateImage({
             prompt, negativePrompt,
@@ -465,16 +552,16 @@ export class DramaService implements OnModuleInit {
       if (!asset.referenceImageUrl) return;
       const ch = characters.find(c => c.characterId === asset.refId);
       if (!ch) return;
-      const role = ch.role as 'protagonist' | 'antagonist' | 'supporting' | 'minor';
+      const role = this.normalizeCharacterRole(ch.role);
       const requiredViews = profile.characterViews.viewsByRole[role] ?? ['face_front'];
       const extraViews = (requiredViews as readonly CharacterViewAngle[]).filter(v => v !== 'face_front');
       if (!extraViews.length) return;
 
-      const images = [...(asset.referenceImages ?? [])];
+      let images = [...(asset.referenceImages ?? [])];
       for (const viewAngle of extraViews) {
         try {
           const rawPrompt = buildViewAnglePrompt(ch, viewAngle);
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'character');
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'character', assetStylePrefix);
           const refImages = [{ url: asset.referenceImageUrl, weight: chainWeight }];
           this.logger.log(`[Phase2] ${viewAngle}: ${ch.name}(${asset.refId})`);
           const result = await this.mediaService.generateImage({
@@ -482,22 +569,31 @@ export class DramaService implements OnModuleInit {
             dramaId, assetType: `character_${viewAngle}`, refId: asset.refId, userId,
           });
           if (result.images?.[0]?.url) {
-            images.push({ viewAngle, imageUrl: result.images[0].url });
+            const updated = this.upsertReferenceByView(
+              { referenceImageUrl: asset.referenceImageUrl, referenceImages: images },
+              viewAngle,
+              result.images[0].url,
+            );
+            asset.referenceImageUrl = updated.referenceImageUrl;
+            images = updated.referenceImages;
           }
         } catch (err) { this.logger.warn(`${viewAngle} 失败: ${asset.refId} — ${(err as Error).message}`); }
       }
       asset.referenceImages = images;
-      await this.visualAssetRepo.update(asset.id, { referenceImages: images });
-      this.logger.log(`${ch.name} 多角度完成: ${images.map(i => i.viewAngle).join(', ')}`);
+      await this.visualAssetRepo.update(asset.id, {
+        referenceImageUrl: asset.referenceImageUrl,
+        referenceImages: images,
+      });
+      this.logger.log(`${ch.name} 多角度完成: ${images.filter(i => !!i.imageUrl).map(i => i.viewAngle).join(', ')}`);
     });
     await this.runConcurrent(phase2Tasks, 3);
 
     // ═══ Phase 3: 角色外观变体参考图 ═══
-    await this.generateVariationImages(dramaId, characters, userId);
+    await this.generateVariationImages(dramaId, characters, assetStylePrefix, userId);
   }
 
   /** 为角色外观变体生成参考图（以 face_front 为参考保持面部一致） */
-  private async generateVariationImages(dramaId: string, characters: DramaState['characters'], userId?: string): Promise<void> {
+  private async generateVariationImages(dramaId: string, characters: DramaState['characters'], stylePrefix?: string, userId?: string): Promise<void> {
     const baseAssets = await this.visualAssetRepo.find({ where: { dramaId, assetType: 'character' as any } });
     const baseMap = new Map(baseAssets.filter(a => a.referenceImageUrl).map(a => [a.refId, a.referenceImageUrl]));
     for (const ch of characters) {
@@ -508,7 +604,7 @@ export class DramaService implements OnModuleInit {
         try {
           const refImages = baseImg ? [{ url: baseImg, weight: 0.6 }] : [];
           const rawPrompt = `${v.visualPromptOverride}, same person as reference, ${ch.faceReferencePrompt}`;
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'character');
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'character', stylePrefix);
           const result = await this.mediaService.generateImage({
             prompt, negativePrompt,
             size: DramaService.CHAR_IMAGE_SIZE, count: 1, referenceImages: refImages,
@@ -521,36 +617,222 @@ export class DramaService implements OnModuleInit {
     }
   }
 
-  /** 重新生成单个视觉资产的参考图 */
-  async regenerateAssetImage(dramaId: string, assetId: string, userId?: string): Promise<VisualAssetEntity> {
+  private normalizeCharacterViewAngle(viewAngle?: string): CharacterViewAngle {
+    const v = String(viewAngle ?? '').trim();
+    return (CHARACTER_VIEW_ANGLES as readonly string[]).includes(v) ? (v as CharacterViewAngle) : 'face_front';
+  }
+
+  private normalizeRefineScope(scope?: string): RefineSyncScope {
+    if (scope === 'single' || scope === 'group' || scope === 'all') return scope;
+    return 'group';
+  }
+
+  private normalizeRefineStrength(strength?: string): RefineStrength {
+    if (strength === 'light' || strength === 'balanced' || strength === 'strong') return strength;
+    return 'balanced';
+  }
+
+  private resolveRefineStrengthHint(strength: RefineStrength): string {
+    if (strength === 'light') return 'small conservative adjustment, keep identity and composition stable';
+    if (strength === 'strong') return 'large visual change allowed, still keep core identity';
+    return 'balanced adjustment on target elements, keep key identity consistent';
+  }
+
+  private resolveCharacterSizeByView(viewAngle: CharacterViewAngle): string {
+    if (viewAngle === 'full_body_front' || viewAngle === 'back_view') return '9:16';
+    return DramaService.CHAR_IMAGE_SIZE;
+  }
+
+  private resolveAssetPrompt(asset: VisualAssetEntity, viewAngle?: CharacterViewAngle): string {
+    const data = (asset.data ?? {}) as Record<string, unknown>;
+    if (asset.assetType === 'character') {
+      const fallback = String(data.faceReferencePrompt || '').trim();
+      try {
+        return buildViewAnglePrompt(data as any, viewAngle ?? 'face_front') || fallback;
+      } catch {
+        return fallback;
+      }
+    }
+    if (asset.assetType === 'location') {
+      return String(data.visualPrompt || '').trim();
+    }
+    return [
+      String(data.overallAesthetic ?? ''),
+      String(data.renderTechnique ?? ''),
+      String(data.textureStyle ?? ''),
+      String(data.colorGrading ?? ''),
+      String(data.lightingStyle ?? ''),
+      String(data.referenceStyle ?? ''),
+    ].map((p) => p.trim()).filter(Boolean).join(', ');
+  }
+
+  private collectAssetRefs(asset: Pick<VisualAssetEntity, 'referenceImageUrl' | 'referenceImages'>): Array<{ url: string; weight: number }> {
+    const refs: Array<{ url: string; weight: number }> = [];
+    if (asset.referenceImageUrl) refs.push({ url: asset.referenceImageUrl, weight: 0.6 });
+    for (const ref of asset.referenceImages ?? []) {
+      if (!ref?.imageUrl) continue;
+      if (refs.some((item) => item.url === ref.imageUrl)) continue;
+      refs.push({ url: ref.imageUrl, weight: 0.5 });
+      if (refs.length >= 3) break;
+    }
+    return refs;
+  }
+
+  private upsertReferenceByView(
+    asset: Pick<VisualAssetEntity, 'referenceImageUrl' | 'referenceImages'>,
+    viewAngle: CharacterViewAngle,
+    imageUrl: string,
+  ): { referenceImageUrl: string; referenceImages: Array<{ viewAngle: string; imageUrl: string }> } {
+    const nextRefImages = [...(asset.referenceImages ?? [])];
+    const idx = nextRefImages.findIndex((item) => item.viewAngle === viewAngle);
+    if (idx >= 0) nextRefImages[idx] = { viewAngle, imageUrl };
+    else nextRefImages.push({ viewAngle, imageUrl });
+    const faceFront = nextRefImages.find((item) => item.viewAngle === 'face_front')?.imageUrl;
+    const nextPrimary = viewAngle === 'face_front' ? imageUrl : (faceFront || asset.referenceImageUrl || imageUrl);
+    return { referenceImageUrl: nextPrimary, referenceImages: nextRefImages };
+  }
+
+  private resolveAffectedCharacterViews(targetView: CharacterViewAngle, scope: RefineSyncScope): CharacterViewAngle[] {
+    if (scope === 'single') return [targetView];
+    if (scope === 'all' || targetView === 'face_front') {
+      return [...CHARACTER_VIEW_ANGLES];
+    }
+    const faceGroup: CharacterViewAngle[] = ['face_three_quarter', 'side_profile', 'back_view'];
+    const framingGroup: CharacterViewAngle[] = ['upper_body_front', 'full_body_front'];
+    if (faceGroup.includes(targetView)) {
+      return faceGroup;
+    }
+    if (framingGroup.includes(targetView)) {
+      return framingGroup;
+    }
+    return [targetView];
+  }
+
+  /** 重新生成单个视觉资产的参考图（角色支持按视角重生） */
+  async regenerateAssetImage(
+    dramaId: string,
+    assetId: string,
+    userId?: string,
+    opts?: { viewAngle?: string },
+  ): Promise<VisualAssetEntity> {
     const asset = await this.visualAssetRepo.findOne({ where: { id: assetId, dramaId } });
     if (!asset) throw new NotFoundException(`视觉资产 ${assetId} 不存在`);
-    const data = asset.data as Record<string, unknown>;
-    const prompt = asset.assetType === 'character'
-      ? String(data.faceReferencePrompt || '')
-      : asset.assetType === 'location'
-        ? String(data.visualPrompt || '')
-        : [
-            String(data.overallAesthetic ?? ''),
-            String(data.renderTechnique ?? ''),
-            String(data.textureStyle ?? ''),
-            String(data.colorGrading ?? ''),
-            String(data.lightingStyle ?? ''),
-            String(data.referenceStyle ?? ''),
-          ].map(p => p.trim()).filter(Boolean).join(', ');
-    if (!prompt) throw new Error(`资产 ${assetId} 缺少生成提示词`);
     const isChar = asset.assetType === 'character';
-    const size = isChar ? DramaService.CHAR_IMAGE_SIZE : DramaService.SCENE_IMAGE_SIZE;
+    const targetView = isChar ? this.normalizeCharacterViewAngle(opts?.viewAngle) : 'face_front';
+    const prompt = this.resolveAssetPrompt(asset, targetView);
+    if (!prompt) throw new Error(`资产 ${assetId} 缺少生成提示词`);
+    const size = isChar ? this.resolveCharacterSizeByView(targetView) : DramaService.SCENE_IMAGE_SIZE;
     const optimized = this.optimizeAssetPrompt(prompt, isChar ? 'character' : 'location');
+    const refs = isChar ? this.collectAssetRefs(asset) : [];
     const result = await this.mediaService.generateImage({
-      prompt: optimized.prompt, negativePrompt: optimized.negativePrompt,
-      size, count: 1, dramaId, assetType: `${asset.assetType}_image`, refId: asset.refId, userId,
+      prompt: optimized.prompt,
+      negativePrompt: optimized.negativePrompt,
+      size,
+      count: 1,
+      referenceImages: refs,
+      dramaId,
+      assetType: `${asset.assetType}_image`,
+      refId: asset.refId,
+      userId,
     });
-    if (result.images?.[0]?.url) {
-      asset.referenceImageUrl = result.images[0].url;
-      await this.visualAssetRepo.update(asset.id, { referenceImageUrl: asset.referenceImageUrl });
+    const imageUrl = result.images?.[0]?.url ?? '';
+    if (!imageUrl) throw new Error('重新生成结果为空');
+    if (isChar) {
+      const baseRefs = this.buildCharacterReferenceSlots(
+        asset.data as DramaState['characters'][number],
+        asset,
+      );
+      const updated = this.upsertReferenceByView(
+        { referenceImageUrl: asset.referenceImageUrl, referenceImages: baseRefs },
+        targetView,
+        imageUrl,
+      );
+      await this.visualAssetRepo.update(asset.id, {
+        referenceImageUrl: updated.referenceImageUrl,
+        referenceImages: updated.referenceImages,
+      });
+    } else {
+      await this.visualAssetRepo.update(asset.id, { referenceImageUrl: imageUrl });
     }
-    return asset;
+    return (await this.visualAssetRepo.findOne({ where: { id: asset.id } })) ?? asset;
+  }
+
+  /** 图生图精修：支持按视角与同步范围进行角色联动 */
+  async refineAssetImage(
+    dramaId: string,
+    assetId: string,
+    input: {
+      instruction: string;
+      viewAngle?: string;
+      syncScope?: RefineSyncScope;
+      strength?: RefineStrength;
+      preserveIdentity?: boolean;
+      userId?: string;
+    },
+  ): Promise<{ asset: VisualAssetEntity; affectedViews: string[] }> {
+    const asset = await this.visualAssetRepo.findOne({ where: { id: assetId, dramaId } });
+    if (!asset) throw new NotFoundException(`视觉资产 ${assetId} 不存在`);
+    const instruction = String(input.instruction || '').trim();
+    if (!instruction) throw new Error('请输入修改要求');
+    const isChar = asset.assetType === 'character';
+    const targetView = isChar ? this.normalizeCharacterViewAngle(input.viewAngle) : 'face_front';
+    const syncScope = this.normalizeRefineScope(input.syncScope);
+    const strength = this.normalizeRefineStrength(input.strength);
+    const preserveIdentity = input.preserveIdentity ?? true;
+    const strengthHint = this.resolveRefineStrengthHint(strength);
+    const affectedViews = isChar
+      ? this.resolveAffectedCharacterViews(targetView, syncScope)
+      : ['primary'];
+    const targetViews = isChar ? affectedViews : ['face_front'];
+    let nextPrimary = asset.referenceImageUrl;
+    let nextRefs = [...(asset.referenceImages ?? [])];
+    let successCount = 0;
+
+    for (const view of targetViews) {
+      const basePrompt = this.resolveAssetPrompt({
+        ...asset,
+        referenceImageUrl: nextPrimary,
+        referenceImages: nextRefs,
+      } as VisualAssetEntity, view as CharacterViewAngle);
+      if (!basePrompt) continue;
+      const prompt = [
+        basePrompt,
+        instruction,
+        strengthHint,
+        preserveIdentity ? 'keep same identity, face structure, hairstyle and body profile' : '',
+      ].filter(Boolean).join(', ');
+      const optimized = this.optimizeAssetPrompt(prompt, isChar ? 'character' : 'location');
+      const refs = this.collectAssetRefs({ referenceImageUrl: nextPrimary, referenceImages: nextRefs });
+      const result = await this.mediaService.generateImage({
+        prompt: optimized.prompt,
+        negativePrompt: optimized.negativePrompt,
+        size: isChar ? this.resolveCharacterSizeByView(view as CharacterViewAngle) : DramaService.SCENE_IMAGE_SIZE,
+        count: 1,
+        referenceImages: refs,
+        dramaId,
+        assetType: `${asset.assetType}_refine`,
+        refId: asset.refId,
+        userId: input.userId,
+      });
+      const imageUrl = result.images?.[0]?.url ?? '';
+      if (!imageUrl) continue;
+      successCount += 1;
+      if (isChar) {
+        const updated = this.upsertReferenceByView({ referenceImageUrl: nextPrimary, referenceImages: nextRefs }, view as CharacterViewAngle, imageUrl);
+        nextPrimary = updated.referenceImageUrl;
+        nextRefs = updated.referenceImages;
+      } else {
+        nextPrimary = imageUrl;
+      }
+    }
+
+    if (!successCount) throw new Error('精修失败，未产出图片');
+    await this.visualAssetRepo.update(asset.id, {
+      referenceImageUrl: nextPrimary,
+      ...(isChar ? { referenceImages: nextRefs } : {}),
+    });
+    const updated = (await this.visualAssetRepo.findOne({ where: { id: asset.id } })) ?? asset;
+    return { asset: updated, affectedViews };
   }
 
   private buildVisualBible(
@@ -639,11 +921,86 @@ export class DramaService implements OnModuleInit {
     return drama;
   }
 
+  /** 生成指定 Agent 节点的基础系统提示词预览（用于创作工坊展示） */
+  async buildNodePreview(dramaId: string, nodeId: string): Promise<{ nodeId: string; basePrompt: string }> {
+    const drama = await this.getDrama(dramaId);
+    const state = drama.state as any;
+    const profile = state?.promptProfile;
+    const ga = profile?.genreArchetype;
+    const guide = profile?.scriptwriterGuide;
+    const reviewerCalibration = profile?.reviewerCalibration;
+    const visualStyle = state?.visualStyle;
+
+    let basePrompt: string;
+    switch (nodeId) {
+      case 'arc-director':
+        basePrompt = buildArcDirectorSystemPrompt({ genreRules: guide?.genreRules });
+        break;
+      case 'episode-director':
+        basePrompt = buildEpisodeDirectorSystemPrompt({
+          maxPresentPerEpisode: state?.strategy?.characterBudget?.maxPresentPerEpisode,
+          genreArchetype: ga,
+          visualStyle: visualStyle ?? undefined,
+          genreRules: guide?.genreRules,
+        });
+        break;
+      case 'continuity-guard':
+        basePrompt = buildContinuityGuardSystemPrompt({
+          factConstraint: ga?.factConstraint,
+          genreSpecificChecks: reviewerCalibration?.genreSpecificChecks,
+        });
+        break;
+      case 'scriptwriter':
+        basePrompt = buildScriptwriterSystemPrompt({ guide, visualStyle, genreArchetype: ga });
+        break;
+      case 'dialogue-coach':
+        basePrompt = buildDialogueCoachSystemPrompt({
+          narrativeArc: ga?.narrativeArc,
+          factConstraint: ga?.factConstraint,
+          dialogueGuide: guide?.dialogueGuide,
+        });
+        break;
+      case 'storyboard-director':
+        basePrompt = buildStoryboardDirectorSystemPrompt({
+          epNum: 1, startIdx: 1, maxShots: 15,
+          targetDur: state?.seed?.targetEpisodeDurationSec ?? 180,
+          visualStyle: visualStyle ?? undefined,
+          camGuide: profile?.visualDirectorGuide,
+        });
+        break;
+      case 'audio-director':
+        basePrompt = buildAudioDirectorSystemPrompt({ audioGuide: profile?.audioGuide });
+        break;
+      case 'deterministic-checker':
+        basePrompt = '硬规则校验器（非 LLM）— 执行确定性规则：镜头时长合规（每 Shot 不超过目标时长）、必填字段完整性、安全内容过滤。此节点不调用大模型，无系统提示词。';
+        break;
+      case 'script-reviewer':
+        basePrompt = buildScriptReviewerSystemPrompt({ dialogueGuide: guide?.dialogueGuide });
+        break;
+      case 'script-editor':
+        basePrompt = buildScriptEditorSystemPrompt({ dialogueGuide: guide?.dialogueGuide });
+        break;
+      case 'pacing-analyzer':
+        basePrompt = buildPacingAnalyzerSystemPrompt();
+        break;
+      case 'hook-crafter':
+        basePrompt = buildHookCrafterSystemPrompt({ genreRules: guide?.genreRules });
+        break;
+      case 'episode-recorder':
+        basePrompt = buildEpisodeRecorderSystemPrompt();
+        break;
+      default:
+        basePrompt = `节点 "${nodeId}" 的提示词预览不可用。`;
+    }
+    return { nodeId, basePrompt };
+  }
+
   /** 校验短剧归属，用于 usage 等需权限的接口 */
   async assertDramaOwnership(dramaId: string, userId: string): Promise<void> {
     const drama = await this.dramaRepo.findOne({ where: { id: dramaId }, select: ['id', 'userId'] });
     if (!drama) throw new NotFoundException(`短剧 ${dramaId} 不存在`);
-    if (drama.userId !== userId) throw new NotFoundException(`短剧 ${dramaId} 不存在`);
+    if (drama.userId !== 'anonymous' && drama.userId !== userId)
+      throw new NotFoundException(`短剧 ${dramaId} 不存在`);
   }
 
   async deleteDrama(dramaId: string, userId?: string): Promise<{ success: boolean }> {

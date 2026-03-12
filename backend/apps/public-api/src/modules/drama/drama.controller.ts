@@ -6,8 +6,8 @@ import { DramaService } from './drama.service';
 import { CreateDramaDto } from './dto/create-drama.dto';
 import { DramaProgressEvent, DramaProgressService, DramaRunType } from './drama-progress.service';
 import { DramaGenreTemplateService } from './drama-genre-template.service';
-import { DramaAgentPipelineService } from './drama-agent-pipeline.service';
-import { DramaWorkflowExecutionService } from './drama-workflow-execution.service';
+import { DramaAgentPipelineService } from './workflow/drama-agent-pipeline.service';
+import { DramaWorkflowExecutionService } from './workflow/drama-workflow-execution.service';
 import { DramaAgentNodeConfig, DramaWorkflowParams } from './entities/drama-agent-pipeline.entity';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
 import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto, AiGenerateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
@@ -23,6 +23,10 @@ export class DramaController {
     private readonly executionService: DramaWorkflowExecutionService,
     private readonly usageLedger: UsageLedgerService,
   ) {}
+
+  private getUserId(req: any, fallback = ''): string {
+    return req?.user?.id ?? req?.user?.userId ?? fallback;
+  }
 
   private createSseSender(subject: Subject<MessageEvent>, runType: DramaRunType, dramaId: string, episodeNumber?: number) {
     const runId = randomUUID();
@@ -106,13 +110,13 @@ export class DramaController {
 
   @Get('genre-templates/list')
   async listGenreTemplates(@Req() req: any) {
-    return this.genreTemplateService.list(req.user?.userId);
+    return this.genreTemplateService.list(req.user?.id);
   }
 
   @Post('genre-templates/ai-generate')
   async aiGenerateGenreTemplate(@Body() dto: AiGenerateDramaGenreTemplateDto, @Req() req: any) {
-    const result = await this.genreTemplateService.aiGenerate({ ...dto, userId: req.user?.userId });
-    return this.genreTemplateService.create(req.user?.userId ?? 'anonymous', {
+    const result = await this.genreTemplateService.aiGenerate({ ...dto, userId: req.user?.id });
+    return this.genreTemplateService.create(req.user?.id ?? 'anonymous', {
       genreKey: dto.genreName.toLowerCase().replace(/\s+/g, '-'),
       displayName: result.displayName,
       description: result.description,
@@ -133,22 +137,22 @@ export class DramaController {
 
   @Post('genre-templates')
   async createGenreTemplate(@Body() dto: CreateDramaGenreTemplateDto, @Req() req: any) {
-    return this.genreTemplateService.create(req.user?.userId ?? 'anonymous', dto);
+    return this.genreTemplateService.create(req.user?.id ?? 'anonymous', dto);
   }
 
   @Put('genre-templates/:id')
   async updateGenreTemplate(@Param('id') id: string, @Body() dto: UpdateDramaGenreTemplateDto, @Req() req: any) {
-    return this.genreTemplateService.update(id, req.user?.userId ?? 'anonymous', dto);
+    return this.genreTemplateService.update(id, req.user?.id ?? 'anonymous', dto);
   }
 
   @Delete('genre-templates/:id')
   async deleteGenreTemplate(@Param('id') id: string, @Req() req: any) {
-    return this.genreTemplateService.remove(id, req.user?.userId ?? 'anonymous');
+    return this.genreTemplateService.remove(id, req.user?.id ?? 'anonymous');
   }
 
   @Post('genre-templates/:id/clone')
   async cloneGenreTemplate(@Param('id') id: string, @Req() req: any) {
-    return this.genreTemplateService.clone(id, req.user?.userId ?? 'anonymous');
+    return this.genreTemplateService.clone(id, req.user?.id ?? 'anonymous');
   }
 
   /* ─── Pipeline 配置 ─── */
@@ -172,33 +176,38 @@ export class DramaController {
   @Get(':dramaId/pipeline/topology')
   async getPipelineTopology(@Param('dramaId') dramaId: string) { return this.pipelineService.getTopology(dramaId); }
 
+  @Get(':dramaId/pipeline/node-preview/:nodeId')
+  async getNodePreview(@Param('dramaId') dramaId: string, @Param('nodeId') nodeId: string) {
+    return this.dramaService.buildNodePreview(dramaId, nodeId);
+  }
+
   /* ─── 创意辅助（静态路由） ─── */
 
   @Post('idea/enhance')
   async enhanceIdea(@Body() body: { idea: string; genre?: string }, @Req() req: any) {
-    return this.dramaService.enhanceIdea(body.idea, body.genre, req.user?.userId);
+    return this.dramaService.enhanceIdea(body.idea, body.genre, req.user?.id);
   }
 
   @Post('idea/generate-goal')
   async generateGoal(@Body() body: { mainIdea: string; genre: string; targetAudience: string }, @Req() req: any) {
-    return this.dramaService.generateStoryGoal(body, req.user?.userId);
+    return this.dramaService.generateStoryGoal(body, req.user?.id);
   }
 
   @Post('idea/recommend-genre-audience')
   async recommendGenreAndAudience(@Body() body: { mainIdea: string }, @Req() req: any) {
-    return this.dramaService.recommendGenreAndAudience(body.mainIdea, req.user?.userId);
+    return this.dramaService.recommendGenreAndAudience(body.mainIdea, req.user?.id);
   }
 
   /* ─── CRUD ─── */
 
   @Post()
   async createDrama(@Body() dto: CreateDramaDto, @Req() req: any) {
-    return this.dramaService.createDrama(dto, { userId: req.user?.userId });
+    return this.dramaService.createDrama(dto, { userId: req.user?.id });
   }
 
   @Get()
   async listDramas(@Req() req: any) {
-    return this.dramaService.listDramas(req.user?.userId);
+    return this.dramaService.listDramas(req.user?.id);
   }
 
   @Get(':dramaId')
@@ -208,12 +217,12 @@ export class DramaController {
 
   @Delete(':dramaId')
   async deleteDrama(@Param('dramaId') dramaId: string, @Req() req: any) {
-    return this.dramaService.deleteDrama(dramaId, req.user?.userId);
+    return this.dramaService.deleteDrama(dramaId, req.user?.id);
   }
 
   @Get(':dramaId/usage')
   async getDramaUsage(@Param('dramaId') dramaId: string, @Req() req: any) {
-    const userId = req.user?.userId ?? req.user?.id ?? '';
+    const userId = req.user?.id ?? '';
     await this.dramaService.assertDramaOwnership(dramaId, userId);
     return this.usageLedger.resourceDetailForDrama('drama', dramaId);
   }
@@ -264,7 +273,7 @@ export class DramaController {
     return this.dramaService.listEpisodes(dramaId);
   }
 
-  @Sse(':dramaId/episodes/generate-sse')
+  @Sse(':dramaId/episode-generate-sse')
   async generateEpisodeSse(
     @Param('dramaId') dramaId: string,
     @Query('count') count?: string,
@@ -315,6 +324,50 @@ export class DramaController {
     return subject.asObservable();
   }
 
+  /* ─── SSE: 集生成进度订阅（仅接收，不触发，用于页面刷新后的安全重连）─── */
+
+  @Sse(':dramaId/episode-progress-sse')
+  async episodeProgressSse(@Param('dramaId') dramaId: string): Promise<Observable<MessageEvent>> {
+    const subject = new Subject<MessageEvent>();
+    const { send } = this.createSseSender(subject, 'episode', dramaId);
+    const heartbeat = setInterval(() => send({ _type: 'heartbeat', terminal: false }), 15_000);
+    const unsub = this.progressService.subscribe(dramaId, (event) => {
+      if (event.runType !== 'episode') return;
+      if (!event.terminal) {
+        this.sendProgress(send, event);
+        return;
+      }
+      if (event.terminalStatus === 'failed' || event.error) {
+        send({
+          _type: 'error',
+          terminal: true,
+          terminalStatus: 'failed',
+          step: event.step,
+          message: event.error ?? event.message,
+          error: event.error ?? event.message,
+          done: true,
+        });
+      } else {
+        send({
+          _type: 'result',
+          terminal: true,
+          terminalStatus: event.terminalStatus ?? 'success',
+          step: event.step,
+          message: event.message,
+          done: true,
+          data: {
+            step: event.step,
+            message: event.message,
+            terminalStatus: event.terminalStatus ?? 'success',
+          },
+        });
+      }
+      clearInterval(heartbeat);
+      setTimeout(() => subject.complete(), 300);
+    });
+    return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
+  }
+
   @Get(':dramaId/episodes/:episodeNumber')
   async getEpisode(@Param('dramaId') dramaId: string, @Param('episodeNumber') episodeNumber: string) {
     const ep = parseInt(episodeNumber, 10);
@@ -328,8 +381,38 @@ export class DramaController {
   }
 
   @Post(':dramaId/visual-assets/:assetId/regenerate')
-  async regenerateAssetImage(@Param('dramaId') dramaId: string, @Param('assetId') assetId: string) {
-    return this.dramaService.regenerateAssetImage(dramaId, assetId);
+  async regenerateAssetImage(
+    @Param('dramaId') dramaId: string,
+    @Param('assetId') assetId: string,
+    @Body() body?: { viewAngle?: string },
+    @Req() req?: any,
+  ) {
+    return this.dramaService.regenerateAssetImage(dramaId, assetId, this.getUserId(req, 'anonymous'), {
+      viewAngle: body?.viewAngle,
+    });
+  }
+
+  @Post(':dramaId/visual-assets/:assetId/refine-image')
+  async refineAssetImage(
+    @Param('dramaId') dramaId: string,
+    @Param('assetId') assetId: string,
+    @Body() body?: {
+      instruction?: string;
+      viewAngle?: string;
+      syncScope?: 'single' | 'group' | 'all';
+      strength?: 'light' | 'balanced' | 'strong';
+      preserveIdentity?: boolean;
+    },
+    @Req() req?: any,
+  ) {
+    return this.dramaService.refineAssetImage(dramaId, assetId, {
+      instruction: String(body?.instruction ?? ''),
+      viewAngle: body?.viewAngle,
+      syncScope: body?.syncScope,
+      strength: body?.strength,
+      preserveIdentity: body?.preserveIdentity,
+      userId: this.getUserId(req, 'anonymous'),
+    });
   }
 
   /**
@@ -383,50 +466,6 @@ export class DramaController {
     const paused = this.dramaService.isGenerationPaused(dramaId);
     const dbRunning = await this.executionService.findRunningForDrama(dramaId);
     return { episode: { ...episode, paused }, dbRunning };
-  }
-
-  /* ─── SSE: 集生成进度订阅（仅接收，不触发，用于页面刷新后的安全重连）─── */
-
-  @Sse(':dramaId/episodes/progress-sse')
-  async episodeProgressSse(@Param('dramaId') dramaId: string): Promise<Observable<MessageEvent>> {
-    const subject = new Subject<MessageEvent>();
-    const { send } = this.createSseSender(subject, 'episode', dramaId);
-    const heartbeat = setInterval(() => send({ _type: 'heartbeat', terminal: false }), 15_000);
-    const unsub = this.progressService.subscribe(dramaId, (event) => {
-      if (event.runType !== 'episode') return;
-      if (!event.terminal) {
-        this.sendProgress(send, event);
-        return;
-      }
-      if (event.terminalStatus === 'failed' || event.error) {
-        send({
-          _type: 'error',
-          terminal: true,
-          terminalStatus: 'failed',
-          step: event.step,
-          message: event.error ?? event.message,
-          error: event.error ?? event.message,
-          done: true,
-        });
-      } else {
-        send({
-          _type: 'result',
-          terminal: true,
-          terminalStatus: event.terminalStatus ?? 'success',
-          step: event.step,
-          message: event.message,
-          done: true,
-          data: {
-            step: event.step,
-            message: event.message,
-            terminalStatus: event.terminalStatus ?? 'success',
-          },
-        });
-      }
-      clearInterval(heartbeat);
-      setTimeout(() => subject.complete(), 300);
-    });
-    return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
   }
 
   /* ─── SSE: 创建进度 ─── */
