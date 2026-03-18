@@ -20,7 +20,9 @@ export interface CreateDramaParams {
   plannedMinEpisodes?: number;
   plannedMaxEpisodes?: number;
   genreTemplateId?: string;
+  visualStyleTemplateId?: string; // 指定视觉风格模板 ID（与 drama_visual_style_templates 关联）
   visualStyleHint?: string; // 视觉风格提示（如"真人影视""2D 动漫""水墨古风"）
+  suggestedVisualStyle?: string; // 视觉风格枚举值（如 period_live / live_action / 2d_anime）
   generationMode?: 'fast' | 'balanced' | 'quality';
 }
 
@@ -51,7 +53,7 @@ export interface EpisodeListItem {
 export interface VisualAssetItem {
   id: string;
   dramaId: string;
-  assetType: 'character' | 'location' | 'style_guide';
+  assetType: 'character' | 'location' | 'style_guide' | 'prop';
   refId: string;
   name: string;
   data: Record<string, unknown>;
@@ -81,16 +83,16 @@ export interface DramaUsageBucket {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
-  llmCostUsd: number;
+  llmCostCny: number;
   imageCalls: number;
-  imageCostUsd: number;
+  imageCostCny: number;
   videoCalls: number;
-  videoCostUsd: number;
+  videoCostCny: number;
   ttsCalls: number;
-  ttsCostUsd: number;
+  ttsCostCny: number;
   embeddingCalls: number;
   embeddingTokens: number;
-  embeddingCostUsd: number;
+  embeddingCostCny: number;
   apiSuccessCalls: number;
   apiFailedCalls: number;
 }
@@ -106,7 +108,7 @@ export interface DramaEpisodeUsage extends DramaUsageBucket {
 
 export interface DramaUsageSummary {
   dramaId: string;
-  currency: 'USD';
+  currency: 'CNY';
   creation: DramaUsageBucket & { steps: DramaUsageStep[] };
   episodes: DramaEpisodeUsage[];
   total: DramaUsageBucket;
@@ -148,6 +150,24 @@ export async function deleteDrama(dramaId: string): Promise<{ success: boolean }
 
 export async function getDrama(dramaId: string): Promise<Record<string, unknown>> {
   return request(`${BASE}/${dramaId}`);
+}
+
+export interface VisualStyleGuideUpdate {
+  overallAesthetic: string;
+  colorGrading: string;
+  lightingStyle: string;
+  era: string;
+  renderTechnique?: string;
+  textureStyle?: string;
+  referenceStyle?: string;
+  styleReferencePrompt?: string;
+}
+
+export async function updateDramaVisualStyle(
+  dramaId: string,
+  visualStyle: VisualStyleGuideUpdate,
+): Promise<{ success: boolean }> {
+  return request(`${BASE}/${dramaId}/visual-style`, { method: 'PATCH', data: { visualStyle } });
 }
 
 export async function getDramaUsage(dramaId: string): Promise<DramaUsageSummary> {
@@ -210,8 +230,8 @@ export async function listDramaExecutions(
   return request(`${BASE}/${dramaId}/executions?${params.toString()}`);
 }
 
-export async function generateEpisodes(dramaId: string, count = 1): Promise<{ message: string }> {
-  return request(`${BASE}/${dramaId}/episodes/generate?count=${count}`, { method: 'POST' });
+export async function generateEpisodes(dramaId: string): Promise<{ message: string }> {
+  return request(`${BASE}/${dramaId}/episodes/generate`, { method: 'POST' });
 }
 
 export async function pauseEpisodeGeneration(dramaId: string): Promise<{ paused: boolean; message: string }> {
@@ -245,6 +265,16 @@ export async function regenerateVisualAssetImage(
   });
 }
 
+export async function regenerateVariationImage(
+  dramaId: string,
+  assetId: string,
+  variationId: string,
+): Promise<VisualAssetItem> {
+  return request(`${BASE}/${dramaId}/visual-assets/${assetId}/variation/${variationId}/regenerate`, {
+    method: 'POST',
+  });
+}
+
 export async function refineVisualAssetImage(
   dramaId: string,
   assetId: string,
@@ -259,7 +289,7 @@ export async function refineVisualAssetImage(
 /* ─── SSE URLs ─── */
 
 export type DramaSseType = 'heartbeat' | 'progress' | 'result' | 'error' | 'info';
-export type DramaRunType = 'create' | 'episode' | 'media' | 'images';
+export type DramaRunType = 'create' | 'episode' | 'media' | 'images' | 'assets';
 export type DramaTerminalStatus = 'success' | 'failed' | 'paused';
 
 export interface DramaSseEvent {
@@ -290,9 +320,18 @@ export function getCreateDramaSseUrl(dramaId: string): string {
   return `${BASE}/${dramaId}/create-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
-export function getGenerateEpisodeSseUrl(dramaId: string, count = 1): string {
+export function getGenerateEpisodeSseUrl(dramaId: string): string {
   const token = getToken();
-  return `${BASE}/${dramaId}/episode-generate-sse?count=${count}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+  return `${BASE}/${dramaId}/episode-generate-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+}
+
+export function getGenerateAllAssetsSseUrl(dramaId: string): string {
+  const token = getToken();
+  return `${BASE}/${dramaId}/visual-assets/generate-all-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+}
+
+export async function generateAllVisualAssets(dramaId: string): Promise<void> {
+  return request(`${BASE}/${dramaId}/visual-assets/generate-all`, { method: 'POST' });
 }
 
 export interface ShotPatch {
@@ -393,6 +432,80 @@ export interface DramaGenreTemplate {
   updatedAt: string;
 }
 
+export interface GenreAnalytics {
+  genre: string;
+  totalDramas: number;
+  avgScore: number | null;
+  avgEpisodes: number;
+  recentCount30d: number;
+  recommendScore: number;
+}
+
+export async function getGenreAnalytics(): Promise<GenreAnalytics[]> {
+  return request(`${BASE}/genre-templates/analytics`);
+}
+
+/* ─── 市场数据（爬虫） ─── */
+
+export interface MarketGenreTrend {
+  genre: string;
+  totalEntries: number;
+  avgHotScore: number;
+  maxHotScore: number;
+  top3Titles: string[];
+  recentGrowth: number;
+  paidRatio: number;
+}
+
+export interface MarketTopDrama {
+  title: string;
+  platform: string;
+  genre: string;
+  hotScore: number;
+  rankPosition: number;
+  rankCategory: string;
+}
+
+export interface MarketSnapshot {
+  date: string;
+  totalEntries: number;
+  platforms: Record<string, number>;
+  topGenres: MarketGenreTrend[];
+  topDramas: MarketTopDrama[];
+}
+
+export async function getMarketSnapshot(date?: string): Promise<MarketSnapshot> {
+  const params = date ? `?date=${date}` : '';
+  return request(`${BASE}/market/snapshot${params}`);
+}
+
+export async function getMarketRecommendedGenres(): Promise<Array<{
+  genre: string;
+  hotScore: number;
+  count: number;
+  topTitles: string[];
+  platforms: string[];
+}>> {
+  return request(`${BASE}/market/recommended-genres`);
+}
+
+export interface CreationRecommendations {
+  suggestedGenres: Array<{ genre: string; count: number; hotScore: number; topTitles: string[] }>;
+  styleHints: string[];
+  topicTrends: string[];
+  hotDramaReferences: string[];
+  summary: string;
+  dataDate: string;
+}
+
+export async function getCreationRecommendations(): Promise<CreationRecommendations> {
+  return request(`${BASE}/market/creation-recommendations`);
+}
+
+export async function triggerMarketCrawl(): Promise<{ inserted: number; updated: number; errors: string[] }> {
+  return request(`${BASE}/market/crawl`, { method: 'POST' });
+}
+
 export async function listDramaGenreTemplates(): Promise<DramaGenreTemplate[]> {
   return request(`${BASE}/genre-templates/list`);
 }
@@ -429,6 +542,8 @@ export interface DramaAgentNodeConfig {
   isCore: boolean;
   position: number;
   additionalSystemPrompt: string;
+  /** 用户固定编辑后的基础提示词快照，存在时替代代码自动生成的 basePrompt */
+  basePromptSnapshot?: string;
   customConfig?: { systemPrompt?: string; temperature?: number };
 }
 
@@ -480,4 +595,98 @@ export interface AiGenerateDramaTemplateParams {
 
 export async function aiGenerateDramaTemplate(data: AiGenerateDramaTemplateParams): Promise<DramaGenreTemplate> {
   return request(`${BASE}/genre-templates/ai-generate`, { method: 'POST', data });
+}
+
+/* ─── 视觉风格模板 ─── */
+
+export interface VisualStyleGuide {
+  overallAesthetic: string;
+  colorGrading: string;
+  lightingStyle: string;
+  era: string;
+  renderTechnique?: string;
+  textureStyle?: string;
+  referenceStyle?: string;
+  styleReferencePrompt?: string;
+}
+
+export interface VisualPromptGuidance {
+  positiveKeywords?: string[];
+  negativeKeywords?: string[];
+  characterStyle?: string;
+  backgroundStyle?: string;
+}
+
+export type VisualStyleCategory = 'live_action' | '2d_animation' | '3d_animation' | 'stop_motion' | 'chinese_traditional' | '2d_art';
+
+export interface DramaVisualStyleTemplate {
+  id: string;
+  userId: string | null;
+  styleKey: string;
+  displayName: string;
+  description: string;
+  styleCategory: VisualStyleCategory;
+  tags: string[];
+  visualGuide: VisualStyleGuide;
+  promptGuidance: VisualPromptGuidance | null;
+  genreCompatibility: string[];
+  audienceTags: string[];
+  platformTags: string[];
+  isSystem: boolean;
+  parentTemplateId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listDramaVisualStyleTemplates(): Promise<DramaVisualStyleTemplate[]> {
+  return request(`${BASE}/visual-style-templates/list`);
+}
+
+export async function getDramaVisualStyleTemplate(id: string): Promise<DramaVisualStyleTemplate> {
+  return request(`${BASE}/visual-style-templates/${id}`);
+}
+
+export async function createDramaVisualStyleTemplate(data: Partial<DramaVisualStyleTemplate>): Promise<DramaVisualStyleTemplate> {
+  return request(`${BASE}/visual-style-templates`, { method: 'POST', data });
+}
+
+export async function updateDramaVisualStyleTemplate(id: string, data: Partial<DramaVisualStyleTemplate>): Promise<DramaVisualStyleTemplate> {
+  return request(`${BASE}/visual-style-templates/${id}`, { method: 'PUT', data });
+}
+
+export async function deleteDramaVisualStyleTemplate(id: string): Promise<{ success: boolean }> {
+  return request(`${BASE}/visual-style-templates/${id}`, { method: 'DELETE' });
+}
+
+export async function cloneDramaVisualStyleTemplate(id: string): Promise<DramaVisualStyleTemplate> {
+  return request(`${BASE}/visual-style-templates/${id}/clone`, { method: 'POST' });
+}
+
+/* ─── 全局 Agent 提示词设置 ─── */
+
+export interface GlobalPromptSetting {
+  agentType: string;
+  globalAdditionalPrompt: string;
+  description: string;
+  updatedAt: string;
+}
+
+export async function getGlobalPromptPreview(nodeId: string): Promise<{ nodeId: string; basePrompt: string }> {
+  return request(`${BASE}/global-prompt-preview/${nodeId}`);
+}
+
+export async function listGlobalPromptSettings(): Promise<GlobalPromptSetting[]> {
+  return request(`${BASE}/global-prompt-settings`);
+}
+
+export async function updateGlobalPromptSetting(agentType: string, globalAdditionalPrompt: string): Promise<GlobalPromptSetting> {
+  return request(`${BASE}/global-prompt-settings/${agentType}`, { method: 'PUT', data: { globalAdditionalPrompt } });
+}
+
+export async function batchUpdateGlobalPromptSettings(items: Array<{ agentType: string; globalAdditionalPrompt: string }>): Promise<GlobalPromptSetting[]> {
+  return request(`${BASE}/global-prompt-settings`, { method: 'PUT', data: { items } });
+}
+
+export async function resetGlobalPromptSetting(agentType: string): Promise<GlobalPromptSetting> {
+  return request(`${BASE}/global-prompt-settings/${agentType}/reset`, { method: 'PUT' });
 }

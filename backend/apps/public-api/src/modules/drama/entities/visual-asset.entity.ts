@@ -9,8 +9,8 @@ export class VisualAssetEntity {
   @Column('uuid')
   dramaId: string;
 
-  @Column({ type: 'enum', enum: ['character', 'location', 'style_guide'] })
-  assetType: 'character' | 'location' | 'style_guide';
+  @Column({ type: 'enum', enum: ['character', 'location', 'style_guide', 'prop'] })
+  assetType: 'character' | 'location' | 'style_guide' | 'prop';
 
   @Column({ default: '' })
   refId: string; // characterId 或 locationId

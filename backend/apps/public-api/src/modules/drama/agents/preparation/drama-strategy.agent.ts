@@ -7,6 +7,7 @@ import { LlmService } from '../../../novel/llm/llm.service';
 import { z } from 'zod';
 import { dramaStrategySchema, DramaStrategy, DramaSeed, SeriesOutline } from '../../schemas/drama-state.schemas';
 import { buildStrategySystemPrompt } from '../../prompting/drama-playbook';
+import type { GenreProductionGuidance } from '../../entities/drama-genre-template.entity';
 
 const strategyOutputSchema = z.object({ strategy: dramaStrategySchema });
 
@@ -14,12 +15,15 @@ const strategyOutputSchema = z.object({ strategy: dramaStrategySchema });
 export class DramaStrategyAgent {
   constructor(private readonly llm: LlmService) {}
 
-  async generate(seed: DramaSeed, outline: SeriesOutline, dramaId?: string, userId?: string): Promise<DramaStrategy> {
+  async generate(seed: DramaSeed, outline: SeriesOutline, dramaId?: string, userId?: string, genreGuidance?: GenreProductionGuidance, additionalSystemPrompt?: string): Promise<DramaStrategy> {
+
+    let sysPrompt = buildStrategySystemPrompt({ genreGuidance });
+    if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-strategy',
       schema: strategyOutputSchema,
-      systemPrompt: buildStrategySystemPrompt(),
+      systemPrompt: sysPrompt,
       metadata: { dramaId, userId },
       userPrompt: `请为以下短剧制定策略：
 

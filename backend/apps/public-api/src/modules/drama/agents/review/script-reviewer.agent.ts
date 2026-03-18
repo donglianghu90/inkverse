@@ -103,7 +103,7 @@ ${shotDetail}
 
   private formatShot(s: any): string {
     const charInfo = (s.characters ?? []).map((c: any) => `${c.characterId}(${c.emotion})`).join(',');
-    return `  shot${s.shotIndex ?? '?'}: ${s.camera?.angle ?? '?'}/${s.camera?.movement ?? 'static'} | ${charInfo} | vis="${(s.visualPrompt ?? '').slice(0, 60)}"${s.dialogue?.text ? ` | 💬"${s.dialogue.text}"` : ''}`;
+    return `  shot${s.shotIndex ?? '?'}: ${s.camera?.shotSize ?? '?'}+${s.camera?.cameraAngle ?? '?'}/${s.camera?.movement ?? 'static'} | ${charInfo} | vis="${(s.visualPrompt ?? '').slice(0, 60)}"${s.dialogue?.text ? ` | 💬"${s.dialogue.text}"` : ''}`;
   }
 
   private ensureReviewCompleteness(review: EpisodeReview, storyboard: EpisodeStoryboard): EpisodeReview {
@@ -165,7 +165,7 @@ ${shotDetail}
   private buildFallbackCameraRiskShots(storyboard: EpisodeStoryboard): Array<{ shotId: string; reason: string }> {
     const riskyMovements = new Set(['whip_pan', 'handheld', 'dolly_zoom', 'orbit', 'tracking']);
     const shots = (storyboard?.shots ?? []).filter(s =>
-      riskyMovements.has(s.camera?.movement ?? '') || s.camera?.angle === 'dutch_angle',
+      riskyMovements.has(s.camera?.movement ?? '') || s.camera?.cameraAngle === 'dutch_angle',
     );
     return shots.slice(0, 3).map(s => ({
       shotId: s.shotId,

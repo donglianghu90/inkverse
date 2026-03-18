@@ -3,7 +3,7 @@ import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { DramaTaskPayload } from './types';
 import { DramaTaskService } from './task.service';
-import { normalizeError } from '../errors';
+import { normalizeError } from './error-normalize';
 
 export interface TaskLifecycleContext { taskService: DramaTaskService; logger: Logger; }
 

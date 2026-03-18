@@ -35,7 +35,11 @@ export class ScriptwriterAgent {
     const relevantChars = state.characters.filter(c => activeCharIds.has(c.characterId) || c.scope !== 'episode');
     const charMap = relevantChars.map(c => {
       const activeInfo = intent.activeCharacters.find(a => a.characterId === c.characterId);
-      return `${c.characterId}(${c.name}): 性格=${c.voiceProfile.speakingStyle}, 口癖="${c.voiceProfile.catchphrase}"${activeInfo ? `, 本集角色=${activeInfo.role}, 情绪弧线=${activeInfo.emotionalJourney || activeInfo.emotionalState}` : '（非本集出场）'}`;
+      const soul = c.soulProfile;
+      const soulStr = soul
+        ? ` | 灵魂层: 欲望=${soul.coreDesire || '-'}, 弱点=${soul.fatalFlaw || '-'}, 恐惧=${soul.coreFear || '-'}, 决策=${soul.decisionStyle || '-'}, 压力反应=${soul.stressResponse || '-'}${soul.emotionalTriggers?.length ? `, 触发器=[${soul.emotionalTriggers.join(',')}]` : ''}${soul.behavioralHabits?.length ? `, 习惯=[${soul.behavioralHabits.join(',')}]` : ''}${soul.internalContradiction ? `, 内在矛盾=${soul.internalContradiction}` : ''}`
+        : '';
+      return `${c.characterId}(${c.name}): 性格=${c.voiceProfile.speakingStyle}, 口癖="${c.voiceProfile.catchphrase}"${soulStr}${activeInfo ? `, 本集角色=${activeInfo.role}, 情绪弧线=${activeInfo.emotionalJourney || activeInfo.emotionalState}` : '（非本集出场）'}`;
     }).join('\n');
 
     // 未揭露的秘密（编剧必须知道谁知道什么，才能写出潜台词）

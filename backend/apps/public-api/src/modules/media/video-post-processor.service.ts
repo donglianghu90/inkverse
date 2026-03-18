@@ -52,7 +52,15 @@ export class VideoPostProcessorService implements OnModuleInit {
       filters.push('deshake=rx=32:ry=32');
     }
 
-    if (opts.colorGrade && opts.colorGrade !== 'neutral') {
+    if (opts.lutPath && fs.existsSync(opts.lutPath)) {
+      const absLut = path.resolve(opts.lutPath).replace(/\\/g, '/');
+      const intensity = Math.max(0, Math.min(1, opts.lutIntensity ?? 1));
+      if (intensity >= 0.99) {
+        filters.push(`lut3d='${absLut}'`);
+      } else {
+        filters.push(`split[lut_orig][lut_graded];[lut_graded]lut3d='${absLut}'[lut_out];[lut_orig][lut_out]blend=all_opacity=${intensity.toFixed(2)}`);
+      }
+    } else if (opts.colorGrade && opts.colorGrade !== 'neutral') {
       const cf = COLOR_FILTERS[opts.colorGrade];
       if (cf) filters.push(cf);
     }
@@ -156,6 +164,7 @@ export class VideoPostProcessorService implements OnModuleInit {
   needsProcessing(opts: PostProcessOptions): boolean {
     if (opts.kenBurns) return true;
     if (opts.specialTechnique) return true;
+    if (opts.lutPath) return true;
     if (opts.colorGrade && opts.colorGrade !== 'neutral') return true;
     if (opts.stabilize) return true;
     if (opts.speedFactor && opts.speedFactor !== 1.0) return true;

@@ -28,6 +28,7 @@ interface StructuredGenerationInput<T extends ZodTypeAny> {
 interface TokenUsageExtraction {
   promptTokens: number;
   completionTokens: number;
+  thinkingTokens: number; // Gemini thinking model 的内部推理 tokens，按 output 价格计费
   totalTokens: number;
   source: 'usage_metadata' | 'response_metadata' | 'missing';
 }
@@ -192,7 +193,7 @@ export class LlmService {
             standard: String(claudeTiers.standard || 'claude-sonnet-4-6'),
             lightweight: String(claudeTiers.lightweight || 'claude-sonnet-4-6'),
           },
-          costRates: LlmService.parseTierCostRates(costClaude, { inputRateUsdPer1M: 5, outputRateUsdPer1M: 25 }),
+          costRates: LlmService.parseTierCostRates(costClaude, { inputRateUsdPer1M: 36, outputRateUsdPer1M: 180 }),
           enabled: Boolean(claudeCfg.apiKey),
         },
         openai: {
@@ -203,7 +204,7 @@ export class LlmService {
             standard: String(openaiTiers.standard || defaultOpenaiModel),
             lightweight: String(openaiTiers.lightweight || defaultOpenaiModel),
           },
-          costRates: LlmService.parseTierCostRates(costOpenai, { inputRateUsdPer1M: 2, outputRateUsdPer1M: 10 }),
+          costRates: LlmService.parseTierCostRates(costOpenai, { inputRateUsdPer1M: 14.4, outputRateUsdPer1M: 72 }),
           enabled: Boolean(openaiCfg.apiKey),
           azure: String(openaiCfg.azure ?? '').toLowerCase() === 'true',
           azureInstanceName: openaiCfg.azureInstanceName ? String(openaiCfg.azureInstanceName) : undefined,
@@ -348,7 +349,7 @@ export class LlmService {
           const errUsage = this.extractUsageFromError(error);
           const errTokens = errUsage ?? { prompt: 0, completion: 0, total: 0, source: 'missing' as const };
           const errCost = LlmService.estimateCost(errTokens.prompt, errTokens.completion, rates);
-          this.traceLogger.logTrace({ ...traceBase, durationMs: Date.now() - t0, tokens: { prompt: errTokens.prompt, completion: errTokens.completion, total: errTokens.total, source: errTokens.source }, cost: { usd: errCost, inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: null, status: 'error', error: (error as Error).message, retries: retry });
+          this.traceLogger.logTrace({ ...traceBase, durationMs: Date.now() - t0, tokens: { prompt: errTokens.prompt, completion: errTokens.completion, total: errTokens.total, source: errTokens.source }, cost: { cny: errCost, inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: null, status: 'error', error: (error as Error).message, retries: retry });
           const errMeta = input.metadata ?? {};
           const errIsDrama = tags.some(t => t.includes('drama'));
           this.usageLedger.record({
@@ -372,16 +373,16 @@ export class LlmService {
     const durationMs = Date.now() - t0;
     const wrapped = this.unwrapResponse<z.infer<T>>(response);
     const usage = this.extractUsage(wrapped.raw, provider);
-    const cost = LlmService.estimateCost(usage.promptTokens, usage.completionTokens, rates);
+    const cost = LlmService.estimateCost(usage.promptTokens, usage.completionTokens, rates, usage.thinkingTokens);
 
     this.logger.log(
       `[${input.taskName}] ====== LLM 调用完成 (${provider}/${modelName}) ====== ${durationMs}ms\n` +
-      `  tokens: in=${usage.promptTokens} out=${usage.completionTokens} total=${usage.totalTokens}\n` +
+      `  tokens: in=${usage.promptTokens} out=${usage.completionTokens}${usage.thinkingTokens > 0 ? ` think=${usage.thinkingTokens}` : ''} total=${usage.totalTokens}\n` +
       `  费率: $${rates.inputRateUsdPer1M}/$${rates.outputRateUsdPer1M} per 1M | 费用: $${cost} (source: ${usage.source})`,
     );
     this.logger.debug(`[${input.taskName}] AI 输出:\n${this.truncate(JSON.stringify(wrapped.parsed, null, 2), 2000)}`);
 
-    this.traceLogger.logTrace({ ...traceBase, durationMs, tokens: { prompt: usage.promptTokens, completion: usage.completionTokens, total: usage.totalTokens, source: usage.source }, cost: { usd: cost, inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: wrapped.parsed, status: wrapped.parsed == null ? 'error' : 'success', error: wrapped.parsed == null ? '结构化输出解析为 null' : undefined, retries: retryCount });
+    this.traceLogger.logTrace({ ...traceBase, durationMs, tokens: { prompt: usage.promptTokens, completion: usage.completionTokens, ...(usage.thinkingTokens > 0 && { thinking: usage.thinkingTokens }), total: usage.totalTokens, source: usage.source }, cost: { cny: cost, inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: wrapped.parsed, status: wrapped.parsed == null ? 'error' : 'success', error: wrapped.parsed == null ? '结构化输出解析为 null' : undefined, retries: retryCount });
 
     const isDrama = tags.some(t => t.includes('drama'));
     const mod = isDrama ? 'drama' : 'novel';
@@ -393,7 +394,8 @@ export class LlmService {
       userId: String(meta.userId ?? ''),
       module: mod, resourceId, scope,
       action: input.taskName, kind: 'llm', provider, model: modelName,
-      tokensIn: usage.promptTokens, tokensOut: usage.completionTokens,
+      // tokensOut 含 thinking tokens（Gemini 按 output 价格计费），与 costCny 保持口径一致
+      tokensIn: usage.promptTokens, tokensOut: usage.completionTokens + usage.thinkingTokens,
       costCny: cost, ok: wrapped.parsed != null, durationMs,
     }).catch(() => {});
 
@@ -443,11 +445,15 @@ export class LlmService {
   // ═══ Token提取 — 兼容Gemini/Claude/OpenAI三种response格式 ═══
 
   private extractUsage(raw: Record<string, unknown> | null, _provider: LlmProvider): TokenUsageExtraction {
-    if (!raw) return { promptTokens: 0, completionTokens: 0, totalTokens: 0, source: 'missing' };
+    if (!raw) return { promptTokens: 0, completionTokens: 0, thinkingTokens: 0, totalTokens: 0, source: 'missing' };
     const um = this.toRecord(raw.usage_metadata);
     if (um) {
       const p = this.toInt(um.input_tokens), c = this.toInt(um.output_tokens);
-      return { promptTokens: p, completionTokens: c, totalTokens: this.toInt(um.total_tokens) || p + c, source: 'usage_metadata' };
+      const total = this.toInt(um.total_tokens) || p + c;
+      // Gemini thinking 模型：totalTokenCount = promptTokenCount + candidatesTokenCount + thoughtsTokenCount
+      // LangChain 的 convertUsageMetadata 不单独暴露 thoughtsTokenCount，通过差值计算
+      const thinking = Math.max(0, total - p - c);
+      return { promptTokens: p, completionTokens: c, thinkingTokens: thinking, totalTokens: total, source: 'usage_metadata' };
     }
     const rm = this.toRecord(raw.response_metadata);
     if (rm) {
@@ -455,10 +461,12 @@ export class LlmService {
       if (u) {
         const p = this.toInt(u.input_tokens) || this.toInt(u.prompt_tokens) || this.toInt(u.promptTokens);
         const c = this.toInt(u.output_tokens) || this.toInt(u.completion_tokens) || this.toInt(u.completionTokens);
-        return { promptTokens: p, completionTokens: c, totalTokens: this.toInt(u.total_tokens) || this.toInt(u.totalTokens) || p + c, source: 'response_metadata' };
+        const total = this.toInt(u.total_tokens) || this.toInt(u.totalTokens) || p + c;
+        const thinking = Math.max(0, total - p - c);
+        return { promptTokens: p, completionTokens: c, thinkingTokens: thinking, totalTokens: total, source: 'response_metadata' };
       }
     }
-    return { promptTokens: 0, completionTokens: 0, totalTokens: 0, source: 'missing' };
+    return { promptTokens: 0, completionTokens: 0, thinkingTokens: 0, totalTokens: 0, source: 'missing' };
   }
 
   // ═══ Schema清理（仅Gemini需要，Claude/OpenAI直传Zod） ═══
@@ -508,8 +516,9 @@ export class LlmService {
 
   // ═══ 工具方法 ═══
 
-  static estimateCost(promptTokens: number, completionTokens: number, rates: CostRates): number {
-    return Number(((promptTokens / 1e6) * rates.inputRateUsdPer1M + (completionTokens / 1e6) * rates.outputRateUsdPer1M).toFixed(8));
+  static estimateCost(promptTokens: number, completionTokens: number, rates: CostRates, thinkingTokens = 0): number {
+    // thinking tokens 按 output 价格计费（Gemini 定价策略）
+    return Number(((promptTokens / 1e6) * rates.inputRateUsdPer1M + ((completionTokens + thinkingTokens) / 1e6) * rates.outputRateUsdPer1M).toFixed(8));
   }
 
   private unwrapResponse<T>(response: unknown): { parsed: T; raw: Record<string, unknown> | null } {

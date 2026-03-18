@@ -11,6 +11,10 @@ export interface ShotMediaParams {
   ttsSpeedMultiplier: number;  // 1.0=正常
   ttsVolumeMultiplier: number; // 1.0=正常
   bgmVolumeMultiplier: number;
+  /** TTS 情感标签 — 传入 TTS 引擎的 emotion 参数，让语音有感情变化 */
+  ttsEmotion?: string;
+  /** 自适应转场时长(秒) — 根据场景情绪和节奏自动计算 */
+  transitionDurationSec: number;
 }
 
 export interface EpisodeTimeline {
@@ -73,6 +77,45 @@ const DIALOGUE_EMOTION_TTS: Record<string, { speed: number; volume: number }> = 
   scream: { speed: 1.2, volume: 1.5 },
 };
 
+/**
+ * 场景情绪 → TTS emotion 标签映射。
+ * 映射到火山引擎 OpenSpeech 支持的情感标签，让语音合成带有感情色彩。
+ */
+const EMOTION_TO_TTS_EMOTION: Record<string, string> = {
+  happy: 'happy', excited: 'happy', joyful: 'happy', loving: 'happy',
+  sweet: 'gentle', romantic: 'gentle', tender: 'gentle',
+  proud: 'happy', triumphant: 'happy', relieved: 'happy',
+  开心: 'happy', 兴奋: 'happy', 喜悦: 'happy', 甜蜜: 'gentle',
+  angry: 'angry', furious: 'angry', rage: 'angry',
+  愤怒: 'angry',
+  sad: 'sad', grieving: 'sad', heartbroken: 'sad',
+  悲伤: 'sad',
+  terrified: 'fear', desperate: 'fear', anxious: 'fear',
+  恐惧: 'fear', 绝望: 'sad',
+  suspicious: 'serious', mysterious: 'serious', tense: 'serious',
+  shocked: 'surprise', stunned: 'surprise',
+  紧张: 'serious', 震惊: 'surprise', 怀疑: 'serious',
+  calm: 'neutral', composed: 'neutral', thoughtful: 'serious',
+  平静: 'neutral', 沉思: 'serious',
+};
+
+/**
+ * 场景类型 → 转场时长映射。
+ * 慢节奏场景（浪漫、情感）使用较长转场，快节奏（动作、冲突）使用较短转场。
+ */
+const PURPOSE_TRANSITION_DURATION: Record<string, number> = {
+  hook_opening: 0.3,
+  action: 0.2,
+  confrontation: 0.3,
+  conflict: 0.3,
+  climax: 0.3,
+  revelation: 0.5,
+  emotional: 0.8,
+  romantic: 1.0,
+  transition: 0.6,
+  cliffhanger: 0.5,
+};
+
 @Injectable()
 export class EmotionMediaMapperService {
 
@@ -99,6 +142,9 @@ export class EmotionMediaMapperService {
     const hasTts = !!shot.dialogue?.text;
     const bgmVolumeMultiplier = hasTts ? Math.max(0.3, 1.0 - bgmVolume * 0.5) : 1.0;
 
+    const ttsEmotion = this.resolveTtsEmotion(emotion, shot.dialogue?.emotion);
+    const transitionDurationSec = this.resolveTransitionDuration(purpose, emotion);
+
     return {
       colorGrade,
       speedFactor,
@@ -107,6 +153,8 @@ export class EmotionMediaMapperService {
       ttsSpeedMultiplier: ttsParams.speed,
       ttsVolumeMultiplier: ttsParams.volume,
       bgmVolumeMultiplier,
+      ttsEmotion,
+      transitionDurationSec,
     };
   }
 
@@ -127,6 +175,35 @@ export class EmotionMediaMapperService {
     }
 
     return { bgmVolumeCurve, cutFrequency, emotionIntensityCurve };
+  }
+
+  /** 解析 TTS 情感标签：优先用对话自带的 emotion，否则从场景情绪推断 */
+  private resolveTtsEmotion(sceneEmotion: string, dialogueEmotion?: string | null): string | undefined {
+    if (dialogueEmotion) {
+      const mapped = EMOTION_TO_TTS_EMOTION[dialogueEmotion.toLowerCase()];
+      if (mapped && mapped !== 'neutral') return mapped;
+    }
+    if (sceneEmotion) {
+      const emotionLower = sceneEmotion.toLowerCase();
+      for (const [key, ttsEm] of Object.entries(EMOTION_TO_TTS_EMOTION)) {
+        if (emotionLower.includes(key) && ttsEm !== 'neutral') return ttsEm;
+      }
+    }
+    return undefined;
+  }
+
+  /** 解析自适应转场时长：根据场景类型和情绪决定，默认 0.5s */
+  private resolveTransitionDuration(purpose?: string, emotion?: string): number {
+    if (purpose) {
+      const purposeDur = PURPOSE_TRANSITION_DURATION[purpose];
+      if (purposeDur !== undefined) return purposeDur;
+    }
+    if (emotion) {
+      const emotionLower = emotion.toLowerCase();
+      if (['sad', 'grieving', 'romantic', 'tender', '悲伤', '甜蜜'].some(e => emotionLower.includes(e))) return 0.8;
+      if (['angry', 'furious', 'shocked', '愤怒', '震惊'].some(e => emotionLower.includes(e))) return 0.3;
+    }
+    return 0.5;
   }
 
   private resolveColorGrade(emotion: string, purpose?: string): ColorGrade {
@@ -153,7 +230,7 @@ export class EmotionMediaMapperService {
   }
 
   private generateKenBurns(shot: Shot): { direction: 'zoom_in' | 'zoom_out' | 'pan_left' | 'pan_right'; zoomFactor: number } {
-    const angle = shot.camera?.angle ?? 'medium';
+    const angle = shot.camera?.shotSize ?? 'medium';
     if (['close_up', 'extreme_close_up', 'medium_close_up'].includes(angle)) {
       return { direction: 'zoom_out', zoomFactor: 1.08 };
     }

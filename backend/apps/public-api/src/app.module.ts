@@ -16,6 +16,7 @@ import { MediaModule } from "./modules/media/media.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { UsageModule } from "./modules/usage/usage.module";
 
+
 @Module({
   imports: [
     // 配置模块
@@ -73,8 +74,10 @@ import { UsageModule } from "./modules/usage/usage.module";
           database: pgConfig.database,
           entities: [path.join(__dirname, "**/*.entity{.ts,.js}")],
           autoLoadEntities: true,
-          migrations: [path.join(__dirname, "migrations/*{.ts,.js}")],
-          migrationsRun: false,
+          migrations: [
+
+          ],
+          migrationsRun: true, // 在 synchronize 前执行迁移
           migrationsTableName: "migrations",
           synchronize: true, // 生产环境禁用自动同步
           logging: false,

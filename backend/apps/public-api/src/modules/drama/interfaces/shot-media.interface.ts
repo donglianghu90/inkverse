@@ -11,6 +11,8 @@ export interface ShotMediaEntry {
   t2iPrompt?: string;
   t2iNegativePrompt?: string;
   lastFrameT2iPrompt?: string;
+  /** 视频质量检查发现的问题（ffprobe 结构性检测） */
+  videoQcIssues?: string[];
   qc?: {
     identityScore?: number;
     styleScore?: number;

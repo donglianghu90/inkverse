@@ -21,11 +21,16 @@ export class DialogueCoachAgent {
     script: EpisodeScript, characters: CharacterIdentity[], profile?: DramaPromptProfile, dramaId?: string, state?: DramaState,
   ): Promise<EpisodeScript> {
     // 全量角色 Map，用于按场景按需过滤（避免每次调用 LLM 传入所有角色，减少噪音和 Token 消耗）
-    const charVoiceMap = new Map(characters.map(c => [c.characterId, `${c.characterId}(${c.name}): 音色=${c.voiceProfile.timbre}, 风格=${c.voiceProfile.speakingStyle}, 口癖="${c.voiceProfile.catchphrase}", 语速=${c.voiceProfile.speed}`]));
+    const charVoiceMap = new Map(characters.map(c => {
+      const soul = c.soulProfile;
+      const soulHint = soul
+        ? ` | 欲望=${soul.coreDesire || '-'}, 弱点=${soul.fatalFlaw || '-'}, 压力反应=${soul.stressResponse || '-'}${soul.emotionalTriggers?.length ? `, 雷区=[${soul.emotionalTriggers.join(',')}]` : ''}`
+        : '';
+      return [c.characterId, `${c.characterId}(${c.name}): 音色=${c.voiceProfile.timbre}, 风格=${c.voiceProfile.speakingStyle}, 口癖="${c.voiceProfile.catchphrase}", 语速=${c.voiceProfile.speed}${soulHint}`];
+    }));
     const coachCtx = {
       dialogueGuide: profile?.scriptwriterGuide?.dialogueGuide,
-      narrativeArc: profile?.genreArchetype?.narrativeArc,
-      factConstraint: profile?.genreArchetype?.factConstraint,
+      adaptationNotes: profile?.genreArchetype?.adaptationNotes,
     };
     const sysPrompt = dramaId
       ? await this.promptService.buildPrompt(dramaId, 'dialogue-coach', buildDialogueCoachSystemPrompt(coachCtx))

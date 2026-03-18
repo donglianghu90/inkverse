@@ -26,14 +26,17 @@ export class StoryboardDirectorAgent {
     if (!scenes.length) throw new Error('剧本场景为空，无法生成分镜');
     const allShots: z.infer<typeof shotSchema>[] = [];
     let globalIdx = 0;
+    let prevSceneLastShots: z.infer<typeof shotSchema>[] = [];
     for (let si = 0; si < scenes.length; si++) {
       const scene = scenes[si];
       const isLastScene = si === scenes.length - 1;
       if (si > 0) await new Promise(r => setTimeout(r, 800));
       this.logger.log(`E${script?.episodeNumber ?? 1} 场景 ${si + 1}/${scenes.length} [${scene?.purpose ?? ''}]: ${scene?.sceneHeading ?? ''}`);
-      const shots = await this.directScene(state, script, scene, globalIdx, isLastScene, intent);
+      const shots = await this.directScene(state, script, scene, globalIdx, isLastScene, intent, prevSceneLastShots);
       allShots.push(...shots);
       globalIdx += shots.length;
+      // 保留最后 2 个 shot 作为下一场景的视觉衔接锚点
+      prevSceneLastShots = shots.slice(-2);
     }
     // 后处理：强制角色锁脸 + 风格前缀嵌入
     this.enforceFaceLock(allShots, state);
@@ -48,6 +51,7 @@ export class StoryboardDirectorAgent {
   private async directScene(
     state: DramaState, script: EpisodeScript, scene: ScriptScene,
     startIdx: number, isLastScene: boolean, intent?: EpisodeIntent,
+    prevSceneLastShots: z.infer<typeof shotSchema>[] = [],
   ) {
     const profile = state.promptProfile;
     const camGuide = profile?.cameraStyleGuide;
@@ -91,11 +95,12 @@ export class StoryboardDirectorAgent {
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'storyboard-director', buildStoryboardDirectorSystemPrompt({
         camGuide,
         visualStyle: state.visualStyle,
-        epNum, startIdx, maxShots, targetDur,
+        maxShots, targetDur,
         scenePurpose,
         isLastScene,
         intentEmotionDirection: intent?.emotionDirection,
         hookDirection: isLastScene ? intent?.hookDirection : undefined,
+        emotionBeats: intent?.emotionBeats,
       })),
       userPrompt: `场景 ${scene.sceneIndex + 1}【${scenePurpose}${isGolden ? ' ⭐黄金场景' : ''}${isLastScene ? ' 🎬全集结尾' : ''}】:
 ${JSON.stringify(scene, null, 0)}
@@ -104,6 +109,10 @@ ${epNum === 1 && scene.sceneIndex === 0 ? `
 - 第1个Shot必须是视觉冲击力最强的画面（特写/低角度/动态构图），qualityTier=golden
 - 前3个Shot必须建立核心视觉张力，禁止平庸构图
 - 角色首次亮相的Shot要突出"记忆锚点"（标志性外貌+环境对比）
+` : ''}
+${prevSceneLastShots.length > 0 ? `
+🎬 上一场景结尾（视觉衔接参考，确保本场景第一个Shot在角色位置/情绪/构图上与此自然衔接）：
+${prevSceneLastShots.map(s => `- shot${s.shotIndex} [${s.camera?.shotSize ?? ''}+${s.camera?.cameraAngle ?? ''}/${s.camera?.movement ?? ''}] chars=[${s.characters.map(c => c.characterId).join(',')}] emotion=${s.characters[0]?.emotion ?? ''} | lastFrame: "${(s.lastFramePrompt ?? '').slice(0, 80)}"`).join('\n')}
 ` : ''}
 ⚠️ 合法角色ID白名单（characters数组只能使用这些ID，其他一律视为违规）：
 [${state.characters.map(c => `${c.characterId}(${c.name})`).join(', ')}]
@@ -153,21 +162,24 @@ ${flashbackCtx}`,
   }
 
   private inferShotType(shot: any): 'portrait' | 'dialogue' | 'action' | 'wide' | 'insert' {
-    const angle = shot?.camera?.angle ?? '';
-    const movement = shot?.camera?.movement ?? '';
+    const shotSize: string = shot?.camera?.shotSize ?? '';
+    const cameraAngle: string = shot?.camera?.cameraAngle ?? '';
+    const movement: string = shot?.camera?.movement ?? '';
     const hasDialogue = !!shot?.dialogue?.text;
     const charCount = Array.isArray(shot?.characters) ? shot.characters.length : 0;
     const visualText = `${shot?.visualPrompt ?? ''} ${(shot?.characters ?? []).map((c: any) => c?.action ?? '').join(' ')}`.toLowerCase();
 
-    if (['extreme_wide', 'wide', 'medium_wide', 'bird_eye'].includes(angle)) return 'wide';
-    if (angle === 'extreme_close_up') return 'insert';
+    // 景别决定基础类型
+    if (['extreme_wide', 'wide', 'medium_wide'].includes(shotSize) || cameraAngle === 'bird_eye') return 'wide';
+    if (shotSize === 'extreme_close_up') return 'insert';
 
     const actionTokens = ['run', 'chase', 'fight', 'hit', 'strike', 'kick', 'jump', 'grab', 'throw', 'punch', '冲', '打', '追', '跑', '跳', '砸', '挥', '扑'];
     const movingCamera = ['tracking', 'crane_up', 'crane_down', 'whip_pan', 'orbit', 'handheld', 'dolly_zoom'].includes(movement);
     if (movingCamera || actionTokens.some(t => visualText.includes(t))) return 'action';
 
     if (hasDialogue && charCount >= 2) return 'dialogue';
-    if (charCount <= 1 && ['close_up', 'medium_close_up', 'high_angle', 'low_angle', 'pov'].includes(angle)) return 'portrait';
+    // close_up 系列 + 单角色 = portrait（人物情绪特写）
+    if (charCount <= 1 && ['close_up', 'medium_close_up'].includes(shotSize)) return 'portrait';
     if (hasDialogue) return 'dialogue';
     if (charCount === 0) return 'insert';
     return 'portrait';
@@ -287,7 +299,7 @@ ${flashbackCtx}`,
       const hair = c.hairStylePrompt || c.hairStyle;
       const body = c.bodyTypePrompt || c.bodyType;
       const parts = [c.faceReferencePrompt, hair, body, costume].filter(Boolean);
-      // 用 characterId（英文，如 lb/ygz）作为 bracket 标识，避免中文名无法匹配英文 prompt
+      // 用 characterId（英文全拼，如 libai/yangyuhuan）作为 bracket 标识，避免中文名无法匹配英文 prompt
       return `[${c.characterId}: ${parts.join(', ')}]`;
     }).filter(Boolean).join(', ');
   }
@@ -296,7 +308,7 @@ ${flashbackCtx}`,
   private injectFaceLock(prompt: string, faceFragments: string, stylePrefix: string): string {
     if (!prompt?.trim()) return `${stylePrefix}${faceFragments}`;
     const hasStyle = stylePrefix && prompt.toLowerCase().startsWith(stylePrefix.toLowerCase().slice(0, 10));
-    // 用 characterId（英文短码，如 [lb:）而非中文名来检测是否已注入，避免中英文不匹配
+    // 用 characterId（英文全拼ID，如 [libai:）而非中文名来检测是否已注入，避免中英文不匹配
     const hasFace = faceFragments.split('[').filter(Boolean).every(f => {
       const cid = f.match(/^([^:]+):/)?.[1]?.trim();
       return cid && prompt.includes(`[${cid}:`);

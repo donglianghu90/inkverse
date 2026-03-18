@@ -17,7 +17,7 @@ export interface LlmTraceEntry {
   tier: string;
   temperature: number;
   durationMs: number;
-  tokens: { prompt: number; completion: number; total: number; source: string };
+  tokens: { prompt: number; completion: number; thinking?: number; total: number; source: string; };
   cost: { cny: number; inputRatePer1M: number; outputRatePer1M: number };
   input: { system: string; user: string };
   output: unknown;

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { history } from '@umijs/max';
-import { Plus, Loader2, AlertCircle, Sparkles, Film, Trash2 } from 'lucide-react';
+import { history, useLocation } from '@umijs/max';
+import { Plus, Loader2, AlertCircle, Sparkles, Film, Trash2, TrendingUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
@@ -123,6 +123,40 @@ const DramaCreateCard: React.FC = () => (
   </div>
 );
 
+/* ─── Sub-Tab Nav ─── */
+const DRAMA_TABS = [
+  { key: '/novel/dramas', label: '我的作品', icon: Film },
+  { key: '/novel/market', label: '市场选品', icon: TrendingUp },
+] as const;
+
+const DramaSubTabs: React.FC = () => {
+  const location = useLocation();
+  return (
+    <div className="flex gap-1 p-0.5 rounded-lg bg-muted/50 w-fit">
+      {DRAMA_TABS.map(tab => {
+        const active = location.pathname === tab.key;
+        const Icon = tab.icon;
+        return (
+          <button
+            key={tab.key}
+            type="button"
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all',
+              active
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground hover:bg-background/50',
+            )}
+            onClick={() => history.push(tab.key)}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {tab.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
 /* ─── DramaShelf ─── */
 const DramaShelf: React.FC = () => {
   const [dramas, setDramas] = useState<DramaListItem[]>([]);
@@ -192,6 +226,10 @@ const DramaShelf: React.FC = () => {
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+      <div className="mb-6">
+        <DramaSubTabs />
+      </div>
+
       {/* Empty state */}
       {!hasDramas && (
         <div className="animate-fade-in flex flex-col items-center py-16 text-center">

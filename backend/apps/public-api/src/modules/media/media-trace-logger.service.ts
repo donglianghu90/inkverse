@@ -14,11 +14,20 @@ export interface MediaTraceEntry {
   dramaId?: string;
   assetType?: string;
   refId?: string;
-  input: { prompt: string; size?: string; count?: number; referenceImages?: number }; // referenceImages=参考图数量
+  input: {
+    prompt: string;
+    size?: string;
+    count?: number;
+    /** 参考图数量 */
+    referenceImages?: number;
+    /** 参考图实际 URL 列表，用于调试 I2I 链路 */
+    referenceImageUrls?: string[];
+  };
   output: { imageUrls?: string[]; videoUrl?: string };
   status: 'success' | 'error';
   error?: string;
   jobId?: string;
+  costCny?: number; // 单次调用成本（人民币）
 }
 
 @Injectable()

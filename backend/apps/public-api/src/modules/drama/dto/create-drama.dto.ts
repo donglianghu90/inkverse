@@ -48,7 +48,13 @@ export class CreateDramaDto {
   genreTemplateId?: string; // 指定题材模板 ID
 
   @IsOptional() @IsString()
+  visualStyleTemplateId?: string; // 指定视觉风格模板 ID（与 drama_visual_style_templates 关联）
+
+  @IsOptional() @IsString()
   visualStyleHint?: string; // 视觉风格提示（如"真人影视""2D 动漫""水墨古风"），传给视觉资产设计师
+
+  @IsOptional() @IsString()
+  suggestedVisualStyle?: string; // 视觉风格枚举值（如 period_live / live_action / 2d_anime），由前端推荐流程确定后透传
 
   @IsOptional() @IsEnum(['fast', 'balanced', 'quality'])
   generationMode?: 'fast' | 'balanced' | 'quality'; // 生成模式：速度优先 / 均衡 / 质量优先

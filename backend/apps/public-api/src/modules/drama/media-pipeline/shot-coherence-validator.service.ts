@@ -133,9 +133,9 @@ export class ShotCoherenceValidatorService {
     }
 
     if (sameScene && shotA.camera && shotB.camera) {
-      const angleA = shotA.camera.angle;
-      const angleB = shotB.camera.angle;
-      if (this.isBadAxisJump(angleA, angleB)) {
+      const angleA = `${shotA.camera.shotSize}+${shotA.camera.cameraAngle}`;
+      const angleB = `${shotB.camera.shotSize}+${shotB.camera.cameraAngle}`;
+      if (this.isBadAxisJump(shotA.camera.cameraAngle, shotB.camera.cameraAngle)) {
         issues.push(`镜头轴线跳跃: ${angleA} → ${angleB}`);
         score -= 0.15;
       }

@@ -19,6 +19,8 @@ export interface DramaAgentNodeConfig {
   position: number;
   rfPosition: { x: number; y: number };
   additionalSystemPrompt: string;
+  /** 用户固定并编辑后的基础提示词快照。存在时替代代码自动生成的 basePrompt。 */
+  basePromptSnapshot?: string;
   customConfig?: { systemPrompt: string; userPromptTemplate: string; temperature: number };
 }
 

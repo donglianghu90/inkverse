@@ -1,6 +1,6 @@
 /** 短剧进度 — 事件契约与状态 */
 
-export type DramaRunType = 'create' | 'episode' | 'media' | 'images';
+export type DramaRunType = 'create' | 'episode' | 'media' | 'images' | 'assets';
 export type DramaTerminalStatus = 'success' | 'failed' | 'paused';
 
 export interface DramaProgressEvent {

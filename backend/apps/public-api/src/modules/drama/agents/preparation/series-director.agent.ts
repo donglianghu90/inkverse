@@ -7,6 +7,7 @@ import { LlmService } from '../../../novel/llm/llm.service';
 import { z } from 'zod';
 import { seriesOutlineSchema, SeriesOutline, DramaSeed, episodeSynopsisSchema } from '../../schemas/drama-state.schemas';
 import { buildSeriesDirectorSystemPrompt } from '../../prompting/drama-playbook';
+import type { GenreProductionGuidance } from '../../entities/drama-genre-template.entity';
 
 const DETAIL_SEGMENT = 15; // 首段详细规划集数
 
@@ -23,16 +24,19 @@ export class SeriesDirectorAgent {
   private readonly logger = new Logger(SeriesDirectorAgent.name);
   constructor(private readonly llm: LlmService) {}
 
-  async plan(seed: DramaSeed, dramaId?: string, userId?: string): Promise<SeriesOutline> {
+  async plan(seed: DramaSeed, dramaId?: string, userId?: string, genreGuidance?: GenreProductionGuidance, additionalSystemPrompt?: string): Promise<SeriesOutline> {
     const epMin = seed.plannedTotalEpisodes.min;
     const epMax = seed.plannedTotalEpisodes.max;
     const targetEp = Math.round((epMin + epMax) / 2);
     const durSec = seed.targetEpisodeDurationSec;
 
+    let sysPrompt = buildSeriesDirectorSystemPrompt({ targetEp, epMin, epMax, durSec, genre: seed.genre, genreGuidance });
+    if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
+
     const raw = await this.llm.generateStructured({
       taskName: 'drama-series-director',
       schema: segmentedOutputSchema,
-      systemPrompt: buildSeriesDirectorSystemPrompt({ targetEp, epMin, epMax, durSec }),
+      systemPrompt: sysPrompt,
       metadata: { dramaId, userId },
       userPrompt: `请根据以下内容种子规划全剧大纲：
 

@@ -65,7 +65,7 @@ const NovelLayout: React.FC = () => {
       label: '我的短剧',
       path: '/novel/dramas',
       icon: <Film className="h-4 w-4" />,
-      match: (p) => p === '/novel/dramas' || p.startsWith('/novel/drama/') || p === '/novel/create-drama',
+      match: (p) => p === '/novel/dramas' || p.startsWith('/novel/drama/') || p === '/novel/create-drama' || p === '/novel/market',
     },
     {
       label: '题材模板',
@@ -75,7 +75,7 @@ const NovelLayout: React.FC = () => {
     },
   ], []);
 
-  const showFooter = ['/novel', '/novel/dramas', '/novel/create', '/novel/create-drama', '/novel/templates'].includes(location.pathname);
+  const showFooter = ['/novel', '/novel/dramas', '/novel/create', '/novel/create-drama', '/novel/templates', '/novel/market'].includes(location.pathname);
 
   const joinDate = useMemo(() => {
     try {

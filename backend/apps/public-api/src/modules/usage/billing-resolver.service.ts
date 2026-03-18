@@ -24,9 +24,14 @@ export class BillingResolverService {
     this.embeddingCostPer1M = Number(emb.costPer1MTokens) || 1.4;
   }
 
+  /** 按完整名或前缀（取第一段 '.' 之前的部分）查找 cost map 条目 */
+  private lookupCost(map: Record<string, number | Record<string, unknown>>, provider: string) {
+    return map[provider] ?? map[provider.split('.')[0]] ?? null;
+  }
+
   /** 图片：按 provider → model 查价，fallback 0.43 CNY/张 */
-  resolveImageCostUsd(provider: string, model?: string, _size?: string): number {
-    const p = this.imageCost[provider];
+  resolveImageCostCny(provider: string, model?: string, _size?: string): number {
+    const p = this.lookupCost(this.imageCost, provider);
     if (p == null) return 0.43;
     if (typeof p === 'number') return p;
     const modelVal = model ? (p[model] as number) : null;
@@ -35,8 +40,8 @@ export class BillingResolverService {
   }
 
   /** 视频：按 provider → quality/model 查价，fallback 5.4 CNY/条 */
-  resolveVideoCostUsd(provider: string, qualityOrModel?: string): number {
-    const p = this.videoCost[provider];
+  resolveVideoCostCny(provider: string, qualityOrModel?: string): number {
+    const p = this.lookupCost(this.videoCost, provider);
     if (p == null) return 5.4;
     if (typeof p === 'number') return p;
     const q = qualityOrModel ? (p[qualityOrModel] as number) : null;
@@ -45,8 +50,8 @@ export class BillingResolverService {
   }
 
   /** TTS：按 provider → model/voice 查价，fallback 0.11 CNY/条 */
-  resolveTtsCostUsd(provider: string, modelOrVoice?: string): number {
-    const p = this.ttsCost[provider];
+  resolveTtsCostCny(provider: string, modelOrVoice?: string): number {
+    const p = this.lookupCost(this.ttsCost, provider);
     if (p == null) return 0.11;
     if (typeof p === 'number') return p;
     const m = modelOrVoice ? (p[modelOrVoice] as number) : null;
@@ -55,7 +60,7 @@ export class BillingResolverService {
   }
 
   /** Embedding：按 tokens 计价（CNY/百万 tokens），当前单 provider */
-  resolveEmbeddingCostUsd(tokens: number, _provider?: string): number {
+  resolveEmbeddingCostCny(tokens: number, _provider?: string): number {
     return tokens > 0 ? (tokens / 1_000_000) * this.embeddingCostPer1M : 0;
   }
 

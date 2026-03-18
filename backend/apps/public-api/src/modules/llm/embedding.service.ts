@@ -77,7 +77,7 @@ export class EmbeddingService {
   }
 
   private recordUsage(tokens: number, ok: boolean, durationMs: number, meta?: EmbeddingMeta) {
-    const costCny = ok && tokens > 0 ? this.billingResolver.resolveEmbeddingCostUsd(tokens, 'openai') : 0;
+    const costCny = ok && tokens > 0 ? this.billingResolver.resolveEmbeddingCostCny(tokens, 'openai') : 0;
     const module = meta?.dramaId ? 'drama' : meta?.bookId ? 'novel' : 'unknown';
     const resourceId = meta?.dramaId ?? meta?.bookId ?? '';
     let scope = 'creation';

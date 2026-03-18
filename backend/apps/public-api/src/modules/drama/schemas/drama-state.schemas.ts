@@ -79,6 +79,12 @@ export const genreArchetypeSchema = z.object({
   conflictType: z.enum(['interpersonal', 'fate_vs_will', 'good_vs_evil', 'internal', 'society']).default('interpersonal'),
   characterEvolution: z.enum(['costume_only', 'age_progression', 'power_level', 'relationship', 'status']).default('costume_only'),
   visualTone: z.enum(['glamorous', 'gritty', 'ethereal', 'period', 'dark', 'whimsical', 'epic']).default('glamorous'),
+  /**
+   * 题材适配生产规则——由 profiler LLM 根据本剧实际 genre 特征生成，注入所有下游 agent 的 system prompt。
+   * 替代原 genreAdaptiveBlock() 的 if-else 硬编码查找表。
+   * 涵盖：旁白比例规则、史实约束、叙事弧线特殊要求、集末钩子风格、角色视觉演变、台词风格示例等。
+   */
+  adaptationNotes: z.string().optional(),
 });
 
 export const dramaPromptProfileSchema = z.object({
@@ -94,16 +100,24 @@ export const dramaPromptProfileSchema = z.object({
     forbiddenPatterns: na(z.string()),
   }),
   cameraStyleGuide: z.object({
-    preferredAngles: na(z.string()), // 偏好镜头角度
-    signatureTechniques: na(z.string()), // 标志性镜头手法
+    preferredAngles: na(z.string()), // 偏好镜头角度列表
+    signatureTechniques: na(z.string()), // 标志性镜头手法列表
     transitionStyle: ns(), // 转场风格偏好
     colorPalette: ns(), // 色彩基调
+    /** 题材专属摄影语言指令（由 profiler LLM 生成，用户可编辑）。
+     *  纯文本，无运行时变量占位符。分镜导演会将其整段注入 system prompt。
+     *  示例内容："■ 霸总登场：medium+low_angle 仰拍；■ 权力对话：over_shoulder+high/low_angle 对比..." */
+    cinematographyDirective: ns(),
   }),
   audioStyleGuide: z.object({
     bgmMoodPreferences: na(z.string()),
     sfxDensity: z.enum(['sparse', 'moderate', 'rich']).default('moderate'),
     silenceUsage: ns(), // 静默使用策略
     voiceActingStyle: ns(), // 配音风格（夸张/克制/自然）
+    /** 题材专属音频品牌指令（由 profiler LLM 生成，用户可编辑）。
+     *  纯文本，无运行时变量占位符。音频导演会将其整段注入 system prompt。
+     *  示例内容："■ 霸总出场：低沉弦乐，intensity=0.5-0.6；■ 打脸反转：drop_to_silence→swell..." */
+    genreBrandingDirective: ns(),
   }),
   reviewerCalibration: z.object({
     dimensionWeights: z.object({
@@ -144,16 +158,30 @@ export const characterIdentitySchema = z.object({
   characterId: z.string(),
   name: z.string(),
   role: z.enum(['protagonist', 'antagonist', 'supporting', 'minor', 'narrator', 'historical_figure']),
-  scope: z.enum(['series', 'arc', 'episode']).default('series'), // 角色生命周期：series=全剧常驻 arc=段落级 episode=本集临时
+  scope: z.enum(['series', 'arc', 'episode']).default('series'),
   faceDescription: z.string(),
   bodyType: z.string(),
   hairStyle: z.string(),
   skinTone: z.string(),
   distinguishingFeatures: z.string(),
   age: z.string(),
+  agePrompt: z.string().optional().default(''),
   faceReferencePrompt: z.string(),
   bodyTypePrompt: z.string().optional().default(''),
   hairStylePrompt: z.string().optional().default(''),
+
+  // ─── 灵魂层：行为/心理人设 ───
+  soulProfile: z.object({
+    coreDesire: ns(),
+    fatalFlaw: ns(),
+    coreFear: ns(),
+    decisionStyle: ns(),
+    stressResponse: ns(),
+    emotionalTriggers: na(z.string()),
+    behavioralHabits: na(z.string()),
+    internalContradiction: ns(),
+  }).optional(),
+
   voiceProfile: z.object({
     ttsVoiceId: ns(),
     pitch: z.enum(['low', 'medium', 'high']).default('medium'),
@@ -180,6 +208,44 @@ export const minorRolePoolEntrySchema = z.object({
   usedInEpisodes: na(z.number().int()),
 });
 
+/**
+ * @deprecated propAssetSchema 仅供旧数据兼容，新剧请使用 signaturePropSchema。
+ * 旧场景级道具结构，保留以避免历史数据解析失败。
+ */
+export const propAssetSchema = z.object({
+  propId: z.string(),
+  name: z.string(),
+  description: z.string(),
+  visualPrompt: z.string(),
+});
+
+export type PropAsset = z.infer<typeof propAssetSchema>;
+
+/**
+ * 签名道具（Signature Prop）— 全剧维度的关键道具，满足以下任一条件才需列入：
+ *   1. 跨场景重复出现（appearsInScenes ≥ 2）
+ *   2. 剧情核心驱动物（MacGuffin）
+ *   3. 特定角色的标志性随身物件
+ *
+ * 设计原则：普通场景陈设（桌椅、杯碟、灯具）不需要签名道具资产；
+ * 只有观众会在多集内记住、且视觉一致性有实际意义的物件才列入。
+ */
+export const signaturePropSchema = z.object({
+  propId: z.string(),           // 全剧唯一 ID（英文/拼音简写，如 "jade_seal"、"jiu_zun"）
+  name: z.string(),             // 中文名称（如"传国玉玺"）
+  description: z.string(),      // 中文详细描述（材质、年代风格、外观特征，30-60字）
+  visualPrompt: z.string(),     // 英文 T2I 提示词（产品图风格，白底，单独展示，无人物）
+  narrativeRole: z.enum([
+    'signature',   // 角色标志性随身物（如主角的玉佩、反派的折扇）
+    'macguffin',   // 剧情核心驱动物（如密令、解药、传位诏书）
+    'recurring',   // 跨场景反复出现、需保持视觉一致的道具
+  ]),
+  appearsInScenes: na(z.string()),  // 出现的 locationId 列表（macguffin 可为空，其余至少 2 个）
+  characterOwner: ns(),             // 归属角色 characterId（signature 类必填，其余可选）
+});
+
+export type SignatureProp = z.infer<typeof signaturePropSchema>;
+
 export const sceneLocationSchema = z.object({
   locationId: z.string(),
   name: z.string(), // 如 "男主总裁办公室"
@@ -188,7 +254,8 @@ export const sceneLocationSchema = z.object({
   lightingDefault: z.string(), // 默认光线
   ambientSoundDefault: z.string(), // 默认环境音
   colorTone: z.string(), // 色调
-  keyProps: na(z.string()), // 标志性道具（如"落地窗""红木书桌"）
+  keyProps: na(z.string()), // 场景内普通道具文字列表（仅用于剧本上下文，不生图）
+  propAssets: na(propAssetSchema), // @deprecated 旧数据兼容字段，新剧不再使用
   isRecurring: z.boolean().default(false), // 是否为反复出现的场景
 });
 
@@ -201,7 +268,12 @@ export const visualStyleGuideSchema = z.object({
   textureStyle: ns(), // 材质质感（如"胶片颗粒""黏土质感""水彩晕染""像素块""毛毡纤维"）
   referenceStyle: ns(), // 参考风格/作品（如"吉卜力""新海诚""皮克斯""伊藤润二""港片黄金时代"）
   // 纯英文 T2I 提示词（用于风格参考图生成，避免中英混杂降低图片质量）
-  styleReferencePrompt: ns(), // English-only T2I style prompt for image generation
+  styleReferencePrompt: ns(), // English-only T2I style prompt for scene/location images
+  characterStylePrompt: ns(), // 角色定妆参考图专用前缀：仅含时代+渲染技术，不含 colorGrading/lightingStyle
+  facePromptRule: ns(), // 该风格的 faceReferencePrompt 写法规范，来自视觉风格模板
+  scenePromptGuidance: ns(), // 场景 visualPrompt 写法示例 + 约束，来自视觉风格模板
+  scriptDialogueGuide: ns(), // 本风格驱动的台词风格引导，来自视觉风格模板
+  shotStyleGuide: ns(), // 本风格驱动的集导演镜头风格提示，来自视觉风格模板
 });
 
 export const visualBibleSchema = z.object({
@@ -221,6 +293,14 @@ export const visualBibleSchema = z.object({
     styleRefImages: na(z.string()),
     colorLutHint: ns(),
   }),
+  scenePack: na(z.object({
+    locationId: z.string(),
+    anchorImages: z.object({
+      establishing: ns(),
+      interiorMedium: ns(),
+      detailClose: ns(),
+    }),
+  })).optional(),
   cameraPack: z.object({
     preferredAngles: na(z.string()),
     movementPolicy: na(z.string()),
@@ -278,10 +358,20 @@ export const arcSegmentSchema = z.object({
 // Phase 4: 集级意图 (Episode Intent)
 // ---------------------------------------------------------------------------
 
+export const emotionBeatSchema = z.object({
+  beatId: z.string(),
+  startPct: z.number().min(0).max(1),
+  endPct: z.number().min(0).max(1),
+  emotion: z.string(),
+  intensity: z.number().min(0).max(1),
+  trigger: z.string(),
+});
+
 export const episodeIntentSchema = z.object({
   episodeNumber: z.number().int().min(1),
   goals: na(z.string()),
   emotionDirection: z.string(),
+  emotionBeats: na(emotionBeatSchema),
   hookDirection: z.string(),
   carryoverFromLastEpisode: z.string(),
   masterShotPlan: na(z.object({
@@ -355,13 +445,72 @@ export const episodeScriptSchema = z.object({
 // Phase 6: 分镜 Shot (Storyboard)
 // ---------------------------------------------------------------------------
 
+/**
+ * 景别枚举 — 描述画框裁切范围（画面包含主体多少）。
+ * 与 cameraAngle 正交：一个镜头同时有景别和角度（如"仰视特写"= close_up + low_angle）。
+ *
+ * 用途：
+ *   shotSize       → firstFramePrompt T2I 构图
+ *   shotSizeEnd    → lastFramePrompt  T2I 构图（运动镜头首尾构图不同时填写）
+ */
+export const SHOT_SIZE_VALUES = [
+  'extreme_close_up', // 大特写：眼/嘴/手等局部细节，面部情绪最大化
+  'close_up',         // 特写：头部+少量颈肩，人物情绪主导
+  'medium_close_up',  // 中近景：胸部以上，对话/情绪两用
+  'medium',           // 中景：腰部以上，最常用的对话景别
+  'medium_wide',      // 中全景：膝部以上，可见肢体语言
+  'wide',             // 全景：全身+部分环境，动作/人物关系
+  'extreme_wide',     // 大全景：以环境为主，人物渺小（建立场景/宏大感）
+] as const;
+export type ShotSize = typeof SHOT_SIZE_VALUES[number];
+const shotSizeEnum = z.enum(SHOT_SIZE_VALUES);
+
+/**
+ * 镜头角度枚举 — 描述摄影机与被摄主体的空间透视关系。
+ * 与 shotSize 正交，可自由组合（如 low_angle + close_up = 仰视特写）。
+ *
+ * 核心情绪规则（短剧黄金法则）：
+ *   low_angle   → 强势/权力/压迫感（拍霸总/反派/反转后的主角）
+ *   high_angle  → 脆弱/被压制（拍受害者/崩溃中的角色）
+ *   dutch_angle → 心理扭曲/紧张/不安（拍转折/悬疑）
+ *   bird_eye    → 命运视角/宏大格局（拍重大转折/场景建立）
+ *   pov         → 强代入感（拍主角视角的冲突/惊喜）
+ *   over_shoulder → 经典对话切法，双人场景首选
+ *   three_quarter → 最自然的人物角度，对话/情绪通用
+ */
+export const CAMERA_ANGLE_VALUES = [
+  'front',          // 正面：角色直视镜头，适合宣告/表白/震惊
+  'three_quarter',  // 斜侧45°：最自然的对话/情绪角度（默认）
+  'side_profile',   // 90°侧面：展现轮廓/行走/若有所思
+  'over_shoulder',  // 过肩：经典对话双人切法，含对方虚化背影
+  'pov',            // 主观视角：强代入感，角色所见即观众所见
+  'bird_eye',       // 正俯视：命运/宏大/全局感（90°向下）
+  'high_angle',     // 斜俯：压制/脆弱（摄影机高于主体向下斜拍）
+  'low_angle',      // 斜仰：权力/强势/压迫（摄影机低于主体向上斜拍）
+  'worm_eye',       // 正仰视：极端仰视，建筑/神像/极度压迫感
+  'dutch_angle',    // 斜构图倾斜：心理扭曲/紧张/悬疑
+  'back_of_head',   // 后脑勺：跟随感/神秘感/角色面向未知
+] as const;
+export type CameraAngle = typeof CAMERA_ANGLE_VALUES[number];
+const cameraAngleEnum = z.enum(CAMERA_ANGLE_VALUES);
+
 export const shotCameraSchema = z.object({
-  angle: z.enum([
-    'extreme_close_up', 'close_up', 'medium_close_up', 'medium',
-    'medium_wide', 'wide', 'extreme_wide',
-    'over_shoulder', 'bird_eye', 'low_angle', 'high_angle', 'dutch_angle',
-    'pov',
-  ]),
+  /**
+   * 景别：画框裁切范围。
+   * firstFramePrompt 用此值生成 T2I 构图关键词。
+   */
+  shotSize: shotSizeEnum,
+  /**
+   * 运动结束景别（可选）。
+   * 仅在 movement 导致景别变化时填写（如 slow_push_in: shotSize=wide, shotSizeEnd=medium_close_up）。
+   * lastFramePrompt 优先使用此值；省略则与 shotSize 相同。
+   */
+  shotSizeEnd: shotSizeEnum.nullish(),
+  /**
+   * 摄影机透视角度：与景别正交，可自由组合。
+   * 两帧共用同一角度（除非 movement 导致角度变化，该情况用 visualPrompt 描述）。
+   */
+  cameraAngle: cameraAngleEnum.default('three_quarter'),
   movement: z.enum([
     'static', 'slow_push_in', 'slow_pull_back', 'pan_left', 'pan_right',
     'tilt_up', 'tilt_down', 'tracking', 'crane_up', 'crane_down',
@@ -379,6 +528,21 @@ export const shotCharacterSchema = z.object({
   action: z.string(), // 角色动作（如"缓缓放下文件，嘴角微扬"）
   emotion: z.string(), // 表情/情绪
   position: z.enum(['left', 'center', 'right', 'background', 'foreground']).default('center'),
+  /**
+   * 角色朝向 — 直接写入 firstFramePrompt/lastFramePrompt T2I 关键词，
+   * T2V 会以第一帧的朝向为锚定，确保整个 clip 内角色朝向一致。
+   *
+   * 规则：
+   *   对话场景：A=left+facing_right, B=right+facing_left（180度法则）
+   *   霸总/反转：facing_camera（正视镜头，权威感）
+   *   若有所思/独处：facing_away 或 side_left/side_right
+   */
+  facing: z.enum([
+    'facing_camera',  // 正视镜头（宣告/表白/震惊/权威）
+    'facing_away',    // 背对镜头（神秘/离开/若有所思）
+    'facing_left',    // 面朝画面左侧（对话B侧，或侧身行走）
+    'facing_right',   // 面朝画面右侧（对话A侧，或侧身行走）
+  ]).default('facing_camera'),
   costumeOverride: z.string().nullish().transform(v => v ?? ''), // AI 可能输出 null
 });
 
@@ -457,6 +621,21 @@ export const shotSchema = z.object({
   firstFrameImageUrl: z.string().nullish(), // T2I 生成前为 null
   lastFrameImageUrl: z.string().nullish(),
   characterVariationIds: z.record(z.string(), z.string()).nullish(), // characterId → variationId 映射
+
+  // ─── 剪辑切点精度 ──────────────────────────────────────────────────────────
+  /** Shot 内的精确入点(秒)，从 Shot 起始处偏移。省略=从头开始 */
+  trimInSec: z.number().min(0).nullish(),
+  /** Shot 内的精确出点(秒)，从 Shot 起始处偏移。省略=用到结尾 */
+  trimOutSec: z.number().min(0).nullish(),
+  /** 剪辑切点类型，指导 composer 在哪种时刻执行切换 */
+  cutPointHint: z.enum([
+    'on_action',       // 在动作最高峰切（拳头落下/门关上的瞬间）
+    'on_reaction',     // 在听者反应的第一帧切（表情刚变化时）
+    'on_emotion_peak', // 在情绪最强点切（最震撼的那一帧）
+    'on_beat',         // 对齐 BGM 节拍切
+    'on_silence',      // 在静默开始时切
+    'free',            // 无特殊要求
+  ]).default('free'),
 
   // ─── 质量分级（基于场景类型自动标记，影响媒体生产优先级）──────────────────
   qualityTier: z.enum(['golden', 'standard', 'filler']).default('standard'),
@@ -666,6 +845,7 @@ export const dramaStateSchema = z.object({
   strategy: dramaStrategySchema.optional(),
 
   visualStyleHint: ns(), // 用户在前端选择的原始视觉风格提示（如"3D 东方玄幻风格：..."），用于 debug/重试
+  suggestedVisualStyle: ns(), // 视觉风格枚举值（如 period_live / live_action / 2d_anime），由前端推荐流程确定后透传
   generationMode: z.enum(['fast', 'balanced', 'quality']).default('balanced'), // 媒体生成策略档位
   visualStyle: visualStyleGuideSchema.optional(),
   visualBible: visualBibleSchema.optional(),
@@ -673,6 +853,7 @@ export const dramaStateSchema = z.object({
   episodeCharacterArchive: z.record(z.string(), z.array(characterIdentitySchema)).optional(), // key = episodeNumber，归档每集 scope='episode' 的临时角色
   minorRolePool: na(minorRolePoolEntrySchema), // 可复用临时角色池，供后续集导演选角
   locations: na(sceneLocationSchema),
+  signatureProps: na(signaturePropSchema), // 全剧级签名道具（跨场景/剧情核心/角色标志），3-8 个
 
   seriesOutline: seriesOutlineSchema.optional(),
   arcSegments: na(arcSegmentSchema),
@@ -746,6 +927,7 @@ export type VisualBible = z.infer<typeof visualBibleSchema>;
 export type EpisodeSynopsis = z.infer<typeof episodeSynopsisSchema>;
 export type SeriesOutline = z.infer<typeof seriesOutlineSchema>;
 export type ArcSegment = z.infer<typeof arcSegmentSchema>;
+export type EmotionBeat = z.infer<typeof emotionBeatSchema>;
 export type EpisodeIntent = z.infer<typeof episodeIntentSchema>;
 export type ScriptScene = z.infer<typeof scriptSceneSchema>;
 export type EpisodeScript = z.infer<typeof episodeScriptSchema>;

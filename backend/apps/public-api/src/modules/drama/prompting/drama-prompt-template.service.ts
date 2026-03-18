@@ -1,19 +1,55 @@
-/** Drama Prompt 模板服务 — 包装 Playbook 函数，叠加 Pipeline 的 additionalSystemPrompt */
+/** Drama Prompt 模板服务 — 包装 Playbook 函数，叠加 Pipeline 的 basePromptSnapshot / additionalSystemPrompt
+ *
+ *  提示词层级（从上到下）：
+ *   1. base = node.basePromptSnapshot（用户固化编辑版）|| codeGeneratedBasePrompt（代码自动生成）
+ *   2. 本剧专属补充指令（node.additionalSystemPrompt）
+ *      └── 创建短剧时从用户的「全局 AI 指令」初始化，之后可在「创作工坊」中按剧修改
+ */
 import { Injectable } from '@nestjs/common';
+import type { DramaAgentNodeConfig } from '../interfaces';
 import { DramaAgentPipelineService } from '../workflow/drama-agent-pipeline.service';
+
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 @Injectable()
 export class DramaPromptTemplateService {
+  private readonly nodeCache = new Map<string, { nodes: DramaAgentNodeConfig[]; expiresAt: number }>();
+
   constructor(private readonly pipelineService: DramaAgentPipelineService) {}
 
-  async getAdditionalPrompt(dramaId: string, nodeId: string): Promise<string> { // 获取某 Agent 节点的 additionalSystemPrompt
+  private async getCachedNodes(dramaId: string): Promise<DramaAgentNodeConfig[]> {
+    const hit = this.nodeCache.get(dramaId);
+    if (hit && Date.now() < hit.expiresAt) return hit.nodes;
     const nodes = await this.pipelineService.getPublishedNodes(dramaId);
+    this.nodeCache.set(dramaId, { nodes, expiresAt: Date.now() + CACHE_TTL_MS });
+    return nodes;
+  }
+
+  invalidateCache(dramaId: string): void {
+    this.nodeCache.delete(dramaId);
+  }
+
+  async getAdditionalPrompt(dramaId: string, nodeId: string): Promise<string> {
+    const nodes = await this.getCachedNodes(dramaId);
     const node = nodes.find(n => n.id === nodeId);
     return node?.additionalSystemPrompt ?? '';
   }
 
-  async buildPrompt(dramaId: string, nodeId: string, basePrompt: string): Promise<string> { // 组合 playbook 基础 prompt + pipeline 自定义追加
-    const additional = await this.getAdditionalPrompt(dramaId, nodeId);
-    return additional ? `${basePrompt}\n\n=== 额外指令 ===\n${additional}` : basePrompt;
+  /**
+   * 组装最终系统提示词：
+   *   1. base = node.basePromptSnapshot || codeGeneratedBasePrompt
+   *   2. 本剧专属补充指令（node.additionalSystemPrompt，创建时从全局指令模版初始化）
+   */
+  async buildPrompt(dramaId: string, nodeId: string, codeGeneratedBasePrompt: string): Promise<string> {
+    const nodes = await this.getCachedNodes(dramaId);
+    const node = nodes.find(n => n.id === nodeId);
+
+    const base = node?.basePromptSnapshot?.trim() || codeGeneratedBasePrompt;
+    const dramaAdditional = node?.additionalSystemPrompt?.trim() ?? '';
+
+    const parts = [base];
+    if (dramaAdditional) parts.push(`=== 本剧补充指令 ===\n${dramaAdditional}`);
+
+    return parts.join('\n\n');
   }
 }

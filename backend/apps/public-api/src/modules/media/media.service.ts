@@ -21,6 +21,13 @@ export interface MediaScopeOpts {
 
 export interface GenerateImageOptions extends ImageGenerationRequest {
   provider?: string;
+  /**
+   * 跨 Provider 降级：当主 provider 完整调用链全部失败时（如内容审核、服务不可用），
+   * 自动切换此备用 provider 重试一次。与 volcengine 内部 seedream 版本降级是两个层次。
+   */
+  fallbackProvider?: string;
+  /** fallbackProvider 专属 extra 参数（如 kieai 的 aspect_ratio/resolution） */
+  fallbackExtra?: Record<string, unknown>;
   dramaId?: string;
   bookId?: string;
   module?: string;     // 'drama' | 'novel'
@@ -79,7 +86,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
       const resourceId = job.dramaId || '_unknown';
       const scope = job.episodeNumber != null ? `episode:${job.episodeNumber}` : (job.assetType?.startsWith('shot_') ? `shot:${job.refId || 'unknown'}` : 'creation');
       const quality = (job.request as any)?.quality as string | undefined;
-      const vidCost = evt.status === 'completed' ? this.billingResolver.resolveVideoCostUsd(job.provider, quality) : 0;
+      const vidCost = evt.status === 'completed' ? this.billingResolver.resolveVideoCostCny(job.provider, quality) : 0;
       const durationMs = evt.status === 'completed' && job.durationMs ? job.durationMs : 0;
       this.usageLedger.record({
         userId: job.userId ?? '', module, resourceId, scope,
@@ -117,41 +124,40 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
     const t0 = Date.now();
     try {
       const result = await provider.generate(opts);
+      return await this.finalizeImageResult(result, provider.name, opts, t0);
+    } catch (primaryErr) {
+      // 跨 Provider 降级：volcengine 内容审核等全链路失败时，切换到备用 Provider 重试
+      if (opts.fallbackProvider) {
+        const fbProvider = this.registry.getImageProvider(opts.fallbackProvider);
+        this.logger.warn(
+          `Provider ${provider.name} 全链路失败，降级至 ${fbProvider.name}: ${(primaryErr as Error).message?.slice(0, 120)}`,
+        );
+        try {
+          const fbOpts: GenerateImageOptions = {
+            ...opts,
+            extra: opts.fallbackExtra ?? opts.extra,
+            provider: opts.fallbackProvider,
+            fallbackProvider: undefined,
+            fallbackExtra: undefined,
+          };
+          const fbResult = await fbProvider.generate(fbOpts);
+          return await this.finalizeImageResult(fbResult, fbProvider.name, opts, t0);
+        } catch (fbErr) {
+          this.logger.error(
+            `备用 Provider ${fbProvider.name} 亦失败: ${(fbErr as Error).message?.slice(0, 120)}`,
+          );
+        }
+      }
 
-      await this.persistImagesToOss(result, opts);
-
-      const job = await this.jobService.createJob({
-        jobType: 'image', provider: provider.name, providerTaskId: '',
-        dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId,
-        request: { prompt: opts.prompt, size: opts.size, count: opts.count },
-        userId: opts.userId,
-      });
-      await this.jobService.markCompleted(job.id, { images: result.images } as any, Date.now() - t0);
-      this.logger.log(`图片生成完成: jobId=${job.id} provider=${provider.name} ${result.images.length}张 (${result.durationMs}ms)`);
-      this.traceLogger.logT2i({
-        provider: provider.name, model: result.model, durationMs: result.durationMs,
-        dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId,
-        input: { prompt: opts.prompt, size: opts.size, count: opts.count ?? 1, referenceImages: opts.referenceImages?.length },
-        output: { imageUrls: result.images.map(i => i.url) },
-        status: 'success', jobId: job.id,
-      });
-      const imgCount = result.images.length;
-      const imgUnitCost = this.billingResolver.resolveImageCostUsd(provider.name, result.model, opts.size);
-      this.usageLedger.record({
-        userId: opts.userId ?? '', module: this.resolveModule(opts),
-        resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
-        action: opts.assetType ?? 'image', kind: 'image',
-        provider: provider.name, model: result.model,
-        quantity: imgCount, costCny: imgCount * imgUnitCost,
-        ok: true, durationMs: result.durationMs,
-      }).catch(() => {});
-      return { ...result, jobId: job.id };
-    } catch (err) {
       this.traceLogger.logT2i({
         provider: provider.name, model: 'unknown', durationMs: Date.now() - t0,
         dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId,
-        input: { prompt: opts.prompt, size: opts.size, count: opts.count ?? 1, referenceImages: opts.referenceImages?.length },
-        output: {}, status: 'error', error: (err as Error).message,
+        input: {
+          prompt: opts.prompt, size: opts.size, count: opts.count ?? 1,
+          referenceImages: opts.referenceImages?.length,
+          referenceImageUrls: opts.referenceImages?.map(r => r.url),
+        },
+        output: {}, status: 'error', error: (primaryErr as Error).message,
       });
       this.usageLedger.record({
         userId: opts.userId ?? '', module: this.resolveModule(opts),
@@ -161,8 +167,48 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
         quantity: opts.count ?? 1, costCny: 0,
         ok: false, durationMs: Date.now() - t0,
       }).catch(() => {});
-      throw err;
+      throw primaryErr;
     }
+  }
+
+  private async finalizeImageResult(
+    result: ImageGenerationResult,
+    providerName: string,
+    opts: GenerateImageOptions,
+    t0: number,
+  ): Promise<ImageGenerationResult & { jobId: string }> {
+    await this.persistImagesToOss(result, opts);
+    const job = await this.jobService.createJob({
+      jobType: 'image', provider: providerName, providerTaskId: '',
+      dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId,
+      request: { prompt: opts.prompt, size: opts.size, count: opts.count },
+      userId: opts.userId,
+    });
+    await this.jobService.markCompleted(job.id, { images: result.images } as any, Date.now() - t0);
+    this.logger.log(`图片生成完成: jobId=${job.id} provider=${providerName} ${result.images.length}张 (${result.durationMs}ms)`);
+    const imgCount = result.images.length;
+    const imgUnitCost = this.billingResolver.resolveImageCostCny(providerName, result.model, opts.size);
+    this.traceLogger.logT2i({
+      provider: providerName, model: result.model, durationMs: result.durationMs,
+      dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId,
+      input: {
+        prompt: opts.prompt, size: opts.size, count: opts.count ?? 1,
+        referenceImages: opts.referenceImages?.length,
+        referenceImageUrls: opts.referenceImages?.map(r => r.url),
+      },
+      output: { imageUrls: result.images.map(i => i.url) },
+      status: 'success', jobId: job.id,
+      costCny: imgCount * imgUnitCost,
+    });
+    this.usageLedger.record({
+      userId: opts.userId ?? '', module: this.resolveModule(opts),
+      resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
+      action: opts.assetType ?? 'image', kind: 'image',
+      provider: providerName, model: result.model,
+      quantity: imgCount, costCny: imgCount * imgUnitCost,
+      ok: true, durationMs: result.durationMs,
+    }).catch(() => {});
+    return { ...result, jobId: job.id };
   }
 
   /**
@@ -273,7 +319,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
     const meta = isNewApi ? reqOrOpts as SynthesizeTtsOptions : {} as Partial<SynthesizeTtsOptions>;
 
     const tts = this.registry.getTtsProvider(prov);
-    const ttsUnitCost = this.billingResolver.resolveTtsCostUsd(tts.name, req.voiceId);
+    const ttsUnitCost = this.billingResolver.resolveTtsCostCny(tts.name, req.voiceId);
     const t0 = Date.now();
     const dir = path.dirname(outPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

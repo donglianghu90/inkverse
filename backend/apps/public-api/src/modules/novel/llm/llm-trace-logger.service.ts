@@ -17,8 +17,8 @@ export interface LlmTraceEntry {
   tier: string;
   temperature: number;
   durationMs: number;
-  tokens: { prompt: number; completion: number; total: number; source: string };
-  cost: { usd: number; inputRatePer1M: number; outputRatePer1M: number };
+  tokens: { prompt: number; completion: number; thinking?: number; total: number; source: string };
+  cost: { cny: number; inputRatePer1M: number; outputRatePer1M: number };
   input: { system: string; user: string };
   output: unknown;
   tags: string[];
@@ -95,7 +95,7 @@ export class LlmTraceLoggerService implements OnModuleDestroy {
       traceId: `${Date.now()}-${++this.seq}`, timestamp: new Date().toISOString(),
       taskName, provider: 'none', model: 'none', tier: 'none', temperature: 0, durationMs: 0,
       tokens: { prompt: 0, completion: 0, total: 0, source: 'skipped' },
-      cost: { usd: 0, inputRatePer1M: 0, outputRatePer1M: 0 },
+      cost: { cny: 0, inputRatePer1M: 0, outputRatePer1M: 0 },
       input: { system: '', user: '' }, output: null,
       tags: ['skipped'], metadata: { reason, ...meta }, status: 'skipped', retries: 0,
     };
@@ -110,7 +110,7 @@ export class LlmTraceLoggerService implements OnModuleDestroy {
       bookId: evt.bookId, chapterNumber: evt.chapterNumber,
       taskName: `workflow:${evt.step}`, provider: 'system', model: 'none', tier: 'none', temperature: 0, durationMs: 0,
       tokens: { prompt: 0, completion: 0, total: 0, source: 'system' },
-      cost: { usd: 0, inputRatePer1M: 0, outputRatePer1M: 0 },
+      cost: { cny: 0, inputRatePer1M: 0, outputRatePer1M: 0 },
       input: { system: '', user: '' }, output: evt.meta ?? null,
       tags: ['workflow-event', evt.step], metadata: evt.meta ?? {},
       status: evt.status === 'ok' ? 'success' : 'error', error: evt.error, retries: 0,
@@ -126,7 +126,7 @@ export class LlmTraceLoggerService implements OnModuleDestroy {
       workflowId: evt.dramaId, metadata: { dramaId: evt.dramaId, phase: evt.phase, step: evt.step, episodeNumber: evt.episodeNumber, message: evt.message, ...evt.meta },
       taskName: `drama:${evt.phase}:${evt.step}`, provider: 'system', model: 'none', tier: 'none', temperature: 0, durationMs: 0,
       tokens: { prompt: 0, completion: 0, total: 0, source: 'system' },
-      cost: { usd: 0, inputRatePer1M: 0, outputRatePer1M: 0 },
+      cost: { cny: 0, inputRatePer1M: 0, outputRatePer1M: 0 },
       input: { system: '', user: '' }, output: evt.meta ?? null,
       tags: ['drama-workflow', evt.phase, evt.step], status: evt.status === 'ok' ? 'success' : 'error', error: evt.error, retries: 0,
     };

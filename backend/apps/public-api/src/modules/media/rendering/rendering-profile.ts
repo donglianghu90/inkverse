@@ -13,8 +13,22 @@ export type RefImageRole = 'character_face' | 'scene' | 'style' | 'prev_frame';
 export const CHARACTER_VIEW_ANGLES = [
   'face_front', 'face_three_quarter', 'upper_body_front',
   'full_body_front', 'side_profile', 'back_view',
+  'face_happy', 'face_angry',
 ] as const;
 export type CharacterViewAngle = typeof CHARACTER_VIEW_ANGLES[number];
+
+export const LOCATION_VIEW_ANGLES = [
+  'establishing',    // 建立镜头：全景展示空间全貌
+  'interior_medium', // 中景：展示空间核心区域和关键道具
+  'detail_close',    // 细节特写：展示标志性道具/质感/材质
+] as const;
+export type LocationViewAngle = typeof LOCATION_VIEW_ANGLES[number];
+
+export const LOCATION_VIEW_LABELS: Record<string, string> = {
+  establishing: '全景',
+  interior_medium: '中景',
+  detail_close: '细节特写',
+};
 
 export interface RefImageCandidate {
   url: string;
@@ -74,6 +88,16 @@ export interface RenderingProfile {
     chainReferenceWeight: number;
   };
 
+  /** 场景多角度参考图策略 — 按场景复用频率决定生成哪些视角 */
+  locationViews: {
+    /** 常用场景（isRecurring=true）的视角列表 */
+    recurring: readonly LocationViewAngle[];
+    /** 普通场景的视角列表 */
+    normal: readonly LocationViewAngle[];
+    /** 链式生成时，以 establishing 为参考图的权重 */
+    chainReferenceWeight: number;
+  };
+
   /** 模型专属额外参数（透传给 Provider.generate 的 extra 字段） */
   extraParams?: Record<string, unknown>;
 }
@@ -86,9 +110,14 @@ export interface CharacterImageSet {
 
 // ═══ 工具函数 ═══
 
-const CLOSE_ANGLES = ['close_up', 'extreme_close_up', 'medium_close_up'];
-const WIDE_ANGLES = ['wide', 'extreme_wide', 'bird_eye'];
-const MEDIUM_ANGLES = ['medium', 'medium_wide', 'medium_close_up'];
+/** 按景别（shotSize）分组 — 与 camera.shotSize 枚举对应 */
+const CLOSE_SHOT_SIZES = ['close_up', 'extreme_close_up', 'medium_close_up'];
+const WIDE_SHOT_SIZES = ['wide', 'extreme_wide'];
+const MEDIUM_SHOT_SIZES = ['medium', 'medium_wide'];
+/** 中远景 + 角色在左/右时易出现侧面，优先用 side_profile 参考图 */
+const SIDE_LIKE_SIZES = ['medium_wide', 'wide', 'extreme_wide'];
+/** bird_eye 是摄影角度（cameraAngle），视野覆盖类似大全景，参考图选全身 */
+const BIRD_EYE_LIKE_ANGLES = ['bird_eye', 'worm_eye'];
 
 /**
  * 按渲染配置的优先级策略筛选参考图。
@@ -97,12 +126,13 @@ const MEDIUM_ANGLES = ['medium', 'medium_wide', 'medium_close_up'];
 export function selectRefImages(
   candidates: RefImageCandidate[],
   profile: RenderingProfile,
+  shotSize?: string,
   cameraAngle?: string,
 ): Array<{ url: string; weight: number }> {
   if (!candidates.length) return [];
 
-  const isCloseUp = CLOSE_ANGLES.includes(cameraAngle ?? '');
-  const isWide = WIDE_ANGLES.includes(cameraAngle ?? '');
+  const isCloseUp = CLOSE_SHOT_SIZES.includes(shotSize ?? '');
+  const isWide = WIDE_SHOT_SIZES.includes(shotSize ?? '') || BIRD_EYE_LIKE_ANGLES.includes(cameraAngle ?? '');
   const priority = isCloseUp
     ? profile.refImage.priorityByScenario.closeUp
     : isWide
@@ -128,14 +158,42 @@ export function selectRefImages(
   }));
 }
 
-/** 从 Shot.camera 提取景别/构图/景深，构建 prompt 补充片段 */
-export function buildCameraHint(camera?: { angle?: string; composition?: string; depthOfField?: string }): string {
+/** 从 Shot.camera 提取景别+角度+构图+景深，构建 T2I prompt 补充片段 */
+export function buildCameraHint(camera?: {
+  shotSize?: string;
+  cameraAngle?: string;
+  composition?: string;
+  depthOfField?: string;
+}): string {
   if (!camera) return '';
   const parts: string[] = [];
-  if (camera.angle) parts.push(camera.angle.replace(/_/g, ' '));
+  if (camera.shotSize) parts.push(camera.shotSize.replace(/_/g, ' '));
+  if (camera.cameraAngle && camera.cameraAngle !== 'three_quarter') {
+    // three_quarter 是默认值，不注入以节省 token
+    parts.push(camera.cameraAngle.replace(/_/g, ' '));
+  }
   if (camera.composition) parts.push(camera.composition.replace(/_/g, ' '));
   if (camera.depthOfField && camera.depthOfField !== 'medium') parts.push(`${camera.depthOfField} depth of field`);
   return parts.join(', ');
+}
+
+/**
+ * 对逗号分隔的 prompt 片段进行大小写不敏感的去重。
+ * 保留首次出现顺序，删除后续重复片段。
+ */
+function deduplicatePromptSegments(prompt: string): string {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const seg of prompt.split(',')) {
+    const trimmed = seg.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(trimmed);
+    }
+  }
+  return result.join(', ');
 }
 
 /**
@@ -162,7 +220,8 @@ export function assembleT2iPrompt(
 
   if (opts?.stylePrefix) {
     const normalized = opts.stylePrefix.replace(/,\s*$/, '');
-    const alreadyHas = prompt.toLowerCase().includes(normalized.toLowerCase().slice(0, 15));
+    // 使用前 50 字符作为判断依据（比 15 字符更精确），避免不同场景 visualPrompt 恰好共享前缀词导致误判
+    const alreadyHas = prompt.toLowerCase().includes(normalized.toLowerCase().slice(0, 50));
     if (!alreadyHas) {
       switch (profile.prompt.styleInjection) {
         case 'prefix': prompt = `${opts.stylePrefix}${prompt}`; break;
@@ -172,8 +231,16 @@ export function assembleT2iPrompt(
     }
   }
 
+  // 去除拼接后可能产生的重复片段（如 scene visualPrompt 与 stylePrefix 共享部分词汇时）
+  prompt = deduplicatePromptSegments(prompt);
+
   if (prompt.length > profile.prompt.maxLength) {
-    prompt = prompt.slice(0, profile.prompt.maxLength);
+    // Word-boundary-aware truncation: find the last comma or space before maxLength
+    const cutPoint = profile.prompt.maxLength;
+    const lastComma = prompt.lastIndexOf(',', cutPoint);
+    const lastSpace = prompt.lastIndexOf(' ', cutPoint);
+    const breakAt = Math.max(lastComma, lastSpace);
+    prompt = breakAt > cutPoint * 0.5 ? prompt.slice(0, breakAt).trimEnd() : prompt.slice(0, cutPoint);
   }
 
   return prompt;
@@ -181,16 +248,22 @@ export function assembleT2iPrompt(
 
 /**
  * 根据镜头参数选择最合适的角色参考图视角。
- * 核心逻辑：特写→面部，远景→全身，过肩→背面/3/4 侧面，中景→半身。
+ * 核心逻辑：特写→面部，远景→全身，过肩→背面/3/4 侧面，中景→半身；
+ * 中远景且角色在左/右时优先用 side_profile，保证成片服饰与正面定妆一致。
  */
 export function selectBestCharacterView(
   availableViews: CharacterViewAngle[],
-  cameraAngle?: string,
+  shotSize?: string,
   characterPosition?: string,
+  cameraAngle?: string,
 ): CharacterViewAngle {
   if (!availableViews.length) return 'face_front';
-  const has = (v: CharacterViewAngle) => availableViews.includes(v);
+  // 表情变体视角（face_happy/face_angry）仅用于资产生成，不参与景别选择逻辑
+  const geometricViews = availableViews.filter(v => v !== 'face_happy' && v !== 'face_angry') as CharacterViewAngle[];
+  if (!geometricViews.length) return 'face_front';
+  const has = (v: CharacterViewAngle) => geometricViews.includes(v);
 
+  // 过肩镜头：前景角色用背影，后景角色用侧脸
   if (cameraAngle === 'over_shoulder') {
     if (characterPosition === 'foreground' || characterPosition === 'background') {
       return characterPosition === 'foreground'
@@ -199,19 +272,111 @@ export function selectBestCharacterView(
     }
   }
 
-  if (CLOSE_ANGLES.includes(cameraAngle ?? '')) {
-    if (characterPosition === 'left' || characterPosition === 'right')
-      return has('face_three_quarter') ? 'face_three_quarter' : 'face_front';
-    return has('face_front') ? 'face_front' : availableViews[0];
-  }
-
-  if (WIDE_ANGLES.includes(cameraAngle ?? ''))
+  // bird_eye / worm_eye：俯仰视角优先全身图
+  if (BIRD_EYE_LIKE_ANGLES.includes(cameraAngle ?? ''))
     return has('full_body_front') ? 'full_body_front' : has('upper_body_front') ? 'upper_body_front' : 'face_front';
 
-  if (MEDIUM_ANGLES.includes(cameraAngle ?? ''))
-    return has('upper_body_front') ? 'upper_body_front' : has('full_body_front') ? 'full_body_front' : 'face_front';
+  // 特写景别：按角色左右决定正面或斜侧
+  if (CLOSE_SHOT_SIZES.includes(shotSize ?? '')) {
+    if (characterPosition === 'left' || characterPosition === 'right')
+      return has('face_three_quarter') ? 'face_three_quarter' : 'face_front';
+    return has('face_front') ? 'face_front' : geometricViews[0];
+  }
 
-  return has('face_front') ? 'face_front' : availableViews[0];
+  // 中远景且角色在左/右：易出现侧面，优先用 side_profile 参考图
+  if (SIDE_LIKE_SIZES.includes(shotSize ?? '') && (characterPosition === 'left' || characterPosition === 'right')) {
+    if (has('side_profile')) return 'side_profile';
+  }
+
+  if (WIDE_SHOT_SIZES.includes(shotSize ?? ''))
+    return has('full_body_front') ? 'full_body_front' : has('upper_body_front') ? 'upper_body_front' : has('side_profile') ? 'side_profile' : 'face_front';
+
+  if (MEDIUM_SHOT_SIZES.includes(shotSize ?? ''))
+    return has('upper_body_front') ? 'upper_body_front' : has('full_body_front') ? 'full_body_front' : has('side_profile') ? 'side_profile' : 'face_front';
+
+  return has('face_front') ? 'face_front' : geometricViews[0];
+}
+
+/**
+ * 根据镜头景别选择最合适的场景参考图视角。
+ * 特写→细节，中景→中景内部，远景/全景→establishing；
+ * 如果所需视角不存在，回退到 establishing。
+ */
+export function selectBestLocationView(
+  availableViews: LocationViewAngle[],
+  shotSize?: string,
+): LocationViewAngle {
+  if (!availableViews.length) return 'establishing';
+  const has = (v: LocationViewAngle) => availableViews.includes(v);
+  if (CLOSE_SHOT_SIZES.includes(shotSize ?? '')) {
+    return has('detail_close') ? 'detail_close' : has('interior_medium') ? 'interior_medium' : 'establishing';
+  }
+  if (MEDIUM_SHOT_SIZES.includes(shotSize ?? '')) {
+    return has('interior_medium') ? 'interior_medium' : 'establishing';
+  }
+  return 'establishing';
+}
+
+/**
+ * 从 age 字符串推导英文 T2I 年龄描述（无 agePrompt 时使用）。
+ * 支持 "50"、"50岁"、"约五十" 等，输出如 "around 50 years old, mature features"。
+ */
+export function ageToT2IPhrase(age: string | undefined): string {
+  if (!age || !String(age).trim()) return '';
+  const s = String(age).trim();
+  const rangeMatch = s.match(/(\d+)\s*[-~～至到]\s*(\d+)/);
+  const numMatch = rangeMatch ? null : s.match(/\d+/);
+  let n: number;
+  if (rangeMatch) {
+    const lo = parseInt(rangeMatch[1], 10);
+    const hi = parseInt(rangeMatch[2], 10);
+    n = Math.round((lo + hi) / 2);
+  } else if (numMatch) {
+    n = parseInt(numMatch[0], 10);
+  } else {
+    n = NaN;
+  }
+  if (!isNaN(n)) {
+    if (n <= 0 || n > 120) return '';
+    if (n < 18) return 'young, teenage appearance';
+    if (n < 35) return `around ${n} years old, young adult`;
+    if (n < 55) return `around ${n} years old, middle-aged, mature features`;
+    return `around ${n} years old, mature, older adult features`;
+  }
+  const lower = s.toLowerCase();
+  if (/少年|teen|young\s*man|young\s*woman/i.test(lower) || /幼|少/.test(s)) return 'young, teenage appearance';
+  if (/青年|young\s*adult|二十|三十|20s|30s/i.test(lower)) return 'young adult';
+  if (/中年|middle|四十|五十|40s|50s|mid\s*age/i.test(lower)) return 'middle-aged, mature features';
+  if (/老年|elder|old|六十|七十|60s|70s|senior/i.test(lower)) return 'mature, older adult features';
+  return '';
+}
+
+/** 为场景指定视角构建 T2I prompt（链式生成用） */
+export function buildLocationViewPrompt(
+  loc: {
+    visualPrompt?: string;
+    description?: string;
+    lightingDefault?: string;
+    colorTone?: string;
+    keyProps?: string[];
+  },
+  viewAngle: LocationViewAngle,
+): string {
+  const base = (loc.visualPrompt || loc.description || '').trim();
+  if (!base) return '';
+  const lighting = loc.lightingDefault ? `, ${loc.lightingDefault} lighting` : '';
+  const color = loc.colorTone ? `, ${loc.colorTone} color tone` : '';
+  // keyProps 是中文场景陈设描述（仅用于剧本上下文），不拼入 T2I prompt
+  switch (viewAngle) {
+    case 'establishing':
+      return `wide establishing shot, ${base}${lighting}${color}, full environment overview, architectural perspective, no people`;
+    case 'interior_medium':
+      return `medium shot interior view, ${base}${lighting}${color}, same location as reference, different angle showing central area, no people`;
+    case 'detail_close':
+      return `close-up detail shot, ${base}${lighting}${color}, same location as reference, focusing on textures, atmospheric detail, no people`;
+    default:
+      return base;
+  }
 }
 
 /** 为指定视角构建 T2I prompt（链式生成用） */
@@ -221,26 +386,65 @@ export function buildViewAnglePrompt(
     bodyType?: string; bodyTypePrompt?: string;
     hairStyle?: string; hairStylePrompt?: string;
     defaultCostume?: string; defaultCostumePrompt?: string;
+    age?: string;
+    agePrompt?: string;
   },
   viewAngle: CharacterViewAngle,
 ): string {
   const face = char.faceReferencePrompt ?? '';
-  const body = char.bodyTypePrompt || char.bodyType || '';
-  const hair = char.hairStylePrompt || char.hairStyle || '';
-  const costume = char.defaultCostumePrompt || char.defaultCostume || '';
+  const body = (char.bodyTypePrompt || char.bodyType || '').trim();
+  const hair = (char.hairStylePrompt || char.hairStyle || '').trim();
+  const costume = (char.defaultCostumePrompt || char.defaultCostume || '').trim();
+  // 始终从 age 字段推导年龄词（ageToT2IPhrase 取范围最小值，避免 LLM 取中间值的错误）
+  const agePhrase = ageToT2IPhrase(char.age) || (char.agePrompt && char.agePrompt.trim()) || '';
+  const opt = (s: string, prefix = '') => (s ? `${prefix}${s}` : '');
   switch (viewAngle) {
     case 'face_front':
-      return face;
+      return [face, opt(agePhrase), opt(hair), costume ? `wearing ${costume}` : '', opt(body), 'front-facing, looking at camera, neutral plain background, character reference sheet portrait']
+        .filter(Boolean)
+        .join(', ');
     case 'face_three_quarter':
-      return `three quarter view portrait, same person, slightly turned, ${face}, neutral background`;
+      return [
+        'three quarter view portrait, same person, slightly turned',
+        face,
+        opt(agePhrase),
+        opt(hair),
+        costume ? `wearing ${costume}` : '',
+        opt(body),
+        'neutral background',
+      ]
+        .filter(Boolean)
+        .join(', ');
     case 'upper_body_front':
-      return `upper body portrait, same person, ${face}, wearing ${costume}, ${body} build, neutral background`;
+      return `upper body portrait, same person, ${face}, ${opt(agePhrase)}${agePhrase ? ', ' : ''}${costume ? `wearing ${costume}, ` : ''}${body ? `${body} build, ` : ''}neutral background`;
     case 'full_body_front':
-      return `full body standing portrait, same person, ${face}, ${body} build, ${hair} hair, wearing ${costume}, neutral studio background`;
+      return `full body standing portrait, same person, ${face}, ${opt(agePhrase)}${agePhrase ? ', ' : ''}${body ? `${body} build, ` : ''}${hair ? `${hair}, ` : ''}${costume ? `wearing ${costume}, ` : ''}neutral studio background`;
     case 'side_profile':
-      return `side profile portrait, same person, ${face}, ${hair} hair, neutral background`;
+      return `side profile portrait, same person, ${opt(agePhrase)}${agePhrase ? ', ' : ''}${hair ? `${hair}, ` : ''}${body ? `${body} build, ` : ''}${costume ? `wearing ${costume}, ` : ''}neutral background`;
     case 'back_view':
-      return `back view, same person from behind, ${hair} hair, ${body} build, wearing ${costume}, neutral background`;
+      return `back view, same person from behind, ${opt(agePhrase)}${agePhrase ? ', ' : ''}${hair ? `${hair}, ` : ''}${body ? `${body} build, ` : ''}${costume ? `wearing ${costume}, ` : ''}neutral background`;
+    case 'face_happy':
+      return [
+        face,
+        opt(agePhrase),
+        opt(hair),
+        costume ? `wearing ${costume}` : '',
+        opt(body),
+        'happy expression, genuine slight smile, pleased and warm, subtle not exaggerated, same facial bone structure, front-facing, looking at camera, neutral background',
+      ]
+        .filter(Boolean)
+        .join(', ');
+    case 'face_angry':
+      return [
+        face,
+        opt(agePhrase),
+        opt(hair),
+        costume ? `wearing ${costume}` : '',
+        opt(body),
+        'angry expression, furrowed brows, sharp stern gaze, controlled tension in eyes, not distorted, same facial bone structure, front-facing, looking at camera, neutral background',
+      ]
+        .filter(Boolean)
+        .join(', ');
     default:
       return face;
   }

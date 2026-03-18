@@ -6,7 +6,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../../../llm/llm.service';
 import { z } from 'zod';
 import {
-  shotSchema, episodeStoryboardSchema, EpisodeStoryboard, DramaState, Shot,
+  shotSchema, episodeStoryboardSchema, EpisodeStoryboard, EpisodeIntent, DramaState, Shot,
 } from '../../schemas/drama-state.schemas';
 import { buildAudioDirectorSystemPrompt } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
@@ -19,7 +19,7 @@ export class AudioDirectorAgent {
   private readonly logger = new Logger(AudioDirectorAgent.name);
   constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
 
-  async enhance(state: DramaState, storyboard: EpisodeStoryboard): Promise<EpisodeStoryboard> {
+  async enhance(state: DramaState, storyboard: EpisodeStoryboard, intent?: EpisodeIntent): Promise<EpisodeStoryboard> {
     const shotsArr = storyboard?.shots ?? [];
     if (!shotsArr.length) throw new Error('分镜数据缺失，无法进行音频设计');
     const profile = state.promptProfile;
@@ -28,7 +28,10 @@ export class AudioDirectorAgent {
       `${c.characterId}(${c.name}): ttsVoiceId=${c.voiceProfile.ttsVoiceId || '待分配'}, pitch=${c.voiceProfile.pitch}, speed=${c.voiceProfile.speed}, timbre=${c.voiceProfile.timbre}`
     ).join('\n');
     const locAmbience = state.locations.map(l => `${l.locationId}: ${l.ambientSoundDefault}`).join('\n');
-    const sysPrompt = await this.promptService.buildPrompt(state.dramaId, 'audio-director', buildAudioDirectorSystemPrompt({ audioGuide }));
+    const sysPrompt = await this.promptService.buildPrompt(state.dramaId, 'audio-director', buildAudioDirectorSystemPrompt({
+      audioGuide,
+      emotionBeats: intent?.emotionBeats,
+    }));
 
     const shots = [...shotsArr];
     const allBgm: any[] = [], allSilence: any[] = [];
@@ -50,7 +53,7 @@ export class AudioDirectorAgent {
         dialogue: s.dialogue,
         subtitle: s.subtitle,
         characters: s.characters.map(c => ({ characterId: c.characterId, action: c.action, emotion: c.emotion })),
-        camera: { angle: s.camera?.angle, movement: s.camera?.movement },
+        camera: { shotSize: s.camera?.shotSize, cameraAngle: s.camera?.cameraAngle, movement: s.camera?.movement },
         audio: s.audio,
       }));
 

@@ -24,12 +24,16 @@ import { MediaQualityGateService, QualityAssessment } from './media-quality-gate
 import { ShotCoherenceValidatorService } from './shot-coherence-validator.service';
 import { EmotionMediaMapperService } from './emotion-media-mapper.service';
 import { GenerationPolicyService } from './generation-policy.service';
+import { ImageProviderRouterService } from './image-provider-router.service';
 import type { DramaGenerationMode, DramaStyleBucket } from '../interfaces';
 import type { ShotMediaEntry } from '../interfaces';
 
 @Injectable()
 export class MediaOrchestratorService implements OnModuleInit {
   private readonly logger = new Logger('MediaOrchestrator');
+  private t2iMaxConcurrency = 3;
+  private t2iNextSlotAt = 0; // 令牌槽：下一次允许提交的时间戳(ms)
+  private acquireT2iSlot: () => Promise<void> = () => Promise.resolve();
   private static readonly LIVE_ACTION_NEGATIVE_EXTRA = [
     'painting', 'illustration', 'watercolor painting', 'ink painting',
     'comic panel', 'storyboard panel', 'split screen', 'grid layout',
@@ -55,12 +59,20 @@ export class MediaOrchestratorService implements OnModuleInit {
     private readonly coherenceValidator: ShotCoherenceValidatorService,
     private readonly emotionMapper: EmotionMediaMapperService,
     private readonly generationPolicy: GenerationPolicyService,
+    private readonly imageRouter: ImageProviderRouterService,
   ) {}
 
   async onModuleInit() {
     const media = (this.configService.get('media') ?? {}) as Record<string, unknown>;
     const pipeline = (media.pipeline ?? {}) as Record<string, unknown>;
     this.skipImageGen = String(pipeline.skipImageGeneration) === 'true';
+    if (pipeline.t2iMaxConcurrency) this.t2iMaxConcurrency = Number(pipeline.t2iMaxConcurrency);
+    const t2iIntervalMs = Number(pipeline.t2iIntervalMs) || 3000;
+    this.acquireT2iSlot = async () => {
+      const waitMs = this.t2iNextSlotAt - Date.now();
+      this.t2iNextSlotAt = Math.max(Date.now(), this.t2iNextSlotAt) + t2iIntervalMs;
+      if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+    };
     this.profile = this.renderingProfileService.getImageProfile();
     await this.recoverPendingEpisodes();
   }
@@ -82,19 +94,23 @@ export class MediaOrchestratorService implements OnModuleInit {
   }
 
   /** 按当前模型的 RenderingProfile 组装 T2I prompt */
-  private assemblePrompt(raw: string, camera?: { angle?: string; composition?: string; depthOfField?: string }, stylePrefix?: string): string {
-    return assembleT2iPrompt(raw, this.profile, { cameraHint: buildCameraHint(camera), stylePrefix });
+  private assemblePrompt(raw: string, camera?: { shotSize?: string; shotSizeEnd?: string | null; cameraAngle?: string; composition?: string; depthOfField?: string }, stylePrefix?: string, useEndSize = false): string {
+    const effectiveCamera = useEndSize && camera?.shotSizeEnd
+      ? { ...camera, shotSize: camera.shotSizeEnd }
+      : camera;
+    return assembleT2iPrompt(raw, this.profile, { cameraHint: buildCameraHint(effectiveCamera), stylePrefix });
   }
 
-  /** 构建 T2I 风格前缀：融合 overallAesthetic + renderTechnique + colorGrading + lightingStyle */
+  /** 构建 T2I 风格前缀：优先 styleReferencePrompt；回退用 overallAesthetic 等拼接（playbook 要求这些字段为英文，直接拼接） */
   private buildT2iStylePrefix(vs?: DramaState['visualStyle']): string | undefined {
-    if (!vs?.overallAesthetic) return undefined;
-    const parts = [vs.overallAesthetic];
-    if (vs.renderTechnique) parts.push(vs.renderTechnique);
-    if (vs.textureStyle) parts.push(vs.textureStyle);
-    if (vs.colorGrading) parts.push(vs.colorGrading);
-    if (vs.lightingStyle) parts.push(vs.lightingStyle);
-    return parts.join(', ') + ', ';
+    if (!vs) return undefined;
+    const styleRef = (vs.styleReferencePrompt ?? '').trim();
+    if (styleRef) return styleRef + ', ';
+    const parts = [vs.overallAesthetic, vs.renderTechnique, vs.textureStyle, vs.colorGrading, vs.lightingStyle, vs.referenceStyle]
+      .filter(Boolean)
+      .map((p) => (p ?? '').trim())
+      .filter(Boolean);
+    return parts.length ? parts.join(', ') + ', ' : undefined;
   }
 
   /** 根据画幅比例返回 Seedream 5.0 宽高比（volcengine-image 会转换为合法像素尺寸） */
@@ -202,23 +218,33 @@ export class MediaOrchestratorService implements OnModuleInit {
           }
         };
 
-        await this.runConcurrent(orderedShots, mediaPolicy.t2iConcurrency, async (shot, i) => {
+        await this.runConcurrent(orderedShots, Math.min(mediaPolicy.t2iConcurrency, this.t2iMaxConcurrency), async (shot, i) => {
           const sid = shot.shotId;
           if (shot.isFlashback || shot.isPreview) { emit(phaseOff + i, `${sid} 跳过T2I`, true); return; }
 
           const mediaParams = shotMediaParamsCache.get(sid);
           const emotionColorHint = mediaParams?.colorGrade;
           const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+          // 在 Shot 级别预先确定 Provider，首帧/尾帧保持一致
+          const shotRoute = this.imageRouter.routeShot({
+            qualityTier: shot.qualityTier,
+            shotSize: shot.camera?.shotSize,
+            cameraAngle: shot.camera?.cameraAngle,
+            isGolden: shot.isPreview || shot.qualityTier === 'golden',
+            size: imgSize,
+          });
 
           if (!shotMediaMap[sid]?.imageUrl) {
             try {
               emit(phaseOff + i, `${sid} 首帧生成中...`);
               const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-              const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix);
+              const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false);
               const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
-                shotType: 'first_frame', qualityTier: shot.qualityTier ?? 'standard',
-                cameraAngle: shot.camera?.angle, emotionColorHint,
+                shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
+                qualityTier: shot.qualityTier ?? 'standard',
+                shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle, emotionColorHint,
                 routeProfile: shotPolicy.routeProfile,
+                provider: shotRoute.provider,
               });
               const refs = this.buildRefImages(
                 shot,
@@ -242,10 +268,14 @@ export class MediaOrchestratorService implements OnModuleInit {
                 const fixHint = prevAssessment?.recommendedFix;
                 const retryNeg = fixHint ? this.buildFixNegativeHint(fixHint, prevAssessment?.issues) : '';
                 const effectiveNeg = retryNeg ? [optimized.negativePrompt, retryNeg].filter(Boolean).join(', ') : (optimized.negativePrompt || undefined);
-                const res = await withMediaRetry(() => this.mediaService.generateImage({
-                  prompt: optimized.prompt, negativePrompt: effectiveNeg,
-                  size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid, userId, episodeNumber,
-                }), `${sid} 首帧`);
+                const res = await withMediaRetry(async () => {
+                  await this.acquireT2iSlot();
+                  return this.mediaService.generateImage({
+                    prompt: optimized.prompt, negativePrompt: effectiveNeg,
+                    size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid, userId, episodeNumber,
+                    ...shotRoute,
+                  });
+                }, `${sid} 首帧`);
                 return res.images?.[0]?.url ?? '';
               };
 
@@ -260,7 +290,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                   characterRefs,
                   styleRefs: styleRefImages,
                   candidateCount: shotPolicy.candidateCount,
-                  dramaId, userId,
+                  dramaId, userId, episodeNumber,
                 });
                 imgUrl = gateResult.imageUrl;
                 gateQc = {
@@ -324,12 +354,23 @@ export class MediaOrchestratorService implements OnModuleInit {
                 'last',
               );
               const styleLockedLastPrompt = this.applyStyleLockPrompt(shot.lastFramePrompt!, shot, state);
-              const rawLastPrompt = this.assemblePrompt(styleLockedLastPrompt, shot.camera, t2iStylePrefix);
+              const rawLastPrompt = this.assemblePrompt(styleLockedLastPrompt, shot.camera, t2iStylePrefix, true);
               const optLast = this.promptOptimizer.optimizeForT2I(rawLastPrompt, episodeNegPrompt ?? '', {
-                shotType: 'last_frame', qualityTier: shot.qualityTier ?? 'standard', emotionColorHint,
+                shotType: 'last_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
+                qualityTier: shot.qualityTier ?? 'standard', emotionColorHint,
+                shotSize: shot.camera?.shotSizeEnd ?? shot.camera?.shotSize,
+                cameraAngle: shot.camera?.cameraAngle,
                 routeProfile: shotPolicy.routeProfile,
+                provider: shotRoute.provider,
               });
-              const res = await withMediaRetry(() => this.mediaService.generateImage({ prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: lastRefs, dramaId, assetType: 'shot_last_frame', refId: `${sid}_last`, userId, episodeNumber }), `${sid} 尾帧`);
+              const res = await withMediaRetry(async () => {
+                await this.acquireT2iSlot();
+                return this.mediaService.generateImage({
+                  prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined,
+                  size: imgSize, count: 1, referenceImages: lastRefs, dramaId, assetType: 'shot_last_frame', refId: `${sid}_last`, userId, episodeNumber,
+                  ...shotRoute,
+                });
+              }, `${sid} 尾帧`);
               const lastUrl = res.images?.[0]?.url ?? '';
               if (lastUrl) shotMediaMap[sid] = { ...shotMediaMap[sid], lastFrameImageUrl: lastUrl, lastFrameT2iPrompt: optLast.prompt };
               emit(phaseOff + orderedShots.length + i, `${sid} 尾帧完成`, true);
@@ -365,12 +406,18 @@ export class MediaOrchestratorService implements OnModuleInit {
               const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
               try {
                 const mediaParams = shotMediaParamsCache.get(sid);
+                const regenRoute = this.imageRouter.routeShot({
+                  qualityTier: shot.qualityTier, shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle,
+                  isGolden: shot.isPreview || shot.qualityTier === 'golden', size: imgSize,
+                });
                 const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-                const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix);
+                const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false);
                 const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
-                  shotType: 'first_frame', qualityTier: shot.qualityTier ?? 'standard',
-                  cameraAngle: shot.camera?.angle, emotionColorHint: mediaParams?.colorGrade,
+                  shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
+                  qualityTier: shot.qualityTier ?? 'standard',
+                  shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle, emotionColorHint: mediaParams?.colorGrade,
                   routeProfile: shotPolicy.routeProfile,
+                  provider: regenRoute.provider,
                 });
                 const refs = this.buildRefImages(
                   shot,
@@ -382,10 +429,14 @@ export class MediaOrchestratorService implements OnModuleInit {
                   prevFrameCache,
                   'first',
                 );
-                const res = await withMediaRetry(() => this.mediaService.generateImage({
-                  prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined,
-                  size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: `${sid}_regen`, userId, episodeNumber,
-                }), `${sid} 连贯性重生成`);
+                const res = await withMediaRetry(async () => {
+                  await this.acquireT2iSlot();
+                  return this.mediaService.generateImage({
+                    prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined,
+                    size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: `${sid}_regen`, userId, episodeNumber,
+                    ...regenRoute,
+                  });
+                }, `${sid} 连贯性重生成`);
                 const newUrl = res.images?.[0]?.url ?? '';
                 if (newUrl) {
                   shotMediaMap[sid] = { ...shotMediaMap[sid], imageUrl: newUrl, status: 'image_done', t2iPrompt: optimized.prompt, t2iNegativePrompt: optimized.negativePrompt || undefined };
@@ -440,7 +491,8 @@ export class MediaOrchestratorService implements OnModuleInit {
             hasLastFrame: !!lastFrame,
             specialTechnique: shot.specialTechnique ?? undefined,
             cameraMovement: shot.camera?.movement,
-            cameraAngle: shot.camera?.angle,
+            shotSize: shot.camera?.shotSize,
+            cameraAngle: shot.camera?.cameraAngle,
             emotionColorHint: mediaParams?.colorGrade,
             routeProfile: shotPolicy.routeProfile,
           });
@@ -498,7 +550,7 @@ export class MediaOrchestratorService implements OnModuleInit {
               const ttsRes = await this.mediaService.synthesizeTtsToFile({
                 request: {
                   text: shot.dialogue.text, voiceId: useVoiceId,
-                  speed: ttsSpeed, emotion: shot.dialogue.emotion,
+                  speed: ttsSpeed, emotion: mediaParams?.ttsEmotion || shot.dialogue.emotion,
                   extra: { volume: shot.dialogue.volume, volumeMultiplier: mediaParams?.ttsVolumeMultiplier },
                 },
                 outputPath: outPath,
@@ -546,6 +598,7 @@ export class MediaOrchestratorService implements OnModuleInit {
               shotId: s.shotId, videoPath: shotMediaMap[s.shotId].videoUrl!,
               ttsAudioPath: shotMediaMap[s.shotId]?.ttsUrl, durationSec: effectiveDuration,
               transition: s.transitionToNext ?? 'cut',
+              transitionDurationSec: mp?.transitionDurationSec,
               subtitle: s.subtitle ? { text: s.subtitle.text, style: s.subtitle.style ?? 'normal' } : undefined,
               bgmPath: s.audio?.bgm?.mood ? (this.audioResource.resolveBgm(s.audio.bgm.mood) ?? undefined) : undefined,
               bgmIntensity: (s.audio?.bgm?.intensity ?? 0.3) * (mp?.bgmVolumeMultiplier ?? 1.0),
@@ -640,12 +693,21 @@ export class MediaOrchestratorService implements OnModuleInit {
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
     const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, sceneForShot);
     const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+    const singleShotRoute = this.imageRouter.routeShot({
+      qualityTier: shot.qualityTier,
+      shotSize: shot.camera?.shotSize,
+      cameraAngle: shot.camera?.cameraAngle,
+      isGolden: shot.isPreview || shot.qualityTier === 'golden',
+      size: imgSize,
+    });
     const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-    const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix);
+    const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false);
     const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
-      shotType: 'first_frame', qualityTier: shot.qualityTier ?? 'standard',
-      cameraAngle: shot.camera?.angle, emotionColorHint: mediaParams.colorGrade,
+      shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
+      qualityTier: shot.qualityTier ?? 'standard',
+      shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle, emotionColorHint: mediaParams.colorGrade,
       routeProfile: shotPolicy.routeProfile,
+      provider: singleShotRoute.provider,
     });
     const refs = this.buildRefImages(
       shot,
@@ -657,13 +719,16 @@ export class MediaOrchestratorService implements OnModuleInit {
       prevFrameCache,
       'first',
     );
-
     const genFn = async () => {
       const res = await this.withRetry(
-        () => this.mediaService.generateImage({
-          prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1,
-          referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: shotId, userId, episodeNumber,
-        }),
+        async () => {
+          await this.acquireT2iSlot();
+          return this.mediaService.generateImage({
+            prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1,
+            referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: shotId, userId, episodeNumber,
+            ...singleShotRoute,
+          });
+        },
         `${shotId} 图片`,
         mediaPolicy.maxMediaRetries,
         mediaPolicy.retryBaseDelayMs,
@@ -690,7 +755,7 @@ export class MediaOrchestratorService implements OnModuleInit {
         characterRefs,
         styleRefs: styleRefImages,
         candidateCount: shotPolicy.candidateCount,
-        dramaId, userId,
+        dramaId, userId, episodeNumber,
       });
       imgUrl = gateResult.imageUrl;
       gateQc = {
@@ -807,18 +872,24 @@ export class MediaOrchestratorService implements OnModuleInit {
       }
     };
 
-    await this.runConcurrent(needsGen, mediaPolicy.t2iConcurrency, async (shot) => {
+    await this.runConcurrent(needsGen, Math.min(mediaPolicy.t2iConcurrency, this.t2iMaxConcurrency), async (shot) => {
       const sid = shot.shotId;
       const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
       try {
         emit(`${sid} 生成中...`);
+        const batchShotRoute = this.imageRouter.routeShot({
+          qualityTier: shot.qualityTier, shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle,
+          isGolden: shot.isPreview || shot.qualityTier === 'golden', size: imgSize,
+        });
         const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, imgSceneMap.get(shot.sceneId));
         const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-        const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix);
+        const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false);
         const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
-          shotType: 'first_frame', qualityTier: shot.qualityTier ?? 'standard',
-          cameraAngle: shot.camera?.angle, emotionColorHint: mediaParams.colorGrade,
+          shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
+          qualityTier: shot.qualityTier ?? 'standard',
+          shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle, emotionColorHint: mediaParams.colorGrade,
           routeProfile: shotPolicy.routeProfile,
+          provider: batchShotRoute.provider,
         });
         const refs = this.buildRefImages(
           shot,
@@ -832,7 +903,14 @@ export class MediaOrchestratorService implements OnModuleInit {
         );
         const genFn = async () => {
           const res = await this.withRetry(
-            () => this.mediaService.generateImage({ prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined, size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid, userId, episodeNumber }),
+            async () => {
+              await this.acquireT2iSlot();
+              return this.mediaService.generateImage({
+                prompt: optimized.prompt, negativePrompt: optimized.negativePrompt || undefined,
+                size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: sid, userId, episodeNumber,
+                ...batchShotRoute,
+              });
+            },
             `${sid} 图片`,
             mediaPolicy.maxMediaRetries,
             mediaPolicy.retryBaseDelayMs,
@@ -858,7 +936,7 @@ export class MediaOrchestratorService implements OnModuleInit {
             characterRefs,
             styleRefs: styleRefImages,
             candidateCount: shotPolicy.candidateCount,
-            dramaId, userId,
+            dramaId, userId, episodeNumber,
           });
           imgUrl = gateResult.imageUrl;
           gateQc = {
@@ -1099,7 +1177,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     sceneCache: Map<string, string>, prevFrameCache: Map<number, string>,
     frameType: 'first' | 'last',
   ): Array<{ url: string; weight: number }> {
-    const isCloseUp = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.angle);
+    const isCloseUp = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.shotSize ?? '');
     const charWeight = isCloseUp ? 0.6 : 0.4;
     const lockCharWeight = isCloseUp ? 0.8 : 0.55;
     const sceneWeight = isCloseUp ? 0.2 : 0.4;
@@ -1144,7 +1222,7 @@ export class MediaOrchestratorService implements OnModuleInit {
         const imageSet = charMap.get(c.characterId);
         if (imageSet) {
           const availableViews = Object.keys(imageSet.views) as CharacterViewAngle[];
-          const bestView = selectBestCharacterView(availableViews, shot.camera?.angle, c.position);
+          const bestView = selectBestCharacterView(availableViews, shot.camera?.shotSize, c.position, shot.camera?.cameraAngle);
           const url = imageSet.views[bestView] || imageSet.primary;
           pushCandidate(url, charWeight, 'character_face');
         }
@@ -1156,7 +1234,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     if (styleRefs.length) {
       pushCandidate(styleRefs[0], styleWeight, 'style');
     }
-    return selectRefImages(candidates, this.profile, shot.camera?.angle);
+    return selectRefImages(candidates, this.profile, shot.camera?.shotSize, shot.camera?.cameraAngle);
   }
 
   /** 收集角色参考图URL（支持变体 + 多角度） */
@@ -1225,6 +1303,17 @@ export class MediaOrchestratorService implements OnModuleInit {
         if (!sid || map[sid].status === 'completed' || map[sid].status === 'failed') return;
         if (evt.status === 'completed') {
           const vUrl = (evt.result as any)?.videoUrl ?? '';
+          // Video quality gate: basic structural check
+          if (vUrl) {
+            try {
+              const shot = shots.find(s => s.shotId === sid);
+              const vqc = await this.qualityGate.assessVideoBasic(vUrl, shot?.estimatedDurationSec);
+              if (!vqc.pass) {
+                this.logger.warn(`${sid} 视频质量检查不通过: ${vqc.issues.join(', ')}`);
+                map[sid] = { ...map[sid], videoQcIssues: vqc.issues };
+              }
+            } catch (vqcErr) { this.logger.debug(`${sid} 视频质量检查降级: ${(vqcErr as Error).message}`); }
+          }
           map[sid] = { ...map[sid], videoUrl: vUrl, status: 'completed' };
           const idx = shots.findIndex(s => s.shotId === sid);
           emit(off + (idx >= 0 ? idx : 0), `${sid} 视频完成`, true);
@@ -1306,6 +1395,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
     return map;
   }
+
 
   /** B2: 将场景参考图持久化到 VisualAssetEntity，供后续集直接复用 */
   private async saveLocationImage(dramaId: string, locationId: string, name: string, imageUrl: string): Promise<void> {

@@ -35,6 +35,7 @@ export class DramaProgressService {
     const keys = [`${payload.dramaId}:generate`];
     if (payload.runType === 'media' && payload.episodeNumber) keys.push(`${payload.dramaId}:media:${payload.episodeNumber}`);
     if (payload.runType === 'images' && payload.episodeNumber) keys.push(`${payload.dramaId}:images:${payload.episodeNumber}`);
+    if (payload.runType === 'assets') keys.push(`${payload.dramaId}:assets`);
     for (const k of keys) {
       const a = this.active.get(k);
       if (a) {

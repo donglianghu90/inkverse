@@ -7,7 +7,7 @@ import { LlmService } from '../../../novel/llm/llm.service';
 import { z } from 'zod';
 import { dramaSeedSchema, DramaSeed } from '../../schemas/drama-state.schemas';
 import { buildSeedAnalyzerSystemPrompt } from '../../prompting/drama-playbook';
-import { DramaSeedHints } from '../entities/drama-genre-template.entity';
+import { DramaSeedHints, GenreProductionGuidance } from '../../entities/drama-genre-template.entity';
 
 export interface DramaSeedInput {
   mainIdea: string;
@@ -21,6 +21,8 @@ export interface DramaSeedInput {
   targetEpisodeDurationSec?: number;
   plannedTotalEpisodes?: { min: number; max: number };
   seedHints?: DramaSeedHints;
+  /** 来自题材模板的生产引导数据，用于精确化 system prompt */
+  genreGuidance?: GenreProductionGuidance;
   dramaId?: string;
   userId?: string;
 }
@@ -32,17 +34,20 @@ type DramaSeedOutput = z.infer<typeof seedOutputSchema>;
 export class DramaSeedAnalyzerAgent {
   constructor(private readonly llm: LlmService) {}
 
-  async analyze(input: DramaSeedInput): Promise<DramaSeedOutput> {
+  async analyze(input: DramaSeedInput, additionalSystemPrompt?: string): Promise<DramaSeedOutput> {
     const epMin = input.plannedTotalEpisodes?.min ?? 60;
     const epMax = input.plannedTotalEpisodes?.max ?? 100;
     const durSec = input.targetEpisodeDurationSec ?? 180;
 
     const hintBlock = this.buildSeedHintBlock(input.seedHints);
 
+    let sysPrompt = buildSeedAnalyzerSystemPrompt({ epMin, epMax, durSec, genre: input.genre, genreGuidance: input.genreGuidance });
+    if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
+
     const raw = await this.llm.generateStructured({
       taskName: 'drama-seed-analyzer',
       schema: seedOutputSchema,
-      systemPrompt: buildSeedAnalyzerSystemPrompt({ epMin, epMax, durSec, genre: input.genre }),
+      systemPrompt: sysPrompt,
       metadata: { dramaId: input.dramaId, userId: input.userId },
       userPrompt: `请分析这个创意并生成短剧种子：
 

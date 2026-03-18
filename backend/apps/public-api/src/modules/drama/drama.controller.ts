@@ -11,7 +11,11 @@ import { DramaWorkflowExecutionService } from './workflow/drama-workflow-executi
 import { DramaAgentNodeConfig, DramaWorkflowParams } from './entities/drama-agent-pipeline.entity';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
 import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto, AiGenerateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
+import { DramaVisualStyleTemplateService } from './drama-visual-style-template.service';
+import { CreateDramaVisualStyleTemplateDto, UpdateDramaVisualStyleTemplateDto } from './dto/drama-visual-style-template.dto';
 import { UsageLedgerService } from '../usage/usage-ledger.service';
+import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.service';
+import { DramaPromptTemplateService } from './prompting/drama-prompt-template.service';
 
 @Controller('drama')
 export class DramaController {
@@ -19,9 +23,12 @@ export class DramaController {
     private readonly dramaService: DramaService,
     private readonly progressService: DramaProgressService,
     private readonly genreTemplateService: DramaGenreTemplateService,
+    private readonly visualStyleTemplateService: DramaVisualStyleTemplateService,
     private readonly pipelineService: DramaAgentPipelineService,
     private readonly executionService: DramaWorkflowExecutionService,
     private readonly usageLedger: UsageLedgerService,
+    private readonly globalPromptSettingService: DramaGlobalPromptSettingService,
+    private readonly promptTemplateService: DramaPromptTemplateService,
   ) {}
 
   private getUserId(req: any, fallback = ''): string {
@@ -113,6 +120,11 @@ export class DramaController {
     return this.genreTemplateService.list(req.user?.id);
   }
 
+  @Get('genre-templates/analytics')
+  async getGenreAnalytics() {
+    return this.genreTemplateService.getRecommendedGenres();
+  }
+
   @Post('genre-templates/ai-generate')
   async aiGenerateGenreTemplate(@Body() dto: AiGenerateDramaGenreTemplateDto, @Req() req: any) {
     const result = await this.genreTemplateService.aiGenerate({ ...dto, userId: req.user?.id });
@@ -155,6 +167,38 @@ export class DramaController {
     return this.genreTemplateService.clone(id, req.user?.id ?? 'anonymous');
   }
 
+  /* ─── 视觉风格模板 ─── */
+
+  @Get('visual-style-templates/list')
+  async listVisualStyleTemplates(@Req() req: any) {
+    return this.visualStyleTemplateService.list(req.user?.id);
+  }
+
+  @Get('visual-style-templates/:id')
+  async getVisualStyleTemplate(@Param('id') id: string) {
+    return this.visualStyleTemplateService.getById(id);
+  }
+
+  @Post('visual-style-templates')
+  async createVisualStyleTemplate(@Body() dto: CreateDramaVisualStyleTemplateDto, @Req() req: any) {
+    return this.visualStyleTemplateService.create(req.user?.id ?? 'anonymous', dto);
+  }
+
+  @Put('visual-style-templates/:id')
+  async updateVisualStyleTemplate(@Param('id') id: string, @Body() dto: UpdateDramaVisualStyleTemplateDto, @Req() req: any) {
+    return this.visualStyleTemplateService.update(id, req.user?.id ?? 'anonymous', dto);
+  }
+
+  @Delete('visual-style-templates/:id')
+  async deleteVisualStyleTemplate(@Param('id') id: string, @Req() req: any) {
+    return this.visualStyleTemplateService.remove(id, req.user?.id ?? 'anonymous');
+  }
+
+  @Post('visual-style-templates/:id/clone')
+  async cloneVisualStyleTemplate(@Param('id') id: string, @Req() req: any) {
+    return this.visualStyleTemplateService.clone(id, req.user?.id ?? 'anonymous');
+  }
+
   /* ─── Pipeline 配置 ─── */
 
   @Get(':dramaId/pipeline')
@@ -166,7 +210,12 @@ export class DramaController {
   }
 
   @Post(':dramaId/pipeline/publish')
-  async publishPipeline(@Param('dramaId') dramaId: string) { return this.pipelineService.publish(dramaId); }
+  async publishPipeline(@Param('dramaId') dramaId: string) {
+    const result = await this.pipelineService.publish(dramaId);
+    // 发布后立即使提示词缓存失效，确保下次生成使用最新的 pipeline 节点配置
+    this.promptTemplateService.invalidateCache(dramaId);
+    return result;
+  }
 
   @Put(':dramaId/pipeline/params')
   async savePipelineParams(@Param('dramaId') dramaId: string, @Body() params: Partial<DramaWorkflowParams>) {
@@ -179,6 +228,48 @@ export class DramaController {
   @Get(':dramaId/pipeline/node-preview/:nodeId')
   async getNodePreview(@Param('dramaId') dramaId: string, @Param('nodeId') nodeId: string) {
     return this.dramaService.buildNodePreview(dramaId, nodeId);
+  }
+
+  /* ─── 全局 Agent 提示词设置（静态路由，无 dramaId） ─── */
+
+  /** 返回指定节点的系统默认基础提示词（无短剧上下文，用于全局设置页预览） */
+  @Get('global-prompt-preview/:nodeId')
+  async getGlobalNodePreview(@Param('nodeId') nodeId: string) {
+    return this.dramaService.buildGlobalNodePreview(nodeId);
+  }
+
+  @Get('global-prompt-settings')
+  async listGlobalPromptSettings(@Req() req: any) {
+    const userId = this.getUserId(req, 'system');
+    return this.globalPromptSettingService.listAll(userId);
+  }
+
+  @Put('global-prompt-settings/:agentType')
+  async updateGlobalPromptSetting(
+    @Param('agentType') agentType: string,
+    @Body() body: { globalAdditionalPrompt: string },
+    @Req() req: any,
+  ) {
+    const userId = this.getUserId(req, 'system');
+    return this.globalPromptSettingService.update(userId, agentType, body.globalAdditionalPrompt ?? '');
+  }
+
+  @Put('global-prompt-settings')
+  async batchUpdateGlobalPromptSettings(
+    @Body() body: { items: Array<{ agentType: string; globalAdditionalPrompt: string }> },
+    @Req() req: any,
+  ) {
+    const userId = this.getUserId(req, 'system');
+    return this.globalPromptSettingService.batchUpdate(userId, body.items ?? []);
+  }
+
+  @Put('global-prompt-settings/:agentType/reset')
+  async resetGlobalPromptSetting(
+    @Param('agentType') agentType: string,
+    @Req() req: any,
+  ) {
+    const userId = this.getUserId(req, 'system');
+    return this.globalPromptSettingService.resetToSystem(userId, agentType);
   }
 
   /* ─── 创意辅助（静态路由） ─── */
@@ -220,6 +311,15 @@ export class DramaController {
     return this.dramaService.deleteDrama(dramaId, req.user?.id);
   }
 
+  @Patch(':dramaId/visual-style')
+  async updateVisualStyle(
+    @Param('dramaId') dramaId: string,
+    @Body() body: { visualStyle: Record<string, unknown> },
+    @Req() req: any,
+  ) {
+    return this.dramaService.updateVisualStyle(dramaId, body.visualStyle, req.user?.id);
+  }
+
   @Get(':dramaId/usage')
   async getDramaUsage(@Param('dramaId') dramaId: string, @Req() req: any) {
     const userId = req.user?.id ?? '';
@@ -251,9 +351,8 @@ export class DramaController {
   }
 
   @Post(':dramaId/episodes/generate')
-  async generateEpisode(@Param('dramaId') dramaId: string, @Query('count') count?: string) {
-    const n = Math.max(1, Math.min(10, parseInt(count || '1', 10) || 1));
-    return this.dramaService.generateEpisodes(dramaId, n);
+  async generateEpisode(@Param('dramaId') dramaId: string) {
+    return this.dramaService.generateEpisodes(dramaId);
   }
 
   @Post(':dramaId/episodes/pause')
@@ -276,10 +375,8 @@ export class DramaController {
   @Sse(':dramaId/episode-generate-sse')
   async generateEpisodeSse(
     @Param('dramaId') dramaId: string,
-    @Query('count') count?: string,
   ): Promise<Observable<MessageEvent>> {
     const subject = new Subject<MessageEvent>();
-    const n = Math.max(1, Math.min(10, parseInt(count || '1', 10) || 1));
     const { send } = this.createSseSender(subject, 'episode', dramaId);
     const heartbeat = setInterval(() => send({ _type: 'heartbeat', terminal: false }), 15_000);
     const key = `${dramaId}:generate`;
@@ -295,7 +392,7 @@ export class DramaController {
     }
     setTimeout(async () => {
       try {
-        const result = await this.dramaService.generateEpisodesAndWait(dramaId, n);
+        const result = await this.dramaService.generateEpisodesAndWait(dramaId);
         send({
           _type: 'result',
           terminal: true,
@@ -378,6 +475,53 @@ export class DramaController {
   @Get(':dramaId/visual-assets')
   async getVisualAssets(@Param('dramaId') dramaId: string) {
     return this.dramaService.getVisualAssets(dramaId);
+  }
+
+  /** 批量生成该短剧全部参考图，SSE 推送进度（runType='assets'） */
+  @Sse(':dramaId/visual-assets/generate-all-sse')
+  async generateAllAssetsSse(
+    @Param('dramaId') dramaId: string,
+    @Req() req: any,
+  ): Promise<Observable<MessageEvent>> {
+    const subject = new Subject<MessageEvent>();
+    const { send } = this.createSseSender(subject, 'assets', dramaId);
+    const heartbeat = setInterval(() => send({ _type: 'heartbeat', terminal: false }), 15_000);
+    const key = `${dramaId}:assets`;
+    const alreadyRunning = !this.progressService.markGenerating(key);
+    const unsub = this.progressService.subscribe(dramaId, (event) => {
+      if (event.runType !== 'assets') return;
+      if (event.terminal) return;
+      this.sendProgress(send, event);
+    });
+    if (alreadyRunning) {
+      send({ _type: 'info', terminal: false, message: '参考图生成已在进行中' });
+      return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
+    }
+    setTimeout(async () => {
+      try {
+        await this.dramaService.generateAllVisualAssets(dramaId, this.getUserId(req, 'anonymous'));
+        send({ _type: 'result', terminal: true, terminalStatus: 'success', message: '参考图生成完成', done: true });
+      } catch (err: any) {
+        const msg = err?.message ?? '参考图生成失败';
+        send({ _type: 'error', terminal: true, terminalStatus: 'failed', message: msg, error: msg, done: true });
+      } finally {
+        this.progressService.clearGenerating(key);
+        clearInterval(heartbeat);
+        unsub();
+        setTimeout(() => subject.complete(), 200);
+      }
+    }, 0);
+    return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
+  }
+
+  @Post(':dramaId/visual-assets/:assetId/variation/:variationId/regenerate')
+  async regenerateVariationImage(
+    @Param('dramaId') dramaId: string,
+    @Param('assetId') assetId: string,
+    @Param('variationId') variationId: string,
+    @Req() req?: any,
+  ) {
+    return this.dramaService.regenerateVariationImage(dramaId, assetId, variationId, this.getUserId(req, 'anonymous'));
   }
 
   @Post(':dramaId/visual-assets/:assetId/regenerate')

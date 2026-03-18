@@ -6,6 +6,9 @@ import { VolcengineClient, VolcengineClientConfig } from './volcengine/volcengin
 import { VolcengineImageProvider } from './volcengine/volcengine-image.provider';
 import { VolcengineVideoProvider } from './volcengine/volcengine-video.provider';
 import { VolcengineTtsProvider } from './volcengine/volcengine-tts.provider';
+import { KieAiImageProvider } from './kieai/kieai-image.provider';
+import { KieAiCallbackService } from './kieai/kieai-callback.service';
+import { KieAiPollingService } from './kieai/kieai-polling.service';
 
 @Injectable()
 export class ProviderRegistryService implements OnModuleInit {
@@ -17,7 +20,11 @@ export class ProviderRegistryService implements OnModuleInit {
   private defaultVideoProvider = '';
   private defaultTtsProvider = '';
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly kieAiCallbackService: KieAiCallbackService,
+    private readonly kieAiPollingService: KieAiPollingService,
+  ) {}
 
   onModuleInit() {
     const media = (this.configService.get('media') ?? {}) as Record<string, unknown>;
@@ -26,6 +33,7 @@ export class ProviderRegistryService implements OnModuleInit {
     this.defaultTtsProvider = String(media.defaultTtsProvider || '');
     this.initVolcengine(media);
     this.initVolcengineTts(media);
+    this.initKieAi(media);
     this.logger.log(`Image: [${[...this.imageProviders.keys()]}] default=${this.defaultImageProvider}`);
     this.logger.log(`Video: [${[...this.videoProviders.keys()]}] default=${this.defaultVideoProvider}`);
     if (this.ttsProviders.size) this.logger.log(`TTS: [${[...this.ttsProviders.keys()]}] default=${this.defaultTtsProvider}`);
@@ -36,6 +44,7 @@ export class ProviderRegistryService implements OnModuleInit {
   registerImageProvider(provider: ImageProvider) { this.imageProviders.set(provider.name, provider); }
   registerVideoProvider(provider: VideoProvider) { this.videoProviders.set(provider.name, provider); }
   registerTtsProvider(provider: TtsProvider) { this.ttsProviders.set(provider.name, provider); }
+
 
   // ═══ 解析（按名称 or 默认） ═══
 
@@ -83,10 +92,13 @@ export class ProviderRegistryService implements OnModuleInit {
     const client = new VolcengineClient(clientCfg);
 
     const imgCfg = (vc.image ?? {}) as Record<string, unknown>;
-    const modelsRaw = String(imgCfg.models || '');
-    const models = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
-    if (models.length || imgCfg.enabled !== false) {
-      if (!models.length) models.push('doubao-seedream-5-0-260128');
+    // 按优先级收集已配置的模型（主 → 降级顺序）
+    const IMAGE_MODEL_PRIORITY = ['seedream-5', 'seedream-4-5', 'seedream-4'] as const;
+    const models = IMAGE_MODEL_PRIORITY
+      .map(key => String(imgCfg[key] || '').trim())
+      .filter(Boolean);
+    if (!models.length) models.push('doubao-seedream-5-0-260128');
+    if (imgCfg.enabled !== false) {
       const imageProvider = new VolcengineImageProvider(client, {
         models,
         defaultSize: String(imgCfg.defaultSize || '1:1'),
@@ -97,13 +109,100 @@ export class ProviderRegistryService implements OnModuleInit {
     }
 
     const vidCfg = (vc.video ?? {}) as Record<string, unknown>;
-    if (vidCfg.model || vidCfg.enabled !== false) {
+    if (vidCfg.models || vidCfg.model || vidCfg.enabled !== false) {
+      const modelsRaw = String(vidCfg.models || vidCfg.model || 'doubao-seedance-1-0-pro-fast-251015,doubao-seedance-1-0-pro-250528');
+      const models = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
       const videoProvider = new VolcengineVideoProvider(client, {
-        model: String(vidCfg.model || 'seedance-2-0-250901'),
+        models,
         defaultDuration: Number(vidCfg.defaultDuration) || 5,
         defaultQuality: String(vidCfg.defaultQuality || '720p'),
+        watermark: String(vidCfg.watermark) === 'true',
       });
       this.registerVideoProvider(videoProvider);
+    }
+  }
+
+  // ═══ Kie.ai 初始化（多模型：nano-banana-pro / flux-2 等，共享同一 apiKey） ═══
+
+  private initKieAi(media: Record<string, unknown>) {
+    const kieai = (media.kieai ?? {}) as Record<string, unknown>;
+    const apiKey = String(kieai.apiKey || '');
+    if (!apiKey) { this.logger.debug('media.kieai.apiKey 未配置，跳过 Kie.ai'); return; }
+
+    const baseUrl = String(kieai.baseUrl || 'https://api.kie.ai');
+    const callBackUrl = String(kieai.callBackUrl || '');
+
+    const modelDefs: Array<{
+      cfgKey: string;
+      defaultModel: string;
+      defaultAspectRatio: string;
+      defaultResolution: string;
+      defaultOutputFormat?: string;
+      supportsImageInput: boolean;
+      imageInputField?: string;
+      providerNameSuffix?: string;
+      maxImageInput?: number;
+      defaultGoogleSearch?: boolean;
+    }> = [
+      {
+        cfgKey: 'nanoBanana',
+        defaultModel: 'nano-banana-pro',
+        defaultAspectRatio: '1:1',
+        defaultResolution: '1K',
+        defaultOutputFormat: 'png',
+        supportsImageInput: true,
+      },
+      {
+        cfgKey: 'nanoBanana2',
+        defaultModel: 'nano-banana-2',
+        defaultAspectRatio: 'auto',
+        defaultResolution: '1K',
+        defaultOutputFormat: 'jpg',
+        supportsImageInput: true,
+        maxImageInput: 14,
+        defaultGoogleSearch: false,
+      },
+      {
+        cfgKey: 'flux2',
+        defaultModel: 'flux-2/flex-text-to-image',
+        defaultAspectRatio: '1:1',
+        defaultResolution: '1K',
+        supportsImageInput: false,
+        providerNameSuffix: 'flux-2',
+      },
+      {
+        cfgKey: 'flux2I2I',
+        defaultModel: 'flux-2/pro-image-to-image',
+        defaultAspectRatio: 'auto',
+        defaultResolution: '1K',
+        supportsImageInput: true,
+        imageInputField: 'input_urls',
+        providerNameSuffix: 'flux-2-i2i',
+      },
+    ];
+
+    for (const def of modelDefs) {
+      const cfg = (kieai[def.cfgKey] ?? {}) as Record<string, unknown>;
+      if (String(cfg.enabled ?? 'true') === 'false') continue;
+      const model = String(cfg.model || def.defaultModel);
+      const provider = new KieAiImageProvider({
+        apiKey,
+        baseUrl,
+        callBackUrl,
+        model,
+        defaultAspectRatio: String(cfg.defaultAspectRatio || def.defaultAspectRatio),
+        defaultResolution: String(cfg.defaultResolution || def.defaultResolution),
+        defaultOutputFormat: def.defaultOutputFormat
+          ? String(cfg.defaultOutputFormat || def.defaultOutputFormat)
+          : undefined,
+        supportsImageInput: def.supportsImageInput,
+        imageInputField: def.imageInputField,
+        providerNameSuffix: def.providerNameSuffix,
+        maxImageInput: def.maxImageInput,
+        defaultGoogleSearch: def.defaultGoogleSearch,
+      }, this.kieAiCallbackService, this.kieAiPollingService);
+      this.registerImageProvider(provider);
+      this.logger.log(`Kie.ai 图片 Provider 已注册: name=${provider.name} model=${model}`);
     }
   }
 

@@ -328,6 +328,7 @@ export class UsageLedgerService {
       byKind,
       costCny: round(rolled.costCny, 2),
       promptTokens: llm.tokensIn,
+      // completionTokens = completion + thinking tokens（thinking 按 output 价格计费，已并入 tokensOut）
       completionTokens: llm.tokensOut,
       totalTokens: llm.tokensIn + llm.tokensOut,
       llmCostCny: round(llm.costCny),

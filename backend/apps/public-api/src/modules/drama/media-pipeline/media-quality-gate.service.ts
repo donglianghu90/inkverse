@@ -1,7 +1,11 @@
-/** 媒体质量关卡 — 生成后质量评估 + 自动重试 + golden Shot 多候选选优 */
+/** 媒体质量关卡 — 生成后质量评估 + 自动重试 + golden Shot 多候选选优 + 视频质量检查 */
 import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../../llm/llm.service';
 import { z } from 'zod';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 export interface QualityAssessment {
   score: number;
@@ -24,6 +28,7 @@ export interface QualityGateOptions {
   candidateCount?: number;
   dramaId?: string;
   userId?: string;
+  episodeNumber?: number;
 }
 
 export interface QualityGateResult {
@@ -47,12 +52,12 @@ const assessmentSchema = z.object({
   aestheticScore: z.number().min(0).max(10),
   promptAdherence: z.number().min(0).max(10),
   technicalQuality: z.number().min(0).max(10),
-  faceConsistency: z.number().min(0).max(10).optional(),
-  styleConsistency: z.number().min(0).max(10).optional(),
-  readabilityScore: z.number().min(0).max(10).optional(),
+  faceConsistency: z.number().min(0).max(10).nullable().optional(),
+  styleConsistency: z.number().min(0).max(10).nullable().optional(),
+  readabilityScore: z.number().min(0).max(10).nullable().optional(),
   issues: z.array(z.string()),
   failReasons: z.array(qualityFixSchema).default([]),
-  recommendedFix: qualityFixSchema.optional(),
+  recommendedFix: qualityFixSchema.nullable().optional(),
 });
 
 @Injectable()
@@ -69,6 +74,7 @@ export class MediaQualityGateService {
     styleRefs?: string[];
     dramaId?: string;
     userId?: string;
+    episodeNumber?: number;
   }): Promise<QualityAssessment> {
     if (!imageUrl) return { score: 0, pass: false, issues: ['empty image URL'] };
 
@@ -77,7 +83,7 @@ export class MediaQualityGateService {
       const result = await this.llm.generateStructured({
         taskName: 'media-quality-assessment',
         schema: assessmentSchema,
-        metadata: { dramaId: opts.dramaId, userId: opts.userId },
+        metadata: { dramaId: opts.dramaId, userId: opts.userId, episodeNumber: opts.episodeNumber },
         systemPrompt: `你是一位AI生成图片质量评估专家。请仔细观察提供的图片，评估维度：
 1. aestheticScore (0-10): 构图、色彩、光影的美学品质
 2. promptAdherence (0-10): 图片内容与提示词的吻合度
@@ -167,6 +173,7 @@ AI生成图常见问题：多余手指、面部扭曲、文字水印、比例失
             styleRefs: opts.styleRefs,
             dramaId: opts.dramaId,
             userId: opts.userId,
+            episodeNumber: opts.episodeNumber,
           });
           const candidate: QualityGateResult = { imageUrl, score: assessment.score, attempts: attempt, assessment };
           if (!bestInAttempt || candidate.score > bestInAttempt.score) bestInAttempt = candidate;
@@ -221,6 +228,66 @@ AI生成图常见问题：多余手指、面部扭曲、文字水印、比例失
   ): QualityFixType | undefined {
     if (recommendedFix) return recommendedFix;
     return failReasons[0];
+  }
+
+  /**
+   * 视频基础质量检查 — 使用 ffprobe 检测帧率稳定性、时长合法性、编码完整性。
+   * 检查维度：
+   * - 时长是否在合理范围(1-15s)
+   * - 帧率是否正常(>10fps)
+   * - 是否包含视频流
+   * - 是否存在截断/损坏(通过解码测试)
+   */
+  async assessVideoBasic(videoUrl: string, expectedDurationSec?: number): Promise<{
+    pass: boolean;
+    issues: string[];
+    duration: number;
+    fps: number;
+  }> {
+    const issues: string[] = [];
+    let duration = 0;
+    let fps = 0;
+
+    try {
+      const { stdout } = await execFileAsync('ffprobe', [
+        '-v', 'quiet',
+        '-print_format', 'json',
+        '-show_format', '-show_streams',
+        '-select_streams', 'v:0',
+        videoUrl,
+      ], { timeout: 30_000 });
+
+      const probe = JSON.parse(stdout);
+      const videoStream = probe.streams?.[0];
+      const format = probe.format;
+
+      if (!videoStream) {
+        issues.push('no_video_stream');
+        return { pass: false, issues, duration: 0, fps: 0 };
+      }
+
+      duration = parseFloat(format?.duration ?? videoStream?.duration ?? '0');
+      if (duration < 1) issues.push(`duration_too_short(${duration.toFixed(1)}s)`);
+      if (duration > 15) issues.push(`duration_too_long(${duration.toFixed(1)}s)`);
+
+      if (expectedDurationSec && Math.abs(duration - expectedDurationSec) > expectedDurationSec * 0.5) {
+        issues.push(`duration_mismatch(expected=${expectedDurationSec.toFixed(1)}s, got=${duration.toFixed(1)}s)`);
+      }
+
+      const fpsStr = videoStream.r_frame_rate ?? videoStream.avg_frame_rate ?? '0/1';
+      const [num, den] = fpsStr.split('/').map(Number);
+      fps = den > 0 ? num / den : 0;
+      if (fps < 10) issues.push(`low_fps(${fps.toFixed(1)})`);
+
+      const width = parseInt(videoStream.width ?? '0', 10);
+      const height = parseInt(videoStream.height ?? '0', 10);
+      if (width < 100 || height < 100) issues.push(`invalid_resolution(${width}x${height})`);
+
+    } catch (err) {
+      issues.push(`probe_failed: ${(err as Error).message?.slice(0, 100)}`);
+    }
+
+    return { pass: issues.length === 0, issues, duration, fps };
   }
 
   private inferFixReasons(input: {

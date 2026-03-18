@@ -5,13 +5,93 @@ import type { OptimizeResult, T2IOptimizeOptions, T2VOptimizeOptions } from './i
 
 export type { OptimizeResult, T2IOptimizeOptions, T2VOptimizeOptions } from './interfaces/prompt-optimizer.interface';
 
+/**
+ * 模型族 → 质量 booster 映射。
+ * 查找规则：先精确匹配 provider，再逐级截取前缀，最后 fallback 到 default。
+ * 示例：'kieai.nano-banana-2' → 'kieai.nano-banana' → 'kieai' → 'default'
+ */
 const QUALITY_BOOSTERS: Record<string, string[]> = {
-  volcengine: ['cinematic lighting', 'rich color depth'],
-  default: ['high quality', 'detailed', 'sharp focus'],
+  volcengine:          ['cinematic lighting', 'rich color depth'],
+  // nano-banana 系列：摄影写实风，emphasis on identity & sharpness
+  'kieai.nano-banana': ['highly detailed', 'professional photography', 'sharp focus', 'photorealistic'],
+  // flux-2 T2I：FLUX.2 擅长构图与概念艺术
+  'kieai.flux-2':      ['professional illustration', 'high quality', 'detailed composition', 'FLUX aesthetic'],
+  // flux-2 I2I：最重要的是保留原图身份同时做精准变换
+  'kieai.flux-2-i2i':  ['consistent identity', 'high quality transformation', 'maintain facial features'],
+  default:             ['high quality', 'detailed', 'sharp focus'],
 };
 
+/** 按 provider 全名、逐级前缀、default 的顺序查找 booster */
+function resolveBoosters(provider: string): string[] {
+  if (QUALITY_BOOSTERS[provider]) return QUALITY_BOOSTERS[provider];
+  const parts = provider.split('.');
+  for (let i = parts.length - 1; i > 0; i--) {
+    const prefix = parts.slice(0, i).join('.');
+    if (QUALITY_BOOSTERS[prefix]) return QUALITY_BOOSTERS[prefix];
+  }
+  return QUALITY_BOOSTERS.default;
+}
+
+/** 人物主体图（人物资产 + 人物主导分镜）：dramatic atmosphere 增添电影感 */
 const GOLDEN_EXTRA = ['cinematic composition', 'dramatic atmosphere'];
+/**
+ * 纯场景/地点图专用（location_image）：
+ * - 去除 dramatic atmosphere：模型会认为需要人物才能"营造戏剧感"
+ * - no human subjects：正向词表达空场景，对不支持 negativePrompt 的模型（如 kieai）也生效
+ * - environmental photography：引导模型聚焦空间和环境
+ */
+const GOLDEN_EXTRA_LOCATION = ['cinematic composition', 'no human subjects', 'environmental photography'];
+/**
+ * 宏大景别分镜（extreme_wide / bird_eye）或 insert 道具特写：
+ * - 人物存在但非主体，或画面以环境/道具为主
+ * - 去除 dramatic atmosphere，避免模型强行把人物推到画面中心
+ */
+const GOLDEN_EXTRA_ATMOSPHERIC = ['cinematic composition', 'atmospheric scene'];
+/** 风格参考图/情绪板：概念艺术不强制无人，同样不追加 dramatic atmosphere */
+const GOLDEN_EXTRA_STYLE_GUIDE = ['cinematic composition', 'concept art aesthetic'];
 const STANDARD_EXTRA: string[] = [];
+
+/**
+ * 景别感知正向提示词表（按 camera.shotSize 注入构图/裁切关键词）。
+ *
+ * 设计原则：
+ * - ECU/CU       → 强调面部细节，大光圈虚化背景
+ * - MCU/MS       → 面部+上身构图，是短剧最常见景别
+ * - MW/WS        → 全身可见，环境开始出现
+ * - EWS          → 宏大全景，人物渺小或不可见
+ */
+const FRAMING_SCALE_HINTS: Record<string, string> = {
+  extreme_close_up: 'extreme close-up, sharp facial detail, intense emotional expression, heavy bokeh background',
+  close_up:         'close-up portrait, sharp facial expression, shallow depth of field, face fills frame',
+  medium_close_up:  'medium close-up, face and shoulders composition, upper body framing',
+  medium:           'medium shot, waist-up composition, conversational framing',
+  medium_wide:      'medium wide shot, full figure framing, character and environment balanced',
+  wide:             'wide shot, full body visible, clear scene environment',
+  extreme_wide:     'extreme wide establishing shot, panoramic scale, vast environment, characters appear small',
+};
+
+/**
+ * 摄影机角度正向提示词表（按 camera.cameraAngle 注入透视关键词）。
+ *
+ * 设计原则：角度影响透视关系和情绪读感，与景别叠加效果加倍：
+ * - low_angle   → 仰拍，产生压迫/强势感（配合人物特写效果最强）
+ * - high_angle  → 俯拍，产生脆弱/被压制感
+ * - dutch_angle → 斜构图，产生心理扭曲/不安感
+ * - bird_eye    → 正俯视，命运视角/宏大格局感
+ */
+const ANGLE_PERSPECTIVE_HINTS: Record<string, string> = {
+  front:         'front-facing direct view, straight-on composition',
+  three_quarter: 'three-quarter view angle, natural conversational perspective',
+  side_profile:  'strict side profile view, silhouette emphasis',
+  over_shoulder: 'over-the-shoulder shot, foreground character silhouette, conversation perspective',
+  pov:           'first person point of view, subjective camera, immersive perspective',
+  bird_eye:      'bird eye view, overhead top-down composition, aerial perspective',
+  high_angle:    'high angle shot, looking downward, surveying vulnerable perspective',
+  low_angle:     'low angle shot, looking upward, imposing powerful perspective',
+  worm_eye:      'worm eye view, extreme low angle upward, towering overwhelming perspective',
+  dutch_angle:   'dutch tilt angle, diagonal tension, psychological unease',
+  back_of_head:  'back of head view, following shot, mysterious trailing perspective',
+};
 
 const BASE_NEGATIVE = [
   'blurry', 'low quality', 'watermark', 'text', 'logo',
@@ -20,6 +100,71 @@ const BASE_NEGATIVE = [
 const CHARACTER_NEGATIVE_EXTRA = [
   'deformed face', 'extra fingers', 'extra limbs',
 ];
+
+/** 场景/地点图：明确排除人物，避免模型自行添加人物以"营造氛围" */
+const LOCATION_NEGATIVE_EXTRA = [
+  'people', 'person', 'human', 'figure', 'character', 'man', 'woman',
+];
+
+/**
+ * 风格防漂移 negative prompt 表。
+ * 核心问题：不同视觉风格的短剧，图像生成模型在 prompt 不足时会"向默认风格漂移"：
+ *  - 2D 动漫剧 → 模型会往写实摄影/3D 渲染漂移
+ *  - 3D CG 剧  → 模型会往动漫手绘/水彩漂移
+ *  - 定格动画  → 模型会往数字写实漂移
+ *
+ * 设计原则：每个桶的 negative 只包含"与本风格矛盾"的词，
+ * 不能太宽泛（如直接 negative "realistic" 会伤害 2D 人物质感）。
+ *
+ * live_action 的 negative 由 media-orchestrator 的 LIVE_ACTION_NEGATIVE_EXTRA 处理（painting/illustration 等），
+ * 此处仍列出以便资产生成流程也能复用。
+ */
+const STYLE_BUCKET_NEGATIVE: Record<string, string[]> = {
+  two_d: [
+    'photorealistic', 'hyperrealistic', 'photograph', '3d render', 'cgi',
+    'realistic face', 'live action', 'cinema photography',
+  ],
+  three_d: [
+    'anime', 'manga', 'hand-drawn', '2d flat', 'sketch',
+    'watercolor painting', 'ink painting', 'cel animation', 'cartoon illustration',
+  ],
+  stop_motion: [
+    'photorealistic', 'hyperrealistic', 'smooth digital render', 'anime', 'manga',
+    'cinema photography',
+  ],
+  live_action: [
+    'painting', 'illustration', 'watercolor painting', 'ink painting',
+    'comic panel', 'anime', 'manga', '2d flat',
+  ],
+  generic: [],
+};
+
+/**
+ * 联合 shotType × dramaShotType × shotSize × cameraAngle 选择 GOLDEN_EXTRA 词组。
+ *
+ * 决策矩阵：
+ *
+ * ┌─────────────────────┬──────────────────────────────────────────────────────┐
+ * │ 条件                │ GOLDEN_EXTRA 选择                                      │
+ * ├─────────────────────┼──────────────────────────────────────────────────────┤
+ * │ shotType=location   │ GOLDEN_EXTRA_LOCATION（严格无人）                       │
+ * │ shotType=style_guide│ GOLDEN_EXTRA_STYLE_GUIDE（概念艺术）                    │
+ * │ dramaShotType=wide  │ GOLDEN_EXTRA_ATMOSPHERIC（宏大环境，人物非主体）         │
+ * │ dramaShotType=insert│ GOLDEN_EXTRA_ATMOSPHERIC（道具/细节特写，不需要戏剧感）   │
+ * │ shotSize=EWS /      │ GOLDEN_EXTRA_ATMOSPHERIC（宏大全景，人物渺小）           │
+ * │ cameraAngle=bird_eye│                                                        │
+ * │ 其他所有分镜        │ GOLDEN_EXTRA（人物主导，dramatic atmosphere 增电影感）   │
+ * └─────────────────────┴──────────────────────────────────────────────────────┘
+ */
+function resolveGoldenExtra(shotType?: string, dramaShotType?: string, shotSize?: string, cameraAngle?: string): string[] {
+  if (shotType === 'location') return GOLDEN_EXTRA_LOCATION;
+  if (shotType === 'style_guide') return GOLDEN_EXTRA_STYLE_GUIDE;
+
+  if (dramaShotType === 'wide' || dramaShotType === 'insert') return GOLDEN_EXTRA_ATMOSPHERIC;
+  if (shotSize === 'extreme_wide' || cameraAngle === 'bird_eye') return GOLDEN_EXTRA_ATMOSPHERIC;
+
+  return GOLDEN_EXTRA;
+}
 
 const CONFLICTING_PAIRS: Array<[RegExp, RegExp]> = [
   [/\bday\b/i, /\bnight\b/i],
@@ -59,7 +204,8 @@ const T2V_CAMERA_MOVEMENT: Record<string, string> = {
   orbit: 'camera orbiting around subject',
 };
 
-const T2V_ANGLE_CONTEXT: Record<string, string> = {
+/** T2V 景别上下文（按 shotSize 注入视频描述词） */
+const T2V_SHOT_SIZE_CONTEXT: Record<string, string> = {
   extreme_close_up: 'extreme close-up detail shot',
   close_up: 'close-up shot',
   medium_close_up: 'medium close-up shot',
@@ -67,15 +213,25 @@ const T2V_ANGLE_CONTEXT: Record<string, string> = {
   medium_wide: 'medium wide shot',
   wide: 'wide establishing shot',
   extreme_wide: 'extreme wide panoramic shot',
-  over_shoulder: 'over the shoulder perspective',
-  bird_eye: 'bird eye view from above',
-  low_angle: 'low angle looking up',
-  high_angle: 'high angle looking down',
-  dutch_angle: 'dutch tilted angle',
-  pov: 'first person point of view',
 };
 
-const CLOSE_UP_ANGLES = new Set(['close_up', 'extreme_close_up', 'medium_close_up']);
+/** T2V 角度上下文（按 cameraAngle 注入视频描述词） */
+const T2V_CAMERA_ANGLE_CONTEXT: Record<string, string> = {
+  front: 'straight-on frontal perspective',
+  three_quarter: 'three-quarter angle view',
+  side_profile: 'side profile view',
+  over_shoulder: 'over the shoulder perspective',
+  pov: 'first person point of view',
+  bird_eye: 'bird eye view from above',
+  high_angle: 'high angle looking down',
+  low_angle: 'low angle looking up',
+  worm_eye: 'extreme low angle worm eye view',
+  dutch_angle: 'dutch tilted angle',
+  back_of_head: 'trailing back-of-head following shot',
+};
+
+/** 特写景别集合 — T2V 时注入 face stability hint（近景面部稳定性更关键） */
+const CLOSE_UP_SIZES = new Set(['close_up', 'extreme_close_up', 'medium_close_up']);
 
 const COLOR_HINT_MAP: Record<string, string> = {
   warm: 'warm tones, golden warm lighting',
@@ -147,8 +303,28 @@ export class PromptOptimizerService implements OnModuleInit {
       }
     }
 
-    const boosters = QUALITY_BOOSTERS[provider] ?? QUALITY_BOOSTERS.default;
-    const tierExtra = tier === 'golden' ? GOLDEN_EXTRA : tier === 'standard' ? STANDARD_EXTRA : [];
+    // 注入景别提示词（按 shotSize 注入构图/裁切关键词）
+    if (opts.shotSize) {
+      const framingHint = FRAMING_SCALE_HINTS[opts.shotSize];
+      if (framingHint && !prompt.toLowerCase().includes(framingHint.split(',')[0].toLowerCase())) {
+        prompt = `${prompt}, ${framingHint}`;
+        added.push(framingHint);
+      }
+    }
+
+    // 注入角度透视提示词（按 cameraAngle 注入透视关键词，与景别叠加）
+    if (opts.cameraAngle) {
+      const anglePerspective = ANGLE_PERSPECTIVE_HINTS[opts.cameraAngle];
+      if (anglePerspective && !prompt.toLowerCase().includes(anglePerspective.split(',')[0].toLowerCase())) {
+        prompt = `${prompt}, ${anglePerspective}`;
+        added.push(anglePerspective);
+      }
+    }
+
+    const boosters = resolveBoosters(provider);
+    const tierExtra = tier === 'golden'
+      ? resolveGoldenExtra(opts.shotType, opts.dramaShotType, opts.shotSize, opts.cameraAngle)
+      : tier === 'standard' ? STANDARD_EXTRA : [];
     const allBoosters = [...boosters, ...tierExtra];
 
     const toAdd = allBoosters.filter(b => !prompt.toLowerCase().includes(b.toLowerCase()));
@@ -160,11 +336,28 @@ export class PromptOptimizerService implements OnModuleInit {
     prompt = this.deduplicateKeywords(prompt);
     prompt = this.smartTruncate(prompt, this.maxT2ITokens);
 
+    // kieai 系列模型不接受 negativePrompt，直接返回空字符串避免无效传参
+    const isKieAi = provider.startsWith('kieai.');
+    if (isKieAi) {
+      return { prompt, negativePrompt: '', metadata: { addedKeywords: added, removedKeywords: removed } };
+    }
+
     let neg = rawNegative?.trim() || '';
     const negTokens = new Set(neg.toLowerCase().split(/,\s*/).map(s => s.trim()).filter(Boolean));
     const baseNeg = [...BASE_NEGATIVE];
     if (opts.shotType === 'character' || opts.shotType === 'first_frame') {
       baseNeg.push(...CHARACTER_NEGATIVE_EXTRA);
+    } else if (opts.shotType === 'location') {
+      // 场景图：强制排除人物（volcengine 支持 negativePrompt，kieai 已通过 GOLDEN_EXTRA_LOCATION 正向处理）
+      baseNeg.push(...LOCATION_NEGATIVE_EXTRA);
+    }
+    // style_guide 不加人物排除词：概念艺术情绪板可以有人物剪影/局部
+
+    // 风格防漂移 negative：按 styleBucket 添加与本风格矛盾的词，防止模型向默认风格漂移
+    if (opts.styleBucket && opts.styleBucket !== 'generic') {
+      const styleDriftNeg = STYLE_BUCKET_NEGATIVE[opts.styleBucket] ?? [];
+      const styleDriftToAdd = styleDriftNeg.filter(n => !negTokens.has(n.toLowerCase()));
+      if (styleDriftToAdd.length) baseNeg.push(...styleDriftToAdd);
     }
     const negToAdd = baseNeg.filter(n => !negTokens.has(n.toLowerCase()));
     if (negToAdd.length) {
@@ -211,8 +404,18 @@ export class PromptOptimizerService implements OnModuleInit {
       }
     }
 
+    // 注入景别上下文（T2V 视频理解景别帮助其维持构图范围）
+    if (opts.shotSize) {
+      const sizeCtx = T2V_SHOT_SIZE_CONTEXT[opts.shotSize];
+      if (sizeCtx && !prompt.toLowerCase().includes(sizeCtx.split(' ')[0].toLowerCase())) {
+        prompt = `${sizeCtx}, ${prompt}`;
+        added.push(sizeCtx);
+      }
+    }
+
+    // 注入角度上下文（T2V 视频理解摄影机透视角度）
     if (opts.cameraAngle) {
-      const angleCtx = T2V_ANGLE_CONTEXT[opts.cameraAngle];
+      const angleCtx = T2V_CAMERA_ANGLE_CONTEXT[opts.cameraAngle];
       if (angleCtx && !prompt.toLowerCase().includes(angleCtx.split(' ')[0].toLowerCase())) {
         prompt = `${angleCtx}, ${prompt}`;
         added.push(angleCtx);
@@ -228,7 +431,7 @@ export class PromptOptimizerService implements OnModuleInit {
     }
 
     // Face stability hint for close-up shots — reduces face deformation in I2V
-    const isCloseUp = CLOSE_UP_ANGLES.has(opts.cameraAngle ?? '');
+    const isCloseUp = CLOSE_UP_SIZES.has(opts.shotSize ?? '');
     if (isCloseUp) {
       const faceHint = 'stable face, subtle expression changes, consistent facial features';
       if (!prompt.toLowerCase().includes('stable face')) {
@@ -297,9 +500,9 @@ export class PromptOptimizerService implements OnModuleInit {
   }
 
   /**
-   * Smart truncation: split prompt into semantic segments, trim from the end
-   * but protect core content (character descriptions) at the front.
-   * Quality boosters are appended last so they get trimmed first.
+   * Semantic-aware truncation: splits prompt into comma-delimited segments,
+   * categorizes them (identity > scene > camera > boosters), and trims from
+   * lowest priority. Never splits a segment mid-word.
    */
   private smartTruncate(prompt: string, maxTokens: number): string {
     const estimatedTokens = Math.ceil(prompt.split(/\s+/).length * 1.3);
@@ -308,36 +511,58 @@ export class PromptOptimizerService implements OnModuleInit {
     const segments = prompt.split(',').map(s => s.trim()).filter(Boolean);
     const BOOSTER_SET = new Set([
       ...Object.values(QUALITY_BOOSTERS).flat(),
-      ...GOLDEN_EXTRA, ...STANDARD_EXTRA,
+      ...GOLDEN_EXTRA, ...GOLDEN_EXTRA_LOCATION, ...GOLDEN_EXTRA_ATMOSPHERIC,
+      ...GOLDEN_EXTRA_STYLE_GUIDE, ...STANDARD_EXTRA,
+      ...Object.values(FRAMING_SCALE_HINTS),
+      ...Object.values(ANGLE_PERSPECTIVE_HINTS),
+      ...Object.values(T2I_ROUTE_HINTS),
     ].map(b => b.toLowerCase()));
 
+    const IDENTITY_PATTERNS = /\[.*?:.*?\]|face|hair|body|costume|wearing|dressed/i;
+
+    const identity: string[] = [];
     const core: string[] = [];
     const boosters: string[] = [];
     for (const seg of segments) {
-      if (BOOSTER_SET.has(seg.toLowerCase())) boosters.push(seg);
+      if (IDENTITY_PATTERNS.test(seg)) identity.push(seg);
+      else if (BOOSTER_SET.has(seg.toLowerCase())) boosters.push(seg);
       else core.push(seg);
     }
 
     const estTokens = (s: string) => Math.ceil(s.split(/\s+/).length * 1.3);
 
-    let result = [...core, ...boosters].join(', ');
+    // Priority: identity > core > boosters; trim boosters first, then core from end
+    let result = [...identity, ...core, ...boosters].join(', ');
     if (estTokens(result) <= maxTokens) return result;
 
-    result = core.join(', ');
-    const coreTokens = estTokens(result);
-    if (coreTokens > maxTokens) {
-      const coreWords = result.split(/\s+/);
-      const cutAt = Math.floor(maxTokens / 1.3);
-      this.logger.debug(`Prompt core truncated from ${coreWords.length} to ~${cutAt} words`);
-      return coreWords.slice(0, cutAt).join(' ');
+    result = [...identity, ...core].join(', ');
+    if (estTokens(result) <= maxTokens) {
+      const remaining = maxTokens - estTokens(result);
+      if (remaining > 0 && boosters.length) {
+        // Add as many complete booster segments as fit
+        const addable: string[] = [];
+        let addedTokens = 0;
+        for (const b of boosters) {
+          const bTokens = estTokens(b);
+          if (addedTokens + bTokens <= remaining) { addable.push(b); addedTokens += bTokens; }
+        }
+        if (addable.length) result = `${result}, ${addable.join(', ')}`;
+      }
+      return result;
     }
 
-    const remaining = maxTokens - coreTokens;
-    if (remaining > 0 && boosters.length) {
-      const boosterStr = boosters.join(', ');
-      const boosterWords = boosterStr.split(/\s+/).slice(0, remaining);
-      result = `${result}, ${boosterWords.join(' ')}`;
+    // Core exceeds budget: keep identity, trim core from end by complete segments
+    const budget = maxTokens - estTokens(identity.join(', '));
+    const kept: string[] = [];
+    let usedTokens = 0;
+    for (const seg of core) {
+      const segTokens = estTokens(seg);
+      if (usedTokens + segTokens > budget) break;
+      kept.push(seg);
+      usedTokens += segTokens;
     }
+    result = [...identity, ...kept].join(', ');
+    this.logger.debug(`Prompt truncated: ${segments.length} segments → ${identity.length + kept.length} (identity=${identity.length}, core=${kept.length}/${core.length})`);
     return result;
   }
 }

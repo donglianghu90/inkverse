@@ -31,13 +31,16 @@ export class PacingAnalyzerAgent {
     const shots = storyboard?.shots ?? [];
     if (!shots.length) return { overallPacing: 'good', score: 7, segments: [], emotionalCurve: '无数据', recommendations: [] };
     const shotSummary = shots.map(s =>
-      `shot${s.shotIndex}: ${s.estimatedDurationSec}s ${s.camera?.angle}/${s.camera?.movement} ${s.dialogue ? '🗣' : '🔇'} ${s.audio?.bgm?.mood ?? 'no_bgm'}(${s.audio?.bgm?.intensity ?? 0})`
+      `shot${s.shotIndex}: ${s.estimatedDurationSec}s ${s.camera?.shotSize}+${s.camera?.cameraAngle}/${s.camera?.movement} ${s.dialogue ? '🗣' : '🔇'} ${s.audio?.bgm?.mood ?? 'no_bgm'}(${s.audio?.bgm?.intensity ?? 0})`
     ).join('\n');
 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-pacing-analyzer',
       schema: pacingResultSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'pacing-analyzer', buildPacingAnalyzerSystemPrompt()),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'pacing-analyzer', buildPacingAnalyzerSystemPrompt({
+        genreArchetype: state.promptProfile?.genreArchetype,
+        genreRules: state.promptProfile?.scriptwriterGuide?.genreRules,
+      })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: storyboard.episodeNumber },
       userPrompt: `分析第 ${storyboard.episodeNumber} 集节奏：
 

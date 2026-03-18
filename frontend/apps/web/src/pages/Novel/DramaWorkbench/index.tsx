@@ -4,7 +4,8 @@ import { message } from 'antd';
 import {
   ArrowLeft, Play, Pause, Loader2, AlertCircle, Film, Clock, Star,
   ChevronRight, Eye, Camera, Users, MapPin, ChevronDown,
-  ChevronUp, Clapperboard, Pencil, Save, X, Lock, Unlock, RotateCcw,
+  ChevronUp, Clapperboard, Pencil, Save, X, Lock, Unlock, RotateCcw, Wand2,
+  Heart, Scissors, Music, Volume2, VolumeX, Timer, Brain, Palette,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -19,11 +20,13 @@ import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import {
   getDrama, listEpisodes, getEpisode, getVisualAssets,
-  regenerateVisualAssetImage, refineVisualAssetImage,
+  regenerateVisualAssetImage, refineVisualAssetImage, regenerateVariationImage,
   getGenerateEpisodeSseUrl, getGenerateMediaSseUrl, getEpisodeProgressSseUrl,
+  getGenerateAllAssetsSseUrl,
   getGenerationStatus, pauseEpisodeGeneration, type DbRunningItem,
   getDramaUsage, updateShot, listDramaExecutions, resetProblemShots,
   getDramaPipeline, saveDramaPipelineDraft, publishDramaPipeline, saveDramaWorkflowParams, getDramaNodePreview,
+  updateDramaVisualStyle, type VisualStyleGuideUpdate,
   type EpisodeListItem, type ShotPatch, type DramaUsageSummary, type DramaSseEvent, type DramaExecutionListItem, type VisualAssetItem,
   type VisualAssetRefineStrength, type VisualAssetRefineSyncScope,
   type ResetFixTarget, type DramaPipeline, type DramaAgentNodeConfig, type DramaWorkflowParams,
@@ -32,10 +35,38 @@ import { getToken } from '@/services/auth';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+const CUT_POINT_LABELS: Record<string, string> = {
+  on_action: '动作切', on_reaction: '反应切', on_emotion_peak: '情绪峰值切',
+  on_beat: '节拍切', on_silence: '静默切', free: '自由',
+};
+const SUBTITLE_STYLE_LABELS: Record<string, string> = {
+  default: '默认', emphasis: '强调', whisper: '低语', scream: '呐喊',
+  narrator: '旁白', time_skip: '时间跳转',
+};
+const SUBTITLE_STYLE_COLORS: Record<string, string> = {
+  default: 'bg-muted text-foreground', emphasis: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300',
+  whisper: 'bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300', scream: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300',
+  narrator: 'bg-gray-100 dark:bg-gray-800/50 text-gray-600 dark:text-gray-300', time_skip: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
+};
+interface EmotionBeat { beatId?: string; startPct?: number; endPct?: number; emotion?: string; intensity?: number; trigger?: string; }
+
+const SOUL_PROFILE_FIELDS: Array<{ key: keyof SoulProfile; label: string; icon: string }> = [
+  { key: 'coreDesire', label: '核心欲望', icon: '🎯' },
+  { key: 'fatalFlaw', label: '致命缺陷', icon: '💔' },
+  { key: 'coreFear', label: '核心恐惧', icon: '😰' },
+  { key: 'decisionStyle', label: '决策风格', icon: '🧠' },
+  { key: 'stressResponse', label: '压力反应', icon: '⚡' },
+  { key: 'internalContradiction', label: '内在矛盾', icon: '🔄' },
+];
+
 const VIEW_ANGLE_LABELS: Record<string, string> = {
   face_front: '正面', face_three_quarter: '3/4侧面', upper_body_front: '半身',
   full_body_front: '全身', side_profile: '侧面', back_view: '背面',
 };
+const LOCATION_VIEW_LABELS: Record<string, string> = {
+  establishing: '全景', interior_medium: '中景', detail_close: '细节特写',
+};
+const LOCATION_VIEW_ORDER = ['establishing', 'interior_medium', 'detail_close'];
 const VIEW_ANGLE_ORDER = ['face_front', 'face_three_quarter', 'side_profile', 'back_view', 'upper_body_front', 'full_body_front'];
 const VIEW_ANGLE_GROUP: Record<string, 'core' | 'face' | 'framing'> = {
   face_front: 'core',
@@ -291,9 +322,9 @@ const FIX_TARGET_LABELS: Record<ResetFixTarget, string> = {
 
 const FIX_TARGET_ORDER: QcFixTarget[] = ['identity', 'style', 'camera', 'motion'];
 
-const fmtUsd = (n?: number) => `$${Number(n ?? 0).toFixed(4)}`;
-const bucketCost = (b: { llmCostUsd: number; imageCostUsd: number; videoCostUsd: number; ttsCostUsd?: number; embeddingCostUsd?: number }) =>
-  (b.llmCostUsd ?? 0) + (b.imageCostUsd ?? 0) + (b.videoCostUsd ?? 0) + (b.ttsCostUsd ?? 0) + (b.embeddingCostUsd ?? 0);
+const fmtCny = (n?: number) => `¥${Number(n ?? 0).toFixed(4)}`;
+const bucketCost = (b: { llmCostCny: number; imageCostCny: number; videoCostCny: number; ttsCostCny?: number; embeddingCostCny?: number }) =>
+  (b.llmCostCny ?? 0) + (b.imageCostCny ?? 0) + (b.videoCostCny ?? 0) + (b.ttsCostCny ?? 0) + (b.embeddingCostCny ?? 0);
 
 const resolveSkippedStepLabel = (input: { nodeId?: string; stepKey?: string; step?: string; message?: string }): string => {
   if (input.nodeId && PIPELINE_NODE_LABELS[input.nodeId]) return PIPELINE_NODE_LABELS[input.nodeId];
@@ -309,12 +340,31 @@ const resolveSkipReasonLabel = (skipReason?: string): string => {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+interface CharacterVariation {
+  variationId: string;
+  name: string;
+  costume: string;
+  visualPromptOverride: string;
+  referenceImageUrl?: string;
+}
+interface SoulProfile {
+  coreDesire?: string;
+  fatalFlaw?: string;
+  coreFear?: string;
+  decisionStyle?: string;
+  stressResponse?: string;
+  emotionalTriggers?: string[];
+  behavioralHabits?: string[];
+  internalContradiction?: string;
+}
 interface Character {
   characterId: string; name: string; role: string; faceDescription: string;
   bodyType: string; hairStyle: string; skinTone: string; age: string;
   defaultCostume: string; distinguishingFeatures: string;
   faceReferencePrompt?: string;
   voiceProfile: { timbre: string; speakingStyle: string; catchphrase?: string };
+  soulProfile?: SoulProfile;
+  variations?: CharacterVariation[];
 }
 interface Location {
   locationId: string; name: string; description: string; lightingDefault: string;
@@ -325,12 +375,15 @@ interface ShotCamera { angle: string; movement: string; composition: string; dep
 interface ShotChar { characterId: string; action: string; emotion: string; position: string; }
 interface ShotDialogue { characterId: string; text: string; emotion: string; isVoiceover: boolean; isInnerThought: boolean; }
 interface ShotSfx { trigger: string; sound: string; }
-interface ShotAudio { bgm?: { mood: string; intensity: number }; sfx?: ShotSfx[]; ambience?: string; }
+interface ShotDramaticSilence { durationSec?: number; trigger?: string; }
+interface ShotAudio { bgm?: { mood: string; intensity: number }; sfx?: ShotSfx[]; ambience?: string; dramaticSilence?: ShotDramaticSilence; }
 interface Shot {
   shotIndex: number; shotId: string; sceneId: string; camera: ShotCamera;
   characters: ShotChar[]; dialogue?: ShotDialogue | null; audio?: ShotAudio | null;
-  visualPrompt: string; subtitle?: { text: string; style: string } | null;
+  visualPrompt: string; subtitle?: { text: string; style: string; karaoke?: boolean } | null;
   estimatedDurationSec: number; transitionToNext: string;
+  trimInSec?: number | null; trimOutSec?: number | null;
+  cutPointHint?: string | null;
   firstFrameImageUrl?: string | null; lastFrameImageUrl?: string | null;
   firstFramePrompt?: string | null; lastFramePrompt?: string | null;
   isMasterShot?: boolean;
@@ -667,6 +720,17 @@ const ShotCard: React.FC<ShotCardProps> = ({
               {shot.isFlashback && (
                 <span className="text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-700 px-1.5 py-0.5 rounded">闪回</span>
               )}
+              {shot.cutPointHint && shot.cutPointHint !== 'free' && (
+                <span className="text-[10px] bg-pink-100 dark:bg-pink-900/30 text-pink-700 dark:text-pink-300 px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                  <Scissors className="h-2 w-2" />{CUT_POINT_LABELS[shot.cutPointHint] ?? shot.cutPointHint}
+                </span>
+              )}
+              {shot.subtitle?.style && shot.subtitle.style !== 'default' && (
+                <span className={cn('text-[10px] px-1.5 py-0.5 rounded', SUBTITLE_STYLE_COLORS[shot.subtitle.style] ?? 'bg-muted')}>
+                  {SUBTITLE_STYLE_LABELS[shot.subtitle.style] ?? shot.subtitle.style}
+                  {shot.subtitle.karaoke && ' ⌨'}
+                </span>
+              )}
               {shot.isHumanEdited && (
                 <span className="text-[10px] bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 px-1.5 py-0.5 rounded flex items-center gap-0.5">
                   <Lock className="h-2 w-2" />已锁定
@@ -877,24 +941,70 @@ const ShotCard: React.FC<ShotCardProps> = ({
               </div>
             )}
 
-            {/* 音效 */}
-            {(shot.audio?.bgm?.mood || (shot.audio?.sfx?.length ?? 0) > 0 || shot.audio?.ambience) && (
+            {/* 字幕 */}
+            {shot.subtitle?.text && (
               <div>
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">音效</p>
-                <div className="space-y-0.5 text-xs text-muted-foreground">
-                  {shot.audio?.bgm?.mood && <p><span className="text-foreground/70">BGM：</span>{shot.audio.bgm.mood}</p>}
-                  {shot.audio?.ambience && <p><span className="text-foreground/70">环境音：</span>{shot.audio.ambience}</p>}
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">字幕</p>
+                <div className={cn('rounded-md px-2.5 py-2 text-xs', SUBTITLE_STYLE_COLORS[shot.subtitle.style] ?? 'bg-muted/50')}>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="text-[10px] font-medium">{SUBTITLE_STYLE_LABELS[shot.subtitle.style] ?? shot.subtitle.style}</span>
+                    {shot.subtitle.karaoke && <span className="text-[10px] bg-white/60 dark:bg-black/30 px-1 py-0.5 rounded">逐字显示</span>}
+                  </div>
+                  <p className={cn('leading-relaxed', shot.subtitle.style === 'whisper' && 'italic opacity-80', shot.subtitle.style === 'scream' && 'font-bold text-base')}>{shot.subtitle.text}</p>
+                </div>
+              </div>
+            )}
+
+            {/* 音效 */}
+            {(shot.audio?.bgm?.mood || (shot.audio?.sfx?.length ?? 0) > 0 || shot.audio?.ambience || shot.audio?.dramaticSilence) && (
+              <div>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 flex items-center gap-1">
+                  <Music className="h-3 w-3" />音频设计
+                </p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {shot.audio?.bgm?.mood && (
+                    <div className="rounded-md bg-indigo-50 dark:bg-indigo-950/30 px-2 py-1.5 col-span-2">
+                      <p className="text-[10px] text-indigo-600 dark:text-indigo-400 flex items-center gap-1"><Volume2 className="h-2.5 w-2.5" />BGM</p>
+                      <p className="text-[11px] font-medium mt-0.5">{shot.audio.bgm.mood} · 强度 {(shot.audio.bgm.intensity * 100).toFixed(0)}%</p>
+                    </div>
+                  )}
+                  {shot.audio?.ambience && (
+                    <div className="rounded-md bg-emerald-50 dark:bg-emerald-950/30 px-2 py-1.5">
+                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400">环境音</p>
+                      <p className="text-[11px] font-medium mt-0.5">{shot.audio.ambience}</p>
+                    </div>
+                  )}
+                  {shot.audio?.dramaticSilence && (
+                    <div className="rounded-md bg-gray-50 dark:bg-gray-800/50 px-2 py-1.5">
+                      <p className="text-[10px] text-gray-600 dark:text-gray-400 flex items-center gap-1"><VolumeX className="h-2.5 w-2.5" />戏剧性静默</p>
+                      <p className="text-[11px] font-medium mt-0.5">
+                        {shot.audio.dramaticSilence.durationSec ? `${shot.audio.dramaticSilence.durationSec}s` : ''}
+                        {shot.audio.dramaticSilence.trigger ? ` · ${shot.audio.dramaticSilence.trigger}` : ''}
+                      </p>
+                    </div>
+                  )}
                   {shot.audio?.sfx?.map((sfx, si) => (
-                    <p key={si}><span className="text-foreground/70">音效：</span>{sfx.trigger}</p>
+                    <div key={si} className="rounded-md bg-amber-50 dark:bg-amber-950/30 px-2 py-1.5">
+                      <p className="text-[10px] text-amber-600 dark:text-amber-400">SFX</p>
+                      <p className="text-[11px] font-medium mt-0.5">{sfx.sound}</p>
+                      <p className="text-[10px] text-muted-foreground">{sfx.trigger}</p>
+                    </div>
                   ))}
                 </div>
               </div>
             )}
 
             {/* 底部 */}
-            <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/30">
-              <span>预估时长 {shot.estimatedDurationSec}s</span>
-              <span>转场：{shot.transitionToNext === 'cut' ? '切换' : shot.transitionToNext === 'fade_black' ? '黑场淡出' : shot.transitionToNext === 'dissolve' ? '溶解' : shot.transitionToNext}</span>
+            <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground pt-1 border-t border-border/30">
+              <span className="flex items-center gap-0.5"><Timer className="h-2.5 w-2.5" />{shot.estimatedDurationSec}s</span>
+              {(shot.trimInSec != null || shot.trimOutSec != null) && (
+                <span className="flex items-center gap-0.5 text-pink-600 dark:text-pink-400">
+                  <Scissors className="h-2.5 w-2.5" />
+                  裁剪 {shot.trimInSec != null ? `入${shot.trimInSec}s` : ''}{shot.trimOutSec != null ? ` 出${shot.trimOutSec}s` : ''}
+                </span>
+              )}
+              <span>转场：{shot.transitionToNext === 'cut' ? '切换' : shot.transitionToNext === 'fade_black' ? '黑场淡出' : shot.transitionToNext === 'dissolve' ? '溶解' : shot.transitionToNext === 'match_cut' ? '匹配剪辑' : shot.transitionToNext}</span>
+              {shot.cutPointHint && <span className="text-pink-500">✂ {CUT_POINT_LABELS[shot.cutPointHint] ?? shot.cutPointHint}</span>}
               {shot.isFlashback && <span className="text-amber-500">◆ 闪回</span>}
             </div>
 
@@ -937,29 +1047,143 @@ const ShotCard: React.FC<ShotCardProps> = ({
 
 // ─── CharacterPromptPanel ─────────────────────────────────────────────────────
 
-const CharacterPromptPanel: React.FC<{ char: Character }> = ({ char }) => {
+/**
+ * 复现后端 drama.service.ts buildAssetStylePrefix 角色分支逻辑：
+ * 优先 characterStylePrompt → styleReferencePrompt → 最小 fallback（不含 colorGrading/lightingStyle）
+ */
+function buildAssetStylePrefix(vs?: Record<string, unknown>): string {
+  if (!vs) return '';
+  const charRef = ((vs.characterStylePrompt as string) ?? '').trim();
+  if (charRef) return charRef + ', ';
+  const styleRef = ((vs.styleReferencePrompt as string) ?? '').trim();
+  if (styleRef) return styleRef + ', ';
+  const parts = [vs.overallAesthetic, vs.renderTechnique, vs.referenceStyle]
+    .filter(Boolean).map((p) => (p as string).trim()).filter(Boolean);
+  return parts.length ? parts.join(', ') + ', ' : '';
+}
+
+/** 复现后端 rendering-profile.ts ageToT2IPhrase 逻辑 */
+function ageToT2IPhrase(age?: string): string {
+  if (!age) return '';
+  const s = String(age).trim();
+  const numMatch = s.match(/\d+/);
+  let n: number;
+  if (numMatch) {
+    n = parseInt(numMatch[0], 10);
+  } else {
+    n = NaN;
+  }
+  if (!isNaN(n)) {
+    if (n <= 0 || n > 120) return '';
+    if (n < 18) return 'young, teenage appearance';
+    if (n < 35) return `around ${n} years old, young adult`;
+    if (n < 55) return `around ${n} years old, middle-aged, mature features`;
+    return `around ${n} years old, mature, older adult features`;
+  }
+  const lower = s.toLowerCase();
+  if (/少年|teen|young\s*man|young\s*woman/i.test(lower) || /幼|少/.test(s)) return 'young, teenage appearance';
+  if (/青年|young\s*adult|二十|三十|20s|30s/i.test(lower)) return 'young adult';
+  if (/中年|middle|四十|五十|40s|50s|mid\s*age/i.test(lower)) return 'middle-aged, mature features';
+  if (/老年|elder|old|六十|七十|60s|70s|senior/i.test(lower)) return 'mature, older adult features';
+  return '';
+}
+
+/** 复现后端 rendering-profile.ts buildViewAnglePrompt 完整逻辑（含 agePhrase） */
+function buildViewAnglePrompt(char: any, viewAngle: string): string {
+  const face = (char.faceReferencePrompt ?? '').trim();
+  const body = (char.bodyTypePrompt || char.bodyType || '').trim();
+  const hair = (char.hairStylePrompt || char.hairStyle || '').trim();
+  const costume = (char.defaultCostumePrompt || char.defaultCostume || '').trim();
+  // 始终从 age 字段推导年龄词（取范围最小值），agePrompt 仅作兜底
+  const agePhrase = (ageToT2IPhrase(char.age) || (char.agePrompt && (char.agePrompt as string).trim()) || '').trim();
+  const opt = (s: string) => s || '';
+  switch (viewAngle) {
+    case 'face_front':
+      return [face, opt(agePhrase), opt(hair), costume ? `wearing ${costume}` : '', opt(body), 'front-facing, looking at camera, neutral plain background, character reference sheet portrait']
+        .filter(Boolean).join(', ');
+    case 'face_three_quarter':
+      return [
+        'three quarter view portrait, same person, slightly turned',
+        face, opt(agePhrase), opt(hair), costume ? `wearing ${costume}` : '', opt(body), 'neutral background',
+      ].filter(Boolean).join(', ');
+    case 'upper_body_front':
+      return `upper body portrait, same person, ${face}${agePhrase ? `, ${agePhrase}` : ''}${costume ? `, wearing ${costume}` : ''}${body ? `, ${body} build` : ''}, neutral background`;
+    case 'full_body_front':
+      return `full body standing portrait, same person, ${face}${agePhrase ? `, ${agePhrase}` : ''}${body ? `, ${body} build` : ''}${hair ? `, ${hair}` : ''}${costume ? `, wearing ${costume}` : ''}, neutral studio background`;
+    case 'side_profile':
+      return `side profile portrait, same person${agePhrase ? `, ${agePhrase}` : ''}${hair ? `, ${hair}` : ''}${body ? `, ${body} build` : ''}${costume ? `, wearing ${costume}` : ''}, neutral background`;
+    case 'back_view':
+      return `back view, same person from behind${agePhrase ? `, ${agePhrase}` : ''}${hair ? `, ${hair}` : ''}${body ? `, ${body} build` : ''}${costume ? `, wearing ${costume}` : ''}, neutral background`;
+    case 'face_happy':
+      return [face, opt(agePhrase), opt(hair), costume ? `wearing ${costume}` : '', opt(body), 'happy expression, genuine slight smile, pleased and warm, subtle not exaggerated, same facial bone structure, front-facing, looking at camera, neutral background']
+        .filter(Boolean).join(', ');
+    case 'face_angry':
+      return [face, opt(agePhrase), opt(hair), costume ? `wearing ${costume}` : '', opt(body), 'angry expression, furrowed brows, sharp stern gaze, controlled tension in eyes, not distorted, same facial bone structure, front-facing, looking at camera, neutral background']
+        .filter(Boolean).join(', ');
+    default:
+      return face;
+  }
+}
+
+/**
+ * 复现后端 prompt-optimizer.service.ts optimizeForT2I 对 Volcengine Seedream 的质量 booster：
+ *   provider boosters: cinematic lighting, rich color depth（volcengine 专属）
+ *   + golden tier extra（按 shotType 不同）
+ *   注意：Seedream profile 的 qualityPrefix / qualitySuffix 均为空字符串，
+ *   质量词完全由 optimizeForT2I 注入，assembleT2iPrompt 不再追加。
+ */
+const CHAR_QUALITY_BOOSTERS  = 'cinematic lighting, rich color depth, cinematic composition, dramatic atmosphere';
+const SCENE_QUALITY_BOOSTERS = 'cinematic lighting, rich color depth, cinematic composition, no human subjects, environmental photography';
+
+const VIEW_ANGLE_PANEL_LABELS: Record<string, string> = {
+  face_front: '正面特写',
+  face_three_quarter: '3/4 侧面',
+  upper_body_front: '上半身',
+  full_body_front: '全身',
+  side_profile: '侧面',
+  back_view: '背面',
+  face_happy: '表情·喜',
+  face_angry: '表情·怒',
+};
+
+const CharacterPromptPanel: React.FC<{ char: Character; visualStyle?: Record<string, unknown> }> = ({ char, visualStyle }) => {
   const [expanded, setExpanded] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
   const anyChar = char as any;
-  const prompts: Array<{ label: string; value: string; hint: string }> = [
+
+  const hasPrompts = !!(char.faceReferencePrompt || anyChar.bodyTypePrompt || anyChar.hairStylePrompt || anyChar.defaultCostumePrompt || anyChar.appearanceHint);
+  if (!hasPrompts) return null;
+
+  const stylePrefix = buildAssetStylePrefix(visualStyle);
+
+  const viewAngles = ['face_front', 'face_three_quarter', 'upper_body_front', 'full_body_front', 'side_profile', 'back_view', 'face_happy', 'face_angry'];
+  const assembledPrompts = viewAngles.map((view) => {
+    const raw = buildViewAnglePrompt(anyChar, view);
+    if (!raw) return null;
+    const optimized = `${raw}, ${CHAR_QUALITY_BOOSTERS}`;
+    const full = stylePrefix ? `${stylePrefix}${optimized}` : optimized;
+    return { view, label: VIEW_ANGLE_PANEL_LABELS[view] ?? view, full };
+  }).filter(Boolean) as Array<{ view: string; label: string; full: string }>;
+
+  const rawFields: Array<{ label: string; value: string; hint: string }> = [
     { label: '面部生成提示词', value: char.faceReferencePrompt ?? '', hint: '注入：所有角色参考图生成' },
+    { label: '年龄提示词', value: anyChar.agePrompt || ageToT2IPhrase(char.age), hint: '注入：所有角色参考图（agePrompt 优先，其次 age 转换）' },
     { label: '体型提示词', value: anyChar.bodyTypePrompt ?? '', hint: '注入：全身图 / storyboard T2I' },
     { label: '发型提示词', value: anyChar.hairStylePrompt ?? '', hint: '注入：角色参考图生成' },
     { label: '服装提示词', value: anyChar.defaultCostumePrompt ?? '', hint: '注入：全身图 / storyboard T2I' },
     { label: '综合外貌提示词', value: anyChar.appearanceHint ?? '', hint: '注入：episode-director 新角色声明' },
   ].filter((p) => p.value);
 
-  if (prompts.length === 0) return null;
-
   return (
     <div className="rounded-md border border-blue-200 dark:border-blue-800/50 overflow-hidden">
       <button
         type="button"
-        onClick={() => setExpanded((v) => !v)}
+        onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
         className="w-full flex items-center justify-between px-2.5 py-1.5 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
       >
         <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400 flex items-center gap-1">
           <Lock className="h-3 w-3" />
-          图片生成提示词（{prompts.length} 项）
+          图片生成提示词
         </span>
         {expanded
           ? <ChevronUp className="h-3 w-3 text-blue-500" />
@@ -967,16 +1191,141 @@ const CharacterPromptPanel: React.FC<{ char: Character }> = ({ char }) => {
       </button>
       {expanded && (
         <div className="bg-blue-50/50 dark:bg-blue-950/20 px-2.5 py-2 space-y-2.5">
-          <p className="text-[10px] text-blue-500/80 dark:text-blue-400/60">由 Profiler Agent 建剧时自动生成，注入图像生成管线。如需调整，请通过「精修」功能指定自定义提示词。</p>
-          {prompts.map(({ label, value, hint }) => (
-            <div key={label}>
-              <div className="flex items-center justify-between mb-0.5">
-                <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400">{label}</p>
-                <span className="text-[9px] text-blue-400/70">{hint}</span>
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] text-blue-500/80 dark:text-blue-400/60">由 Profiler Agent 建剧时自动生成，注入图像生成管线。如需调整，请通过「精修」功能指定自定义提示词。</p>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setShowRaw((v) => !v); }}
+              className="shrink-0 ml-2 text-[9px] text-blue-500 hover:text-blue-700 dark:hover:text-blue-300 underline underline-offset-2"
+            >
+              {showRaw ? '查看完整 Prompt' : '查看原子字段'}
+            </button>
+          </div>
+
+          {showRaw ? (
+            rawFields.map(({ label, value, hint }) => (
+              <div key={label}>
+                <div className="flex items-center justify-between mb-0.5">
+                  <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400">{label}</p>
+                  <span className="text-[9px] text-blue-400/70">{hint}</span>
+                </div>
+                <p className="text-[11px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all font-mono">{value}</p>
               </div>
-              <p className="text-[11px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all font-mono">{value}</p>
+            ))
+          ) : (
+            <>
+              <p className="text-[10px] text-blue-500/70 dark:text-blue-400/50">以下为实际发送给 Seedream 5.0 的完整 Prompt（风格前缀 + 视角原子 + Volcengine quality boosters），按视角展示：</p>
+              {assembledPrompts.map(({ view, label, full }) => (
+                <div key={view}>
+                  <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400 mb-0.5">{label}</p>
+                  <p className="text-[11px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all font-mono">{full}</p>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── LocationPromptPanel ──────────────────────────────────────────────────────
+
+/** 复现后端 buildAssetStylePrefix location 分支逻辑（优先 styleReferencePrompt） */
+function buildSceneStylePrefix(vs?: Record<string, unknown>): string {
+  if (!vs) return '';
+  const styleRef = ((vs.styleReferencePrompt as string) ?? '').trim();
+  if (styleRef) return styleRef + ', ';
+  const parts = [vs.overallAesthetic, vs.renderTechnique, vs.textureStyle, vs.colorGrading, vs.lightingStyle, vs.referenceStyle]
+    .filter(Boolean).map((p) => (p as string).trim()).filter(Boolean);
+  return parts.length ? parts.join(', ') + ', ' : '';
+}
+
+/** 复现后端 rendering-profile.ts buildLocationViewPrompt 逻辑 */
+function buildLocViewPromptFE(loc: Location, viewAngle: string): string {
+  const base = (loc.visualPrompt || loc.description || '').trim();
+  if (!base) return '';
+  const lighting = loc.lightingDefault ? `, ${loc.lightingDefault} lighting` : '';
+  const color = loc.colorTone ? `, ${loc.colorTone} color tone` : '';
+  switch (viewAngle) {
+    case 'establishing':
+      return `wide establishing shot, ${base}${lighting}${color}, full environment overview, architectural perspective, no people`;
+    case 'interior_medium':
+      return `medium shot interior view, ${base}${lighting}${color}, same location as reference, different angle showing central area, no people`;
+    case 'detail_close':
+      return `close-up detail shot, ${base}${lighting}${color}, same location as reference, focusing on textures and key props, atmospheric detail, no people`;
+    default:
+      return base;
+  }
+}
+
+const LOCATION_VIEW_PANEL_LABELS: Record<string, string> = {
+  establishing: '全景',
+  interior_medium: '中景',
+  detail_close: '细节特写',
+};
+
+const LocationPromptPanel: React.FC<{ loc: Location; visualStyle?: Record<string, unknown> }> = ({ loc, visualStyle }) => {
+  const [expanded, setExpanded] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
+
+  if (!loc.visualPrompt) return null;
+
+  const stylePrefix = buildSceneStylePrefix(visualStyle);
+
+  const viewAngles = ['establishing', 'interior_medium', 'detail_close'];
+  const assembledPrompts = viewAngles.map((view) => {
+    const raw = buildLocViewPromptFE(loc, view);
+    if (!raw) return null;
+    const optimized = `${raw}, ${SCENE_QUALITY_BOOSTERS}`;
+    const full = stylePrefix ? `${stylePrefix}${optimized}` : optimized;
+    return { view, label: LOCATION_VIEW_PANEL_LABELS[view] ?? view, full };
+  }).filter(Boolean) as Array<{ view: string; label: string; full: string }>;
+
+  return (
+    <div className="rounded-md border border-blue-200 dark:border-blue-800/50 overflow-hidden">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
+        className="w-full flex items-center justify-between px-2.5 py-1.5 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+      >
+        <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400 flex items-center gap-1">
+          <Lock className="h-3 w-3" />
+          图片生成提示词
+        </span>
+        {expanded
+          ? <ChevronUp className="h-3 w-3 text-blue-500" />
+          : <ChevronDown className="h-3 w-3 text-blue-500" />}
+      </button>
+      {expanded && (
+        <div className="bg-blue-50/50 dark:bg-blue-950/20 px-2.5 py-2 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] text-blue-500/80 dark:text-blue-400/60">由 Visual Asset Designer 建剧时自动生成，注入图像生成管线。如需调整，请通过「精修」功能指定自定义提示词。</p>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setShowRaw((v) => !v); }}
+              className="shrink-0 ml-2 text-[9px] text-blue-500 hover:text-blue-700 dark:hover:text-blue-300 underline underline-offset-2"
+            >
+              {showRaw ? '查看完整 Prompt' : '查看原始提示词'}
+            </button>
+          </div>
+
+          {showRaw ? (
+            <div>
+              <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400 mb-0.5">场景视觉提示词</p>
+              <p className="text-[11px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all font-mono">{loc.visualPrompt}</p>
             </div>
-          ))}
+          ) : (
+            <>
+              <p className="text-[10px] text-blue-500/70 dark:text-blue-400/50">以下为实际发送给 Seedream 5.0 的完整 Prompt（风格前缀 + 视角原子 + Volcengine quality boosters），按视角展示：</p>
+              {assembledPrompts.map(({ view, label, full }) => (
+                <div key={view}>
+                  <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400 mb-0.5">{label}</p>
+                  <p className="text-[11px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all font-mono">{full}</p>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -990,6 +1339,9 @@ const CharacterCard: React.FC<{
   imageUrl?: string;
   viewImages?: Array<{ viewAngle: string; imageUrl: string }>;
   busy?: boolean;
+  visualStyle?: Record<string, unknown>;
+  variationImages?: Map<string, string>;
+  variationBusyKeys?: Set<string>;
   onRegenerate: (viewAngle?: string) => void;
   onRefine: (input: {
     viewAngle?: string;
@@ -997,7 +1349,8 @@ const CharacterCard: React.FC<{
     strength: VisualAssetRefineStrength;
     instruction: string;
   }) => void;
-}> = ({ char, imageUrl, viewImages, busy = false, onRegenerate, onRefine }) => {
+  onRegenerateVariation?: (variationId: string) => void;
+}> = ({ char, imageUrl, viewImages, busy = false, visualStyle, variationImages, variationBusyKeys, onRegenerate, onRefine, onRegenerateVariation }) => {
   const [expanded, setExpanded] = useState(false);
   const [activeViewAngle, setActiveViewAngle] = useState('');
   const [refineOpen, setRefineOpen] = useState(false);
@@ -1005,6 +1358,11 @@ const CharacterCard: React.FC<{
   const [refineViewAngle, setRefineViewAngle] = useState('');
   const [syncScope, setSyncScope] = useState<ViewSyncScope>('group');
   const [editStrength, setEditStrength] = useState<ViewEditStrength>('balanced');
+  const prevBusyRef = useRef(busy);
+  useEffect(() => {
+    if (prevBusyRef.current && !busy) setExpanded(true);
+    prevBusyRef.current = busy;
+  }, [busy]);
   const roleStyle = ROLE_STYLES[char.role] ?? ROLE_STYLES.minor;
   const resolvedViews = useMemo(() => {
     if (viewImages?.length) return sortViewImages(viewImages);
@@ -1100,7 +1458,9 @@ const CharacterCard: React.FC<{
             >
               {busy
                 ? <><Loader2 className="h-3 w-3 animate-spin" />生成中</>
-                : <><RotateCcw className="h-3 w-3" />重新生成</>}
+                : (imageUrl || resolvedViews.length > 0)
+                  ? <><RotateCcw className="h-3 w-3" />重新生成</>
+                  : <><Wand2 className="h-3 w-3" />生成</>}
             </Button>
             <Button
               size="sm"
@@ -1118,7 +1478,7 @@ const CharacterCard: React.FC<{
           </div>
 
           {expanded && (
-            <div className="pt-2 border-t border-border/40 space-y-2 text-xs">
+            <div className="pt-2 border-t border-border/40 space-y-2 text-xs" onClick={(e) => e.stopPropagation()}>
               {resolvedViews.length > 1 ? (
                 <div className="space-y-1.5">
                   <p className="text-[10px] font-semibold text-muted-foreground">多角度参考图（点击选择当前视角）</p>
@@ -1167,7 +1527,7 @@ const CharacterCard: React.FC<{
               )}
 
               {(char.faceReferencePrompt || (char as any).bodyTypePrompt || (char as any).hairStylePrompt || (char as any).defaultCostumePrompt || (char as any).appearanceHint) && (
-                <CharacterPromptPanel char={char} />
+                <CharacterPromptPanel char={char} visualStyle={visualStyle} />
               )}
               {char.age && <p><span className="text-muted-foreground">年龄：</span>{char.age}</p>}
               {char.hairStyle && <p><span className="text-muted-foreground">发型：</span>{char.hairStyle}</p>}
@@ -1179,6 +1539,88 @@ const CharacterCard: React.FC<{
               {char.voiceProfile?.speakingStyle && <p><span className="text-muted-foreground">配音风格：</span>{char.voiceProfile.speakingStyle}</p>}
               {char.voiceProfile?.catchphrase && (
                 <p><span className="text-muted-foreground">口头禅：</span><span className="italic">&quot;{char.voiceProfile.catchphrase}&quot;</span></p>
+              )}
+
+              {char.soulProfile && Object.values(char.soulProfile).some(Boolean) && (
+                <div className="pt-2 border-t border-border/40">
+                  <p className="text-[10px] font-semibold text-muted-foreground mb-2 flex items-center gap-1">
+                    <Brain className="h-3 w-3" />灵魂人设
+                  </p>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {SOUL_PROFILE_FIELDS.map(({ key, label, icon }) => {
+                      const val = char.soulProfile?.[key];
+                      if (!val || (Array.isArray(val) && val.length === 0)) return null;
+                      return (
+                        <div key={key} className="rounded-md bg-muted/50 px-2 py-1.5">
+                          <p className="text-[10px] text-muted-foreground">{icon} {label}</p>
+                          <p className="text-[11px] font-medium mt-0.5">{String(val)}</p>
+                        </div>
+                      );
+                    })}
+                    {char.soulProfile.emotionalTriggers?.length ? (
+                      <div className="rounded-md bg-muted/50 px-2 py-1.5">
+                        <p className="text-[10px] text-muted-foreground">🎭 情绪触发点</p>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {char.soulProfile.emotionalTriggers.map((t, i) => (
+                            <span key={i} className="text-[10px] bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 px-1.5 py-0.5 rounded">{t}</span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {char.soulProfile.behavioralHabits?.length ? (
+                      <div className="rounded-md bg-muted/50 px-2 py-1.5">
+                        <p className="text-[10px] text-muted-foreground">🔁 行为习惯</p>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {char.soulProfile.behavioralHabits.map((h, i) => (
+                            <span key={i} className="text-[10px] bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 px-1.5 py-0.5 rounded">{h}</span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+
+              {char.variations && char.variations.length > 0 && (
+                <div className="pt-2 border-t border-border/40">
+                  <p className="text-[10px] font-semibold text-muted-foreground mb-2">服装变体（衣橱）</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {char.variations.map((v) => {
+                      const vImg = variationImages?.get(v.variationId);
+                      const vBusy = variationBusyKeys?.has(`${char.characterId}:${v.variationId}`);
+                      return (
+                        <div key={v.variationId} className="rounded-lg border border-border/60 overflow-hidden bg-background">
+                          {vImg ? (
+                            <img src={vImg} alt={v.name} className="w-full aspect-[3/4] object-cover" />
+                          ) : (
+                            <div className="w-full aspect-[3/4] bg-muted/50 flex items-center justify-center text-[10px] text-muted-foreground">
+                              待生成
+                            </div>
+                          )}
+                          <div className="p-1.5 space-y-1">
+                            <p className="text-[11px] font-medium truncate">{v.name}</p>
+                            {(v.costume || v.visualPromptOverride) && (
+                              <p className="text-[10px] text-muted-foreground line-clamp-2">{v.costume || v.visualPromptOverride}</p>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 text-[10px] gap-1 w-full"
+                              disabled={vBusy || busy}
+                              onClick={() => onRegenerateVariation?.(v.variationId)}
+                            >
+                              {vBusy
+                                ? <><Loader2 className="h-3 w-3 animate-spin" />生成中</>
+                                : vImg
+                                  ? <><RotateCcw className="h-3 w-3" />重新生成</>
+                                  : <><Wand2 className="h-3 w-3" />生成</>}
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -1314,20 +1756,153 @@ const CharacterCard: React.FC<{
   );
 };
 
+// ─── PropCard ─────────────────────────────────────────────────────────────────
+
+const PropCard: React.FC<{
+  prop: VisualAssetItem;
+  busy?: boolean;
+  onRegenerate: () => void;
+  onRefine: (instruction: string) => void;
+}> = ({ prop, busy = false, onRegenerate, onRefine }) => {
+  const [refineOpen, setRefineOpen] = useState(false);
+  const [instruction, setInstruction] = useState('');
+  const imageUrl = prop.referenceImageUrl;
+  const propData = prop.data as {
+    name?: string; description?: string; visualPrompt?: string;
+    locationName?: string; locationId?: string;
+  };
+
+  const handleRefine = () => {
+    const text = instruction.trim();
+    if (!text) { message.warning('请先输入精修要求'); return; }
+    onRefine(text);
+    setRefineOpen(false);
+  };
+
+  return (
+    <>
+      <Card className="overflow-hidden flex flex-col">
+        {/* Prop image */}
+        <div className="relative aspect-square bg-muted/40 overflow-hidden">
+          {imageUrl ? (
+            <img src={imageUrl} alt={prop.name} className="w-full h-full object-cover" />
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground gap-1">
+              <span className="text-2xl">📦</span>
+              <span className="text-[10px]">待生成</span>
+            </div>
+          )}
+          {busy && (
+            <div className="absolute inset-0 bg-background/60 flex items-center justify-center">
+              <Loader2 className="h-5 w-5 animate-spin text-violet-500" />
+            </div>
+          )}
+        </div>
+        {/* Info */}
+        <CardContent className="p-2.5 flex-1 flex flex-col gap-1.5">
+          <div>
+            <p className="text-xs font-semibold leading-tight">{prop.name}</p>
+            {propData.locationName && (
+              <p className="text-[10px] text-muted-foreground mt-0.5">📍 {propData.locationName}</p>
+            )}
+            {propData.description && (
+              <p className="text-[10px] text-muted-foreground mt-1 line-clamp-2 leading-relaxed">{propData.description}</p>
+            )}
+          </div>
+          {/* Actions */}
+          <div className="flex gap-1 mt-auto pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 text-[10px] flex-1 px-1"
+              disabled={busy}
+              onClick={onRegenerate}
+            >
+              <RotateCcw className="h-2.5 w-2.5 mr-1" />重生
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 text-[10px] flex-1 px-1"
+              disabled={busy || !imageUrl}
+              onClick={() => { setInstruction(''); setRefineOpen(true); }}
+            >
+              <Wand2 className="h-2.5 w-2.5 mr-1" />精修
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Refine dialog */}
+      <Dialog open={refineOpen} onOpenChange={setRefineOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">精修道具：{prop.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            {imageUrl && <img src={imageUrl} alt={prop.name} className="w-full rounded-lg object-cover aspect-square" />}
+            <div className="space-y-1">
+              <Label className="text-xs">精修要求</Label>
+              <Textarea
+                className="text-xs min-h-[60px]"
+                placeholder="描述需要修改的部分，如：调整材质质感为青铜锈蚀效果..."
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+              />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setRefineOpen(false)}>取消</Button>
+              <Button size="sm" className="h-7 text-xs" onClick={handleRefine}>开始精修</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+};
+
 // ─── LocationCard ─────────────────────────────────────────────────────────────
+
+const sortLocationViewImages = (items: Array<{ viewAngle: string; imageUrl: string }>) => {
+  const order = new Map(LOCATION_VIEW_ORDER.map((v, i) => [v, i]));
+  return [...items].sort((a, b) => (order.get(a.viewAngle) ?? 99) - (order.get(b.viewAngle) ?? 99));
+};
 
 const LocationCard: React.FC<{
   loc: Location;
   imageUrl?: string;
+  viewImages?: Array<{ viewAngle: string; imageUrl: string }>;
   busy?: boolean;
-  onRegenerate: () => void;
-  onRefine: (instruction: string) => void;
-}> = ({ loc, imageUrl, busy = false, onRegenerate, onRefine }) => {
+  visualStyle?: Record<string, unknown>;
+  onRegenerate: (viewAngle?: string) => void;
+  onRefine: (instruction: string, viewAngle?: string) => void;
+}> = ({ loc, imageUrl, viewImages, busy = false, visualStyle, onRegenerate, onRefine }) => {
   const [expanded, setExpanded] = useState(false);
+  const [activeViewAngle, setActiveViewAngle] = useState('');
   const [refineOpen, setRefineOpen] = useState(false);
   const [instruction, setInstruction] = useState('');
+  const [refineViewAngle, setRefineViewAngle] = useState('');
+
+  const resolvedViews = useMemo(() => {
+    if (viewImages?.length) return sortLocationViewImages(viewImages);
+    return imageUrl ? [{ viewAngle: 'establishing', imageUrl }] : [];
+  }, [imageUrl, viewImages]);
+  const availableViews = useMemo(() => resolvedViews.map((vi) => vi.viewAngle), [resolvedViews]);
+  const selectedView = activeViewAngle || resolvedViews[0]?.viewAngle || '';
+
+  useEffect(() => {
+    if (resolvedViews.length === 0) {
+      if (activeViewAngle) setActiveViewAngle('');
+      return;
+    }
+    if (!activeViewAngle || !availableViews.includes(activeViewAngle)) {
+      setActiveViewAngle(resolvedViews[0].viewAngle);
+    }
+  }, [activeViewAngle, availableViews, resolvedViews]);
+
   const openRefineDialog = () => {
     setInstruction('');
+    setRefineViewAngle(selectedView || 'establishing');
     setRefineOpen(true);
   };
   const handleRefine = () => {
@@ -1336,14 +1911,14 @@ const LocationCard: React.FC<{
       message.warning('请先输入场景精修要求');
       return;
     }
-    onRefine(text);
+    onRefine(text, refineViewAngle || selectedView || 'establishing');
     setRefineOpen(false);
   };
 
   return (
     <>
       <Card className="overflow-hidden">
-        <button type="button" className="w-full text-left" onClick={() => setExpanded(e => !e)}>
+        <div role="button" tabIndex={0} className="w-full text-left cursor-pointer" onClick={() => setExpanded(e => !e)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(v => !v); } }}>
           <CardContent className="p-3 flex items-start gap-3">
             {imageUrl ? (
               <img src={imageUrl} alt={loc.name} className="w-9 h-9 rounded-lg object-cover shrink-0 ring-2 ring-emerald-200 dark:ring-emerald-800" />
@@ -1361,18 +1936,43 @@ const LocationCard: React.FC<{
               </div>
               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{loc.description}</p>
               {expanded && (
-                <div className="mt-2 space-y-1.5 text-xs">
-                  {imageUrl && (
+                <div className="mt-2 space-y-1.5 text-xs" onClick={(e) => e.stopPropagation()}>
+                  {resolvedViews.length > 0 ? (
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-semibold text-muted-foreground">多角度参考图（点击选择当前视角）</p>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {resolvedViews.map((vi) => (
+                          <button
+                            key={vi.viewAngle}
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setActiveViewAngle(vi.viewAngle); }}
+                            className={cn(
+                              'rounded-lg overflow-hidden border text-left transition-colors',
+                              selectedView === vi.viewAngle
+                                ? 'border-emerald-500 ring-1 ring-emerald-300 dark:ring-emerald-700'
+                                : 'border-border/60 hover:border-emerald-300',
+                            )}
+                          >
+                            {vi.imageUrl ? (
+                              <img src={vi.imageUrl} alt={`${loc.name} ${vi.viewAngle}`} className="w-full aspect-[3/2] object-cover" />
+                            ) : (
+                              <div className="w-full aspect-[3/2] bg-muted/50 flex items-center justify-center text-[10px] text-muted-foreground">
+                                待生成
+                              </div>
+                            )}
+                            <p className="text-[10px] text-center text-muted-foreground py-0.5 bg-background">
+                              {LOCATION_VIEW_LABELS[vi.viewAngle] ?? vi.viewAngle}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : imageUrl ? (
                     <div className="rounded-lg overflow-hidden bg-muted mb-2">
                       <img src={imageUrl} alt={loc.name} className="w-full object-cover max-h-40" />
                     </div>
-                  )}
-                  {loc.visualPrompt && (
-                    <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/50 px-2.5 py-2">
-                      <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400 mb-1">图片生成提示词</p>
-                      <p className="text-[11px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all">{loc.visualPrompt}</p>
-                    </div>
-                  )}
+                  ) : null}
+                  <LocationPromptPanel loc={loc} visualStyle={visualStyle} />
                   {loc.lightingDefault && <p><span className="text-muted-foreground">光线：</span>{loc.lightingDefault}</p>}
                   {loc.colorTone && <p><span className="text-muted-foreground">色调：</span>{loc.colorTone}</p>}
                   {loc.ambientSoundDefault && <p><span className="text-muted-foreground">环境音：</span>{loc.ambientSoundDefault}</p>}
@@ -1386,18 +1986,20 @@ const LocationCard: React.FC<{
               {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
             </div>
           </CardContent>
-        </button>
+        </div>
         <div className="px-3 pb-3 pt-0 flex items-center gap-2">
           <Button
             size="sm"
             variant="outline"
             className="h-7 text-xs gap-1"
             disabled={busy}
-            onClick={onRegenerate}
+            onClick={() => onRegenerate(selectedView || 'establishing')}
           >
             {busy
               ? <><Loader2 className="h-3 w-3 animate-spin" />生成中</>
-              : <><RotateCcw className="h-3 w-3" />重新生成</>}
+              : (imageUrl || resolvedViews.length > 0)
+                ? <><RotateCcw className="h-3 w-3" />重新生成</>
+                : <><Wand2 className="h-3 w-3" />生成</>}
           </Button>
           <Button
             size="sm"
@@ -1407,6 +2009,11 @@ const LocationCard: React.FC<{
           >
             <Pencil className="h-3 w-3" />精修
           </Button>
+          {selectedView && (
+            <span className="text-[10px] text-muted-foreground">
+              当前视角：{LOCATION_VIEW_LABELS[selectedView] ?? selectedView}
+            </span>
+          )}
         </div>
       </Card>
 
@@ -1422,6 +2029,28 @@ const LocationCard: React.FC<{
             <DialogTitle>精修场景图：{loc.name}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            {availableViews.length > 1 && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">目标视角</Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {availableViews.map((view) => (
+                    <button
+                      key={view}
+                      type="button"
+                      onClick={() => setRefineViewAngle(view)}
+                      className={cn(
+                        'px-2 py-1 rounded-md border text-xs transition-colors',
+                        (refineViewAngle || selectedView) === view
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-background text-muted-foreground border-border hover:text-foreground',
+                      )}
+                    >
+                      {LOCATION_VIEW_LABELS[view] ?? view}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label className="text-xs">精修要求</Label>
               <Textarea
@@ -1452,6 +2081,7 @@ const LocationCard: React.FC<{
 interface WorkshopTabProps {
   dramaId: string;
   drama: Record<string, unknown> | null;
+  onDramaUpdated: () => void;
   draftNodes: DramaAgentNodeConfig[];
   setDraftNodes: React.Dispatch<React.SetStateAction<DramaAgentNodeConfig[]>>;
   workflowParams: DramaWorkflowParams;
@@ -1473,7 +2103,7 @@ interface WorkshopTabProps {
 }
 
 const WorkshopTab: React.FC<WorkshopTabProps> = ({
-  dramaId, drama, draftNodes, setDraftNodes, workflowParams, setWorkflowParams,
+  dramaId, drama, onDramaUpdated, draftNodes, setDraftNodes, workflowParams, setWorkflowParams,
   pipeline, setPipeline, selectedNodeId, setSelectedNodeId,
   nodeAdditional, setNodeAdditional, nodeAdditionalSaved, setNodeAdditionalSaved,
   pipelineSaving, setPipelineSaving, pipelinePublishing, setPipelinePublishing,
@@ -1485,12 +2115,66 @@ const WorkshopTab: React.FC<WorkshopTabProps> = ({
   const genreArchetype = promptProfile?.genreArchetype as Record<string, unknown> | undefined;
   const visualStyle = (drama as any)?.state?.visualStyle as Record<string, unknown> | undefined;
 
+  // ── 视觉风格编辑状态 ──
+  const [vsEditing, setVsEditing] = useState(false);
+  const [vsSaving, setVsSaving] = useState(false);
+  const [vsForm, setVsForm] = useState<VisualStyleGuideUpdate>({
+    overallAesthetic: '', colorGrading: '', lightingStyle: '', era: 'contemporary',
+    renderTechnique: '', textureStyle: '', referenceStyle: '', styleReferencePrompt: '',
+  });
+
+  useEffect(() => {
+    if (visualStyle) {
+      setVsForm({
+        overallAesthetic: (visualStyle.overallAesthetic as string) ?? '',
+        colorGrading: (visualStyle.colorGrading as string) ?? '',
+        lightingStyle: (visualStyle.lightingStyle as string) ?? '',
+        era: (visualStyle.era as string) ?? 'contemporary',
+        renderTechnique: (visualStyle.renderTechnique as string) ?? '',
+        textureStyle: (visualStyle.textureStyle as string) ?? '',
+        referenceStyle: (visualStyle.referenceStyle as string) ?? '',
+        styleReferencePrompt: (visualStyle.styleReferencePrompt as string) ?? '',
+      });
+    }
+  }, [visualStyle]);
+
+  const handleVsSave = async () => {
+    setVsSaving(true);
+    try {
+      const payload: VisualStyleGuideUpdate = {
+        overallAesthetic: vsForm.overallAesthetic,
+        colorGrading: vsForm.colorGrading,
+        lightingStyle: vsForm.lightingStyle,
+        era: vsForm.era,
+        ...(vsForm.renderTechnique ? { renderTechnique: vsForm.renderTechnique } : {}),
+        ...(vsForm.textureStyle ? { textureStyle: vsForm.textureStyle } : {}),
+        ...(vsForm.referenceStyle ? { referenceStyle: vsForm.referenceStyle } : {}),
+        ...(vsForm.styleReferencePrompt ? { styleReferencePrompt: vsForm.styleReferencePrompt } : {}),
+      };
+      await updateDramaVisualStyle(dramaId, payload);
+      message.success('视觉风格已更新');
+      setVsEditing(false);
+      onDramaUpdated();
+    } catch (err: any) {
+      message.error(err?.data?.message || '保存失败');
+    } finally {
+      setVsSaving(false);
+    }
+  };
+
   const isDirty = nodeAdditional !== nodeAdditionalSaved;
   const hasUnpublished = pipeline?.hasDraft ?? false;
 
   // 基础提示词预览
   const [basePromptCache, setBasePromptCache] = useState<Record<string, string>>({});
   const [previewLoading, setPreviewLoading] = useState(false);
+
+  // 基础提示词编辑状态
+  const [baseEditing, setBaseEditing] = useState(false);
+  const [editedBase, setEditedBase] = useState('');
+  const [editedBaseSaved, setEditedBaseSaved] = useState('');
+  const [baseSaving, setBaseSaving] = useState(false);
+  const isBaseDirty = editedBase !== editedBaseSaved;
 
   useEffect(() => {
     if (!selectedNodeId || !dramaId) return;
@@ -1503,12 +2187,70 @@ const WorkshopTab: React.FC<WorkshopTabProps> = ({
   }, [dramaId, selectedNodeId, basePromptCache]);
 
   const handleSelectNode = (node: DramaAgentNodeConfig) => {
-    if (isDirty) {
-      if (!window.confirm('当前补充指令有未保存的修改，切换节点会丢弃，确认切换吗？')) return;
+    if (isDirty || isBaseDirty) {
+      if (!window.confirm('当前有未保存的修改，切换节点会丢弃，确认切换吗？')) return;
     }
     setSelectedNodeId(node.id);
     setNodeAdditional(node.additionalSystemPrompt ?? '');
     setNodeAdditionalSaved(node.additionalSystemPrompt ?? '');
+    // 切换节点时重置基础提示词编辑状态
+    setBaseEditing(false);
+    const snap = node.basePromptSnapshot ?? '';
+    setEditedBase(snap);
+    setEditedBaseSaved(snap);
+  };
+
+  /** 解锁基础提示词进入编辑模式 */
+  const handleUnlockBase = () => {
+    if (!selectedNode) return;
+    // 优先使用已有快照，无快照时用自动生成的预览文本作为起始值
+    const initial = selectedNode.basePromptSnapshot?.trim() || basePromptCache[selectedNode.id] || '';
+    setEditedBase(initial);
+    setEditedBaseSaved(selectedNode.basePromptSnapshot ?? '');
+    setBaseEditing(true);
+  };
+
+  /** 保存基础提示词快照 */
+  const handleSaveBase = async () => {
+    if (!selectedNodeId) return;
+    const updated = draftNodes.map((n) =>
+      n.id === selectedNodeId ? { ...n, basePromptSnapshot: editedBase || undefined } : n,
+    );
+    setBaseSaving(true);
+    try {
+      const pl = await saveDramaPipelineDraft(dramaId, updated);
+      setDraftNodes(updated);
+      setPipeline(pl);
+      setEditedBaseSaved(editedBase);
+      message.success('基础提示词已固定保存');
+    } catch {
+      message.error('保存失败');
+    } finally {
+      setBaseSaving(false);
+    }
+  };
+
+  /** 重置基础提示词快照（恢复自动生成） */
+  const handleResetBase = async () => {
+    if (!selectedNodeId) return;
+    if (!window.confirm('重置后将恢复为系统自动生成的提示词，已固定的内容将丢失，确认重置吗？')) return;
+    const updated = draftNodes.map((n) =>
+      n.id === selectedNodeId ? { ...n, basePromptSnapshot: undefined } : n,
+    );
+    setBaseSaving(true);
+    try {
+      const pl = await saveDramaPipelineDraft(dramaId, updated);
+      setDraftNodes(updated);
+      setPipeline(pl);
+      setEditedBase('');
+      setEditedBaseSaved('');
+      setBaseEditing(false);
+      message.success('已重置为自动生成');
+    } catch {
+      message.error('重置失败');
+    } finally {
+      setBaseSaving(false);
+    }
   };
 
   const handleToggleNode = async (node: DramaAgentNodeConfig) => {
@@ -1593,7 +2335,7 @@ const WorkshopTab: React.FC<WorkshopTabProps> = ({
         <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
           <Clapperboard className="h-4 w-4 text-violet-500" />
           Agent 节点配置
-          <span className="text-xs text-muted-foreground font-normal">— 灰色区域为系统基础提示词（只读），补充指令可自由编辑</span>
+          <span className="text-xs text-muted-foreground font-normal">— 基础提示词可解锁编辑并固定，补充指令追加在末尾</span>
         </h3>
         <div className="grid grid-cols-[240px_1fr] gap-4 min-h-[400px]">
           {/* 节点列表 */}
@@ -1619,6 +2361,9 @@ const WorkshopTab: React.FC<WorkshopTabProps> = ({
                     )}
                     {!node.isEnabled && (
                       <Badge variant="outline" className="text-[9px] h-4 px-1 text-muted-foreground">已关</Badge>
+                    )}
+                    {node.basePromptSnapshot?.trim() && (
+                      <div className="w-1.5 h-1.5 rounded-full bg-violet-400" title="基础提示词已固定" />
                     )}
                     {node.additionalSystemPrompt?.trim() && (
                       <div className="w-1.5 h-1.5 rounded-full bg-amber-400" title="有补充指令" />
@@ -1658,18 +2403,89 @@ const WorkshopTab: React.FC<WorkshopTabProps> = ({
                 </div>
               </div>
 
-              {/* 基础提示词（只读） */}
-              <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 overflow-hidden">
+              {/* 基础提示词 */}
+              <div className={cn(
+                'rounded-lg border overflow-hidden transition-colors',
+                baseEditing
+                  ? 'border-violet-300 dark:border-violet-700'
+                  : selectedNode.basePromptSnapshot ? 'border-violet-200 dark:border-violet-800 bg-violet-50/30 dark:bg-violet-950/20' : 'border-dashed border-muted-foreground/30 bg-muted/20',
+              )}>
                 <div className="flex items-center justify-between px-3 py-2 border-b border-dashed border-muted-foreground/20">
                   <div className="flex items-center gap-1.5">
-                    <Lock className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-xs font-medium text-muted-foreground">基础提示词（只读）</span>
+                    {baseEditing ? (
+                      <Unlock className="h-3.5 w-3.5 text-violet-500" />
+                    ) : (
+                      <Lock className="h-3.5 w-3.5 text-muted-foreground" />
+                    )}
+                    <span className={cn('text-xs font-medium', baseEditing ? 'text-violet-700 dark:text-violet-300' : 'text-muted-foreground')}>
+                      基础提示词
+                    </span>
+                    {selectedNode.basePromptSnapshot && !baseEditing && (
+                      <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-violet-300 text-violet-600 dark:text-violet-400">已固定</Badge>
+                    )}
+                    {!baseEditing && (
+                      <span className="text-[10px] text-muted-foreground/60">（{selectedNode.basePromptSnapshot ? '用户已固定，点击编辑可修改' : '系统自动生成，点击编辑可固定修改'}）</span>
+                    )}
                   </div>
-                  {basePromptCache[selectedNode.id] && (
-                    <span className="text-[10px] text-muted-foreground/60">{basePromptCache[selectedNode.id].length} 字符</span>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    {baseEditing ? (
+                      <>
+                        <Button
+                          variant="ghost" size="sm" className="h-6 text-[10px] px-2"
+                          onClick={() => { setBaseEditing(false); setEditedBase(editedBaseSaved); }}
+                        >
+                          取消
+                        </Button>
+                        {selectedNode.basePromptSnapshot && (
+                          <Button
+                            variant="ghost" size="sm" className="h-6 text-[10px] px-2 text-destructive hover:text-destructive"
+                            onClick={handleResetBase} disabled={baseSaving}
+                          >
+                            重置为自动生成
+                          </Button>
+                        )}
+                        <Button
+                          size="sm" className="h-6 text-[10px] px-2"
+                          onClick={handleSaveBase} disabled={baseSaving || !isBaseDirty}
+                        >
+                          {baseSaving ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Save className="h-3 w-3 mr-1" />}
+                          固定保存
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        {(basePromptCache[selectedNode.id] || selectedNode.basePromptSnapshot) && (
+                          <span className="text-[10px] text-muted-foreground/60">
+                            {(selectedNode.basePromptSnapshot || basePromptCache[selectedNode.id] || '').length} 字符
+                          </span>
+                        )}
+                        <Button
+                          variant="ghost" size="sm" className="h-6 text-[10px] px-2 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/30"
+                          onClick={handleUnlockBase}
+                        >
+                          <Unlock className="h-3 w-3 mr-1" />编辑
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </div>
-                {previewLoading && !basePromptCache[selectedNode.id] ? (
+                {baseEditing ? (
+                  <div className="space-y-1.5 p-2">
+                    <Textarea
+                      value={editedBase}
+                      onChange={(e) => setEditedBase(e.target.value)}
+                      className="min-h-[260px] font-mono text-[11px] resize-y bg-background"
+                      placeholder="输入自定义基础提示词，保存后将替代系统自动生成的版本..."
+                    />
+                    <p className="text-right text-[10px] text-muted-foreground">{editedBase.length} 字符</p>
+                  </div>
+                ) : selectedNode.basePromptSnapshot ? (
+                  <div className="h-56 overflow-y-auto">
+                    <pre className="px-3 py-2.5 text-[11px] text-foreground/80 leading-relaxed whitespace-pre-wrap font-mono break-words">
+                      {selectedNode.basePromptSnapshot}
+                    </pre>
+                  </div>
+                ) : previewLoading && !basePromptCache[selectedNode.id] ? (
                   <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />加载中…
                   </div>
@@ -1862,28 +2678,167 @@ const WorkshopTab: React.FC<WorkshopTabProps> = ({
               </Card>
             )}
 
-            {/* 视觉风格 */}
-            {visualStyle && (
+            {/* 视觉风格 — 可编辑 */}
+            {(visualStyle || true) && (
               <Card className="border-sky-100 dark:border-sky-900">
                 <CardContent className="pt-3 pb-3">
-                  <p className="text-xs font-medium text-sky-700 dark:text-sky-300 mb-2 flex items-center gap-1.5">
-                    <Lock className="h-3 w-3" /> 视觉风格
-                    <span className="text-[10px] text-muted-foreground font-normal">— 注入：分镜导演 / 集导演</span>
-                  </p>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                    {([
-                      ['整体美学', 'overallAesthetic'],
-                      ['色调调色板', 'colorGrading'],
-                      ['灯光风格', 'lightingStyle'],
-                      ['镜头语言', 'cameraLanguage'],
-                      ['视角比例', 'aspectRatio'],
-                    ] as [string, string][]).map(([label, key]) => typeof visualStyle[key] === 'string' && visualStyle[key] ? (
-                      <div key={key}>
-                        <span className="text-[10px] text-muted-foreground">{label}：</span>
-                        <span className="text-xs">{visualStyle[key] as string}</span>
-                      </div>
-                    ) : null)}
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs font-medium text-sky-700 dark:text-sky-300 flex items-center gap-1.5">
+                      <Palette className="h-3 w-3" /> 视觉风格
+                      <span className="text-[10px] text-muted-foreground font-normal">— 注入：分镜导演 / 集导演 / 图像生成</span>
+                    </p>
+                    <div className="flex items-center gap-1.5">
+                      {vsEditing ? (
+                        <>
+                          <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setVsEditing(false)} disabled={vsSaving}>
+                            <X className="h-3 w-3 mr-1" />取消
+                          </Button>
+                          <Button size="sm" className="h-6 px-2 text-[11px]" onClick={handleVsSave} disabled={vsSaving}>
+                            {vsSaving ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Save className="h-3 w-3 mr-1" />}保存
+                          </Button>
+                        </>
+                      ) : (
+                        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-muted-foreground" onClick={() => setVsEditing(true)}>
+                          <Pencil className="h-3 w-3 mr-1" />编辑
+                        </Button>
+                      )}
+                    </div>
                   </div>
+
+                  {vsEditing ? (
+                    /* ── 编辑模式 ── */
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 gap-2.5">
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">整体美学风格 *</Label>
+                          <Textarea
+                            rows={2}
+                            className="text-xs mt-0.5"
+                            value={vsForm.overallAesthetic}
+                            onChange={(e) => setVsForm(p => ({ ...p, overallAesthetic: e.target.value }))}
+                            placeholder="如: 现代都市电影质感，高对比度，层次丰富"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <Label className="text-[10px] text-muted-foreground">调色风格 *</Label>
+                            <Input
+                              className="text-xs h-7 mt-0.5"
+                              value={vsForm.colorGrading}
+                              onChange={(e) => setVsForm(p => ({ ...p, colorGrading: e.target.value }))}
+                              placeholder="如: 冷暖对比，阴影压蓝"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-[10px] text-muted-foreground">光影风格 *</Label>
+                            <Input
+                              className="text-xs h-7 mt-0.5"
+                              value={vsForm.lightingStyle}
+                              onChange={(e) => setVsForm(p => ({ ...p, lightingStyle: e.target.value }))}
+                              placeholder="如: 三点布光，伦勃朗光"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">时代背景</Label>
+                          <div className="flex gap-1.5 mt-1">
+                            {(['contemporary', 'ancient', 'future', 'mixed'] as const).map(era => (
+                              <Badge
+                                key={era}
+                                variant={vsForm.era === era ? 'default' : 'outline'}
+                                className="cursor-pointer text-[10px] px-1.5"
+                                onClick={() => setVsForm(p => ({ ...p, era }))}
+                              >
+                                {{ contemporary: '现代', ancient: '古代', future: '未来', mixed: '跨时代' }[era]}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <Label className="text-[10px] text-muted-foreground">渲染技术</Label>
+                            <Input
+                              className="text-xs h-7 mt-0.5"
+                              value={vsForm.renderTechnique}
+                              onChange={(e) => setVsForm(p => ({ ...p, renderTechnique: e.target.value }))}
+                              placeholder="如: 写实CG、3D NPR赛璐璐"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-[10px] text-muted-foreground">材质质感</Label>
+                            <Input
+                              className="text-xs h-7 mt-0.5"
+                              value={vsForm.textureStyle}
+                              onChange={(e) => setVsForm(p => ({ ...p, textureStyle: e.target.value }))}
+                              placeholder="如: 胶片颗粒、水彩晕染"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">参考风格/作品</Label>
+                          <Input
+                            className="text-xs h-7 mt-0.5"
+                            value={vsForm.referenceStyle}
+                            onChange={(e) => setVsForm(p => ({ ...p, referenceStyle: e.target.value }))}
+                            placeholder="如: 吉卜力、新海诚、港片黄金时代"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">英文 T2I 风格提示词</Label>
+                          <Textarea
+                            rows={2}
+                            className="text-xs font-mono mt-0.5"
+                            value={vsForm.styleReferencePrompt}
+                            onChange={(e) => setVsForm(p => ({ ...p, styleReferencePrompt: e.target.value }))}
+                            placeholder="English-only T2I style prompt injected into every image..."
+                          />
+                          <p className="text-[10px] text-muted-foreground mt-0.5">仅英文，直接注入所有图片生成提示词前缀</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* ── 查看模式 ── */
+                    visualStyle ? (
+                      <div className="space-y-2.5">
+                        <div className="grid grid-cols-1 gap-1.5">
+                          {vsForm.overallAesthetic && (
+                            <div>
+                              <span className="text-[10px] text-muted-foreground">整体美学：</span>
+                              <span className="text-xs">{vsForm.overallAesthetic}</span>
+                            </div>
+                          )}
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                            {vsForm.colorGrading && (
+                              <div><span className="text-[10px] text-muted-foreground">调色：</span><span className="text-xs">{vsForm.colorGrading}</span></div>
+                            )}
+                            {vsForm.lightingStyle && (
+                              <div><span className="text-[10px] text-muted-foreground">光影：</span><span className="text-xs">{vsForm.lightingStyle}</span></div>
+                            )}
+                            {vsForm.era && (
+                              <div><span className="text-[10px] text-muted-foreground">时代：</span><span className="text-xs">{{ contemporary: '现代', ancient: '古代', future: '未来', mixed: '跨时代' }[vsForm.era] ?? vsForm.era}</span></div>
+                            )}
+                            {vsForm.renderTechnique && (
+                              <div><span className="text-[10px] text-muted-foreground">渲染：</span><span className="text-xs">{vsForm.renderTechnique}</span></div>
+                            )}
+                            {vsForm.textureStyle && (
+                              <div><span className="text-[10px] text-muted-foreground">材质：</span><span className="text-xs">{vsForm.textureStyle}</span></div>
+                            )}
+                            {vsForm.referenceStyle && (
+                              <div><span className="text-[10px] text-muted-foreground">参考：</span><span className="text-xs">{vsForm.referenceStyle}</span></div>
+                            )}
+                          </div>
+                          {vsForm.styleReferencePrompt && (
+                            <div className="mt-1 rounded bg-muted/40 px-2 py-1.5">
+                              <p className="text-[10px] text-muted-foreground mb-0.5">T2I 提示词前缀：</p>
+                              <p className="text-[10px] font-mono text-foreground/70 leading-relaxed line-clamp-2">{vsForm.styleReferencePrompt}</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground italic">尚未生成视觉风格，点击"编辑"手动配置</p>
+                    )
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -1927,8 +2882,12 @@ const DramaWorkbench: React.FC = () => {
   const [assetImages, setAssetImages] = useState<Map<string, string>>(new Map());
   const [assetViewImages, setAssetViewImages] = useState<Map<string, Array<{ viewAngle: string; imageUrl: string }>>>(new Map());
   const [assetGeneratingKeys, setAssetGeneratingKeys] = useState<Set<string>>(new Set());
-  const [assetTypeFilter, setAssetTypeFilter] = useState<'all' | 'character' | 'location'>('all');
+  const [variationGeneratingKeys, setVariationGeneratingKeys] = useState<Set<string>>(new Set());
+  const [assetTypeFilter, setAssetTypeFilter] = useState<'all' | 'character' | 'location' | 'prop'>('all');
   const [assetQuery, setAssetQuery] = useState('');
+  const [allAssetsGenerating, setAllAssetsGenerating] = useState(false);
+  const [allAssetsProgress, setAllAssetsProgress] = useState('');
+  const allAssetsSseRef = useRef<EventSource | null>(null);
   // ── 提示词工坊 Pipeline ──
   const [pipeline, setPipeline] = useState<DramaPipeline | null>(null);
   const [draftNodes, setDraftNodes] = useState<DramaAgentNodeConfig[]>([]);
@@ -2048,6 +3007,26 @@ const DramaWorkbench: React.FC = () => {
     }
   }, [applyUpdatedAsset, assetByKey, dramaId, setAssetBusy]);
 
+  const handleRegenerateVariation = useCallback(async (
+    characterId: string,
+    variationId: string,
+  ) => {
+    if (!dramaId) return;
+    const asset = assetByKey.get(`character:${characterId}`);
+    if (!asset) { message.warning('未找到角色资产'); return; }
+    const busyKey = `${characterId}:${variationId}`;
+    setVariationGeneratingKeys((prev) => new Set([...prev, busyKey]));
+    try {
+      const updated = await regenerateVariationImage(dramaId, asset.id, variationId);
+      applyUpdatedAsset(updated);
+      message.success('服装变体图已生成');
+    } catch (e: any) {
+      message.error(e?.message ?? '变体图生成失败');
+    } finally {
+      setVariationGeneratingKeys((prev) => { const next = new Set(prev); next.delete(busyKey); return next; });
+    }
+  }, [applyUpdatedAsset, assetByKey, dramaId]);
+
   const handleRefineAsset = useCallback(async (
     assetType: 'character' | 'location',
     refId: string,
@@ -2087,6 +3066,60 @@ const DramaWorkbench: React.FC = () => {
       setAssetBusy(key, false);
     }
   }, [applyUpdatedAsset, assetByKey, dramaId, setAssetBusy]);
+
+  // ─── 批量生成所有参考图 ────────────────────────────────────────────────────────
+  const handleGenerateAllAssets = useCallback(() => {
+    if (!dramaId || allAssetsGenerating) return;
+    allAssetsSseRef.current?.close();
+    setAllAssetsGenerating(true);
+    setAllAssetsProgress('连接中...');
+    const url = getGenerateAllAssetsSseUrl(dramaId);
+    const es = new EventSource(url);
+    allAssetsSseRef.current = es;
+    es.onmessage = (e) => {
+      try {
+        const ev: DramaSseEvent = JSON.parse(e.data);
+        if (ev._type === 'heartbeat') return;
+        if (ev._type === 'progress') {
+          setAllAssetsProgress(ev.message ?? '生成中...');
+          return;
+        }
+        if (ev.terminal) {
+          es.close();
+          allAssetsSseRef.current = null;
+          setAllAssetsGenerating(false);
+          if (ev._type === 'result') {
+            setAllAssetsProgress('');
+            message.success('参考图生成完成');
+            getVisualAssets(dramaId).then(({ assets }) => {
+              const imgMap = new Map<string, string>();
+              const viewMap = new Map<string, Array<{ viewAngle: string; imageUrl: string }>>();
+              const aMap = new Map<string, VisualAssetItem>();
+              (assets ?? []).forEach((a: VisualAssetItem) => {
+                const key = `${a.assetType}:${a.refId}`;
+                aMap.set(key, a);
+                if (a.referenceImageUrl) imgMap.set(key, a.referenceImageUrl);
+                if (a.referenceImages?.length) viewMap.set(key, a.referenceImages);
+              });
+              setAssetByKey(aMap);
+              setAssetImages(imgMap);
+              setAssetViewImages(viewMap);
+            }).catch(() => {});
+          } else {
+            setAllAssetsProgress('');
+            message.error(ev.error ?? '参考图生成失败');
+          }
+        }
+      } catch { /* ignore parse errors */ }
+    };
+    es.onerror = () => {
+      es.close();
+      allAssetsSseRef.current = null;
+      setAllAssetsGenerating(false);
+      setAllAssetsProgress('');
+      message.error('参考图生成连接中断');
+    };
+  }, [dramaId, allAssetsGenerating]);
 
   // ─── 通用 SSE 读取循环 ────────────────────────────────────────────────────────
   const readSseStream = useCallback(async (url: string, onResult?: (msg: string) => void) => {
@@ -2188,12 +3221,12 @@ const DramaWorkbench: React.FC = () => {
   }, [fetchData]);
 
   // 用户主动触发生成（使用 generate-sse，后端会新建或断点续传）
-  const handleGenerate = useCallback(async (count = 1) => {
+  const handleGenerate = useCallback(async () => {
     if (!dramaId) return;
     setPaused(false); setPauseLoading(false);
     setGenerating(true); setGenProgress(0); setGenStep(''); setLastError(null); setDbRunning([]);
     setSkippedSteps([]);
-    await readSseStream(getGenerateEpisodeSseUrl(dramaId, count), (msg) => message.success(msg));
+    await readSseStream(getGenerateEpisodeSseUrl(dramaId), (msg) => message.success(msg));
   }, [dramaId, readSseStream]);
 
   const handlePause = useCallback(async () => {
@@ -2323,6 +3356,59 @@ const DramaWorkbench: React.FC = () => {
     setShotQuery('');
   }, [previewEp]);
 
+  // Must run unconditionally (before any early return) to satisfy Rules of Hooks
+  const charactersForHooks: Character[] = ((drama as any)?.state?.characters ?? []) as Character[];
+  const locationsForHooks: Location[] = ((drama as any)?.state?.locations ?? []) as Location[];
+  const allProps = useMemo(() => {
+    const props: VisualAssetItem[] = [];
+    for (const [key, asset] of assetByKey) {
+      if (key.startsWith('prop:')) props.push(asset);
+    }
+    return props.sort((a, b) => {
+      const locA = String(a.data?.locationName ?? '');
+      const locB = String(b.data?.locationName ?? '');
+      return locA.localeCompare(locB, 'zh') || a.name.localeCompare(b.name, 'zh');
+    });
+  }, [assetByKey]);
+  const assetVariationImages = useMemo(() => {
+    const map = new Map<string, Map<string, string>>();
+    for (const [, asset] of assetByKey) {
+      if (asset.assetType !== 'character') continue;
+      const vars = (asset.data?.variations ?? []) as Array<{ variationId?: string; referenceImageUrl?: string }>;
+      if (!vars.length) continue;
+      const varMap = new Map<string, string>();
+      for (const v of vars) {
+        if (v.variationId && v.referenceImageUrl) varMap.set(v.variationId, v.referenceImageUrl);
+      }
+      if (varMap.size) map.set(asset.refId, varMap);
+    }
+    return map;
+  }, [assetByKey]);
+  const missingVariationImageCount = useMemo(() => {
+    let count = 0;
+    for (const char of charactersForHooks) {
+      if (!char.variations?.length) continue;
+      if (!assetImages.get(`character:${char.characterId}`)) continue;
+      const varMap = assetVariationImages.get(char.characterId);
+      for (const v of char.variations) {
+        if (!varMap?.get(v.variationId)) count++;
+      }
+    }
+    return count;
+  }, [charactersForHooks, assetImages, assetVariationImages]);
+  const missingLocationImageCount = useMemo(() => {
+    let count = 0;
+    for (const loc of locationsForHooks) {
+      const views = assetViewImages.get(`location:${loc.locationId}`);
+      if (!views?.length) {
+        count += 1;
+        continue;
+      }
+      count += views.filter(vi => !vi.imageUrl).length;
+    }
+    return count;
+  }, [locationsForHooks, assetViewImages]);
+
   if (loading) return (
     <div className="flex h-[60vh] items-center justify-center">
       <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -2344,6 +3430,7 @@ const DramaWorkbench: React.FC = () => {
   const logline = typeof seed?.logline === 'string' ? seed.logline : '';
   const characters = (state?.characters as Character[]) ?? [];
   const locations = (state?.locations as Location[]) ?? [];
+  const visualStyle = state?.visualStyle as Record<string, unknown> | undefined;
   const charNames = new Map<string, string>(characters.map(c => [c.characterId, c.name]));
   const locNames = new Map<string, string>(locations.map(l => [l.locationId, l.name]));
   const normalizedAssetQuery = assetQuery.trim().toLowerCase();
@@ -2369,8 +3456,17 @@ const DramaWorkbench: React.FC = () => {
     return haystack.includes(normalizedAssetQuery);
   });
   const missingCharacterImageCount = characters.filter((char) => !assetImages.get(`character:${char.characterId}`)).length;
-  const missingLocationImageCount = locations.filter((loc) => !assetImages.get(`location:${loc.locationId}`)).length;
-  const missingAssetCount = missingCharacterImageCount + missingLocationImageCount;
+
+  const filteredProps = normalizedAssetQuery
+    ? allProps.filter((p) => {
+        const haystack = [p.name, String(p.data?.description ?? ''), String(p.data?.locationName ?? '')]
+          .join(' ').toLowerCase();
+        return haystack.includes(normalizedAssetQuery);
+      })
+    : allProps;
+
+  const missingPropImageCount = allProps.filter((p) => !p.referenceImageUrl).length;
+  const missingAssetCount = missingCharacterImageCount + missingLocationImageCount + missingVariationImageCount + missingPropImageCount;
 
   const shots = ((previewEp as any)?.storyboard?.shots as Shot[]) ?? [];
   const shotMediaMap = ((previewEp as any)?.shotMediaMap as Record<string, ShotMedia>) ?? {};
@@ -2433,9 +3529,10 @@ const DramaWorkbench: React.FC = () => {
     ].join(' ').toLowerCase();
     return haystack.includes(normalizedShotQuery);
   });
-  const showCharacterAssets = assetTypeFilter !== 'location' && filteredCharacters.length > 0;
-  const showLocationAssets = assetTypeFilter !== 'character' && filteredLocations.length > 0;
-  const showAssetEmptyState = !showCharacterAssets && !showLocationAssets;
+  const showCharacterAssets = (assetTypeFilter === 'all' || assetTypeFilter === 'character') && filteredCharacters.length > 0;
+  const showLocationAssets = (assetTypeFilter === 'all' || assetTypeFilter === 'location') && filteredLocations.length > 0;
+  const showPropAssets = (assetTypeFilter === 'all' || assetTypeFilter === 'prop') && filteredProps.length > 0;
+  const showAssetEmptyState = !showCharacterAssets && !showLocationAssets && !showPropAssets;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
@@ -2460,6 +3557,7 @@ const DramaWorkbench: React.FC = () => {
           {catharsisType && <><span>·</span><span>爽点：{catharsisType}</span></>}
           {characters.length > 0 && <><span>·</span><span>{characters.length} 角色</span></>}
           {locations.length > 0 && <><span>·</span><span>{locations.length} 场景</span></>}
+          {allProps.length > 0 && <><span>·</span><span>{allProps.length} 道具</span></>}
         </div>
         {logline && <p className="mt-3 text-sm text-muted-foreground leading-relaxed">{logline}</p>}
       </div>
@@ -2483,7 +3581,7 @@ const DramaWorkbench: React.FC = () => {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
               <div className="rounded-md border px-2 py-1.5">
                 <p className="text-muted-foreground">总费用</p>
-                <p className="font-semibold">{fmtUsd(bucketCost(usage.total))}</p>
+                <p className="font-semibold">{fmtCny(bucketCost(usage.total))}</p>
               </div>
               <div className="rounded-md border px-2 py-1.5">
                 <p className="text-muted-foreground">LLM Tokens</p>
@@ -2510,12 +3608,12 @@ const DramaWorkbench: React.FC = () => {
                 <div className="grid sm:grid-cols-2 gap-2 text-xs pt-1">
                   <div className="rounded-md border p-2.5">
                     <p className="text-muted-foreground mb-1">创建阶段</p>
-                    <p className="font-medium">{fmtUsd(bucketCost(usage.creation))}</p>
+                    <p className="font-medium">{fmtCny(bucketCost(usage.creation))}</p>
                     <p className="text-muted-foreground mt-0.5">tokens {usage.creation.totalTokens.toLocaleString()} · 图片 {usage.creation.imageCalls} · 视频 {usage.creation.videoCalls}</p>
                   </div>
                   <div className="rounded-md border p-2.5">
                     <p className="text-muted-foreground mb-1">集数阶段</p>
-                    <p className="font-medium">{fmtUsd(bucketCost(usage.total) - bucketCost(usage.creation))}</p>
+                    <p className="font-medium">{fmtCny(bucketCost(usage.total) - bucketCost(usage.creation))}</p>
                     <p className="text-muted-foreground mt-0.5">共 {usage.episodes.length} 集有消耗统计</p>
                   </div>
                 </div>
@@ -2527,7 +3625,7 @@ const DramaWorkbench: React.FC = () => {
                       {usage.creation.steps.slice(0, 6).map((s) => (
                         <div key={s.step} className="text-xs flex items-center justify-between text-muted-foreground">
                           <span>{STEP_LABELS[s.step] ?? s.step}</span>
-                          <span>{fmtUsd(bucketCost(s))} · {s.totalTokens.toLocaleString()} tokens</span>
+                          <span>{fmtCny(bucketCost(s))} · {s.totalTokens.toLocaleString()} tokens</span>
                         </div>
                       ))}
                     </div>
@@ -2549,7 +3647,7 @@ const DramaWorkbench: React.FC = () => {
                             >
                               <span>第 {epUsage.episodeNumber} 集</span>
                               <span className="text-muted-foreground">
-                                {fmtUsd(bucketCost(epUsage))} · {epUsage.totalTokens.toLocaleString()} tokens · 图 {epUsage.imageCalls} / 视 {epUsage.videoCalls}
+                                {fmtCny(bucketCost(epUsage))} · {epUsage.totalTokens.toLocaleString()} tokens · 图 {epUsage.imageCalls} / 视 {epUsage.videoCalls}
                               </span>
                             </button>
                             {open && epUsage.steps.length > 0 && (
@@ -2557,7 +3655,7 @@ const DramaWorkbench: React.FC = () => {
                                 {epUsage.steps.slice(0, 6).map((step) => (
                                   <div key={step.step} className="flex items-center justify-between">
                                     <span>{STEP_LABELS[step.step] ?? step.step}</span>
-                                    <span>{fmtUsd(bucketCost(step))} · {step.totalTokens.toLocaleString()} tokens</span>
+                                    <span>{fmtCny(bucketCost(step))} · {step.totalTokens.toLocaleString()} tokens</span>
                                   </div>
                                 ))}
                               </div>
@@ -2587,9 +3685,9 @@ const DramaWorkbench: React.FC = () => {
           <TabsTrigger value="assets" className="gap-1.5">
             <Users className="h-3.5 w-3.5" />
             角色 & 场景
-            {(characters.length + locations.length) > 0 && (
+            {(characters.length + locations.length + allProps.length) > 0 && (
               <Badge variant="secondary" className="ml-1 text-[10px] h-4 min-w-[18px] px-1">
-                {characters.length + locations.length}
+                {characters.length + locations.length + allProps.length}
               </Badge>
             )}
           </TabsTrigger>
@@ -2604,21 +3702,15 @@ const DramaWorkbench: React.FC = () => {
           <div className="flex gap-3 mb-4">
             {!paused ? (
               <>
-                <Button className="gap-2" disabled={generating} onClick={() => handleGenerate(1)}>
+                <Button className="gap-2" disabled={generating} onClick={() => handleGenerate()}>
                   {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                   {generating ? '生成中...' : '生成下一集'}
-                </Button>
-                <Button variant="outline" className="gap-2" disabled={generating} onClick={() => handleGenerate(3)}>
-                  <Play className="h-4 w-4" />连续生成 3 集
                 </Button>
               </>
             ) : (
               <>
-                <Button className="gap-2" onClick={() => handleGenerate(1)}>
+                <Button className="gap-2" onClick={() => handleGenerate()}>
                   <Play className="h-4 w-4" />继续生成
-                </Button>
-                <Button variant="outline" className="gap-2" onClick={() => handleGenerate(3)}>
-                  <Play className="h-4 w-4" />连续生成 3 集
                 </Button>
               </>
             )}
@@ -2700,7 +3792,7 @@ const DramaWorkbench: React.FC = () => {
                           size="sm"
                           variant="outline"
                           className="h-6 text-xs px-2 border-amber-300 hover:bg-amber-100"
-                          onClick={() => handleGenerate(1)}
+                          onClick={() => handleGenerate()}
                         >
                           {isFailed ? '从断点重试' : '从断点继续'}
                         </Button>
@@ -2720,7 +3812,7 @@ const DramaWorkbench: React.FC = () => {
                   <p className="text-xs text-amber-700 dark:text-amber-300 truncate mt-0.5">{lastError}</p>
                 </div>
                 <Button variant="outline" size="sm" className="shrink-0"
-                  onClick={() => { setLastError(null); handleGenerate(1); }}>
+                  onClick={() => { setLastError(null); handleGenerate(); }}>
                   从断点重试
                 </Button>
               </CardContent>
@@ -2818,7 +3910,7 @@ const DramaWorkbench: React.FC = () => {
               <Card className="border-border/70 bg-muted/20">
                 <CardContent className="p-3 space-y-2">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    {(['all', 'character', 'location'] as const).map((mode) => (
+                    {(['all', 'character', 'location', 'prop'] as const).map((mode) => (
                       <button
                         key={mode}
                         type="button"
@@ -2830,7 +3922,13 @@ const DramaWorkbench: React.FC = () => {
                             : 'bg-background text-muted-foreground border-border hover:text-foreground',
                         )}
                       >
-                        {mode === 'all' ? '全部资产' : mode === 'character' ? `角色 ${characters.length}` : `场景 ${locations.length}`}
+                        {mode === 'all'
+                          ? '全部资产'
+                          : mode === 'character'
+                            ? `角色 ${characters.length}`
+                            : mode === 'location'
+                              ? `场景 ${locations.length}`
+                              : `道具 ${allProps.length}`}
                       </button>
                     ))}
                     {missingAssetCount > 0 && (
@@ -2838,16 +3936,31 @@ const DramaWorkbench: React.FC = () => {
                         <AlertCircle className="h-3 w-3 mr-1" />缺图 {missingAssetCount}
                       </Badge>
                     )}
+                    <Button
+                      size="sm"
+                      variant={missingAssetCount > 0 ? 'default' : 'outline'}
+                      className="h-7 px-2.5 text-xs ml-auto"
+                      disabled={allAssetsGenerating}
+                      onClick={handleGenerateAllAssets}
+                    >
+                      {allAssetsGenerating ? (
+                        <><Loader2 className="h-3 w-3 mr-1 animate-spin" />{allAssetsProgress || '生成中...'}</>
+                      ) : missingAssetCount > 0 ? (
+                        <><Wand2 className="h-3 w-3 mr-1" />{`生成全部参考图 (${missingAssetCount})`}</>
+                      ) : (
+                        <><RotateCcw className="h-3 w-3 mr-1" />重新生成全部</>
+                      )}
+                    </Button>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                     <Input
                       className="h-8 text-xs sm:max-w-sm"
                       value={assetQuery}
                       onChange={(e) => setAssetQuery(e.target.value)}
-                      placeholder="搜索角色/场景：名称、描述、服装、道具..."
+                      placeholder="搜索角色/场景/道具：名称、描述、服装..."
                     />
                     <p className="text-[11px] text-muted-foreground">
-                      当前显示：角色 {filteredCharacters.length}/{characters.length} · 场景 {filteredLocations.length}/{locations.length}
+                      当前显示：角色 {filteredCharacters.length}/{characters.length} · 场景 {filteredLocations.length}/{locations.length} · 道具 {filteredProps.length}/{allProps.length}
                     </p>
                   </div>
                 </CardContent>
@@ -2868,8 +3981,12 @@ const DramaWorkbench: React.FC = () => {
                         imageUrl={assetImages.get(`character:${char.characterId}`)}
                         viewImages={assetViewImages.get(`character:${char.characterId}`)}
                         busy={assetGeneratingKeys.has(`character:${char.characterId}`)}
+                        visualStyle={visualStyle}
+                        variationImages={assetVariationImages.get(char.characterId)}
+                        variationBusyKeys={variationGeneratingKeys}
                         onRegenerate={(viewAngle) => handleRegenerateAsset('character', char.characterId, viewAngle)}
                         onRefine={(input) => handleRefineAsset('character', char.characterId, input)}
+                        onRegenerateVariation={(variationId) => handleRegenerateVariation(char.characterId, variationId)}
                       />
                     ))}
                   </div>
@@ -2888,9 +4005,47 @@ const DramaWorkbench: React.FC = () => {
                         key={loc.locationId}
                         loc={loc}
                         imageUrl={assetImages.get(`location:${loc.locationId}`)}
+                        viewImages={assetViewImages.get(`location:${loc.locationId}`)}
                         busy={assetGeneratingKeys.has(`location:${loc.locationId}`)}
-                        onRegenerate={() => handleRegenerateAsset('location', loc.locationId)}
-                        onRefine={(instruction) => handleRefineAsset('location', loc.locationId, { instruction })}
+                        visualStyle={visualStyle}
+                        onRegenerate={(viewAngle) => handleRegenerateAsset('location', loc.locationId, viewAngle)}
+                        onRefine={(instruction, viewAngle) => handleRefineAsset('location', loc.locationId, { instruction, viewAngle })}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {showPropAssets && (
+                <div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-base">🎭</span>
+                    <h3 className="text-base font-semibold">道具</h3>
+                    <Badge variant="secondary" className="text-xs">{filteredProps.length}</Badge>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {filteredProps.map(prop => (
+                      <PropCard
+                        key={prop.id}
+                        prop={prop}
+                        busy={assetGeneratingKeys.has(`prop:${prop.refId}`)}
+                        onRegenerate={() => {
+                          const asset = assetByKey.get(`prop:${prop.refId}`);
+                          if (!asset || !dramaId) return;
+                          setAssetGeneratingKeys(prev => new Set(prev).add(`prop:${prop.refId}`));
+                          regenerateVisualAssetImage(dramaId, asset.id)
+                            .then(updated => applyUpdatedAsset(updated))
+                            .catch(() => message.error('道具图片重新生成失败'))
+                            .finally(() => setAssetGeneratingKeys(prev => { const s = new Set(prev); s.delete(`prop:${prop.refId}`); return s; }));
+                        }}
+                        onRefine={(instruction) => {
+                          const asset = assetByKey.get(`prop:${prop.refId}`);
+                          if (!asset || !dramaId) return;
+                          setAssetGeneratingKeys(prev => new Set(prev).add(`prop:${prop.refId}`));
+                          refineVisualAssetImage(dramaId, asset.id, { instruction })
+                            .then(({ asset: updated }) => applyUpdatedAsset(updated))
+                            .catch(() => message.error('道具图片精修失败'))
+                            .finally(() => setAssetGeneratingKeys(prev => { const s = new Set(prev); s.delete(`prop:${prop.refId}`); return s; }));
+                        }}
                       />
                     ))}
                   </div>
@@ -2899,7 +4054,7 @@ const DramaWorkbench: React.FC = () => {
               {showAssetEmptyState ? (
                 <Card className="border-dashed">
                   <CardContent className="py-8 text-center text-xs text-muted-foreground">
-                    未找到符合筛选条件的角色或场景
+                    未找到符合筛选条件的资产
                   </CardContent>
                 </Card>
               ) : null}
@@ -2912,6 +4067,7 @@ const DramaWorkbench: React.FC = () => {
           <WorkshopTab
             dramaId={dramaId ?? ''}
             drama={drama}
+            onDramaUpdated={fetchData}
             draftNodes={draftNodes}
             setDraftNodes={setDraftNodes}
             workflowParams={workflowParams}
@@ -3092,6 +4248,57 @@ const DramaWorkbench: React.FC = () => {
                     </CardContent>
                   </Card>
                 )}
+
+                {/* Emotion Beats */}
+                {(() => {
+                  const beats = ((previewEp as any)?.intent?.emotionBeats ?? []) as EmotionBeat[];
+                  if (!beats.length) return null;
+                  const EMOTION_COLORS: Record<string, string> = {
+                    tension: 'bg-red-400', fear: 'bg-purple-400', joy: 'bg-yellow-400', sadness: 'bg-blue-400',
+                    anger: 'bg-orange-400', surprise: 'bg-pink-400', hope: 'bg-emerald-400', despair: 'bg-gray-500',
+                    relief: 'bg-teal-400', excitement: 'bg-rose-400', suspense: 'bg-indigo-400', warmth: 'bg-amber-400',
+                  };
+                  return (
+                    <div>
+                      <div className="flex items-center gap-2 mb-2.5">
+                        <Heart className="h-4 w-4 text-rose-500" />
+                        <h3 className="text-sm font-semibold">情绪节拍表</h3>
+                        <span className="text-[10px] text-muted-foreground ml-auto">{beats.length} 个节拍</span>
+                      </div>
+                      <div className="relative rounded-lg bg-muted/50 p-3 overflow-hidden">
+                        <div className="relative h-8 rounded bg-muted mb-2">
+                          {beats.map((b, i) => {
+                            const left = (b.startPct ?? 0) * 100;
+                            const width = Math.max(((b.endPct ?? 0) - (b.startPct ?? 0)) * 100, 1);
+                            const color = EMOTION_COLORS[b.emotion ?? ''] ?? 'bg-violet-400';
+                            const opacity = 0.3 + (b.intensity ?? 0.5) * 0.7;
+                            return (
+                              <div
+                                key={b.beatId ?? i}
+                                className={cn('absolute top-0 h-full rounded-sm transition-colors', color)}
+                                style={{ left: `${left}%`, width: `${width}%`, opacity }}
+                                title={`${b.emotion} (${((b.startPct ?? 0) * 100).toFixed(0)}%–${((b.endPct ?? 0) * 100).toFixed(0)}%) 强度:${((b.intensity ?? 0) * 100).toFixed(0)}%`}
+                              />
+                            );
+                          })}
+                          <div className="absolute bottom-0 left-0 right-0 flex justify-between px-1 text-[8px] text-muted-foreground/60">
+                            <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {beats.map((b, i) => (
+                            <div key={b.beatId ?? i} className="flex items-center gap-1 text-[10px]">
+                              <span className={cn('w-2 h-2 rounded-full', EMOTION_COLORS[b.emotion ?? ''] ?? 'bg-violet-400')} />
+                              <span className="font-medium">{b.emotion}</span>
+                              <span className="text-muted-foreground">{((b.startPct ?? 0) * 100).toFixed(0)}–{((b.endPct ?? 0) * 100).toFixed(0)}%</span>
+                              {b.trigger && <span className="text-muted-foreground/70 truncate max-w-24">({b.trigger})</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Review scores */}
                 {(previewEp as any).review && (

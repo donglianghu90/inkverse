@@ -29,15 +29,15 @@ describe('BillingResolverService', () => {
     } as any;
 
     const resolver = new BillingResolverService(config);
-    expect(resolver.resolveImageCostUsd('volcengine.doubao-seedream')).toBe(0.08);
-    expect(resolver.resolveImageCostUsd('volcengine.doubao-seedream', 'doubao-seedream-4-0-250828')).toBe(0.08);
-    expect(resolver.resolveImageCostUsd('volcengine.other-family', 'doubao-seedream-4-0-250828')).toBe(0.03);
-    expect(resolver.resolveImageCostUsd('volcengine.other-family', 'doubao-seedream-5-0-260128', '9:16')).toBe(0.07);
-    expect(resolver.resolveImageCostUsd('volcengine.other-family', 'doubao-seedream-5-0-260128', '3:2')).toBe(0.06);
-    expect(resolver.resolveImageCostUsd('volcengine.other-family', 'doubao-seedream-5-0-260128', '2k')).toBe(0.09);
-    expect(resolver.resolveVideoCostUsd('volcengine.seedance')).toBe(0.6);
-    expect(resolver.resolveTtsCostUsd('volcengine.voice')).toBe(0.02);
-    expect(resolver.resolveEmbeddingCostUsd(1_000_000)).toBe(1.23);
+    expect(resolver.resolveImageCostCny('volcengine.doubao-seedream')).toBe(0.08);
+    expect(resolver.resolveImageCostCny('volcengine.doubao-seedream', 'doubao-seedream-4-0-250828')).toBe(0.08);
+    expect(resolver.resolveImageCostCny('volcengine.other-family', 'doubao-seedream-4-0-250828')).toBe(0.03);
+    expect(resolver.resolveImageCostCny('volcengine.other-family', 'doubao-seedream-5-0-260128', '9:16')).toBe(0.07);
+    expect(resolver.resolveImageCostCny('volcengine.other-family', 'doubao-seedream-5-0-260128', '3:2')).toBe(0.06);
+    expect(resolver.resolveImageCostCny('volcengine.other-family', 'doubao-seedream-5-0-260128', '2k')).toBe(0.09);
+    expect(resolver.resolveVideoCostCny('volcengine.seedance')).toBe(0.6);
+    expect(resolver.resolveTtsCostCny('volcengine.voice')).toBe(0.02);
+    expect(resolver.resolveEmbeddingCostCny(1_000_000)).toBe(1.23);
   });
 
   it('throws on invalid billing number to fail fast at startup', () => {

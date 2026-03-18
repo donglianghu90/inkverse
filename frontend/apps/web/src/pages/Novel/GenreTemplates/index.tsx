@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { message } from 'antd';
 import {
   Plus, Loader2, Copy, Trash2, Sparkles, Pencil, Shield, ChevronRight, ChevronDown,
-  BookOpen, Search, X, Wand2, ArrowLeft, Film,
+  BookOpen, Search, X, Wand2, ArrowLeft, Film, Palette, Bot, Save, Info, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,10 +23,14 @@ import {
 import {
   listDramaGenreTemplates, getDramaGenreTemplate, updateDramaGenreTemplate,
   deleteDramaGenreTemplate, cloneDramaGenreTemplate, aiGenerateDramaTemplate,
+  listDramaVisualStyleTemplates, getDramaVisualStyleTemplate, updateDramaVisualStyleTemplate,
+  deleteDramaVisualStyleTemplate, cloneDramaVisualStyleTemplate,
   type DramaGenreTemplate, type AiGenerateDramaTemplateParams,
+  type DramaVisualStyleTemplate, type VisualStyleCategory,
+  listGlobalPromptSettings, updateGlobalPromptSetting, resetGlobalPromptSetting, getGlobalPromptPreview, type GlobalPromptSetting,
 } from '@/services/drama';
 
-type ContentTab = 'novel' | 'drama';
+type ContentTab = 'novel' | 'drama' | 'visual_style' | 'ai_prompts';
 
 const GENRE_COLORS: Record<string, string> = {
   xianxia: 'from-violet-500 to-indigo-600',
@@ -66,6 +70,69 @@ const DRAMA_GENRE_COLORS: Record<string, string> = {
 
 const PLATFORM_LABELS: Record<string, string> = {
   douyin: '抖音', kuaishou: '快手', reelshort: 'ReelShort', dramabox: 'DramaBox', generic: '通用',
+};
+
+const VISUAL_STYLE_CATEGORY_META: Record<VisualStyleCategory, { label: string; gradient: string; icon: string }> = {
+  live_action:        { label: '真人影视',   gradient: 'from-rose-500 to-orange-600',    icon: '🎬' },
+  '2d_animation':    { label: '2D动画',     gradient: 'from-fuchsia-500 to-pink-500',   icon: '✏️' },
+  '3d_animation':    { label: '3D动画',     gradient: 'from-cyan-500 to-blue-600',      icon: '🎨' },
+  stop_motion:       { label: '定格动画',   gradient: 'from-amber-500 to-yellow-600',   icon: '🧸' },
+  chinese_traditional: { label: '中国传统', gradient: 'from-red-600 to-rose-800',       icon: '🖌️' },
+  '2d_art':          { label: '2D画风',     gradient: 'from-violet-500 to-indigo-600',  icon: '🎭' },
+};
+
+const VISUAL_STYLE_KEY_COLORS: Record<string, string> = {
+  // 真人影视
+  live_action:         'from-rose-500 to-orange-600',
+  period_live:         'from-amber-600 to-red-700',
+  hk_film:             'from-zinc-600 to-red-900',
+  retro_wuxia:         'from-stone-600 to-amber-800',
+  western_film:        'from-blue-700 to-indigo-900',
+  // 2D 动画
+  '2d_anime':          'from-fuchsia-500 to-purple-600',
+  '2d_ghibli':         'from-emerald-400 to-teal-600',
+  '2d_korean_anime':   'from-pink-400 to-rose-500',
+  '2d_shoujo':         'from-rose-300 to-pink-500',
+  '2d_film':           'from-indigo-500 to-blue-700',
+  '2d_retro_anime':    'from-amber-600 to-orange-700',
+  '2d_action':         'from-red-500 to-orange-500',
+  '2d_cybercity':      'from-cyan-600 to-violet-800',
+  '2d_thick_line':     'from-gray-700 to-slate-900',
+  '2d_fantasy_anime':  'from-violet-500 to-blue-600',
+  '2d_british_anime':  'from-teal-500 to-cyan-700',
+  '2d_sports':         'from-orange-500 to-red-600',
+  '2d_tezuka':         'from-gray-400 to-slate-600',
+  '2d_death_note':     'from-gray-900 to-red-900',
+  '2d_horror':         'from-stone-900 to-red-950',
+  '2d_chibi':          'from-pink-300 to-purple-400',
+  // 3D 动画
+  '3d_toon_render':    'from-fuchsia-600 to-pink-700',
+  '3d_japanese_npr':   'from-pink-400 to-purple-500',
+  '3d_cyberpunk':      'from-cyan-500 to-blue-700',
+  '3d_realistic':      'from-slate-500 to-zinc-700',
+  '3d_fantasy':        'from-violet-600 to-purple-800',
+  '3d_british':        'from-amber-700 to-stone-800',
+  '3d_chibi':          'from-pink-300 to-rose-400',
+  '3d_voxel':          'from-green-400 to-cyan-500',
+  '3d_mobile_game':    'from-violet-500 to-purple-600',
+  '3d_disney':         'from-purple-400 to-pink-400',
+  // 中国传统 / 2D画风
+  chinese_ink:         'from-gray-600 to-zinc-800',
+  chinese_style:       'from-red-600 to-rose-700',
+  '2d_gongbi':         'from-amber-500 to-red-600',
+  '2d_watercolor':     'from-sky-300 to-teal-400',
+  '2d_pixel':          'from-indigo-600 to-blue-800',
+  '2d_simple':         'from-gray-300 to-slate-500',
+  '2d_sketch':         'from-stone-400 to-amber-600',
+  '2d_british_comic':  'from-yellow-400 to-pink-500',
+  '2d_rubber_hose':    'from-amber-400 to-yellow-600',
+  '2d_golden':         'from-yellow-500 to-amber-700',
+  // 定格动画
+  stop_motion:         'from-amber-500 to-yellow-600',
+  clay_stop:           'from-orange-400 to-amber-500',
+  felt_stop:           'from-pink-400 to-purple-500',
+  lego_stop:           'from-red-500 to-yellow-400',
+  paper_stop:          'from-red-400 to-orange-500',
 };
 
 const PLAYBOOK_META: Record<string, { label: string; desc: string; agents: string[] }> = {
@@ -1085,27 +1152,474 @@ const DramaEditPanel: React.FC<{ tplId: string; onBack: () => void; onSaved: () 
   );
 };
 
+/* ─── Visual Style Template Card ─── */
+const VisualStyleTemplateCard: React.FC<{
+  tpl: DramaVisualStyleTemplate;
+  onEdit: (tpl: DramaVisualStyleTemplate) => void;
+  onClone: (id: string) => void;
+  onDelete: (tpl: DramaVisualStyleTemplate) => void;
+}> = ({ tpl, onEdit, onClone, onDelete }) => {
+  const gradient = VISUAL_STYLE_KEY_COLORS[tpl.styleKey] ?? (VISUAL_STYLE_CATEGORY_META[tpl.styleCategory]?.gradient ?? 'from-violet-500 to-fuchsia-600');
+  const catMeta = VISUAL_STYLE_CATEGORY_META[tpl.styleCategory];
+  return (
+    <Card className="group cursor-pointer hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 overflow-hidden relative" onClick={() => onEdit(tpl)}>
+      <div className={cn('h-2 bg-gradient-to-r', gradient)} />
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline gap-2">
+              <span className="text-base leading-none">{catMeta?.icon}</span>
+              <h3 className="font-semibold text-sm truncate">{tpl.displayName}</h3>
+              {tpl.isSystem && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0"><Shield className="w-3 h-3 mr-0.5" />预置</Badge>}
+            </div>
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 mt-1">{catMeta?.label ?? tpl.styleCategory}</Badge>
+            <p className="text-xs text-muted-foreground mt-1.5 line-clamp-2">{tpl.description || '暂无描述'}</p>
+          </div>
+          <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {tpl.tags.slice(0, 4).map((tag) => <Badge key={tag} variant="outline" className="text-[10px] px-1.5 py-0">{tag}</Badge>)}
+        </div>
+        {tpl.visualGuide && (
+          <div className="text-[10px] text-muted-foreground space-y-0.5 border rounded p-2 bg-muted/30">
+            <div className="truncate"><span className="font-medium">美学：</span>{tpl.visualGuide.overallAesthetic}</div>
+            <div className="truncate"><span className="font-medium">调色：</span>{tpl.visualGuide.colorGrading}</div>
+          </div>
+        )}
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex gap-1.5">
+            {tpl.genreCompatibility.slice(0, 2).map((g) => <span key={g}>{g}</span>)}
+          </div>
+          <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onClone(tpl.id)} title="克隆"><Copy className="w-3.5 h-3.5" /></Button>
+            {!tpl.isSystem && <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(tpl)} title="删除"><Trash2 className="w-3.5 h-3.5" /></Button>}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+/* ─── Visual Style Edit Panel ─── */
+const VisualStyleEditPanel: React.FC<{ tplId: string; onBack: () => void; onSaved: () => void }> = ({ tplId, onBack, onSaved }) => {
+  const [tpl, setTpl] = useState<DramaVisualStyleTemplate | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const [displayName, setDisplayName] = useState('');
+  const [description, setDescription] = useState('');
+  const [styleCategory, setStyleCategory] = useState<VisualStyleCategory>('live_action');
+  const [tags, setTags] = useState<string[]>([]);
+
+  const [overallAesthetic, setOverallAesthetic] = useState('');
+  const [colorGrading, setColorGrading] = useState('');
+  const [lightingStyle, setLightingStyle] = useState('');
+  const [era, setEra] = useState('contemporary');
+  const [renderTechnique, setRenderTechnique] = useState('');
+  const [textureStyle, setTextureStyle] = useState('');
+  const [referenceStyle, setReferenceStyle] = useState('');
+  const [styleReferencePrompt, setStyleReferencePrompt] = useState('');
+
+  const [positiveKeywords, setPositiveKeywords] = useState<string[]>([]);
+  const [negativeKeywords, setNegativeKeywords] = useState<string[]>([]);
+  const [characterStyle, setCharacterStyle] = useState('');
+  const [backgroundStyle, setBackgroundStyle] = useState('');
+
+  const [genreCompatibility, setGenreCompatibility] = useState<string[]>([]);
+  const [audienceTags, setAudienceTags] = useState<string[]>([]);
+  const [platformTags, setPlatformTags] = useState<string[]>([]);
+
+  useEffect(() => {
+    setLoading(true);
+    getDramaVisualStyleTemplate(tplId).then((data) => {
+      setTpl(data);
+      setDisplayName(data.displayName);
+      setDescription(data.description);
+      setStyleCategory(data.styleCategory);
+      setTags(data.tags ?? []);
+      const vg = data.visualGuide ?? {};
+      setOverallAesthetic(vg.overallAesthetic ?? '');
+      setColorGrading(vg.colorGrading ?? '');
+      setLightingStyle(vg.lightingStyle ?? '');
+      setEra(vg.era ?? 'contemporary');
+      setRenderTechnique(vg.renderTechnique ?? '');
+      setTextureStyle(vg.textureStyle ?? '');
+      setReferenceStyle(vg.referenceStyle ?? '');
+      setStyleReferencePrompt(vg.styleReferencePrompt ?? '');
+      const pg = data.promptGuidance ?? {};
+      setPositiveKeywords(pg.positiveKeywords ?? []);
+      setNegativeKeywords(pg.negativeKeywords ?? []);
+      setCharacterStyle(pg.characterStyle ?? '');
+      setBackgroundStyle(pg.backgroundStyle ?? '');
+      setGenreCompatibility(data.genreCompatibility ?? []);
+      setAudienceTags(data.audienceTags ?? []);
+      setPlatformTags(data.platformTags ?? []);
+    }).catch(() => message.error('加载视觉风格模板详情失败')).finally(() => setLoading(false));
+  }, [tplId]);
+
+  const handleSave = async () => {
+    if (!tpl) return;
+    setSaving(true);
+    try {
+      await updateDramaVisualStyleTemplate(tplId, {
+        displayName, description, styleCategory, tags,
+        visualGuide: { overallAesthetic, colorGrading, lightingStyle, era, renderTechnique: renderTechnique || undefined, textureStyle: textureStyle || undefined, referenceStyle: referenceStyle || undefined, styleReferencePrompt: styleReferencePrompt || undefined },
+        promptGuidance: { positiveKeywords, negativeKeywords, characterStyle: characterStyle || undefined, backgroundStyle: backgroundStyle || undefined },
+        genreCompatibility, audienceTags, platformTags,
+      } as any);
+      message.success('保存成功'); onSaved();
+    } catch (err: any) { message.error(err?.data?.message || '保存失败'); }
+    finally { setSaving(false); }
+  };
+
+  if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
+  if (!tpl) return <div className="text-center py-12 text-muted-foreground">模板不存在</div>;
+
+  const CATEGORY_OPTIONS: { value: VisualStyleCategory; label: string }[] = [
+    { value: 'live_action', label: '真人影视' },
+    { value: '2d_animation', label: '2D动画' },
+    { value: '2d_art', label: '2D画风' },
+    { value: '3d_animation', label: '3D动画' },
+    { value: 'stop_motion', label: '定格动画' },
+    { value: 'chinese_traditional', label: '中国传统' },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <Button variant="ghost" size="sm" onClick={onBack} className="gap-1.5"><ArrowLeft className="w-4 h-4" />返回列表</Button>
+        <Button size="sm" onClick={handleSave} disabled={saving}>
+          {saving ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Pencil className="w-4 h-4 mr-1.5" />}保存修改
+        </Button>
+      </div>
+      <Tabs defaultValue="basic" className="w-full">
+        <TabsList className="w-full grid grid-cols-4">
+          <TabsTrigger value="basic">基本信息</TabsTrigger>
+          <TabsTrigger value="visual">视觉规格</TabsTrigger>
+          <TabsTrigger value="prompt">创作引导</TabsTrigger>
+          <TabsTrigger value="scope">适用范围</TabsTrigger>
+        </TabsList>
+
+        {/* 基本信息 */}
+        <TabsContent value="basic" className="space-y-4 pt-4">
+          <div><Label>显示名称</Label><Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} /></div>
+          <div><Label>描述</Label><Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></div>
+          <div>
+            <Label className="text-sm font-medium">风格大类</Label>
+            <div className="mt-2">
+              <Badge variant="secondary" className="text-xs">
+                {VISUAL_STYLE_CATEGORY_META[styleCategory]?.icon} {VISUAL_STYLE_CATEGORY_META[styleCategory]?.label ?? styleCategory}
+              </Badge>
+              <p className="text-[11px] text-muted-foreground mt-1">风格大类由模板类型决定，仅用于列表分组显示</p>
+            </div>
+          </div>
+          <FormSection title="风格标签">
+            <StrList value={tags} onChange={setTags} ph="如: 写实、高饱和、电影感" />
+          </FormSection>
+        </TabsContent>
+
+        {/* 视觉规格 */}
+        <TabsContent value="visual" className="space-y-4 pt-4">
+          <div><Label>整体美学风格</Label><Textarea rows={2} className="text-xs mt-1" value={overallAesthetic} onChange={(e) => setOverallAesthetic(e.target.value)} placeholder="如: 现代都市电影质感，高对比度，层次丰富" /></div>
+          <div><Label>调色风格</Label><Input className="text-xs mt-1" value={colorGrading} onChange={(e) => setColorGrading(e.target.value)} placeholder="如: 冷暖对比调色，阴影压蓝，高光保暖" /></div>
+          <div><Label>光影风格</Label><Input className="text-xs mt-1" value={lightingStyle} onChange={(e) => setLightingStyle(e.target.value)} placeholder="如: 三点布光，伦勃朗光，黄金时段自然光" /></div>
+          <div>
+            <Label className="text-sm font-medium">时代背景</Label>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {(['contemporary', 'ancient', 'future', 'mixed'] as const).map(e => (
+                <Badge
+                  key={e}
+                  variant={era === e ? 'default' : 'outline'}
+                  className="cursor-pointer"
+                  onClick={() => setEra(e)}
+                >
+                  {{ contemporary: '现代', ancient: '古代', future: '未来', mixed: '跨时代' }[e]}
+                </Badge>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1">影响角色服装和场景时代感（创建短剧时传入 AI）</p>
+          </div>
+          <FormSection title="渲染技术" defaultOpen={false}>
+            <Input className="text-xs" value={renderTechnique} onChange={(e) => setRenderTechnique(e.target.value)} placeholder="如: 3D NPR赛璐璐、写实CG、定格动画" />
+          </FormSection>
+          <FormSection title="材质质感" defaultOpen={false}>
+            <Input className="text-xs" value={textureStyle} onChange={(e) => setTextureStyle(e.target.value)} placeholder="如: 胶片颗粒、水彩晕染、像素块" />
+          </FormSection>
+          <FormSection title="参考风格/作品" defaultOpen={false}>
+            <Input className="text-xs" value={referenceStyle} onChange={(e) => setReferenceStyle(e.target.value)} placeholder="如: 吉卜力、新海诚、港片黄金时代" />
+          </FormSection>
+          <FormSection title="T2I 英文风格提示词" defaultOpen={false}>
+            <Textarea className="text-xs font-mono" rows={3} value={styleReferencePrompt} onChange={(e) => setStyleReferencePrompt(e.target.value)} placeholder="English-only T2I style prompt for image generation..." />
+            <p className="text-[10px] text-muted-foreground mt-1">仅使用英文，用于 AI 图像生成风格参考</p>
+          </FormSection>
+        </TabsContent>
+
+        {/* 创作引导 */}
+        <TabsContent value="prompt" className="space-y-4 pt-4">
+          <FormSection title="正向关键词（推荐加入 T2I prompt）">
+            <StrList value={positiveKeywords} onChange={setPositiveKeywords} ph="如: cinematic, bokeh, warm lighting" />
+          </FormSection>
+          <FormSection title="负向关键词（避免出现在 prompt 中）">
+            <StrList value={negativeKeywords} onChange={setNegativeKeywords} ph="如: anime, cartoon, oversaturated" />
+          </FormSection>
+          <FormSection title="角色风格描述" defaultOpen={false}>
+            <Textarea className="text-xs" rows={2} value={characterStyle} onChange={(e) => setCharacterStyle(e.target.value)} placeholder="如: 真人演员质感，自然妆容，现代时装，面部光影层次丰富" />
+          </FormSection>
+          <FormSection title="背景/场景风格描述" defaultOpen={false}>
+            <Textarea className="text-xs" rows={2} value={backgroundStyle} onChange={(e) => setBackgroundStyle(e.target.value)} placeholder="如: 都市写字楼、高档住宅、街道等真实场景，景深虚化背景" />
+          </FormSection>
+        </TabsContent>
+
+        {/* 适用范围 */}
+        <TabsContent value="scope" className="space-y-4 pt-4">
+          <FormSection title="适配题材">
+            <StrList value={genreCompatibility} onChange={setGenreCompatibility} ph="如: 都市、古装、玄幻" />
+          </FormSection>
+          <FormSection title="适合受众">
+            <StrList value={audienceTags} onChange={setAudienceTags} ph="如: 女性向、18-35岁" />
+          </FormSection>
+          <FormSection title="推荐平台">
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(PLATFORM_LABELS).map(([key, label]) => {
+                const selected = platformTags.includes(key);
+                return <Badge key={key} variant={selected ? 'default' : 'outline'} className="cursor-pointer" onClick={() => setPlatformTags(selected ? platformTags.filter(t => t !== key) : [...platformTags, key])}>{label}</Badge>;
+              })}
+            </div>
+          </FormSection>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+};
+
+/* ─── 单个 Agent 提示词卡片 ─── */
+interface AgentPromptCardProps {
+  setting: GlobalPromptSetting;
+  draft: string;
+  onDraftChange: (val: string) => void;
+  onSave: () => void;
+  onReset: () => void;
+  saving: boolean;
+  resetting: boolean;
+}
+
+const AgentPromptCard: React.FC<AgentPromptCardProps> = ({ setting, draft, onDraftChange, onSave, onReset, saving, resetting }) => {
+  const isDirty = draft !== setting.globalAdditionalPrompt;
+  const [baseExpanded, setBaseExpanded] = useState(false);
+  const [basePrompt, setBasePrompt] = useState<string | null>(null);
+  const [baseLoading, setBaseLoading] = useState(false);
+
+  const handleExpandBase = async () => {
+    if (basePrompt !== null) { setBaseExpanded((v) => !v); return; }
+    setBaseExpanded(true);
+    setBaseLoading(true);
+    try {
+      const { basePrompt: text } = await getGlobalPromptPreview(setting.agentType);
+      setBasePrompt(text);
+    } catch {
+      setBasePrompt('加载失败');
+    } finally {
+      setBaseLoading(false);
+    }
+  };
+
+  const agentName = setting.description.split('—')[0].trim();
+  const agentDesc = setting.description.includes('—') ? setting.description.split('—').slice(1).join('—').trim() : '';
+
+  return (
+    <Card className={cn(isDirty && 'border-amber-300 dark:border-amber-700')}>
+      <CardContent className="pt-4 space-y-3">
+        {/* 头部 */}
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Bot className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+              <span className="text-sm font-semibold">{agentName}</span>
+              <Badge variant="outline" className="text-[9px] h-4 px-1.5 font-mono">{setting.agentType}</Badge>
+              {setting.globalAdditionalPrompt.trim() && (
+                <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-violet-300 text-violet-600 dark:text-violet-400">已设默认指令</Badge>
+              )}
+              {isDirty && <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-amber-400 text-amber-600">未保存</Badge>}
+            </div>
+            {agentDesc && <p className="text-[11px] text-muted-foreground mt-0.5">{agentDesc}</p>}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Button size="sm" variant="ghost" className="h-7 text-xs shrink-0 text-muted-foreground" onClick={onReset} disabled={resetting || saving} title="重置为系统默认值">
+              {resetting ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RotateCcw className="h-3 w-3 mr-1" />}
+              重置
+            </Button>
+            <Button size="sm" className="h-7 text-xs shrink-0" onClick={onSave} disabled={saving || !isDirty}>
+              {saving ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Save className="h-3 w-3 mr-1" />}
+              保存
+            </Button>
+          </div>
+        </div>
+
+        {/* 当前系统基础提示词（可展开） */}
+        <div className="rounded-md border border-dashed border-muted-foreground/25 overflow-hidden">
+          <button
+            type="button"
+            onClick={handleExpandBase}
+            className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-muted/40 transition-colors"
+          >
+            <div className="flex items-center gap-1.5">
+              <Shield className="h-3 w-3 text-muted-foreground" />
+              <span className="text-[11px] font-medium text-muted-foreground">系统基础提示词（只读，点击展开查看）</span>
+              {basePrompt && (
+                <span className="text-[10px] text-muted-foreground/60">{basePrompt.length} 字符</span>
+              )}
+            </div>
+            {baseExpanded
+              ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+              : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+            }
+          </button>
+          {baseExpanded && (
+            <div className="border-t border-dashed border-muted-foreground/20 bg-muted/20">
+              {baseLoading ? (
+                <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />加载中…
+                </div>
+              ) : (
+                <div className="max-h-80 overflow-y-auto">
+                  <pre className="px-3 py-2.5 text-[10.5px] text-muted-foreground/80 leading-relaxed whitespace-pre-wrap font-mono break-words">
+                    {basePrompt}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 全局补充指令 */}
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Pencil className="h-3 w-3 text-violet-500" />
+            <Label className="text-[11px] font-medium">新剧默认补充指令</Label>
+            <span className="text-[10px] text-muted-foreground">（新短剧创建完成后写入初始配置，生成集内容时生效，可在「创作工坊」中按剧修改）</span>
+          </div>
+          <Textarea
+            value={draft}
+            onChange={(e) => onDraftChange(e.target.value)}
+            placeholder={`为「${agentName}」设置补充规则（留空则不注入）\n示例：\n- 每集结尾必须有一个让观众好奇"然后呢"的问题\n- 禁止出现"但是"/"然而"等过渡词，直接推进情节`}
+            className="min-h-[100px] font-mono text-xs resize-y"
+          />
+          <p className="text-right text-[10px] text-muted-foreground">{draft.length} 字符</p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+/* ─── 全局 Agent 提示词设置面板 ─── */
+const GlobalPromptSettingsPanel: React.FC = () => {
+  const [settings, setSettings] = useState<GlobalPromptSetting[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const [resetting, setResetting] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    listGlobalPromptSettings()
+      .then((data) => {
+        setSettings(data);
+        const initial: Record<string, string> = {};
+        data.forEach((s) => { initial[s.agentType] = s.globalAdditionalPrompt; });
+        setDrafts(initial);
+      })
+      .catch(() => message.error('加载全局提示词设置失败'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async (agentType: string) => {
+    setSaving((prev) => ({ ...prev, [agentType]: true }));
+    try {
+      const updated = await updateGlobalPromptSetting(agentType, drafts[agentType] ?? '');
+      setSettings((prev) => prev.map((s) => s.agentType === agentType ? updated : s));
+      message.success('已保存');
+    } catch {
+      message.error('保存失败');
+    } finally {
+      setSaving((prev) => ({ ...prev, [agentType]: false }));
+    }
+  };
+
+  const handleReset = async (agentType: string) => {
+    setResetting((prev) => ({ ...prev, [agentType]: true }));
+    try {
+      const updated = await resetGlobalPromptSetting(agentType);
+      setSettings((prev) => prev.map((s) => s.agentType === agentType ? updated : s));
+      setDrafts((prev) => ({ ...prev, [agentType]: updated.globalAdditionalPrompt }));
+      message.success('已重置为系统默认');
+    } catch {
+      message.error('重置失败');
+    } finally {
+      setResetting((prev) => ({ ...prev, [agentType]: false }));
+    }
+  };
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
+  }
+
+  return (
+    <div className="space-y-5">
+      <Card className="border-blue-200/60 bg-blue-50/50 dark:border-blue-800/40 dark:bg-blue-950/20">
+        <CardContent className="pt-4 pb-3 flex items-start gap-3">
+          <Info className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-blue-800 dark:text-blue-300">短剧创建 Agent — 全局补充指令</p>
+            <p className="text-[12px] text-blue-700/80 dark:text-blue-400/80 space-y-1">
+              <span className="block">这里的 5 个 Agent 在<strong>创建短剧时</strong>运行（分析创意 → 规划大纲 → 设计视觉 → 编剧手册 → 策略制定），下方补充指令会实时注入到对应 Agent 的系统提示词中。</span>
+              <span className="block">集内容生成的 12 个 Agent（编剧/分镜导演等）<strong>不在此处管理</strong>，请在各短剧的「创作工坊 → 选中 Agent → 本剧补充指令」中按剧配置。</span>
+              <span className="block text-blue-600/70 dark:text-blue-500/70">设置为个人专属，点击「重置」可恢复系统默认值。</span>
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {settings.map((setting) => (
+        <AgentPromptCard
+          key={setting.agentType}
+          setting={setting}
+          draft={drafts[setting.agentType] ?? ''}
+          onDraftChange={(val) => setDrafts((prev) => ({ ...prev, [setting.agentType]: val }))}
+          onSave={() => handleSave(setting.agentType)}
+          onReset={() => handleReset(setting.agentType)}
+          saving={saving[setting.agentType] ?? false}
+          resetting={resetting[setting.agentType] ?? false}
+        />
+      ))}
+    </div>
+  );
+};
+
 /* ─── Main Page ─── */
 const GenreTemplatesPage: React.FC = () => {
   const [contentTab, setContentTab] = useState<ContentTab>('novel');
   const [templates, setTemplates] = useState<GenreProfileTemplate[]>([]);
   const [dramaTemplates, setDramaTemplates] = useState<DramaGenreTemplate[]>([]);
+  const [visualStyleTemplates, setVisualStyleTemplates] = useState<DramaVisualStyleTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showAiDialog, setShowAiDialog] = useState(false);
   const [showDramaAiDialog, setShowDramaAiDialog] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [dramaEditingId, setDramaEditingId] = useState<string | null>(null);
+  const [visualStyleEditingId, setVisualStyleEditingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<GenreProfileTemplate | null>(null);
   const [dramaDeleteTarget, setDramaDeleteTarget] = useState<DramaGenreTemplate | null>(null);
+  const [visualStyleDeleteTarget, setVisualStyleDeleteTarget] = useState<DramaVisualStyleTemplate | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   const fetchTemplates = useCallback(async () => {
     setLoading(true);
     try {
-      const [novels, dramas] = await Promise.all([listGenreTemplates(), listDramaGenreTemplates()]);
-      setTemplates(novels); setDramaTemplates(dramas);
-    } catch { message.error('加载题材模板失败'); }
+      const [novels, dramas, visualStyles] = await Promise.all([
+        listGenreTemplates(), listDramaGenreTemplates(), listDramaVisualStyleTemplates(),
+      ]);
+      setTemplates(novels); setDramaTemplates(dramas); setVisualStyleTemplates(visualStyles);
+    } catch { message.error('加载模板失败'); }
     finally { setLoading(false); }
   }, []);
 
@@ -1145,6 +1659,23 @@ const GenreTemplatesPage: React.FC = () => {
     finally { setDeleting(false); }
   };
 
+  const handleVisualStyleClone = async (id: string) => {
+    try {
+      await cloneDramaVisualStyleTemplate(id);
+      message.success('克隆成功'); fetchTemplates();
+    } catch (err: any) { message.error(err?.data?.message || '克隆失败'); }
+  };
+
+  const handleVisualStyleDelete = async () => {
+    if (!visualStyleDeleteTarget) return;
+    setDeleting(true);
+    try {
+      await deleteDramaVisualStyleTemplate(visualStyleDeleteTarget.id);
+      message.success('删除成功'); setVisualStyleDeleteTarget(null); fetchTemplates();
+    } catch (err: any) { message.error(err?.data?.message || '删除失败'); }
+    finally { setDeleting(false); }
+  };
+
   const filtered = templates.filter((t) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -1155,6 +1686,12 @@ const GenreTemplatesPage: React.FC = () => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return t.displayName.toLowerCase().includes(q) || t.genreKey.toLowerCase().includes(q) || t.genreKeywords.some((kw) => kw.toLowerCase().includes(q));
+  });
+
+  const filteredVisualStyle = visualStyleTemplates.filter((t) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return t.displayName.toLowerCase().includes(q) || t.styleKey.toLowerCase().includes(q) || t.tags.some((tag) => tag.toLowerCase().includes(q));
   });
 
   if (editingId) {
@@ -1173,32 +1710,53 @@ const GenreTemplatesPage: React.FC = () => {
     );
   }
 
+  if (visualStyleEditingId) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
+        <VisualStyleEditPanel tplId={visualStyleEditingId} onBack={() => { setVisualStyleEditingId(null); fetchTemplates(); }} onSaved={fetchTemplates} />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <BookOpen className="w-6 h-6 text-primary" />题材模板管理
         </h1>
-        <p className="text-sm text-muted-foreground mt-1">管理小说和短剧的题材模板，创建作品时自动匹配使用</p>
+        <p className="text-sm text-muted-foreground mt-1">管理小说、短剧题材模板和视觉风格模板，创建作品时自动匹配使用</p>
         <div className="flex items-center gap-4 mt-4 border-b">
-          {(['novel', 'drama'] as ContentTab[]).map(t => (
+          {(['novel', 'drama', 'visual_style', 'ai_prompts'] as ContentTab[]).map(t => (
             <button key={t} className={cn('flex items-center gap-1.5 text-sm font-medium pb-2.5 border-b-2 -mb-px transition-colors', contentTab === t ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')} onClick={() => { setContentTab(t); setSearch(''); }}>
-              {t === 'novel' ? <><BookOpen className="w-3.5 h-3.5" />小说 ({templates.length})</> : <><Film className="w-3.5 h-3.5" />短剧 ({dramaTemplates.length})</>}
+              {t === 'novel'
+                ? <><BookOpen className="w-3.5 h-3.5" />小说 ({templates.length})</>
+                : t === 'drama'
+                ? <><Film className="w-3.5 h-3.5" />短剧题材 ({dramaTemplates.length})</>
+                : t === 'visual_style'
+                ? <><Palette className="w-3.5 h-3.5" />视觉风格 ({visualStyleTemplates.length})</>
+                : <><Bot className="w-3.5 h-3.5" />全局 AI 指令</>
+              }
             </button>
           ))}
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-4">
-        <div className="relative max-w-sm flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input className="pl-9 pr-8" placeholder="搜索题材名称、关键词..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          {search && <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setSearch('')}><X className="w-4 h-4 text-muted-foreground hover:text-foreground" /></button>}
+      {contentTab !== 'ai_prompts' && (
+        <div className="flex items-center justify-between gap-4">
+          <div className="relative max-w-sm flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input className="pl-9 pr-8" placeholder="搜索名称、关键词..." value={search} onChange={(e) => setSearch(e.target.value)} />
+            {search && <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setSearch('')}><X className="w-4 h-4 text-muted-foreground hover:text-foreground" /></button>}
+          </div>
+          {contentTab !== 'visual_style' && (
+            <Button variant="outline" size="sm" onClick={() => contentTab === 'novel' ? setShowAiDialog(true) : setShowDramaAiDialog(true)}><Wand2 className="w-4 h-4 mr-1.5" />AI 生成</Button>
+          )}
         </div>
-        <Button variant="outline" size="sm" onClick={() => contentTab === 'novel' ? setShowAiDialog(true) : setShowDramaAiDialog(true)}><Wand2 className="w-4 h-4 mr-1.5" />AI 生成</Button>
-      </div>
+      )}
 
-      {loading ? (
+      {contentTab === 'ai_prompts' ? (
+        <GlobalPromptSettingsPanel />
+      ) : loading ? (
         <div className="flex items-center justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
       ) : contentTab === 'novel' ? (
         filtered.length === 0 ? (
@@ -1214,7 +1772,7 @@ const GenreTemplatesPage: React.FC = () => {
             {filtered.map((t) => <TemplateCard key={t.id} tpl={t} onEdit={(tpl) => setEditingId(tpl.id)} onClone={handleClone} onDelete={setDeleteTarget} />)}
           </div>
         )
-      ) : (
+      ) : contentTab === 'drama' ? (
         filteredDrama.length === 0 ? (
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center justify-center py-12 text-center">
@@ -1226,6 +1784,19 @@ const GenreTemplatesPage: React.FC = () => {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredDrama.map((t) => <DramaTemplateCard key={t.id} tpl={t} onEdit={(tpl) => setDramaEditingId(tpl.id)} onClone={handleDramaClone} onDelete={setDramaDeleteTarget} />)}
+          </div>
+        )
+      ) : (
+        filteredVisualStyle.length === 0 ? (
+          <Card className="border-dashed">
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-3"><Palette className="w-6 h-6 text-muted-foreground" /></div>
+              <p className="text-sm text-muted-foreground mb-4">暂无视觉风格模板</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredVisualStyle.map((t) => <VisualStyleTemplateCard key={t.id} tpl={t} onEdit={(tpl) => setVisualStyleEditingId(tpl.id)} onClone={handleVisualStyleClone} onDelete={setVisualStyleDeleteTarget} />)}
           </div>
         )
       )}
@@ -1246,6 +1817,16 @@ const GenreTemplatesPage: React.FC = () => {
           <DialogFooter>
             <Button variant="outline" onClick={() => setDramaDeleteTarget(null)} disabled={deleting}>取消</Button>
             <Button variant="destructive" onClick={handleDramaDelete} disabled={deleting}>{deleting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}确认删除</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!visualStyleDeleteTarget} onOpenChange={(v) => !v && setVisualStyleDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>确认删除</DialogTitle><DialogDescription>删除视觉风格模板「{visualStyleDeleteTarget?.displayName}」后无法恢复，确定继续？</DialogDescription></DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVisualStyleDeleteTarget(null)} disabled={deleting}>取消</Button>
+            <Button variant="destructive" onClick={handleVisualStyleDelete} disabled={deleting}>{deleting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}确认删除</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

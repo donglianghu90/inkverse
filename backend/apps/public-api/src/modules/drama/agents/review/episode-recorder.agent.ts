@@ -24,7 +24,10 @@ export class EpisodeRecorderAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-episode-recorder',
       schema: recorderOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-recorder', buildEpisodeRecorderSystemPrompt()),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-recorder', buildEpisodeRecorderSystemPrompt({
+        genreArchetype: state.promptProfile?.genreArchetype,
+        genreRules: state.promptProfile?.scriptwriterGuide?.genreRules,
+      })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: script.episodeNumber },
       userPrompt: `记录第 ${script.episodeNumber} 集知识：
 

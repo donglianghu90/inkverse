@@ -26,7 +26,8 @@ const SEEDREAM_PROFILE: RenderingProfile = {
   },
   negativePrompt: {
     supported: true,
-    defaultValue: 'blurry, low quality, watermark, text, logo',
+    // 加入 typography/calligraphy/writing 等词，防止模型在古装历史风格下生成带水墨题字、片名水印的图片
+    defaultValue: 'blurry, low quality, watermark, text, logo, typography, calligraphy, writing, words, letters, captions, subtitles, title card, Chinese characters, stamps, seals',
   },
   prompt: {
     maxLength: 2000,
@@ -36,12 +37,19 @@ const SEEDREAM_PROFILE: RenderingProfile = {
   },
   characterViews: {
     viewsByRole: {
-      protagonist: ['face_front', 'face_three_quarter', 'upper_body_front', 'full_body_front', 'side_profile'],
-      antagonist: ['face_front', 'face_three_quarter', 'upper_body_front', 'full_body_front'],
+      // 主角：加入情绪变体（开心/愤怒），用于情感特写场景的参考图，防止面部漂移
+      protagonist: ['face_front', 'face_three_quarter', 'upper_body_front', 'full_body_front', 'side_profile', 'face_happy', 'face_angry'],
+      // 对手：同样需要情绪变体（愤怒/强势是反派高频情绪），加入 face_angry
+      antagonist: ['face_front', 'face_three_quarter', 'upper_body_front', 'full_body_front', 'face_angry'],
       supporting: ['face_front', 'face_three_quarter', 'upper_body_front'],
       minor: ['face_front'],
     },
     chainReferenceWeight: 0.65,
+  },
+  locationViews: {
+    recurring: ['establishing', 'interior_medium', 'detail_close'],
+    normal: ['establishing'],
+    chainReferenceWeight: 0.55,
   },
 };
 
@@ -69,6 +77,11 @@ const GENERIC_PROFILE: RenderingProfile = {
       supporting: ['face_front'],
       minor: ['face_front'],
     },
+    chainReferenceWeight: 0.5,
+  },
+  locationViews: {
+    recurring: ['establishing'],
+    normal: ['establishing'],
     chainReferenceWeight: 0.5,
   },
 };

@@ -26,6 +26,7 @@ interface StructuredGenerationInput<T extends ZodTypeAny> {
 interface TokenUsageExtraction {
   promptTokens: number;
   completionTokens: number;
+  thinkingTokens: number; // Gemini thinking model 的内部推理 tokens，按 output 价格计费
   totalTokens: number;
   source: 'usage_metadata' | 'response_metadata' | 'missing';
 }
@@ -138,6 +139,8 @@ const TASK_ROUTES: Record<string, TaskRoute> = {
   'drama-continuity-guard':   { provider: 'gemini', tier: 'lightweight' },
   'drama-pacing-analyzer':    { provider: 'gemini', tier: 'lightweight' },
   'drama-episode-recorder':   { provider: 'gemini', tier: 'lightweight' },
+  // --- 媒体质量评估（OpenAI — 支持 HTTP URL 图片 + 结构化输出） ---
+  'media-quality-assessment': { provider: 'openai', tier: 'lightweight' },
 };
 
 interface LlmCachedConfig {
@@ -381,16 +384,16 @@ export class LlmService {
     const durationMs = Date.now() - t0;
     const wrapped = this.unwrapResponse<z.infer<T>>(response);
     const usage = this.extractUsage(wrapped.raw, provider);
-    const cost = LlmService.estimateCost(usage.promptTokens, usage.completionTokens, rates);
+    const cost = LlmService.estimateCost(usage.promptTokens, usage.completionTokens, rates, usage.thinkingTokens);
 
     this.logger.log(
       `[${input.taskName}] ====== LLM 调用完成 (${provider}/${modelName}) ====== ${durationMs}ms\n` +
-      `  tokens: in=${usage.promptTokens} out=${usage.completionTokens} total=${usage.totalTokens}\n` +
+      `  tokens: in=${usage.promptTokens} out=${usage.completionTokens}${usage.thinkingTokens > 0 ? ` think=${usage.thinkingTokens}` : ''} total=${usage.totalTokens}\n` +
       `  费率: ¥${rates.inputRatePer1M}/¥${rates.outputRatePer1M} per 1M | 费用: ¥${cost} (source: ${usage.source})`,
     );
     this.logger.debug(`[${input.taskName}] AI 输出:\n${this.truncate(JSON.stringify(wrapped.parsed, null, 2), 2000)}`);
 
-    this.traceLogger.logTrace({ ...traceBase, durationMs, tokens: { prompt: usage.promptTokens, completion: usage.completionTokens, total: usage.totalTokens, source: usage.source }, cost: { cny: cost, inputRatePer1M: rates.inputRatePer1M, outputRatePer1M: rates.outputRatePer1M }, output: wrapped.parsed, status: wrapped.parsed == null ? 'error' : 'success', error: wrapped.parsed == null ? '结构化输出解析为 null' : undefined, retries: retryCount });
+    this.traceLogger.logTrace({ ...traceBase, durationMs, tokens: { prompt: usage.promptTokens, completion: usage.completionTokens, ...(usage.thinkingTokens > 0 && { thinking: usage.thinkingTokens }), total: usage.totalTokens, source: usage.source }, cost: { cny: cost, inputRatePer1M: rates.inputRatePer1M, outputRatePer1M: rates.outputRatePer1M }, output: wrapped.parsed, status: wrapped.parsed == null ? 'error' : 'success', error: wrapped.parsed == null ? '结构化输出解析为 null' : undefined, retries: retryCount });
 
     const usageContext = this.resolveUsageContext(meta, tags);
     this.usageLedger.record({
@@ -399,7 +402,8 @@ export class LlmService {
       resourceId: usageContext.resourceId,
       scope: usageContext.scope,
       action: input.taskName, kind: 'llm', provider, model: modelName,
-      tokensIn: usage.promptTokens, tokensOut: usage.completionTokens,
+      // tokensOut 含 thinking tokens（Gemini 按 output 价格计费），与 costCny 保持口径一致
+      tokensIn: usage.promptTokens, tokensOut: usage.completionTokens + usage.thinkingTokens,
       costCny: cost, ok: wrapped.parsed != null, durationMs,
     }).catch(() => {});
 
@@ -449,11 +453,13 @@ export class LlmService {
   // ═══ Token提取 — 兼容Gemini/Claude/OpenAI三种response格式 ═══
 
   private extractUsage(raw: Record<string, unknown> | null, _provider: LlmProvider): TokenUsageExtraction {
-    if (!raw) return { promptTokens: 0, completionTokens: 0, totalTokens: 0, source: 'missing' };
+    if (!raw) return { promptTokens: 0, completionTokens: 0, thinkingTokens: 0, totalTokens: 0, source: 'missing' };
     const um = this.toRecord(raw.usage_metadata);
     if (um) {
       const p = this.toInt(um.input_tokens), c = this.toInt(um.output_tokens);
-      return { promptTokens: p, completionTokens: c, totalTokens: this.toInt(um.total_tokens) || p + c, source: 'usage_metadata' };
+      const total = this.toInt(um.total_tokens) || p + c;
+      const thinking = Math.max(0, total - p - c);
+      return { promptTokens: p, completionTokens: c, thinkingTokens: thinking, totalTokens: total, source: 'usage_metadata' };
     }
     const rm = this.toRecord(raw.response_metadata);
     if (rm) {
@@ -461,10 +467,12 @@ export class LlmService {
       if (u) {
         const p = this.toInt(u.input_tokens) || this.toInt(u.prompt_tokens) || this.toInt(u.promptTokens);
         const c = this.toInt(u.output_tokens) || this.toInt(u.completion_tokens) || this.toInt(u.completionTokens);
-        return { promptTokens: p, completionTokens: c, totalTokens: this.toInt(u.total_tokens) || this.toInt(u.totalTokens) || p + c, source: 'response_metadata' };
+        const total = this.toInt(u.total_tokens) || this.toInt(u.totalTokens) || p + c;
+        const thinking = Math.max(0, total - p - c);
+        return { promptTokens: p, completionTokens: c, thinkingTokens: thinking, totalTokens: total, source: 'response_metadata' };
       }
     }
-    return { promptTokens: 0, completionTokens: 0, totalTokens: 0, source: 'missing' };
+    return { promptTokens: 0, completionTokens: 0, thinkingTokens: 0, totalTokens: 0, source: 'missing' };
   }
 
   // ═══ Schema清理（仅Gemini需要，Claude/OpenAI直传Zod） ═══
@@ -514,8 +522,9 @@ export class LlmService {
 
   // ═══ 工具方法 ═══
 
-  static estimateCost(promptTokens: number, completionTokens: number, rates: CostRates): number {
-    return Number(((promptTokens / 1e6) * rates.inputRatePer1M + (completionTokens / 1e6) * rates.outputRatePer1M).toFixed(8));
+  static estimateCost(promptTokens: number, completionTokens: number, rates: CostRates, thinkingTokens = 0): number {
+    // thinking tokens 按 output 价格计费（Gemini 定价策略）
+    return Number(((promptTokens / 1e6) * rates.inputRatePer1M + ((completionTokens + thinkingTokens) / 1e6) * rates.outputRatePer1M).toFixed(8));
   }
 
   private unwrapResponse<T>(response: unknown): { parsed: T; raw: Record<string, unknown> | null } {

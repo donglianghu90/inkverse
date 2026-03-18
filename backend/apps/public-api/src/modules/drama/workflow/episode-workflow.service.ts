@@ -240,9 +240,14 @@ export class EpisodeWorkflowService {
           const skeletonRange = Array.from({ length: segEnd - segStart + 1 }, (_, i) => segStart + i)
             .filter(n => { const s = state.seriesOutline?.episodes?.[n - 1]; return !s?.coreConflict || s.coreConflict === '待展开'; });
           if (skeletonRange.length > 0) {
-            emitEp(0, `展开骨架集 E${skeletonRange[0]}-E${skeletonRange[skeletonRange.length - 1]}...`);
-            const expanded = await this.arcDirector.expandEpisodeSynopses(state, arcSegment, skeletonRange);
-            expanded.forEach(es => { if (state.seriesOutline?.episodes?.[es.episodeNumber - 1]) state.seriesOutline!.episodes[es.episodeNumber - 1] = es; });
+            // 分批展开，每批最多 8 集，避免单次 LLM 输出 token 超限导致后段概要质量下降
+            const EXPANSION_BATCH_SIZE = 8;
+            for (let batchStart = 0; batchStart < skeletonRange.length; batchStart += EXPANSION_BATCH_SIZE) {
+              const batch = skeletonRange.slice(batchStart, batchStart + EXPANSION_BATCH_SIZE);
+              emitEp(0, `展开骨架集 E${batch[0]}-E${batch[batch.length - 1]}（共 ${skeletonRange.length} 集）...`);
+              const expanded = await this.arcDirector.expandEpisodeSynopses(state, arcSegment, batch);
+              expanded.forEach(es => { if (state.seriesOutline?.episodes?.[es.episodeNumber - 1]) state.seriesOutline!.episodes[es.episodeNumber - 1] = es; });
+            }
             synopsis = state.seriesOutline!.episodes[episodeNumber - 1];
           }
         }
@@ -396,7 +401,7 @@ export class EpisodeWorkflowService {
         logDrama('audio_start', 'ok', '音频设计');
         emitEp(6, '音频设计...');
         let audioSkipped = false;
-        if (enableAudioDirector) storyboard = await this.audioDirector.enhance(state, storyboard);
+        if (enableAudioDirector) storyboard = await this.audioDirector.enhance(state, storyboard, intent);
         else {
           audioSkipped = true;
           this.logger.log(`E${episodeNumber} 音频设计已跳过(pipeline禁用 audio-director)`);
@@ -563,11 +568,18 @@ export class EpisodeWorkflowService {
             this.logger.warn(`[E${episodeNumber}] 分镜回炉触发：visualImpact=${dims.visualImpact} pacing=${dims.pacing}，重新生成分镜`);
             emitEp(9, `视觉质量低（${visualIssueScore.toFixed(1)}分），重新生成分镜...`);
             storyboard = await this.storyboardDirector.direct(state, script, intent);
+            // 回炉后重新校验硬规则（新分镜可能引入新的未知角色或 shotIndex 错误）
+            detCheck = this.deterministicChecker.check(state, script, storyboard);
+            if (detCheck.hardFails?.some(f => f.rule !== 'unknown_character')) {
+              this.logger.warn(`[E${episodeNumber}] 分镜回炉后硬规则校验发现问题: ${detCheck.hardFails.map(f => f.rule).join(', ')}，继续执行`);
+            }
             if (enableAudioDirector) {
-              try { storyboard = await this.audioDirector.enhance(state, storyboard); } catch (audioErr) {
+              try { storyboard = await this.audioDirector.enhance(state, storyboard, intent); } catch (audioErr) {
                 this.logger.warn(`[E${episodeNumber}] 分镜回炉后音频设计降级: ${(audioErr as Error).message}`);
               }
             }
+            // 回炉后重置 pacing 以便 Step 10 对新分镜重新分析
+            pacing = null;
             if (enableReviewer) {
               review = await this.reviewer.review(state, script, storyboard);
               review = this.normalizeReview(review, wp);
@@ -590,7 +602,7 @@ export class EpisodeWorkflowService {
         }
 
         // 质量门禁：精修结束后分数仍极低，从剧本阶段重写一次
-        const REJECT_THRESHOLD = 4.5;
+        const REJECT_THRESHOLD = 5.5;
         const finalScore = this.normalizeScore(review?.overallScore, 0);
         if (enableScriptEditor && enableReviewer && finalScore < REJECT_THRESHOLD && !scriptRetried) {
           scriptRetried = true;
@@ -606,7 +618,7 @@ export class EpisodeWorkflowService {
             }
             storyboard = await this.storyboardDirector.direct(state, script, intent);
             if (enableAudioDirector) {
-              try { storyboard = await this.audioDirector.enhance(state, storyboard); } catch (audioErr) {
+              try { storyboard = await this.audioDirector.enhance(state, storyboard, intent); } catch (audioErr) {
                 this.logger.warn(`[E${episodeNumber}] 重写后音频设计降级: ${(audioErr as Error).message}`);
               }
             }
@@ -965,6 +977,7 @@ export class EpisodeWorkflowService {
       this.logger.log(`[E${epNum}] 归档 ${episodeChars.length} 个临时角色: ${episodeChars.map(c => `${c.characterId}(${c.name})`).join(', ')}`);
 
       // 有名有姓的临时角色进入可复用池，供后续集导演选角（纯匿名路人跳过）
+      if (!state.minorRolePool) state.minorRolePool = [];
       const ANONYMOUS_NAMES = new Set(['路人', '行人', '群众', '士兵', '甲', '乙', '路人甲', '路人乙', '行人甲', '行人乙']);
       for (const char of episodeChars) {
         if (!char.name || ANONYMOUS_NAMES.has(char.name.trim())) continue;
@@ -1001,6 +1014,22 @@ export class EpisodeWorkflowService {
     if (state.flashbackBank.length > 120) state.flashbackBank = state.flashbackBank.slice(-120);
     if (state.kpiHistory.length > 60) state.kpiHistory = state.kpiHistory.slice(-60);
     if (state.dopamineSchedule.history.length > 60) state.dopamineSchedule.history = state.dopamineSchedule.history.slice(-60);
+    // secretLedger 上限：保留所有未解决 + 最近 5 集内解决的，超出后归档已解决的旧秘密
+    const SECRET_KEEP_RECENT_EPISODES = 5;
+    const SECRET_HARD_CAP = 80;
+    if (state.secretLedger.length > SECRET_HARD_CAP) {
+      // 未解决的全部保留；已解决的按集号倒序，超出 cap 后移除最旧的
+      const unresolved = state.secretLedger.filter(s => !s.resolved);
+      const resolved = state.secretLedger
+        .filter(s => s.resolved)
+        .sort((a, b) => (b.seededAtEpisode ?? 0) - (a.seededAtEpisode ?? 0));
+      // 已解决秘密：保留最近 5 集内解决的，其余仅保留到总上限
+      const recentResolved = resolved.filter(s => epNum - (s.seededAtEpisode ?? 0) <= SECRET_KEEP_RECENT_EPISODES);
+      const olderResolved = resolved.filter(s => epNum - (s.seededAtEpisode ?? 0) > SECRET_KEEP_RECENT_EPISODES);
+      const remaining = SECRET_HARD_CAP - unresolved.length - recentResolved.length;
+      state.secretLedger = [...unresolved, ...recentResolved, ...olderResolved.slice(0, Math.max(0, remaining))];
+      this.logger.log(`[E${epNum}] secretLedger 裁剪: ${unresolved.length} 未解决 + ${recentResolved.length} 近期已解决 + ${Math.max(0, remaining)} 旧已解决 = ${state.secretLedger.length}`);
+    }
     // episodeCharacterArchive 保留最近 60 集（极小数据无需激进裁剪）
     if (state.episodeCharacterArchive) {
       const archiveKeys = Object.keys(state.episodeCharacterArchive).sort((a, b) => Number(a) - Number(b));

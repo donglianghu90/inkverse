@@ -23,7 +23,9 @@ describe('ProviderRegistryService', () => {
       }),
     } as any;
 
-    const registry = new ProviderRegistryService(configService);
+    const kieAiCallbackService = {} as any;
+    const kieAiPollingService = {} as any;
+    const registry = new ProviderRegistryService(configService, kieAiCallbackService, kieAiPollingService);
     registry.onModuleInit();
 
     expect(registry.getImageProvider().name).toBe('volcengine');

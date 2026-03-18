@@ -1,0 +1,1866 @@
+/** 短剧视觉风格模板 Service — 系统预置 + 用户自定义 CRUD + 启动时种子同步 */
+import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { DramaVisualStyleTemplateEntity, VisualStyleGuide, VisualPromptGuidance } from './entities/drama-visual-style-template.entity';
+import { CreateDramaVisualStyleTemplateDto, UpdateDramaVisualStyleTemplateDto } from './dto/drama-visual-style-template.dto';
+
+type StyleCategory = 'live_action' | '2d_animation' | '3d_animation' | 'stop_motion' | 'chinese_traditional' | '2d_art';
+
+interface SystemVisualStyleTemplate {
+  styleKey: string;
+  displayName: string;
+  description: string;
+  styleCategory: StyleCategory;
+  tags: string[];
+  visualGuide: VisualStyleGuide;
+  promptGuidance: VisualPromptGuidance;
+  genreCompatibility: string[];
+  audienceTags: string[];
+  platformTags: string[];
+}
+
+const SYSTEM_TEMPLATES: SystemVisualStyleTemplate[] = [
+  /* ─── 真人影视 ─── */
+  {
+    styleKey: 'live_action',
+    displayName: '真人影视',
+    description: '现代都市真实感，影视级调色与光影，适合都市情感、职场、悬疑题材',
+    styleCategory: 'live_action',
+    tags: ['真实感', '影视级', '都市', '现代'],
+    visualGuide: {
+      overallAesthetic: '现代都市电影质感，高对比度，层次丰富，商业顶级制作标准；对标《繁花》《漫长的季节》摄影质感',
+      colorGrading: '冷暖对比调色，阴影压蓝（shadow blue shift -15），高光保暖（highlight warm +20），LUT风格接近顶级商业片；整体对比度 +25',
+      lightingStyle: '三点布光为主（主灯3:1比例），情绪场景使用伦勃朗光（45°侧光+眼袋阴影三角），外景利用黄金时段自然光（日落前后1小时）',
+      era: 'contemporary',
+      renderTechnique: '真实感摄影，浅景深（f/1.4-f/2.8，85mm-135mm焦段），9:16竖屏优化，镜头压缩感强',
+      textureStyle: '胶片颗粒感（ISO 800-3200模拟），轻度色差（chromatic aberration），自然皮肤毛孔细节，无磨皮感',
+      referenceStyle: '国产顶级都市剧，Netflix亚洲制作标准，韩剧顶级摄影水准',
+      styleReferencePrompt: 'cinematic live action photography, RAW photo, professional film color grading, shallow depth of field bokeh, Korean drama premium cinematic lighting, commercial broadcast production quality, photorealistic, 4K ultra-detailed, 85mm portrait lens compression, film grain texture, award-winning cinematography, masterpiece',
+      characterStylePrompt: 'cinematic live action portrait, contemporary urban professional, photorealistic skin with natural pores and subsurface scattering, professional makeup and styling, 85mm lens compression shallow bokeh, Korean drama cinematic lighting, commercial quality photography, highly detailed, 4K resolution, masterpiece portrait',
+      facePromptRule: '本剧为【现代都市真人】。faceReferencePrompt 必须以 "modern contemporary" 或 "stylish urban" 开头，配合职业/身份词，例如："modern contemporary Chinese CEO, sharp confident face, strong jawline, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。真人风格质量要求：faceReferencePrompt 末尾必须加入 "eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, natural subsurface scattering, no airbrushing, not plastic skin, 4K portrait masterpiece quality"，确保生成电影级人像质感而非磨皮商业照。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['cinematic', 'photorealistic', 'film grain', 'bokeh', 'urban', 'contemporary', 'Korean drama style', 'commercial quality', 'high quality', 'masterpiece', 'detailed', '4K', 'award-winning'],
+      negativeKeywords: ['anime', 'cartoon', 'illustrated', 'CGI', 'unrealistic', 'flat lighting', 'oversaturated', 'low quality', 'worst quality', 'blurry', 'watermark', 'text overlay', 'plastic skin', 'airbrushed', 'bad anatomy', 'deformed'],
+      characterStyle: '真人演员质感，自然妆容，现代时装或职业服装，面部光影层次丰富，毛孔可见，眼神有神；避免磨皮感，避免僵硬表情，皮肤有自然纹理',
+      backgroundStyle: '都市写字楼、高档住宅、咖啡厅、街道等真实场景，景深虚化背景突出主体；背景需有纵深感，细节真实，光线自然',
+    },
+    genreCompatibility: ['都市', '职场', '悬疑', '爱情', '家庭', '霸总', '甜宠'],
+    audienceTags: ['全年龄段', '18-45岁'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'reelshort', 'wechat_mini'],
+  },
+  {
+    styleKey: 'period_live',
+    displayName: '真人古装',
+    description: '古装历史真实感，宫廷或江湖场景，华丽服饰与道具，适合历史剧、宫斗、武侠',
+    styleCategory: 'live_action',
+    tags: ['古装', '历史', '写实', '华丽'],
+    visualGuide: {
+      overallAesthetic: '古典宫廷或江湖写实风格，金色暖调为主，层次丰富，服化道精致考究；对标《甄嬛传》《长安十二时辰》制作水准',
+      colorGrading: '暖金调色为主（shadows: warm amber, highlights: golden warm），宫廷场景加深暗部红棕色，江湖场景偏冷绿色调；整体色温偏暖',
+      lightingStyle: '古典油画式侧光（Rembrandt lighting），宫廷用烛光暖光效（2700K-3000K），户外使用柔和散射自然光，大型场景用天光+人工补光',
+      era: 'ancient',
+      renderTechnique: '真实摄影，浅景深（f/2.0-f/4），精致服饰特写，传统建筑宏大空间感',
+      textureStyle: '丝绸织物细腻纹理，刺绣精工细节，做旧木材与石材质感，金属器皿反光',
+      referenceStyle: '国产顶级古装剧《甄嬛传》《琅琊榜》《长安十二时辰》《鹤唳华亭》',
+      styleReferencePrompt: 'Chinese historical drama cinematography, ancient Tang dynasty court costume, cinematic hanfu with meticulous silk embroidery texture, imperial palace interior dougong wooden beams, warm golden candlelight amber tone, shallow depth of field, photorealistic, 4K ultra-detailed, award-winning period drama production quality, inspired by The Longest Day in Chang\'an cinematography, masterpiece',
+      characterStylePrompt: 'Chinese historical drama portrait, ancient Chinese noblewoman in imperial hanfu costume, photorealistic skin texture, intricate silk embroidery costume detail, traditional hair ornament jewelry, palace warm candlelight, 4K portrait quality, realistic skin with natural pores, no airbrushing, film grain, masterpiece period drama',
+      facePromptRule: '本剧为【真人古装 / 中国历史画风】。faceReferencePrompt 必须以朝代词 + 身份词开头，例如："Tang dynasty ancient Chinese emperor in imperial dragon robe, commanding presence, front-facing, looking at camera, ..." 或 "ancient Chinese noblewoman in court attire, graceful bearing, front-facing, looking at camera, ..."。禁止仅写 "Chinese man/woman"，否则模型会生成现代人。必须包含 "front-facing, looking at camera"。真人风格质量要求：faceReferencePrompt 末尾必须加入 "eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, no airbrushing, not plastic skin, 4K portrait masterpiece quality, period-accurate makeup"，确保生成电影级人像质感。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['ancient China', 'hanfu', 'historical', 'palace', 'wuxia', 'cinematic', 'warm lighting', 'ornate costume', 'high quality', 'masterpiece', 'photorealistic', '4K', 'period drama', 'silk texture', 'detailed'],
+      negativeKeywords: ['modern', 'contemporary', 'anime', 'fantasy CGI', 'neon light', 'casual clothing', 'low quality', 'worst quality', 'blurry', 'watermark', 'bad anatomy', 'plastic skin', 'deformed'],
+      characterStyle: '精致汉服或宫廷服饰（纹样精细），传统发髻与头饰（层次丰富），古典妆容，面部光影柔和；服装须有织物纹理细节，皮肤质感真实',
+      backgroundStyle: '宫廷建筑（斗拱彩画金柱）、古典园林、江湖山水、茶楼客栈等古代场景；场景细节考究，建筑比例准确，无现代元素',
+    },
+    genreCompatibility: ['古装', '宫斗', '武侠', '历史', '穿越', '重生'],
+    audienceTags: ['女性向', '18-40岁'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'mango_tv', 'wechat_mini'],
+  },
+  {
+    styleKey: 'hk_film',
+    displayName: '港片风格',
+    description: '香港电影黄金时代美学，高对比度色调，霓虹氛围，适合悬疑、动作、黑帮题材',
+    styleCategory: 'live_action',
+    tags: ['港片', '霓虹', '复古', '高对比'],
+    visualGuide: {
+      overallAesthetic: '香港电影黄金时代美学，高对比度，霓虹色调，街头烟雨氛围；致敬王家卫《花样年华》《重庆森林》的视觉诗意',
+      colorGrading: '青橙调色（teal & orange LUT），提升阴影饱和度至+40，暗部保留霓虹反光；高光偏暖橙，阴影保留深蓝青',
+      lightingStyle: '强烈人工光（霓虹灯牌混色），雨夜路面积水反光，高对比明暗（光比5:1以上），逆光剪影效果',
+      era: 'contemporary',
+      renderTechnique: '35mm胶片感（ISO 800-1600颗粒），轻微过曝高光（+0.7EV），颗粒噪点模拟真实胶片',
+      textureStyle: '35mm胶片颗粒（高对比粗颗粒），湿漉漉的路面反光，玻璃折射，霓虹晕光散射',
+      referenceStyle: '王家卫《花样年华》《2046》，《无间道》，《英雄本色》，香港黄金时代noir电影',
+      styleReferencePrompt: 'Hong Kong noir film photography, neon-drenched rain-wet alley, teal orange cinematic color grade, 35mm film grain high contrast, Chungking Express aesthetic, moody night scene, cyan magenta neon reflections, photorealistic, atmospheric fog, Wong Kar-wai visual poetry, award-winning Hong Kong cinematography, 9:16 vertical cinematic, masterpiece',
+      characterStylePrompt: 'Hong Kong classic cinema portrait, 35mm film grain texture, neon light color cast on skin, realistic skin with natural pores, moody character composition, noir atmosphere, photorealistic, 4K portrait quality, atmospheric cinematic lighting, masterpiece',
+      facePromptRule: '本剧为【港片风格】。faceReferencePrompt 必须以 "Hong Kong classic cinema style" 开头，例如："Hong Kong classic cinema style triad boss, sharp angular face, slicked-back hair, neon light on cheekbones, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。真人风格质量要求：faceReferencePrompt 末尾必须加入 "eyes sharply in focus, clear iris detail, 35mm film grain skin texture, neon color cast, realistic pores, no airbrushing, masterpiece quality"，确保生成胶片质感人像。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['Hong Kong film', 'neon', 'rain', 'noir', 'cinematic', '35mm', 'teal orange', 'high contrast', 'moody', 'atmospheric', 'film grain', 'photorealistic', 'high quality', 'masterpiece'],
+      negativeKeywords: ['bright daylight', 'clean modern', 'anime', 'cheerful', 'pastel', 'low quality', 'worst quality', 'blurry', 'watermark', 'plastic skin', 'deformed', 'airbrushed'],
+      characterStyle: '复古港式穿着，霓虹反光打在人物脸上（蓝/红双色），表情深沉或含蓄；面部光影对比强烈，皮肤自然质感，眼神有故事',
+      backgroundStyle: '雨夜街头（路面积水反光）、霓虹招牌（中文字体）、老式茶餐厅、天台、停车场、狭窄巷弄等港式场景',
+    },
+    genreCompatibility: ['悬疑', '动作', '黑帮', '爱情', '犯罪'],
+    audienceTags: ['男性向', '25-45岁'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo'],
+  },
+
+  /* ─── 真人实拍（补充） ─── */
+  {
+    styleKey: 'retro_wuxia',
+    displayName: '真人复古武侠',
+    description: '经典武侠片美学，胶片暖色调，大漠孤烟/竹林飞瀑场景，武打动作质感，侠客江湖',
+    styleCategory: 'live_action',
+    tags: ['武侠', '复古', '胶片', '江湖', '动作'],
+    visualGuide: {
+      overallAesthetic: '经典武侠片美学，胶片暖色调，粗粝江湖气息，刀光剑影的动作张力；致敬徐克《新龙门客栈》《倩女幽魂》的独特视觉语言',
+      colorGrading: '暖棕橙调色（shadows: deep brown, highlights: warm amber），胶片感颗粒，竹林场景偏绿意，大漠场景强橙黄',
+      lightingStyle: '自然光为主（竹林硬边散射），大漠强侧光（golden hour），室内烛光暖黄（3000K点光源），夜景月光冷蓝与火把暖橙对比',
+      era: 'ancient',
+      renderTechnique: '真实摄影，胶片模拟（Kodak 5219风格），轻微晕影（vignette），动作场景适度运动模糊',
+      textureStyle: '35mm胶片颗粒，布料汗迹污迹，风沙尘土，刀剑金属光泽，木材纹理，绳索质感',
+      referenceStyle: '《笑傲江湖》《新龙门客栈》《卧虎藏龙》《英雄》，徐克、李安武侠电影美学',
+      styleReferencePrompt: 'retro wuxia martial arts film photography, ancient Chinese swordsman, warm earth tone 35mm film grain, bamboo forest dappled light, desert dune golden hour side light, worn leather iron sword detail, 1990s Hong Kong wuxia Tsui Hark cinema aesthetic, photorealistic, 4K ultra-detailed, dynamic action composition, masterpiece period wuxia film',
+      characterStylePrompt: 'retro wuxia film portrait, ancient Chinese swordsman, 35mm film grain texture, warm amber color cast, weathered skin with natural pores, period-accurate warrior costume with wear and dirt, photorealistic, 4K portrait quality, no airbrushing, masterpiece',
+      facePromptRule: '本剧为【复古武侠】。faceReferencePrompt 必须以 "retro wuxia film style" 开头，配合武侠身份词，例如："retro wuxia film style Chinese swordsman, weathered rugged face, intense gaze, front-facing, looking at camera, 1990s HK cinema aesthetic, ..."。必须包含 "front-facing, looking at camera"。真人风格质量要求：faceReferencePrompt 末尾必须加入 "eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, weathered skin details, 35mm film grain quality, no airbrushing, masterpiece"，确保生成胶片质感人像。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['wuxia', 'martial arts', 'retro film', 'ancient China', 'sword', 'bamboo', 'warm tones', 'film grain', 'cinematic', 'photorealistic', 'high quality', 'masterpiece', 'atmospheric'],
+      negativeKeywords: ['modern', 'anime', 'CGI fantasy', 'neon', 'clean digital', 'pastel', 'low quality', 'worst quality', 'blurry', 'watermark', 'bad anatomy', 'plastic skin'],
+      characterStyle: '武侠风真人角色，古朴服饰（做旧处理），飘逸长发或束发，携刀剑，面容沧桑或英气；武器须有划痕磨损，服装有汗渍风尘感',
+      backgroundStyle: '竹林（光线穿透感）、大漠（沙尘漫天）、古镇（青石板路）、茶楼（木制结构）、山谷（岩石质感），无现代建筑',
+    },
+    genreCompatibility: ['武侠', '古装', '动作', '江湖', '复仇'],
+    audienceTags: ['男性向', '25-50岁'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo'],
+  },
+
+  /* ─── 2D 动画 ─── */
+  {
+    styleKey: '2d_anime',
+    displayName: '2D日漫动画',
+    description: '日式动画美学，流畅线条，清晰轮廓线，鲜艳色彩，适合热血、青春、奇幻题材',
+    styleCategory: '2d_animation',
+    tags: ['日漫', '动漫', '二次元', '线条'],
+    visualGuide: {
+      overallAesthetic: '日式动画美学，清晰轮廓线描，鲜艳饱和色彩，表情夸张生动；制作水准对标主流商业动画studio',
+      colorGrading: '高饱和色彩（+40-60饱和度），清晰硬边赛璐璐阴影，明亮对比，无低饱和灰调',
+      lightingStyle: 'Cel shading风格，2-3级硬边阴影（无渐变），眼睛必有精致高光点，逆光场景有光晕效果',
+      era: 'contemporary',
+      renderTechnique: '2D手绘风格，清晰线稿（0.5-1.5px线宽变化），赛璐璐涂色，动漫透视比例',
+      textureStyle: '平涂色块（无材质噪点），赛璐璐质感，高光点简洁，毛发用线条表达方向',
+      referenceStyle: '主流日本动画制作水准，ufotable画质，《鬼灭之刃》《进击的巨人》《咒术回战》',
+      styleReferencePrompt: 'anime style illustration, 2D hand-drawn cel shading, clean precise line art, vibrant saturated colors, Japanese animation masterpiece quality, manga key visual, sharp cel shadow edges, beautiful anime character design, highly detailed, best quality, masterpiece anime illustration',
+      characterStylePrompt: 'anime style character illustration, 2D cel shading, clean detailed line art, vibrant saturated colors, large expressive anime eyes with detailed catchlights, beautiful hair rendering with highlights, masterpiece quality, best quality, highly detailed anime illustration',
+      facePromptRule: '本剧为【2D日系动漫】。faceReferencePrompt 必须以 "anime style" 开头，使用动漫五官描述（大眼、细腻线条），例如："anime style young male protagonist, sharp determined eyes, messy dark hair, angular jawline, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。动漫风格质量要求：faceReferencePrompt 末尾加入 "detailed anime eyes with catchlight, clean line art, best quality, masterpiece"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['anime', '2D', 'cel shading', 'line art', 'vibrant', 'Japanese animation', 'manga style', 'expressive', 'high quality', 'masterpiece', 'best quality', 'highly detailed'],
+      negativeKeywords: ['realistic', '3D render', 'photograph', 'watercolor', 'sketch', 'monochrome', 'low quality', 'worst quality', 'blurry', 'off-model', 'bad anatomy', 'deformed'],
+      characterStyle: '日式动漫风格角色，大眼睛（含精致高光），清晰线稿，鲜艳发色，夸张表情，动漫比例身材',
+      backgroundStyle: '日式动画背景风格，精细手绘场景，明亮色调，透视准确，细节丰富（植物、建筑、光影分层）',
+    },
+    genreCompatibility: ['奇幻', '热血', '青春', '校园', '战斗'],
+    audienceTags: ['年轻向', '13-25岁'],
+    platformTags: ['douyin', 'kuaishou', 'bilibili'],
+  },
+  {
+    styleKey: '2d_ghibli',
+    displayName: '吉卜力风格',
+    description: '宫崎骏式温暖手绘美学，柔和水彩质感，自然光线，适合治愈、奇幻、冒险题材',
+    styleCategory: '2d_animation',
+    tags: ['吉卜力', '宫崎骏', '温暖', '手绘', '治愈'],
+    visualGuide: {
+      overallAesthetic: '宫崎骏式温暖手绘动画，柔和色彩，自然光线，充满生命力的细节；Studio Ghibli制作最高标准',
+      colorGrading: '柔和暖调（低饱和+20），淡雅不刺眼，阳光感，大气透视效果（远景淡蓝）',
+      lightingStyle: '柔和自然光（无硬边阴影），窗边逆光（光晕效果），黄金时段暖光，云层散射漫射光',
+      era: 'contemporary',
+      renderTechnique: '传统手绘动画风格（类水彩质感背景），流畅自然的线条，背景与角色分层感',
+      textureStyle: '水彩纸张质感，轻微颗粒感，笔触可见（尤其背景），颜料晕染效果',
+      referenceStyle: 'Studio Ghibli《千与千寻》《龙猫》《哈尔的移动城堡》《幽灵公主》',
+      styleReferencePrompt: 'Studio Ghibli style masterpiece, Miyazaki Hayao animation, soft hand-painted watercolor background art, warm golden sunlight atmosphere, gentle natural lighting, lush detailed nature scenery, nostalgic heartwarming aesthetic, beautiful 2D animation film quality, highly detailed background art, soft warm color palette, masterpiece Ghibli film illustration, best quality',
+      characterStylePrompt: 'Studio Ghibli style character, Miyazaki animation design, soft round features, warm expressive eyes, natural gentle expression, hand-drawn line art with soft watercolor fill, warm color palette, highly detailed, best quality, Ghibli masterpiece animation',
+      facePromptRule: '本剧为【吉卜力/Ghibli风格】。faceReferencePrompt 必须以 "Studio Ghibli style" 或 "Miyazaki anime style" 开头，使用温暖圆润的五官描述，例如："Studio Ghibli style young girl, round soft face, gentle warm eyes, natural expression, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。质量要求：末尾加入 "soft watercolor line art, warm Ghibli color palette, best quality, masterpiece"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['Ghibli', 'Studio Ghibli', 'Miyazaki', 'watercolor', 'hand-drawn', 'warm', 'soft lighting', 'nostalgic', 'nature', 'detailed', 'masterpiece', 'high quality', 'best quality'],
+      negativeKeywords: ['dark', 'horror', 'violent', 'sharp lines', 'CGI', '3D', 'modern anime sharp', 'hard cel shading', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '吉卜力式可爱角色，圆润面庞，简洁而有温度的线条，自然表情（不夸张），温暖穿着，眼睛明亮有神但不过分大',
+      backgroundStyle: '极其精细的手绘自然背景（草地植物细节丰富），绿野、海洋、乡村、欧式小镇；光线穿透树叶的丁达尔效果，远景大气透视',
+    },
+    genreCompatibility: ['奇幻', '冒险', '治愈', '童话', '成长'],
+    audienceTags: ['全年龄', '亲子向'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+  {
+    styleKey: '2d_korean_anime',
+    displayName: '韩漫/条漫',
+    description: '韩式网络漫画风格，竖排阅读优化，精致人物，柔和配色，适合爱情、都市、职场',
+    styleCategory: '2d_animation',
+    tags: ['韩漫', '条漫', 'webtoon', '甜美', '竖屏'],
+    visualGuide: {
+      overallAesthetic: '韩式网络漫画美学，精致唯美，色彩柔和清新，竖屏9:16优化，适合手机阅读体验',
+      colorGrading: '粉紫柔和调色（pastel palette），高亮度（+30），低饱和温柔色调，肤色偏白皙通透',
+      lightingStyle: '柔光散射（soft box效果），唯美逆光（背光晕染），发丝高光，面部光晕柔和',
+      era: 'contemporary',
+      renderTechnique: '数字绘画，精细线稿（发丝级线条），柔和渐变涂色，皮肤分层上色',
+      textureStyle: '细腻皮肤质感（光泽感），柔和色块过渡，发丝精细质感',
+      referenceStyle: '韩国top webtoon《我的ID是江南美人》《女神降临》《隐秘的角落》条漫版',
+      styleReferencePrompt: 'Korean webtoon style illustration, manhwa artwork vertical scroll comic, soft pink purple pastel palette, beautiful idealized characters, delicate precision line art, gentle gradient cel shading, romance drama aesthetic, 9:16 vertical composition, highly detailed, best quality, professional webtoon artist masterpiece quality',
+      characterStylePrompt: 'Korean webtoon style character, manhwa beautiful face, delicate precision line art, soft gradient shading, pastel color palette, tall nose bridge, fair skin, large expressive eyes, romantic drama aesthetic, highly detailed, best quality, masterpiece webtoon illustration',
+      facePromptRule: '本剧为【韩漫 / 条漫风格】。faceReferencePrompt 必须以 "Korean webtoon style" 开头，例如："Korean webtoon style handsome male lead, clean sharp features, gradient dyed hair, tall nose bridge, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。质量要求：末尾加入 "delicate webtoon line art, soft gradient shading, best quality, masterpiece"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['webtoon', 'manhwa', 'Korean comic', 'soft colors', 'delicate', 'romantic', 'beautiful characters', 'pastel', 'high quality', 'masterpiece', 'detailed', 'professional'],
+      negativeKeywords: ['rough sketch', 'dark', 'violent', 'horror', 'bold lines', 'vintage', 'low quality', 'worst quality', 'blurry', 'off-model', 'bad anatomy'],
+      characterStyle: '韩漫精致美型角色，白皙光滑皮肤，精致立体五官（高鼻梁、双眼皮），时尚穿搭，眼神表达丰富，发色多样',
+      backgroundStyle: '韩式都市场景、咖啡厅（木质暖色调）、学校（明亮窗边）、办公室（现代感），色彩柔和温馨，背景细节精致',
+    },
+    genreCompatibility: ['爱情', '都市', '职场', '校园', '霸总', '甜宠'],
+    audienceTags: ['女性向', '15-30岁'],
+    platformTags: ['douyin', 'kuaishou', 'hongguo', 'wechat_mini'],
+  },
+  {
+    styleKey: '2d_shoujo',
+    displayName: '少女漫画风',
+    description: '日式少女漫画美学，星光泡泡效果，精致花背景，梦幻浪漫，适合恋爱、偶像题材',
+    styleCategory: '2d_animation',
+    tags: ['少女漫', '梦幻', '浪漫', '星光', '花'],
+    visualGuide: {
+      overallAesthetic: '日式少女漫画经典美学，花与星光背景，精致大眼角色，梦幻浪漫气质；致敬经典少女漫画大师风格',
+      colorGrading: '粉红色调（cherry blossom pink主调），高亮度（+40），星光与花瓣点缀（screen blend），梦幻渐变',
+      lightingStyle: '逆光唯美（背光剪影+散射晕），花瓣散落光效，泡泡与星光点缀，柔和发光体',
+      era: 'contemporary',
+      renderTechnique: '传统少女漫风格，精细线稿（特别是眼睛细节），半调网点（screen tone），装饰性花卉背景',
+      textureStyle: '网点纸质感，花朵蕾丝装饰，丝带与蝴蝶结，星光闪烁粒子',
+      referenceStyle: '《美少女战士》《玻璃假面》池田理代子风格，《红色河岸》现代少女漫',
+      styleReferencePrompt: 'shoujo manga style illustration, Japanese girls comic, sparkling star effects, cherry blossom flower background, large expressive beautiful eyes with detailed catchlights, delicate precision line art, romantic dreamy atmosphere, screen tone halftone dots, pastel pink color palette, highly detailed, best quality, classic shoujo manga masterpiece quality',
+      characterStylePrompt: 'shoujo manga style character, large sparkly gorgeous eyes with multiple catchlights, soft romantic round face, rosy delicate features, flowing hair with highlights, floral background elements, pink pastel palette, detailed line art, best quality, masterpiece shoujo manga illustration',
+      facePromptRule: '本剧为【少女漫画风】。faceReferencePrompt 必须以 "shoujo manga style" 开头，例如："shoujo manga style young woman, large sparkling eyes with detailed catchlights, soft rounded face, rosy cheeks, delicate features, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。质量要求：末尾加入 "highly detailed eye rendering with sparkle effects, best quality, masterpiece shoujo manga"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['shoujo', 'shoujo manga', 'sparkle', 'flowers', 'romantic', 'big eyes', 'delicate', 'dreamy', 'pastel', 'masterpiece', 'high quality', 'detailed', 'best quality'],
+      negativeKeywords: ['action', 'dark', 'horror', 'rough', 'minimalist', 'realistic', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '少女漫大眼睛精致角色，精心发型（卷发/长发飘逸），蕾丝或校服或礼裙，脸颊常有红晕，睫毛精致上翘',
+      backgroundStyle: '花朵与星光装饰性背景（玫瑰园、教室窗边、游乐场、舞台），网点纸质感背景，光晕效果显著',
+    },
+    genreCompatibility: ['恋爱', '偶像', '校园', '奇幻', '甜宠'],
+    audienceTags: ['女性向', '13-25岁'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+
+  {
+    styleKey: '2d_film',
+    displayName: '2D电影动画',
+    description: '电影感2D手绘动画，精致背景美术，细腻光影，如新海诚式宽画幅，适合情感、都市、奇幻题材',
+    styleCategory: '2d_animation',
+    tags: ['2D', '电影', '新海诚', '精致', '背景美术'],
+    visualGuide: {
+      overallAesthetic: '电影感2D动画，精细背景美术，宽画幅构图，光影细腻层次丰富，文艺感强；新海诚式唯美写实主义',
+      colorGrading: '写实系色调，精细的大气透视（远景蓝紫渐变），蓝紫偏冷系或暖金系，光线质感突出，色彩层次丰富',
+      lightingStyle: '电影级自然光（HDRI式环境光），窗口散射光（丁达尔光束），逆光剪影+背景晕染，雨后场景的散射雾气',
+      era: 'contemporary',
+      renderTechnique: '高精度2D数字绘画，分层背景（8-12层），精细光影渲染，动漫透视与写实场景的融合',
+      textureStyle: '背景水彩或油彩质感，轻微颗粒，精细大气效果（云层、雨水、粉尘），玻璃反射',
+      referenceStyle: '新海诚《你的名字》《天气之子》《铃芽之旅》，京阿尼《声之形》画风',
+      styleReferencePrompt: 'Makoto Shinkai anime film style, cinematic 2D animation masterpiece, ultra-detailed background art, beautiful atmospheric lighting, volumetric light rays tyndall effect, atmospheric perspective gradient, film quality anime illustration, vibrant yet realistic colors, 9:16 vertical cinematic frame, highly detailed, best quality, award-winning anime film, masterpiece',
+      characterStylePrompt: 'Makoto Shinkai style anime character, cinematic 2D animation film, large luminous eyes with detailed light reflections, soft realistic shading, detailed hair with light refraction, anime film quality, highly detailed, best quality, KyoAni character design level masterpiece',
+      facePromptRule: '本剧为【2D电影动画 / 新海诚风格】。faceReferencePrompt 必须以 "Makoto Shinkai anime style" 或 "cinematic 2D anime film style" 开头，使用动漫五官描述，例如："Makoto Shinkai anime style young woman, large luminous eyes with detailed light reflections, delicate features, soft realistic shading, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。质量要求：末尾加入 "detailed eye rendering beautiful lighting, best quality, anime film masterpiece"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['Shinkai style', 'cinematic anime', 'detailed background', '2D animation film', 'beautiful lighting', 'atmospheric', 'lush', 'masterpiece', 'high quality', 'detailed', 'film quality', 'best quality'],
+      negativeKeywords: ['simple', 'flat', 'sketch', 'rough', 'chibi', 'dark horror', '3D', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '精致2D动画角色，写实比例，自然表情（细腻情绪），精心服装与发型设计，眼睛有光感和多层次',
+      backgroundStyle: '极其精细的2D背景美术，光感十足（丁达尔、反光、折射），城市（玻璃大楼反光）、自然（草地微风）场景细节饱满',
+    },
+    genreCompatibility: ['爱情', '青春', '奇幻', '都市', '成长'],
+    audienceTags: ['全年龄', '18-35岁'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+  {
+    styleKey: '2d_retro_anime',
+    displayName: '2D复古动画',
+    description: '80-90年代经典动画质感，胶片颗粒，暖色调，老派赛璐璐着色，充满怀旧气息',
+    styleCategory: '2d_animation',
+    tags: ['复古', '80年代', '90年代', '怀旧', '赛璐璐'],
+    visualGuide: {
+      overallAesthetic: '80-90年代经典动画质感，胶片感十足，怀旧色调，老派赛璐璐着色，充满时代感',
+      colorGrading: '暖色调偏黄褐（vintage warm filter），轻微褪色感（desaturation -15），有时代感的颗粒噪点，偶有色彩偏移',
+      lightingStyle: '平面硬边赛璐璐阴影（2-tone），无复杂体积光，对比度适中，老派感强',
+      era: 'contemporary',
+      renderTechnique: '传统赛璐璐动画手绘，胶片颗粒模拟，老旧动画帧率感，线条粗细变化传统',
+      textureStyle: '胶片颗粒（VHS感），轻微色差，赛璐璐涂料质感，无数字平滑感',
+      referenceStyle: '《圣斗士星矢》《幽游白书》《龙珠Z》，高达系列，经典东映动画',
+      styleReferencePrompt: '1990s anime style illustration, retro Japanese animation aesthetic, traditional cel animation technique, warm vintage color palette with film grain, classic anime character design, old-school manga adaptation quality, VHS era 90s animation, nostalgic otaku culture, highly detailed, retro anime masterpiece quality, best quality',
+      characterStylePrompt: '1990s retro anime style character, classic cel animation, warm vintage color palette, traditional anime proportions, old-school line art style, film grain texture overlay, nostalgic 90s anime aesthetic, highly detailed retro illustration, best quality, masterpiece vintage anime',
+      facePromptRule: '本剧为【2D复古动画 / 90年代日漫】。faceReferencePrompt 必须以 "1990s retro anime style" 或 "classic cel animation style" 开头，使用复古动漫五官描述，例如："1990s retro anime style young hero, sharp determined eyes, spiky dark hair, classic anime proportions, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['retro anime', '90s anime', 'vintage', 'cel animation', 'classic', 'film grain', 'nostalgic', 'warm', 'high quality', 'traditional animation', 'masterpiece'],
+      negativeKeywords: ['modern clean', 'clean digital', 'sharp contemporary', 'HD crisp', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '经典动画人物造型，怀旧风格穿着，老派比例设计（大眼睛），赛璐璐着色特有的硬边阴影，无数字平滑感',
+      backgroundStyle: '复古动画背景（厚重颜料感），日式街道、学校、道场、神社，色彩质朴有时代感',
+    },
+    genreCompatibility: ['热血', '冒险', '校园', '机甲', '武术'],
+    audienceTags: ['男性向', '20-40岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '2d_action',
+    displayName: '2D热血动画',
+    description: '少年漫画式激烈动作，速度线与爆发特效，高对比着色，适合战斗、热血、竞技题材',
+    styleCategory: '2d_animation',
+    tags: ['热血', '动作', '速度线', '战斗', '少年漫'],
+    visualGuide: {
+      overallAesthetic: '热血少年漫画式动画，动作爆发力强，速度线与冲击波特效，视觉冲击显著；ufotable战斗场景制作水准',
+      colorGrading: '高饱和鲜艳色彩（+50饱和），红橙黄暖色系主导，爆炸与冲击用高饱和对比色（互补色撞色）',
+      lightingStyle: '动感硬边光影，强调力量感轮廓光（rim light），爆发时高亮过曝（bloom效果），能量气场发光',
+      era: 'contemporary',
+      renderTechnique: '2D手绘动画，速度线（motion blur lines），爆炸特效（spark+glow），动作扭曲变形表现力',
+      textureStyle: '速度线与冲击波线条，爆炸火花颗粒，力量变形效果（impact frames），能量光效',
+      referenceStyle: '《鬼灭之刃》《咒术回战》《我的英雄学院》ufotable战斗场景',
+      styleReferencePrompt: 'shounen action anime illustration, intense dynamic battle scene, motion speed lines, explosion impact effects, vibrant saturated colors, energy aura power-up glow, dynamic extreme pose, fight sequence composition, ufotable animation quality, masterpiece, best quality, highly detailed action anime illustration',
+      characterStylePrompt: 'action anime character, intense battle pose, energy aura effect, vibrant powerful expression, dynamic muscle tension, detailed combat costume, motion blur effect, masterpiece quality, best quality highly detailed action anime illustration',
+      facePromptRule: '本剧为【2D热血战斗动漫】。faceReferencePrompt 必须以 "shounen action anime style" 开头，使用热血动漫五官描述，例如："shounen action anime style hero, fierce determined eyes with power glow, wild spiky hair, strong jaw, intense battle expression, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['action anime', 'shounen', 'speed lines', 'dynamic', 'battle', 'energy', 'intense', 'explosion', 'vibrant', 'masterpiece', 'best quality', 'highly detailed', 'powerful'],
+      negativeKeywords: ['slow', 'calm', 'pastel', 'romance', 'static', 'peaceful', 'watercolor', 'low quality', 'worst quality', 'blurry', 'bad anatomy', 'off-model'],
+      characterStyle: '热血动漫主角造型，战斗姿态（动态极端），爆发能量光效，夸张表情与动态，肌肉线条明确',
+      backgroundStyle: '战斗场景（破坏环境碎片），速度线背景，爆炸特效+火花，城市废墟或自然战场；视角夸张',
+    },
+    genreCompatibility: ['热血', '战斗', '竞技', '冒险', '超级英雄'],
+    audienceTags: ['男性向', '13-30岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '2d_cybercity',
+    displayName: '2D灵境都市',
+    description: '2D赛璐璐赛博朋克都市，霓虹与暗巷，高科技都市夜景，适合科幻、悬疑、都市黑色题材',
+    styleCategory: '2d_animation',
+    tags: ['赛博朋克', '2D', '霓虹', '都市', '科幻'],
+    visualGuide: {
+      overallAesthetic: '2D赛博朋克都市夜景，霓虹灯光点缀暗巷，高科技低生活，二次元科幻美学；致敬《攻壳机动队》《赛博朋克：边缘行者》',
+      colorGrading: '深蓝暗底调（shadows: deep navy），霓虹粉红青绿点缀（neon pink #FF006E, cyan #00FFE5），高对比度（+40），暗部保留冷色',
+      lightingStyle: '人工霓虹光源（色彩混合），街道灯光湿路反光，全息投影发光（自发光），阴暗角落深黑色有层次',
+      era: 'future',
+      renderTechnique: '2D手绘数字艺术，霓虹光晕特效（bloom+glow），赛璐璐着色（硬边阴影），夜景多层分层',
+      textureStyle: '玻璃反射，雨水路面倒影，霓虹光晕，电路板纹理感，数字噪点',
+      referenceStyle: '《攻壳机动队》《赛博朋克：边缘行者》2D片段，《银翼杀手》动画版，《AKIRA》',
+      styleReferencePrompt: '2D cyberpunk anime illustration, neon urban night scene dystopian city, teal cyan magenta pink color scheme, holographic display overlays, rain-wet street reflections, high contrast dark atmosphere, sci-fi futuristic 2D animation style, Ghost in the Shell aesthetic, Cyberpunk Edgerunners visual, masterpiece, best quality, highly detailed cyberpunk illustration',
+      characterStylePrompt: '2D cyberpunk anime character, neon-lit face with teal and pink color cast, cyber augmentation details, dark tactical outfit, holographic eye implant, rain-soaked atmosphere, masterpiece quality, best quality cyberpunk illustration',
+      facePromptRule: '本剧为【赛博朋克 / 科幻】。faceReferencePrompt 必须以 "cyberpunk futuristic" 或 "sci-fi" 开头，配合科技改造特征，例如："cyberpunk futuristic female hacker, neon-lit face with teal and pink color cast, glowing cyber eye implant, subtle facial implants, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['cyberpunk', 'neon', '2D animation', 'night scene', 'futuristic', 'teal pink', 'holographic', 'urban', 'high quality', 'masterpiece', 'atmospheric', 'detailed'],
+      negativeKeywords: ['daylight', 'natural', 'pastoral', 'ancient', 'warm cheerful', 'bright pastel', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '2D赛博朋克风格人物，机械改造元素（发光义眼、金属臂），暗系战术服装，霓虹反光打脸（蓝/粉双色光）',
+      backgroundStyle: '未来都市夜景（高密度楼宇），中文霓虹广告牌，飞行载具轨迹，雨夜湿地反光，全息广告投影',
+    },
+    genreCompatibility: ['科幻', '悬疑', '动作', '赛博朋克', '都市'],
+    audienceTags: ['男性向', '18-35岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '2d_thick_line',
+    displayName: '2D粗线条',
+    description: '粗黑大胆描边风格，强烈视觉冲击，简约但有力的角色造型，高对比配色',
+    styleCategory: '2d_animation',
+    tags: ['粗线条', '粗描边', '简约', '力量感', '高对比'],
+    visualGuide: {
+      overallAesthetic: '粗黑大胆描边，简约有力的角色造型，强烈视觉冲击感，减法美学；漫威漫画原版风格',
+      colorGrading: '高对比度（+50），少量色彩配置（限制色板4-6色），黑白主调偶有鲜明强调色（英雄红/蓝）',
+      lightingStyle: '简化光影，大面积阴影平涂（高对比2-tone），无复杂渐变，强调轮廓线定义形状',
+      era: 'contemporary',
+      renderTechnique: '粗描边手绘（2-4px uniform line weight），大色块平涂，简约数字绘画',
+      textureStyle: '无材质细节，粗糙笔触感，刷漆感描边，Ben-Day网点偶有点缀',
+      referenceStyle: '《双城之战》（英雄联盟动画），漫威漫画原版，《蜘蛛侠：平行宇宙》风格',
+      styleReferencePrompt: 'bold thick outline illustration, graphic novel comic book style, high contrast black outline strokes, simplified geometric character design, strong dynamic line weight, Marvel DC comic aesthetic, limited bold color palette, Arcane League of Legends animation style, masterpiece graphic novel quality, highly detailed bold illustration, best quality',
+      characterStylePrompt: 'bold thick outline comic character, graphic novel style, high contrast simplified design, strong uniform line weight, dynamic pose, limited color palette, comic book hero aesthetic, masterpiece quality bold illustration, best quality',
+      facePromptRule: '本剧为【粗线条 / 图形漫画风格】。faceReferencePrompt 必须以 "bold graphic novel style" 或 "thick outline comic style" 开头，例如："bold graphic novel style character, angular simplified face, thick black outline, strong jaw definition, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['bold outline', 'thick line', 'graphic', 'comic', 'high contrast', 'simplified', 'strong', 'illustration', 'high quality', 'masterpiece', 'dynamic', 'best quality'],
+      negativeKeywords: ['delicate', 'watercolor', 'realistic', 'fine detail', 'subtle complex', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '粗线条简约角色，大胆几何造型，清晰轮廓（描边加粗），少量色块，力量感十足，表情夸张直接',
+      backgroundStyle: '简化背景（大色块），无细节堆砌，主体突出，对比色背景增强戏剧性',
+    },
+    genreCompatibility: ['动作', '热血', '犯罪', '超级英雄', '悬疑'],
+    audienceTags: ['男性向', '18-35岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+
+  {
+    styleKey: '2d_fantasy_anime',
+    displayName: '2D奇幻动画',
+    description: '魔法与冒险主题，华丽特效，欧式奇幻与日系动漫的融合，适合奇幻、冒险、魔法少女题材',
+    styleCategory: '2d_animation',
+    tags: ['奇幻', '魔法', '冒险', '欧式', '华丽'],
+    visualGuide: {
+      overallAesthetic: '欧式奇幻与日系动漫融合，魔法特效华丽，色彩鲜艳明快，史诗感强；《Fate》《无职转生》制作水准',
+      colorGrading: '高饱和魔幻色彩（+50），蓝紫金三色系为主，法术光效高亮（bloom），阴影深蓝紫，对比强烈',
+      lightingStyle: '魔法发光体（自发光粒子），粒子光效，戏剧性光源（法阵），奇幻光晕（lens flare魔法版）',
+      era: 'mixed',
+      renderTechnique: '2D手绘 + 数字特效，魔法粒子叠加（Add blend mode），华丽背景美术（欧式建筑细节）',
+      textureStyle: '魔法纹路（符文光刻），金属盔甲光泽（高光精细），魔法阵发光，华丽布料（丝绸+皮革）',
+      referenceStyle: '《魔法少女小圆》《Fate/stay night》《无职转生》，奇幻动画美学',
+      styleReferencePrompt: '2D fantasy anime illustration, magical adventure epic aesthetic, colorful vivid magic spell particle effects, European fantasy medieval setting, Japanese anime art style, brilliant particle spell aura, ornate fantasy costume design, masterpiece, best quality, highly detailed 2D fantasy anime artwork, vibrant colors',
+      characterStylePrompt: '2D fantasy anime character, elaborate fantasy armor or mage costume, magical aura glow effect, detailed ornate accessories, epic adventure expression, vibrant color palette, masterpiece quality, best quality highly detailed fantasy anime illustration',
+      facePromptRule: '本剧为【2D奇幻动漫】。faceReferencePrompt 必须以 "fantasy anime style" 开头，使用奇幻动漫五官描述，例如："fantasy anime style young mage, large determined eyes with magical glow, intricate hair with fantasy ornaments, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['fantasy anime', 'magic', 'epic', 'colorful', 'adventure', '2D animation', 'spell effects', 'European fantasy', 'masterpiece', 'best quality', 'detailed', 'vibrant'],
+      negativeKeywords: ['realistic', 'dark horror', 'mundane', 'slice of life', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '奇幻动漫角色，华丽法术服装（铠甲/法袍细节精致），魔法道具，光效辅助，精致异世界造型',
+      backgroundStyle: '奇幻王国（哥特城堡/魔法学院/龙巢），史诗场景，魔法粒子漫天，法阵发光，色彩丰富',
+    },
+    genreCompatibility: ['奇幻', '冒险', '魔法', '异世界', '成长'],
+    audienceTags: ['全年龄', '13-30岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '2d_british_anime',
+    displayName: '2D英式动画',
+    description: '优雅含蓄的英伦美学，柔和水彩质感，精致角色设计，温暖淡雅色调，适合绅士、悬疑、奇遇题材',
+    styleCategory: '2d_animation',
+    tags: ['英伦', '优雅', '水彩', '温暖', '绅士'],
+    visualGuide: {
+      overallAesthetic: '英伦优雅动画美学，柔和水彩质感，克制而精致，温暖淡雅；Wes Anderson式精准对称构图',
+      colorGrading: '暖米茶色调（warm beige+dusty rose），低饱和优雅色系（pastel muted），轻微水彩晕染，英式雾气感',
+      lightingStyle: '柔和散射光（英伦多云漫射），雾天漫射，英式下午茶般温暖光感（3200K-4000K），无强烈高光',
+      era: 'mixed',
+      renderTechnique: '2D手绘 + 水彩质感，精细线稿（细而优雅），柔和着色，精准对称构图',
+      textureStyle: '水彩纸纹理，轻微颗粒，布料厚实感（毛呢、皮革），木质与铜铁质感',
+      referenceStyle: '《了不起的狐狸爸爸》，Wes Anderson风，《小熊维尼》原版，BBC经典动画',
+      styleReferencePrompt: 'British animation style illustration, watercolor texture artwork, elegant refined character design, warm muted pastel English tones, pastoral countryside aesthetic, precise symmetrical Wes Anderson composition, BBC quality British animation, masterpiece, best quality, highly detailed elegant British illustration',
+      characterStylePrompt: 'British animation style character, elegant refined design, warm muted color palette, watercolor line art, gentleman or lady Victorian attire, composed dignified expression, symmetrical composition, masterpiece quality British animation illustration, best quality',
+      facePromptRule: '本剧为【2D英式动画 / Wes Anderson风格】。faceReferencePrompt 必须以 "British animation style" 或 "Wes Anderson animation style" 开头，例如："British animation style gentleman character, refined oval face, subtle expression, well-groomed appearance, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['British animation', 'watercolor', 'elegant', 'warm', 'refined', 'English', 'pastoral', 'gentle', 'high quality', 'masterpiece', 'detailed', 'sophisticated', 'best quality'],
+      negativeKeywords: ['flashy', 'loud colors', 'action', 'dark', 'aggressive', 'neon', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '英式优雅动画角色，绅士服饰（西服、风衣）或淑女装扮（茶会裙），含蓄表情，精致五官，对称构图',
+      backgroundStyle: '英国田园（薰衣草田/牧场），维多利亚街道（红电话亭），下午茶室（骨瓷茶具），雾天伦敦，暖色灯光',
+    },
+    genreCompatibility: ['悬疑', '奇遇', '爱情', '童话', '治愈'],
+    audienceTags: ['全年龄', '文艺向'],
+    platformTags: ['bilibili', 'douyin', 'wechat_mini'],
+  },
+  {
+    styleKey: '2d_sports',
+    displayName: '2D运动漫画',
+    description: '井上雄彦式写实人体比例，运动动态线，热血竞技氛围，90年代经典运动漫画质感',
+    styleCategory: '2d_animation',
+    tags: ['运动', '热血', '竞技', '写实', '漫画'],
+    visualGuide: {
+      overallAesthetic: '写实运动漫画美学，精准人体比例，运动张力十足，热血竞技氛围；《灌篮高手》高清重制版水准',
+      colorGrading: '高对比度（+35），暖橙红系主调（体育馆暖光），汗水高光（白色反光点），阴影浓重（蓝黑阴影）',
+      lightingStyle: '体育馆顶光（强硬顶光），聚光灯效果（spotlight drama），动态感强的戏剧性光影，逆光剪影凸显运动姿态',
+      era: 'contemporary',
+      renderTechnique: '写实手绘漫画风格，精准线描（肌肉线条细腻），速度感动态线条，汗水飞溅效果',
+      textureStyle: '汗水光泽（高光点），运动服饰质感（球衣纹理），木地板球场纹理，速度线（动态模糊）',
+      referenceStyle: '《灌篮高手》《排球少年》《足球小将》，井上雄彦、古舘春一写实画风',
+      styleReferencePrompt: 'sports manga illustration, Inoue Takehiko realistic human proportion, dynamic athletic motion speed lines, basketball volleyball court stadium, highly detailed athletic figure anatomy, high contrast dramatic stadium lighting, sweat determination intense expression, sports anime manga masterpiece quality, best quality highly detailed sports manga illustration',
+      characterStylePrompt: 'sports manga style character, realistic athletic proportion, detailed muscle anatomy, sports uniform with texture detail, intense competitive expression, dynamic action pose, masterpiece quality, best quality sports manga illustration, highly detailed',
+      facePromptRule: '本剧为【运动漫画 / 热血竞技】。faceReferencePrompt 必须以 "sports manga style" 开头，使用运动漫画五官描述，例如："sports manga style basketball player, determined burning eyes, athletic strong jaw, short practical hair, sweat detail, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['sports manga', 'dynamic', 'athletic', 'realistic proportion', 'action lines', 'competition', 'sweat', 'masterpiece', 'high quality', 'detailed anatomy', 'dramatic lighting'],
+      negativeKeywords: ['fantasy', 'magical', 'slow', 'peaceful', 'chibi', 'pastel', 'cute', 'low quality', 'worst quality', 'blurry', 'bad anatomy', 'unrealistic proportion'],
+      characterStyle: '运动漫画写实风格角色，精准肌肉线条，运动装备，专注燃烧的眼神，汗水动感，肌肉张力可见',
+      backgroundStyle: '体育馆（木地板纹理/灯光阵列）、球场（草地/沙地）、赛场（观众席虚化），竞技氛围强烈',
+    },
+    genreCompatibility: ['竞技', '热血', '运动', '青春', '校园'],
+    audienceTags: ['男性向', '13-30岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '2d_tezuka',
+    displayName: '2D手冢治虫',
+    description: '日本漫画之父经典画风，圆润线条，大眼夸张表情，简洁叙事画面，适合励志、人文、成长题材',
+    styleCategory: '2d_animation',
+    tags: ['手冢治虫', '经典', '圆润', '大眼', '怀旧'],
+    visualGuide: {
+      overallAesthetic: '手冢治虫经典动漫画风，简洁圆润，大眼夸张表情，充满人文温度；日本漫画之神的永恒美学',
+      colorGrading: '明亮清爽色彩（无强烈调色），中等饱和度（+15），复古感平实色调，轻微时代感',
+      lightingStyle: '均匀平光（无复杂光影），简化阴影（单面阴影），明朗开放感，儿童读物般明快',
+      era: 'contemporary',
+      renderTechnique: '经典赛璐璐风格，简洁线条（线宽均匀），圆润造型（无锐角），平涂着色',
+      textureStyle: '光滑赛璐璐质感（无材质细节），简洁干净，圆润圆弧线条，无材质噪点',
+      referenceStyle: '手冢治虫《铁臂阿童木》《怪医黑杰克》《火鸟》，东映经典动画',
+      styleReferencePrompt: 'Tezuka Osamu manga style illustration, classic Japanese animation, large expressive round eyes, clean simple rounded line art, Astro Boy 1960s animation aesthetic, humanist storytelling art style, warm gentle colors, masterpiece classic anime quality, highly detailed Tezuka style illustration, best quality',
+      characterStylePrompt: 'Tezuka Osamu style character, large round expressive eyes, simple clean rounded design, classic anime proportion, warm simple color palette, Astro Boy era animation quality, masterpiece classic illustration, best quality',
+      facePromptRule: '本剧为【手冢治虫 / 经典日漫风格】。faceReferencePrompt 必须以 "Tezuka Osamu anime style" 或 "classic Astro Boy animation style" 开头，使用圆润大眼五官描述，例如："Tezuka Osamu anime style young hero, large round innocent eyes, clean simple round face, gentle expression, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['Tezuka style', 'classic anime', 'big eyes', 'round', 'simple lines', 'clean', 'retro Japanese animation', 'humanist', 'high quality', 'masterpiece'],
+      negativeKeywords: ['modern sharp', 'realistic', 'dark', 'complex texture', 'photorealistic', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '手冢式圆润大眼角色，简洁造型（无过度装饰），夸张但有温度的表情，朴实服装，比例偏向儿童漫画感',
+      backgroundStyle: '简洁干净背景，少细节堆砌，主体清晰，故事感强；背景比角色简单，保持整体平衡',
+    },
+    genreCompatibility: ['励志', '人文', '成长', '科幻', '家庭'],
+    audienceTags: ['全年龄', '亲子向'],
+    platformTags: ['bilibili', 'douyin', 'wechat_mini'],
+  },
+  {
+    styleKey: '2d_death_note',
+    displayName: '2D暗黑悬疑',
+    description: '高对比暗色调，锐利线条，阴影浓重，死亡笔记/死神式暗黑美学，适合悬疑、惊悚、心理题材',
+    styleCategory: '2d_animation',
+    tags: ['暗黑', '悬疑', '哥特', '高对比', '惊悚'],
+    visualGuide: {
+      overallAesthetic: '暗黑悬疑动漫美学，高对比黑白灰+强调红，阴影压制，心理惊悚氛围；《死亡笔记》村田雄介画风',
+      colorGrading: '极低饱和暗调（desaturate -40），黑灰主调，局部强调深红（血色/死亡意象）或惨白，阴暗压抑',
+      lightingStyle: '强烈侧逆光（split lighting），深沉阴影（高比例暗面），诡异光源，表情阴阳分割光',
+      era: 'contemporary',
+      renderTechnique: '精细2D线描（细腻精工），阴影层次丰富（4-5级阴影过渡），高对比度着色',
+      textureStyle: '皮革质感，金属冷光，纸张与墨水，哥特花纹，羽毛（死神意象）',
+      referenceStyle: '《死亡笔记》大场つぐみ/村田雄介，《进击的巨人》谏山创，《寄生兽》岩明均',
+      styleReferencePrompt: 'dark psychological thriller anime illustration, Death Note aesthetic dark manga style, high contrast deep oppressive shadows, gothic atmosphere, sharp detailed precise line art, moody psychological horror lighting, mysterious villain character design, masterpiece quality dark anime, best quality highly detailed dark illustration',
+      characterStylePrompt: 'dark psychological anime character, Death Note manga style, sharp angular features, cold calculating expression, high contrast shadow on face, gothic costume details, masterpiece quality dark anime illustration, best quality, highly detailed',
+      facePromptRule: '本剧为【暗黑悬疑动漫】。faceReferencePrompt 必须以 "dark psychological anime style" 或 "Death Note manga style" 开头，使用暗黑系五官描述，例如："dark psychological anime style genius antagonist, sharp calculating eyes with shadows, angular refined face, cold expression, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['dark anime', 'gothic', 'high contrast', 'psychological thriller', 'sharp lines', 'moody', 'Death Note style', 'masterpiece', 'highly detailed', 'atmospheric'],
+      negativeKeywords: ['cheerful', 'colorful', 'warm', 'cute', 'simple', 'light', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '暗黑系动漫角色，锐利深邃眼神（有内心戏），精细五官，深色服装（西服/黑袍），神秘或压迫感',
+      backgroundStyle: '深夜城市（霓虹与黑暗对比）、密室、废墟、哥特建筑（教堂/古堡），阴暗压抑，光影强烈对比',
+    },
+    genreCompatibility: ['悬疑', '惊悚', '心理', '犯罪', '反转'],
+    audienceTags: ['男性向', '成人向', '18-35岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '2d_horror',
+    displayName: '2D诡异恐怖',
+    description: '阴暗扭曲画面，不安定线条，伊藤润二式恐怖美学，暗红与黑色为主，适合恐怖、灵异题材',
+    styleCategory: '2d_animation',
+    tags: ['恐怖', '灵异', '扭曲', '伊藤润二', '惊悚'],
+    visualGuide: {
+      overallAesthetic: '伊藤润二式恐怖漫画美学，画面扭曲不安，极度恐怖氛围，视觉冲击强烈；令人不适的诡异细节',
+      colorGrading: '极暗低饱和（desaturate -60），暗红血色点缀（crimson），黑色主调，偶有惨白高光',
+      lightingStyle: '诡异光源（从下方打光），强烈阴影，阴暗角落，不自然的光线方向，闪光恐怖瞬间',
+      era: 'contemporary',
+      renderTechnique: '精细恐怖风手绘，扭曲变形线条（organic horror deformation），恐怖阴影技法，密集阴影排线',
+      textureStyle: '腐朽纹理，潮湿暗面，锈迹血迹，蛛网与裂缝，头发扭曲螺旋',
+      referenceStyle: '伊藤润二《漩涡》《富江》《人间椅子》，horror manga美学，《寂静岭》概念艺术',
+      styleReferencePrompt: 'Junji Ito horror manga style illustration, grotesque body horror aesthetic, dark deeply disturbing atmosphere, spiral motif horror, horror illustration masterpiece, deep oppressive shadows, unsettling off-putting composition, highly detailed disturbing illustration, best quality horror manga masterpiece',
+      characterStylePrompt: 'Junji Ito horror manga character, grotesque distorted features, disturbing unnatural expression, pale skin with dark veins, horror manga precise line art style, deeply unsettling, masterpiece quality horror illustration, best quality',
+      facePromptRule: '本剧为【恐怖灵异漫画】。faceReferencePrompt 必须以 "Junji Ito horror manga style" 或 "horror manga style" 开头，使用恐怖漫画五官描述，例如："Junji Ito horror manga style character, distorted unnatural face, hollow spiral eyes, disturbing smile, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['horror manga', 'Junji Ito', 'grotesque', 'dark', 'disturbing', 'black', 'horror illustration', 'unsettling', 'highly detailed', 'masterpiece horror'],
+      negativeKeywords: ['cute', 'cheerful', 'bright', 'colorful', 'warm', 'safe', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '恐怖风格角色，惊恐或扭曲表情（不自然），扭曲肢体，苍白皮肤，空洞眼神，头发呈螺旋状',
+      backgroundStyle: '废弃建筑、地下室、诡异山村、扭曲空间（物理违和），极度压抑阴暗，局部血迹或腐朽',
+    },
+    genreCompatibility: ['恐怖', '灵异', '惊悚', '心理', '悬疑'],
+    audienceTags: ['成人向', '18-35岁'],
+    platformTags: ['douyin', 'bilibili'],
+  },
+  {
+    styleKey: '2d_chibi',
+    displayName: '2DQ版',
+    description: '超可爱大头小身比例，圆润简约线条，糖果色彩，表情丰富夸张，萌系治愈风格',
+    styleCategory: '2d_animation',
+    tags: ['Q版', 'chibi', '萌系', '可爱', '治愈'],
+    visualGuide: {
+      overallAesthetic: 'Q版萌系动漫美学，大头小身可爱比例，糖果般明亮色彩，夸张萌趣表情',
+      colorGrading: '高饱和糖果色系（+60），粉、蓝、黄、绿鲜亮主调，无暗沉调色，纯净明快',
+      lightingStyle: '明亮均匀光（平光），可爱高光点（圆圆高光），无复杂阴影（简化1-tone阴影）',
+      era: 'contemporary',
+      renderTechnique: '2D简约线稿（圆润均匀线条），圆润平涂，可爱卡通着色，超级变形比例',
+      textureStyle: '光滑平涂（无材质噪点），圆润无锐角，眼睛大且有多重高光点',
+      referenceStyle: '《Re:Zero》Q版，《Fate/chibi》，日式萌系角色设计，Nendoroid风格',
+      styleReferencePrompt: 'chibi anime style illustration, Q-version super deformed cute character, big oversized head small body, pastel candy colors palette, round simple kawaii design, expressive huge round cute eyes with multiple catchlights, adorable character design, best quality, masterpiece chibi illustration, highly detailed kawaii art',
+      characterStylePrompt: 'chibi Q-version anime character, cute big head tiny body proportion, large shiny sparkling eyes with multiple catchlights, round simple features, candy pastel color palette, adorable kawaii design, masterpiece quality chibi illustration, best quality',
+      facePromptRule: '本剧为【Q版 / Chibi 风格】。faceReferencePrompt 必须以 "chibi cartoon style" 开头，例如："chibi cartoon style cute girl, oversized round head, tiny body, big shiny sparkly dot eyes, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['chibi', 'Q version', 'kawaii', 'cute', 'pastel', 'round', 'small body big head', 'adorable', 'masterpiece', 'best quality', 'highly detailed'],
+      negativeKeywords: ['realistic', 'dark', 'mature', 'serious', 'horror', 'detailed complex', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: 'Q版大头小身可爱角色，圆圆大眼（多重高光），简洁服装，夸张表情（喜怒哀乐放大），糖果配色',
+      backgroundStyle: '明亮可爱背景（简约），花草装饰，温馨无压迫感；背景比角色更简洁，主体凸显',
+    },
+    genreCompatibility: ['喜剧', '治愈', '恋爱', '校园', '亲子'],
+    audienceTags: ['全年龄', '女性向', '亲子向'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+
+  /* ─── 3D 动画 ─── */
+  {
+    styleKey: '3d_toon_render',
+    displayName: '3D漫染2D',
+    description: '3D建模结合赛璐璐卡通渲染，保留手绘2D质感的立体动画，色彩鲜明，线条清晰',
+    styleCategory: '3d_animation',
+    tags: ['3D', '卡通渲染', 'NPR', '赛璐璐', '动画'],
+    visualGuide: {
+      overallAesthetic: '3D卡通渲染（NPR），保留手绘2D轮廓线的立体动画，色彩鲜明，表现力强；《蜘蛛侠：平行宇宙》制作水准',
+      colorGrading: '高饱和平涂色块（+50），硬边赛璐璐阴影（2-tone），无渐变过渡，原色系明亮',
+      lightingStyle: 'Cel shading硬边阴影，强调轮廓描边（outline pass），卡通化高光（circle highlight）',
+      era: 'contemporary',
+      renderTechnique: '3D模型 + NPR渲染（Toon shader），描边Outline Pass（1-2px），赛璐璐着色器',
+      textureStyle: '平涂色块无噪点，轮廓线清晰有力，卡通化材质（无PBR噪点）',
+      referenceStyle: '《蜘蛛侠：平行宇宙》《双城之战》3D渲染，《龙珠超：布罗利》，《宝可梦》3D动画',
+      styleReferencePrompt: '3D NPR toon render animation, cel shading cartoon outline style, vibrant flat colors, anime aesthetic 3D character, clean precise line art outline stroke, stylized non-photorealistic render, Spider-verse animation quality, masterpiece 3D toon render, best quality, highly detailed stylized 3D animation',
+      characterStylePrompt: '3D NPR toon render character, cel shading with hard shadow edges, clean outline stroke, vibrant cartoon colors, anime proportion 3D model, high quality 3D animation, masterpiece quality toon render, best quality',
+      facePromptRule: '本剧为【3D动画 / 卡通渲染】。faceReferencePrompt 必须以 "3D toon render style" 或 "3D NPR cel shading character" 开头，五官描述圆润夸张，例如："3D toon render style animated young woman, large expressive cel-shaded eyes, soft rounded cartoon face, clean outline stroke, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['toon render', 'cel shading', 'NPR', '3D anime', 'outline', 'cartoon 3D', 'vibrant', 'stylized', 'high quality', 'masterpiece', 'detailed'],
+      negativeKeywords: ['photorealistic', 'realistic render', '2D flat', 'painted', 'watercolor', 'dark', 'low quality', 'worst quality', 'blurry', 'off-model'],
+      characterStyle: '3D卡通风格角色，清晰轮廓线（描边均匀），赛璐璐着色（硬边阴影），夸张表情，动漫造型比例',
+      backgroundStyle: '3D场景NPR卡通化，场景色彩鲜明，风格统一，无写实噪点；背景深度感强，色调与人物统一',
+    },
+    genreCompatibility: ['热血', '奇幻', '校园', '冒险', '青春'],
+    audienceTags: ['年轻向', '13-30岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '3d_japanese_npr',
+    displayName: '日式3D漫染',
+    description: '日本动画公司级3D NPR渲染，非写实赛璐璐着色，柔和光影，动漫角色精致立体感',
+    styleCategory: '3d_animation',
+    tags: ['3D', '日式', 'NPR', '动画', '精致'],
+    visualGuide: {
+      overallAesthetic: '日本动画公司级3D渲染，兼具立体感与2D动漫质感，柔和而精致；ufotable/CloverWorks制作标准',
+      colorGrading: '柔和日式色调（+20饱和，soft feel），高亮度，柔边阴影（soft cel edge），发光感高光',
+      lightingStyle: '柔光漫射（softbox key light），唯美逆光（背光光晕），光晕感柔和高光，无强硬阴影',
+      era: 'contemporary',
+      renderTechnique: '3D + 日式NPR渲染（soft cel shading），柔边cel shading，次级轮廓线（thin rim outline）',
+      textureStyle: '柔和皮肤质感（SSS模拟），柔边着色，丝绸般光滑，无粗糙噪点',
+      referenceStyle: '《鬼灭之刃》剧场版3D，《进击的巨人》后期，ufotable制作水准，CloverWorks',
+      styleReferencePrompt: 'Japanese 3D anime NPR render, ufotable studio quality masterpiece, soft cel shading with smooth gradients, beautiful detailed anime character, delicate atmospheric lighting, anime film quality 3D animation, high-end Japanese animation studio level, masterpiece, best quality, highly detailed Japanese 3D anime',
+      characterStylePrompt: 'Japanese 3D NPR anime character, ufotable quality soft cel shading, beautiful detailed features, delicate hair with light refraction sheen, soft atmospheric lighting, high-end Japanese animation studio quality, masterpiece, best quality highly detailed',
+      facePromptRule: '本剧为【日式3D漫染 / ufotable风格】。faceReferencePrompt 必须以 "Japanese 3D NPR anime style" 或 "ufotable quality 3D anime character" 开头，五官描述柔和精致，例如："Japanese 3D NPR anime style young woman, soft cel-shaded large eyes, delicate refined features, beautiful hair with light sheen, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['Japanese 3D anime', 'NPR', 'ufotable', 'soft shading', 'anime film', 'beautiful', 'delicate', 'high quality', 'masterpiece', 'detailed', 'studio quality'],
+      negativeKeywords: ['western cartoon', 'realistic', 'rough', 'dark', 'gritty', 'low quality', 'worst quality', 'blurry', 'off-model', 'bad anatomy'],
+      characterStyle: '精致日式动漫3D角色，柔和赛璐璐着色，唯美面部细节（眼睛有多层反光），精心发型与服装',
+      backgroundStyle: '精细手绘感3D背景，场景光感柔和（体积光），日式城市或自然场景（樱花/神社/教室），细节丰富',
+    },
+    genreCompatibility: ['奇幻', '热血', '爱情', '青春', '仙侠'],
+    audienceTags: ['年轻向', '13-30岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '3d_cyberpunk',
+    displayName: '3D赛博朋克',
+    description: '高科技低生活赛博朋克美学，霓虹霓虹雨夜城市，适合科幻、反乌托邦题材',
+    styleCategory: '3d_animation',
+    tags: ['赛博朋克', '科幻', '霓虹', '未来', '3D'],
+    visualGuide: {
+      overallAesthetic: '高科技低生活赛博朋克美学，霓虹灯光刺穿雨夜，信息爆炸视觉；《银翼杀手2049》电影级制作标准',
+      colorGrading: '青色和品红霓虹为主（teal #00FFFF + magenta #FF00FF LUT），高对比暗部（-50 shadows），雨水反光，全息投影效果',
+      lightingStyle: '霓虹补光（coloured rim lighting），体积光雾气（volumetric fog），垂直LED灯带，雨水反光路面（wet look）',
+      era: 'future',
+      renderTechnique: '高质量3D渲染（路径追踪ray tracing），全息投影（holographic shader），赛博增强特效，屏幕空间反射',
+      textureStyle: '金属与混凝土（PBR材质），电路纹理（circuit board pattern），湿漉漉的雨水（wet surface shader），全息半透明',
+      referenceStyle: '《银翼杀手2049》《赛博朋克2077》游戏CG，《攻壳机动队》真人版',
+      styleReferencePrompt: '3D cyberpunk render, neon-drenched rain-wet futuristic city streets, holographic display screens, high contrast teal magenta color scheme, volumetric fog atmosphere, cyber-enhanced character with implants, physically based rendering, ray tracing reflections, masterpiece 3D cyberpunk render, best quality, 8K ultra-detailed highly realistic',
+      characterStylePrompt: '3D cyberpunk character render, futuristic cyber-enhanced body, neon teal magenta light color cast, high fidelity PBR metallic surfaces, circuit texture implants, rain-wet atmosphere, ray tracing quality, masterpiece 3D render, 8K quality, best quality',
+      facePromptRule: '本剧为【赛博朋克 / 科幻】。faceReferencePrompt 必须以 "cyberpunk futuristic" 或 "sci-fi" 开头，配合科技改造特征，例如："cyberpunk futuristic female hacker, neon-lit face, glowing cyber eye, subtle facial implants, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['cyberpunk', 'neon', 'futuristic', 'holographic', '3D render', 'rain', 'high contrast', 'sci-fi', 'cyber', 'masterpiece', 'ray tracing', '8K', 'highly detailed'],
+      negativeKeywords: ['natural', 'warm pastoral', 'ancient', 'fantasy', 'soft cheerful', 'pastel', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '赛博朋克风格人物，机械改造身体部件（发光义眼/金属臂），全息眼镜，暗系战术服装，霓虹色反光（蓝紫光）',
+      backgroundStyle: '高密度未来城市（垂直密集楼宇），霓虹广告牌（中英混排），飞行载具轨迹，雨夜湿地反光，地下酒吧/黑市',
+    },
+    genreCompatibility: ['科幻', '悬疑', '动作', '反乌托邦'],
+    audienceTags: ['男性向', '18-35岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '3d_realistic',
+    displayName: '3D写实',
+    description: '高精度写实3D渲染，接近真实摄影质感，适合需要沉浸感的都市、战争、历史题材',
+    styleCategory: '3d_animation',
+    tags: ['3D', '写实', '高精度', '沉浸'],
+    visualGuide: {
+      overallAesthetic: '高精度写实3D渲染，接近真实摄影质感，细节极为丰富；虚幻引擎5级别数字人质量',
+      colorGrading: '中性调色（physically accurate），接近真实摄影（natural LUT），精细的色彩科学（ACES color space）',
+      lightingStyle: 'HDRI环境光（16K HDR），光线追踪（ray tracing全局光照），物理正确的阴影（contact shadow）',
+      era: 'contemporary',
+      renderTechnique: '路径追踪渲染（path tracing），次表面散射皮肤（SSS），物理模拟布料（cloth simulation），Lumen实时全局光照',
+      textureStyle: '超高精度PBR材质（8K texture maps），皮肤微孔细节（micro-detail normal map），服装纤维质感，环境反射',
+      referenceStyle: '《最终幻想》CG电影，虚幻引擎5数字人，《矩阵》特效级别',
+      styleReferencePrompt: '3D photorealistic render, Unreal Engine 5 quality, subsurface scattering human skin pores, path tracing global illumination, 8K texture detail, physically based rendering, hyper-realistic digital human, ray tracing reflections, masterpiece 3D photorealistic render, best quality, highly detailed realistic 3D, award-winning visual effects',
+      characterStylePrompt: '3D photorealistic digital human character, Unreal Engine 5 MetaHuman quality, subsurface scattering realistic skin, detailed pore-level texture, realistic eye with corneal reflections, physically simulated hair strand, masterpiece photorealistic 3D, best quality, 8K',
+      facePromptRule: '本剧为【3D写实 CG】。faceReferencePrompt 必须以 "photorealistic 3D CG character" 或 "Unreal Engine 5 digital human" 开头，例如："photorealistic 3D CG character, young Asian male, high-detail subsurface skin texture, realistic iris pattern, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['photorealistic', '3D render', 'Unreal Engine', 'high fidelity', 'subsurface scattering', 'ray tracing', 'PBR', 'masterpiece', 'best quality', '8K', 'ultra-detailed', 'realistic'],
+      negativeKeywords: ['cartoon', 'anime', 'stylized', 'flat', 'illustrated', 'sketchy', 'low quality', 'worst quality', 'blurry', 'bad anatomy', 'deformed'],
+      characterStyle: '高精度3D数字人，真实皮肤质感（毛孔可见），精细毛发（单根发丝），写实服装（布料物理模拟），眼睛有角膜反光',
+      backgroundStyle: '写实三维场景，精细建筑与环境（材质纹理丰富），自然光照（HDRI），细节不输真实摄影',
+    },
+    genreCompatibility: ['都市', '历史', '战争', '科幻', '动作'],
+    audienceTags: ['全年龄', '18-40岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+
+  {
+    styleKey: '3d_fantasy',
+    displayName: '3D玄幻',
+    description: '东方玄幻仙侠风格，流光溢彩法术特效，精致CG渲染，磅礴仙境山川，适合玄幻、仙侠、神话题材',
+    styleCategory: '3d_animation',
+    tags: ['3D', '玄幻', '仙侠', '法术', '东方'],
+    visualGuide: {
+      overallAesthetic: '东方玄幻3D风格，仙侠修真世界，流光溢彩法术特效，磅礴仙境气势；《哪吒之魔童降世》制作水准',
+      colorGrading: '高饱和紫金色调（+60），蓝紫主调法术光效，金色点缀（#FFD700），云雾仙气感（低饱和灰白）',
+      lightingStyle: '仙境丁达尔效果（god rays），法术粒子发光（emissive），云层散射，戏剧性体积光（紫色/金色）',
+      era: 'ancient',
+      renderTechnique: '高质量3D渲染（PBR+NPR混合），粒子特效（particle system），体积光雾气（volumetric clouds），仙术光轨',
+      textureStyle: 'PBR丝绸与金属（仙服），仙器光泽（magical glow），云雾体积感，灵气粒子散落',
+      referenceStyle: '《哪吒之魔童降世》《白蛇：缘起》《雄狮少年》，国产玄幻3D动画顶级水准',
+      styleReferencePrompt: '3D Chinese xianxia fantasy render, immortal cultivation divine realm, magical spiritual aura particle effects, ancient Chinese mythology, volumetric cloud sea heaven, purple gold color palette epic scale, divine immortal cultivation aesthetic, masterpiece 3D xianxia render, best quality, 8K highly detailed Chinese fantasy 3D animation',
+      characterStylePrompt: '3D Chinese xianxia immortal character, elaborate flowing celestial robes with PBR silk texture, magical spiritual weapon aura glow, ancient refined features, divine ethereal expression, masterpiece 3D fantasy render, best quality, highly detailed',
+      facePromptRule: '本剧为【3D东方玄幻/仙侠】。faceReferencePrompt 以剧情决定：东方神话仙侠以 "ancient Chinese xianxia immortal" 或 "Chinese mythological deity 3D character" 开头；西方奇幻以 "high fantasy 3D character" + 种族/身份词开头，例如："high fantasy 3D character elven warrior, pointed ears, ethereal otherworldly beauty, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['xianxia', 'Chinese fantasy', '3D render', 'magical aura', 'ancient China', 'immortal', 'epic', 'volumetric light', 'particles', 'masterpiece', 'best quality', '8K', 'highly detailed'],
+      negativeKeywords: ['modern', 'realistic photo', 'contemporary', 'cyberpunk', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '仙侠3D角色，华丽仙服飘带（PBR丝绸），法宝道具（发光），仙气光效（灵气粒子），精致古典面庞',
+      backgroundStyle: '仙境云海（体积云），古代宫殿神殿（中式建筑），奇山仙岛（险峻山峰），宏大壮观，法阵光效',
+    },
+    genreCompatibility: ['玄幻', '仙侠', '神话', '古装', '穿越', '修真'],
+    audienceTags: ['全年龄', '18-40岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '3d_british',
+    displayName: '3D英式复古',
+    description: '维多利亚时代建筑质感，暖褐色调，皮革与金属材质，精致绅士美学，皮克斯级渲染品质',
+    styleCategory: '3d_animation',
+    tags: ['3D', '英式', '维多利亚', '复古', '精致'],
+    visualGuide: {
+      overallAesthetic: '维多利亚英伦3D美学，暖褐色调，精致绅士气质，工业时代美感；皮克斯级别渲染品质',
+      colorGrading: '暖棕褐色调（warm sepia，shadows: brown +20），铜绿点缀（verdigris），皮革暗棕，烛光暖黄（2800K）',
+      lightingStyle: '煤气灯暖光（point light 2600K），壁炉火光（warm flicker），雾天漫射光（overcast diffuse），精致内室台灯光',
+      era: 'ancient',
+      renderTechnique: '皮克斯级3D渲染（SSS皮肤），精致材质（皮革/金属/木质），次表面散射皮肤，维多利亚服装模拟',
+      textureStyle: '皮革纹理（full-grain leather），金属铆钉（aged brass），木质雕花（mahogany），针织布料，铜绿氧化',
+      referenceStyle: '《了不起的狐狸爸爸》，《克里斯麦奇历险记》，皮克斯/ILM制作标准',
+      styleReferencePrompt: '3D Victorian British style render, Pixar quality animation masterpiece, warm brown aged leather texture, brass copper steampunk details, foggy London atmosphere, Victorian gentleman aesthetic, soft warm candlelight lighting, best quality, highly detailed Victorian 3D animation, masterpiece',
+      characterStylePrompt: '3D Victorian British animation character, Pixar quality render, Victorian era costume with leather and brass details, warm candlelight on face, refined gentleman or lady expression, masterpiece quality 3D British animation, best quality highly detailed',
+      facePromptRule: '本剧为【3D英式复古 / 维多利亚风格】。faceReferencePrompt 必须以 "3D Pixar-style Victorian character" 或 "3D animated Victorian British character" 开头，五官描述圆润精致，例如："3D Pixar-style Victorian British gentleman, distinguished face with kind eyes, well-groomed mustache, warm candlelight on face, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['Victorian', 'British', '3D render', 'Pixar quality', 'leather', 'brass', 'warm tones', 'elegant', 'steampunk', 'masterpiece', 'highly detailed', 'best quality'],
+      negativeKeywords: ['modern', 'neon', 'anime', 'flat', 'contemporary', 'colorful bright', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '英式3D角色，绅士服装或维多利亚礼裙（精细布料），精致帽子与配饰，皮革皮毛质感，表情含蓄优雅',
+      backgroundStyle: '维多利亚街道（砖石铺路），雾天伦敦（暖黄路灯），书房客厅（暖木家具），蒸汽工厂（铜管设备），暖色灯光',
+    },
+    genreCompatibility: ['悬疑', '冒险', '奇幻', '喜剧', '历史'],
+    audienceTags: ['全年龄', '文艺向'],
+    platformTags: ['bilibili', 'douyin', 'wechat_mini'],
+  },
+  {
+    styleKey: '3d_chibi',
+    displayName: '3DQ版',
+    description: '3D大头小身萌系卡通，圆润可爱造型，糖果色系，精致卡通渲染，适合全年龄喜剧内容',
+    styleCategory: '3d_animation',
+    tags: ['3D', 'Q版', '萌系', '圆润', '可爱'],
+    visualGuide: {
+      overallAesthetic: '3D萌系Q版美学，大头小身圆润造型，糖果色彩，精致卡通渲染；Nintendo级别3D卡通',
+      colorGrading: '高饱和糖果色系（+60），粉彩明亮（candy pastel），无阴暗色调，纯净明快',
+      lightingStyle: '明亮均匀光（ambient occlusion柔和），可爱高光点缀（round specular），无复杂阴影',
+      era: 'contemporary',
+      renderTechnique: '3D卡通NPR渲染，圆润建模（beveled edges），赛璐璐简化着色（soft gradient）',
+      textureStyle: '光滑塑料感（smooth PBR），无复杂材质，糖果色块，简化纹理',
+      referenceStyle: '《Pokemon》3D，《动物之森》，Nintendo Switch游戏美术，《Splatoon》风格',
+      styleReferencePrompt: '3D chibi Q-version cute render, big head small body kawaii character, candy pastel colors, Nintendo Switch game aesthetic quality, adorable rounded cartoon render, super deformed proportions, cheerful expression, masterpiece 3D chibi quality, best quality, highly detailed kawaii 3D animation',
+      characterStylePrompt: '3D chibi Q-version character, large round head tiny body proportion, big shiny 3D eyes with multiple highlights, smooth rounded features, candy color palette, Nintendo quality 3D render, kawaii aesthetic, masterpiece chibi quality, best quality',
+      facePromptRule: '本剧为【3D Q版 / Chibi 风格】。faceReferencePrompt 必须以 "3D chibi cartoon style" 或 "3D Q-version kawaii character" 开头，例如："3D chibi cartoon style cute girl, oversized round head, tiny body, big 3D shiny dot eyes, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['3D chibi', 'Q version', 'kawaii', 'round', 'cute', 'pastel', 'Nintendo style', 'adorable', 'masterpiece', 'best quality', 'highly detailed'],
+      negativeKeywords: ['realistic', 'dark', 'mature', 'serious', 'horror', 'sharp', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '3D Q版圆润角色，大眼睛（3D高光球），大头比例，可爱发型与服装，糖果配色',
+      backgroundStyle: '3D卡通场景，明亮可爱，简约建筑（圆角化），花草装饰，游戏感',
+    },
+    genreCompatibility: ['喜剧', '治愈', '恋爱', '校园', '亲子', '冒险'],
+    audienceTags: ['全年龄', '亲子向', '女性向'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+  {
+    styleKey: '3d_voxel',
+    displayName: '3D方块世界',
+    description: 'Minecraft式方块体素美学，低多边形像素体素组合，明亮清新色彩，轻松游戏风格',
+    styleCategory: '3d_animation',
+    tags: ['体素', '方块', 'Minecraft', '像素', '游戏'],
+    visualGuide: {
+      overallAesthetic: 'Minecraft式方块体素3D世界，像素化方块组合，明亮清新，游戏感强；沙盒游戏视觉美学',
+      colorGrading: '鲜艳明快色彩（saturated game palette），绿草地蓝天白云，无复杂调色，像素游戏色盘（limited palette）',
+      lightingStyle: '简化体素光照（chunk lighting），块状阴影（block shadow），日光明亮（daylight ambient），无复杂光源',
+      era: 'mixed',
+      renderTechnique: '体素3D渲染，方块化几何体（cubic mesh），低多边形风格（low-poly），像素级材质',
+      textureStyle: '方块像素纹理（16x16 texel），简化材质，马赛克色块，像素化边缘',
+      referenceStyle: 'Minecraft游戏，Roblox，体素艺术（MagicaVoxel），Crossy Road风格',
+      styleReferencePrompt: 'voxel art 3D style render, Minecraft aesthetic blocky cubic world, pixel voxel characters, bright primary saturated colors, low-poly game look, sandbox game environment, cubic block design, masterpiece voxel art quality, best quality, highly detailed voxel render, game quality',
+      characterStylePrompt: 'voxel 3D character, cubic blocky design, pixel face texture, simple geometric body, bright primary color palette, Minecraft player skin style, masterpiece voxel art quality, best quality',
+      facePromptRule: '本剧为【体素 / 像素 3D 风格】。faceReferencePrompt 必须以 "voxel art 3D character" 或 "Minecraft style character" 开头，例如："voxel art 3D character, blocky cubic head, simple pixel 8-bit face, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['voxel', 'Minecraft', 'blocky', 'cubic', 'pixel', '3D game', 'colorful', 'sandbox', 'masterpiece', 'best quality', 'game quality'],
+      negativeKeywords: ['realistic', 'organic', 'smooth', 'photorealistic', 'dark', 'complex', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '方块化体素角色，像素化五官，简单几何体组合，游戏角色风，颜色区块分明',
+      backgroundStyle: '方块体素世界，像素地形，草地方块、石头方块、树木方块，天空明亮，视野开阔',
+    },
+    genreCompatibility: ['冒险', '奇幻', '喜剧', '亲子', '科幻'],
+    audienceTags: ['全年龄', '亲子向', '年轻向'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+  {
+    styleKey: '3d_mobile_game',
+    displayName: '3D手游',
+    description: '精致NPR渲染，偏卡通但细节丰富，鲜艳色彩，现代手机游戏画面质感',
+    styleCategory: '3d_animation',
+    tags: ['3D', '手游', 'NPR', '精致', '卡通'],
+    visualGuide: {
+      overallAesthetic: '现代手游级3D渲染，NPR偏卡通但细节丰富，精致美型，鲜艳好看；米哈游《原神》制作水准',
+      colorGrading: '鲜艳饱和色彩（+45），清晰明亮，暗部轻微，高光清脆（crisp specular）',
+      lightingStyle: '手游标准三点光（key+fill+rim），轮廓光（rim light描边效果），柔和赛璐璐阴影',
+      era: 'contemporary',
+      renderTechnique: '手游级NPR 3D渲染，轮廓描边（outline），赛璐璐着色器，骨骼动画权重精细',
+      textureStyle: '精致卡通材质（手绘质感PBR），金属光泽（metallic sheen），布料飘动（cloth simulation），无写实噪点',
+      referenceStyle: '《原神》《崩坏：星穹铁道》《碧蓝航线》，米哈游/bilibili Games手游美术风格',
+      styleReferencePrompt: 'mobile game 3D style, Genshin Impact anime aesthetic quality, anime game character NPR toon render, vibrant saturated colors, highly detailed fantasy costume design, game-quality character render, Chinese mobile game art standard, beautiful idealized character, masterpiece mobile game render, best quality, 8K highly detailed',
+      characterStylePrompt: 'mobile game 3D character, Genshin Impact quality anime game style, detailed ornate costume with gem and metal details, beautiful idealized face, rim light outline, NPR toon shading, masterpiece mobile game quality, best quality, highly detailed',
+      facePromptRule: '本剧为【3D手游 / 原神风格】。faceReferencePrompt 必须以 "mobile game 3D anime character" 或 "Genshin Impact style 3D character" 开头，五官描述美型精致，例如："mobile game 3D anime character, beautiful idealized female character, large detailed eyes, refined features, Genshin Impact art style, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['mobile game 3D', 'Genshin Impact style', 'game character', 'NPR', 'vibrant', 'anime game', 'detailed', 'polished', 'masterpiece', 'best quality', '8K', 'beautiful'],
+      negativeKeywords: ['rough', 'low quality', 'dark horror', 'photorealistic', 'sketch', 'watercolor', 'worst quality', 'blurry', 'bad anatomy', 'off-model'],
+      characterStyle: '手游级精美3D角色，精致服装装备（宝石金属细节），华丽发型，游戏角色美型设计，轮廓光明确',
+      backgroundStyle: '手游场景（精致奇幻或现代城市），视觉效果丰富，美术品质高，光效华丽',
+    },
+    genreCompatibility: ['奇幻', '冒险', '校园', '恋爱', '仙侠'],
+    audienceTags: ['年轻向', '13-35岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '3d_disney',
+    displayName: '3D迪士尼皮克斯',
+    description: '圆润柔和角色设计，温暖明亮色彩，电影级3D渲染，富有表情的角色动画，适合家庭、童话题材',
+    styleCategory: '3d_animation',
+    tags: ['3D', '迪士尼', '皮克斯', '圆润', '电影'],
+    visualGuide: {
+      overallAesthetic: '迪士尼/皮克斯电影级3D动画，角色圆润柔和，色彩温暖明亮，情感表现丰富；奥斯卡级别3D动画',
+      colorGrading: '暖色饱和调色（warm saturation +30），温暖阳光感（golden hour），柔和对比度（contrast +20），情绪色彩丰富',
+      lightingStyle: '三点布光（soft key+fill+bounce），温暖主光（warm golden 3200K），柔和补光，电影感聚光效果',
+      era: 'contemporary',
+      renderTechnique: '电影级3D渲染（RenderMan/Arnold），次表面散射皮肤（Pixar SSS），物理布料，真实光照（HDRI+GI）',
+      textureStyle: '皮肤细腻质感（SSS），布料柔软（微纤维细节），皮革光泽，自然材质（木头/石头），多层表面细节',
+      referenceStyle: '《飞屋环游记》《冰雪奇缘》《寻梦环游记》，皮克斯/迪士尼电影制作最高标准',
+      styleReferencePrompt: 'Pixar Disney 3D animation film style, rounded expressive character design, warm cinematic lighting, highly expressive 3D animated character, RenderMan quality render, family friendly heartwarming aesthetic, emotional storytelling visual, masterpiece Pixar quality 3D render, best quality, highly detailed Disney animation',
+      characterStylePrompt: 'Pixar Disney 3D animated character, round soft features with large expressive eyes, warm skin SSS subsurface scattering, rich emotional expression, clean stylized design, Pixar quality render, masterpiece Disney animation quality, best quality, highly detailed',
+      facePromptRule: '本剧为【3D迪士尼/皮克斯风格】。faceReferencePrompt 必须以 "3D Pixar Disney animated character" 开头，五官描述圆润富有表情，例如："3D Pixar Disney animated young woman, large expressive emotionally rich eyes, soft rounded cheeks, warm skin tones, Pixar quality render, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['Pixar', 'Disney', '3D animation', 'rounded', 'warm lighting', 'expressive', 'cinematic', 'family', 'masterpiece', 'best quality', 'highly detailed', 'heartwarming'],
+      negativeKeywords: ['dark horror', 'realistic gritty', 'anime flat', 'adult only', 'violent', 'low quality', 'worst quality', 'blurry', 'bad anatomy'],
+      characterStyle: '皮克斯式3D角色，圆润大眼（高度表情化），表情丰富（多控制点），温暖穿着，亲切可爱；角色设计有记忆点',
+      backgroundStyle: '温暖丰富3D场景，自然光照（HDRI），细节精美，家庭环境或奇幻世界，色彩明亮温馨',
+    },
+    genreCompatibility: ['童话', '家庭', '冒险', '成长', '喜剧', '治愈'],
+    audienceTags: ['全年龄', '亲子向'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+
+  /* ─── 中国传统 ─── */
+  {
+    styleKey: 'chinese_ink',
+    displayName: '水墨风格',
+    description: '中国传统水墨画美学，墨韵淡雅，意境深远，适合古风、武侠、诗意题材',
+    styleCategory: 'chinese_traditional',
+    tags: ['水墨', '国画', '意境', '淡雅', '古典'],
+    visualGuide: {
+      overallAesthetic: '中国传统水墨画美学，墨韵流动，留白意境，禅意深远；致敬齐白石、吴冠中大师水平',
+      colorGrading: '黑白灰为主调（ink wash monochrome），点缀淡墨色或淡彩（ochre/sienna），极低饱和度（-70），墨色分五层（焦浓重淡清）',
+      lightingStyle: '无明确光源，以墨色浓淡表现空间感（墨分五彩），留白即光（negative space as light），远景淡墨近景浓墨',
+      era: 'ancient',
+      renderTechnique: '水墨笔触模拟（wet brush stroke，dry brush texture），墨晕扩散效果（ink diffusion），宣纸纹理叠加',
+      textureStyle: '宣纸纹理（xuan paper fiber），墨迹晕染（ink bloom），笔触可见（brushstroke texture），飞白效果',
+      referenceStyle: '齐白石、徐悲鸿国画，《大圣归来》水墨片段，《一人之下》开场，《大鱼海棠》',
+      styleReferencePrompt: 'Chinese ink wash painting masterpiece, sumi-e calligraphy brushstroke style, traditional black and white watercolor, rice paper xuan paper texture, ink diffusion bloom effect, minimalist negative space composition, classical Chinese painting grand master quality, highly detailed ink painting, museum quality traditional Chinese ink art, best quality',
+      characterStylePrompt: 'Chinese ink wash painting character portrait, elegant calligraphy brushstroke line, ink wash monochrome with subtle ochre accent, rice paper background, calligraphy-quality line work, traditional Chinese painting master level, highly detailed ink illustration, best quality, masterpiece',
+      facePromptRule: '本剧为【中国水墨画风】。faceReferencePrompt 必须以 "Chinese ink wash painting style" 开头，描述水墨线描五官，例如："Chinese ink wash painting style ancient scholar, elegant calligraphy brushstroke face, minimalist ink features, white rice paper background, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['ink wash', 'sumi-e', 'Chinese painting', 'brushstroke', 'black white', 'minimalist', 'rice paper', 'traditional', 'masterpiece', 'museum quality', 'highly detailed', 'classical'],
+      negativeKeywords: ['colorful', 'saturated', 'modern', 'realistic photo', 'neon', '3D render', 'anime', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '水墨勾勒线描人物，简约古典服饰，姿态飘逸，意境大于写实；笔墨线条富有力度感，疏密有致',
+      backgroundStyle: '云雾山水，古松竹林，亭台楼阁，大量留白营造意境；远景淡墨，近景细节，层次分明',
+    },
+    genreCompatibility: ['古装', '武侠', '仙侠', '诗意', '文化'],
+    audienceTags: ['文艺向', '25-50岁'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+  {
+    styleKey: 'chinese_style',
+    displayName: '中国古风绘画',
+    description: '中国风彩绘美学，工笔或重彩风格，华丽精细，适合古装、神话、仙侠题材',
+    styleCategory: 'chinese_traditional',
+    tags: ['中国风', '古风', '工笔', '重彩', '华丽'],
+    visualGuide: {
+      overallAesthetic: '中国古风彩绘美学，工笔重彩或唯美插画风，色彩丰富而不失典雅；游戏概念美术或商业插画级别',
+      colorGrading: '传统中国色彩体系（朱砂红#D72E2E，墨蓝#1A2F5E，翡翠绿#1E7B52，金黄#E8A020），高雅不俗气',
+      lightingStyle: '传统绘画式散射光，无强烈明暗对比，注重色彩层次，仙境场景有光晕效果',
+      era: 'ancient',
+      renderTechnique: '数字工笔画技法（数字绘画）或重彩插画，精细线描，平涂与渐变结合，金箔纹理叠加',
+      textureStyle: '绢布质感（silk texture），金箔点缀（gold leaf），工笔细腻纹理，流云纹、回纹等传统纹样',
+      referenceStyle: '《大话西游》插画，《仙剑》概念艺术，《原神》角色原画，现代国风游戏美术顶级水准',
+      styleReferencePrompt: 'Chinese gongbi traditional painting style illustration, vibrant mineral pigment colors, meticulous detailed line art, silk texture background, gold accent ornaments, ancient Chinese aesthetic mythology, fantasy cultivation art style, masterpiece quality Chinese traditional illustration, highly detailed museum quality Chinese art, best quality',
+      characterStylePrompt: 'Chinese traditional style character illustration, ancient Chinese beauty in elaborate hanfu, intricate hair ornament, vibrant mineral color palette, silk texture costume, gold detail accents, traditional Chinese illustration quality, masterpiece Chinese art, best quality, highly detailed',
+      facePromptRule: '本剧为【中国古风插画】。faceReferencePrompt 必须以 "Chinese traditional gongbi illustration style" 开头，描述古风插画五官，例如："Chinese traditional gongbi illustration style ancient beauty, delicate painted features, silk fabric background, gold ornaments in hair, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['Chinese style', 'gongbi', 'traditional Chinese', 'ancient', 'colorful', 'detailed', 'illustration', 'silk', 'gold', 'masterpiece', 'museum quality', 'highly detailed'],
+      negativeKeywords: ['western', 'modern', 'abstract', 'minimalist', 'ink wash only', 'monochrome', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '中国风唯美角色，华丽汉服（纹样精细），精致头饰（层次丰富），传统妆容（点朱砂，画蛾眉），仙气飘飘',
+      backgroundStyle: '古典楼阁、神仙仙境、桃花林、龙宫等华美场景；色彩丰富，金色光效，流云祥瑞纹样',
+    },
+    genreCompatibility: ['古装', '仙侠', '神话', '玄幻', '武侠'],
+    audienceTags: ['女性向', '18-35岁'],
+    platformTags: ['douyin', 'bilibili', 'hongguo'],
+  },
+  {
+    styleKey: '2d_gongbi',
+    displayName: '2D工笔风',
+    description: '中国传统工笔重彩，精致细腻线描，矿物颜料质感，绢本设色，典雅古典',
+    styleCategory: 'chinese_traditional',
+    tags: ['工笔', '重彩', '线描', '绢本', '古典'],
+    visualGuide: {
+      overallAesthetic: '中国传统工笔重彩，精致细腻，线描精工，色彩典雅浓丽；唐宋院体画最高标准',
+      colorGrading: '传统矿物颜料色系（石青#1F78B4，石绿#2AAE74，朱砂#D72E2E，赭石#C17D3C，金色#E8A020），高饱和而不艳俗',
+      lightingStyle: '均匀散射光，无明显高光，依赖线条与色彩表现层次，传统勾染法技法',
+      era: 'ancient',
+      renderTechnique: '工笔细线描（游丝描/铁线描），分染渲染（层层叠染），矿物颜料叠色技法，底稿线条精准',
+      textureStyle: '绢布底纹（silk weave），颜料厚薄层次，线条匀细劲健，金粉点缀（泥金）',
+      referenceStyle: '唐代仕女图（周昉《簪花仕女图》），宋代院体画，《清明上河图》，现代工笔名家刘大为',
+      styleReferencePrompt: 'Chinese gongbi fine brushwork painting masterpiece, meticulous precision line art, vibrant mineral pigments azure crimson ochre gold, silk xuan paper texture background, Tang Song dynasty classical painting aesthetic, traditional Chinese figure painting grand master quality, highly detailed museum quality gongbi illustration, best quality',
+      characterStylePrompt: 'Chinese gongbi fine brushwork character, Tang dynasty beauty in court attire, meticulously painted delicate features, mineral pigment vibrant color palette, silk texture embroidery costume, gold hairpin ornament, masterpiece gongbi quality, museum level traditional Chinese art, best quality',
+      facePromptRule: '本剧为【2D工笔重彩】。faceReferencePrompt 必须以 "Chinese gongbi fine brushwork painting style" 开头，描述工笔画五官，例如："Chinese gongbi fine brushwork painting style Tang dynasty beauty, meticulously painted delicate features, mineral pigment color palette, silk texture background, gold ornament detail, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['gongbi', 'fine brushwork', 'Chinese traditional painting', 'mineral pigment', 'silk', 'detailed line art', 'Tang dynasty', 'classical', 'masterpiece', 'museum quality', 'highly detailed'],
+      negativeKeywords: ['sketch', 'ink wash', 'minimalist', 'abstract', 'western', 'anime', 'modern', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '工笔仕女或武将，精细发饰服饰（纹样描摹），矿物颜料着色（石青/石绿/朱砂），线描精致如发丝',
+      backgroundStyle: '绢本底纹，园林亭阁或庭院场景，工笔花鸟点缀，色彩浓郁典雅，无透视错误',
+    },
+    genreCompatibility: ['古装', '宫斗', '仙侠', '历史', '文化'],
+    audienceTags: ['文艺向', '女性向', '25-50岁'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+
+  {
+    styleKey: '2d_watercolor',
+    displayName: '2D水彩',
+    description: '透明水彩晕染质感，清透柔和色彩，纸张纹理，自然流动的色彩过渡，文艺清新风',
+    styleCategory: '2d_art',
+    tags: ['水彩', '清透', '文艺', '纸张', '流动'],
+    visualGuide: {
+      overallAesthetic: '透明水彩画美学，清透柔和，颜色自然流动晕染，文艺清新气质；顶级水彩插画师水准',
+      colorGrading: '低饱和清透色彩（translucent wash），水彩晕染感（soft bloom），色彩边界模糊柔和，粉蓝绿淡调为主',
+      lightingStyle: '柔和散射光，水彩留白为光（white paper as light），无强烈阴影，光线方向柔和',
+      era: 'contemporary',
+      renderTechnique: '水彩数字绘画，纸张纹理叠加（cold press texture），颜料晕染效果（wet-on-wet），轻手感线稿',
+      textureStyle: '水彩纸张纹理（140lb cold press），颜料晕染（granulation），轻微颗粒，纸纤维质感可见',
+      referenceStyle: '欧式水彩插画（Erin Hanson），日式水彩少女画风，Studio Ghibli水彩背景，儿童书插画',
+      styleReferencePrompt: 'watercolor illustration masterpiece, transparent paint wash technique, soft bleeding colors wet-on-wet, cold press paper texture, delicate artistic brushwork, gentle color gradient, clean sketch ink line with watercolor fill, highly detailed watercolor illustration, best quality, professional watercolor artist level, masterpiece',
+      characterStylePrompt: 'watercolor illustration character, soft translucent skin tones gentle washes, delicate watercolor line art, paper texture visible, tender gentle expression, pastel watercolor palette, masterpiece watercolor quality, best quality, professional illustration',
+      facePromptRule: '本剧为【2D水彩插画】。faceReferencePrompt 必须以 "watercolor illustration style" 开头，描述水彩画五官，例如："watercolor illustration style young woman, soft translucent skin tones, gentle watercolor wash texture, delicate features, white paper background visible, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['watercolor', 'transparent', 'paper texture', 'soft', 'artistic', 'bleeding colors', 'gentle', 'illustration', 'masterpiece', 'best quality', 'highly detailed', 'professional'],
+      negativeKeywords: ['sharp edges', 'neon', 'dark', 'cel shading', 'bold outline', 'photorealistic', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '水彩插画风格角色，柔和轮廓（轻描线稿），清透肤色（透明感皮肤），简洁自然造型，晕染发色',
+      backgroundStyle: '水彩晕染背景，自然风光或城市，颜色柔和流动，留白感强，远近景色调差异',
+    },
+    genreCompatibility: ['爱情', '治愈', '青春', '奇幻', '文艺'],
+    audienceTags: ['女性向', '文艺向', '18-40岁'],
+    platformTags: ['bilibili', 'douyin', 'wechat_mini'],
+  },
+  {
+    styleKey: '2d_pixel',
+    displayName: '2D像素',
+    description: '8-bit/16-bit复古游戏美学，格子化像素色块，复古游戏色盘，怀旧电子游戏感',
+    styleCategory: '2d_art',
+    tags: ['像素', '复古', '游戏', '8-bit', '怀旧'],
+    visualGuide: {
+      overallAesthetic: '复古像素游戏美学，8-bit/16-bit格子化像素色块，电子游戏怀旧感；精品像素艺术水准',
+      colorGrading: '有限像素色盘（16-256色），高对比度饱和色彩，无渐变（dithering替代），RGB电子感',
+      lightingStyle: '无真实光照，像素化高光块，游戏式简化光影（block highlight），像素发光效果',
+      era: 'contemporary',
+      renderTechnique: '像素艺术（pixel art），有限分辨率格子化（32x32-256x256 sprite），复古游戏渲染，抖动效果',
+      textureStyle: '像素格子纹理，马赛克色块（chunky pixels），无平滑抗锯齿，像素字体点缀',
+      referenceStyle: '超级马里奥（SNES版）、勇者斗恶龙、洛克人，《铲子骑士》精品像素艺术',
+      styleReferencePrompt: 'pixel art 16-bit retro game style, limited color palette, chunky clean pixels, classic JRPG aesthetic, sprite art character design, old school video game look, masterpiece pixel art quality, best quality highly detailed pixel illustration, game quality',
+      characterStylePrompt: 'pixel art 16-bit game character sprite, clear pixel block design, limited color palette, expressive pixel dot eyes, classic RPG character design, masterpiece pixel art quality, best quality, highly detailed',
+      facePromptRule: '本剧为【像素 / 复古游戏风格】。faceReferencePrompt 必须以 "pixel art 16-bit game character" 开头，例如："pixel art 16-bit game character, blocky simplified features, limited color palette, expressive pixel dot eyes, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['pixel art', '16-bit', 'retro game', 'sprite', 'chunky pixels', 'limited palette', 'classic RPG', 'nostalgic', 'masterpiece', 'best quality', 'clean pixels'],
+      negativeKeywords: ['smooth', 'photorealistic', 'detailed organic', 'watercolor', 'film grain', 'low quality', 'worst quality', 'blurry', 'anti-aliased'],
+      characterStyle: '像素艺术精灵，有限色块（颜色跳跃清晰），游戏风格表情（像素化眼睛），经典复古造型，动作姿势清晰',
+      backgroundStyle: '像素游戏地图，方块瓦片场景（tile set），像素地形与建筑，经典RPG地图感',
+    },
+    genreCompatibility: ['冒险', '喜剧', '科幻', '奇幻', '怀旧'],
+    audienceTags: ['全年龄', '年轻向', '男性向'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '2d_simple',
+    displayName: '2D极简简画',
+    description: '最少线条勾勒，大面积留白，黑白为主偶有点缀色，简约而不简单的高级感',
+    styleCategory: '2d_art',
+    tags: ['极简', '简画', '留白', '高级感', '黑白'],
+    visualGuide: {
+      overallAesthetic: '极简插画美学，最少线条表达最多信息，大面积留白，高级简约感；国际顶级商业插画水准',
+      colorGrading: '黑白为主，极少彩色点缀（单色强调，如红色或金色），无复杂调色',
+      lightingStyle: '无明确光源，以线条疏密表现空间，留白即光，无阴影渐变',
+      era: 'contemporary',
+      renderTechnique: '极简线条插画（单线或双线），大面积留白，单色或双色配置，线条粗细有节奏感',
+      textureStyle: '无材质，光滑纸面，极细线条（发丝级细线），无噪点，白色负空间',
+      referenceStyle: '极简主义插画（Christoph Niemann），《小王子》圣-埃克苏佩里线稿，Bloomberg等商业插图风格',
+      styleReferencePrompt: 'minimalist line art illustration masterpiece, simple clean elegant strokes, generous negative space, black and white sparse drawing, editorial magazine illustration style, high-end minimalist aesthetic, best quality, highly detailed minimalist illustration, professional commercial art quality, masterpiece',
+      characterStylePrompt: 'minimalist line art character, simple elegant line strokes, minimal detail, generous white space, editorial style composition, high-end minimalist illustration, masterpiece quality minimalist art, best quality',
+      facePromptRule: '本剧为【极简线条插画风格】。faceReferencePrompt 必须以 "minimalist line art style character" 开头，例如："minimalist line art style character, simple elegant strokes, few essential lines, white background, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['minimalist', 'line art', 'simple', 'clean', 'negative space', 'black white', 'editorial', 'sparse', 'masterpiece', 'best quality', 'professional', 'elegant'],
+      negativeKeywords: ['complex', 'detailed', 'colorful', 'dark', 'photorealistic', 'busy', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '极简线条人物，最少笔画表现神态（5-10条线），无多余细节，形式感强，线条有力度和节奏感',
+      backgroundStyle: '极简留白背景，线条轮廓场景，无材质填充，意境优先，画面简洁有力',
+    },
+    genreCompatibility: ['文艺', '爱情', '哲理', '商业', '教育'],
+    audienceTags: ['文艺向', '成人向', '25-45岁'],
+    platformTags: ['bilibili', 'wechat_mini', 'douyin'],
+  },
+  {
+    styleKey: '2d_sketch',
+    displayName: '2D素描手绘',
+    description: '铅笔手绘质感，纸张纹理，淡雅灰色调，速写式人物，文艺素描风',
+    styleCategory: '2d_art',
+    tags: ['素描', '手绘', '铅笔', '速写', '文艺'],
+    visualGuide: {
+      overallAesthetic: '铅笔素描手绘质感，速写式线条，纸张纹理，文艺学院气息；顶级素描插画师水准',
+      colorGrading: '灰阶为主（graphite gray），轻微暖褐色调（raw umber warm tint），铅笔线条质感，淡雅无彩色',
+      lightingStyle: '素描式明暗关系（排线表现体积），交叉排线阴影，无彩色光源，纸张白色为最亮调',
+      era: 'contemporary',
+      renderTechnique: '铅笔素描模拟（H/HB/2B/6B铅笔质感），纸张纹理叠加，排线阴影（hatching），橡皮擦高光',
+      textureStyle: '铅笔石墨颗粒（graphite grain），纸张纤维（Strathmore paper），排线质感，橡皮擦痕迹',
+      referenceStyle: '速写插画（Gustav Klimt素描），素描人体，手账风格（Moleskine），Andrew Loomis人体素描',
+      styleReferencePrompt: 'pencil sketch illustration masterpiece, hand-drawn graphite style, paper texture overlay, loose gestural drawing strokes, sketchbook art quality, monochrome line work, cross-hatching shading technique, highly detailed pencil illustration, best quality professional sketch art, masterpiece',
+      characterStylePrompt: 'pencil sketch character illustration, graphite hand-drawn portrait, paper texture visible, expressive gestural lines, hatching shadow technique, sketchbook aesthetic, masterpiece pencil illustration quality, best quality, highly detailed',
+      facePromptRule: '本剧为【素描 / 手绘铅笔风格】。faceReferencePrompt 必须以 "pencil sketch illustration style" 开头，例如："pencil sketch illustration style character, graphite line portrait, paper texture background, hatching shadow detail, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['pencil sketch', 'hand drawn', 'graphite', 'paper texture', 'sketch', 'gestural', 'monochrome', 'artistic', 'masterpiece', 'best quality', 'highly detailed'],
+      negativeKeywords: ['colorful', 'digital clean', 'photorealistic', 'smooth', 'bright', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '素描风格人物，铅笔线条速写（轻快灵动），排线阴影（有节奏感），文艺自然气质',
+      backgroundStyle: '速写背景，简单铅笔轮廓场景，纸张纹理，笔记本手绘感，主次分明',
+    },
+    genreCompatibility: ['文艺', '爱情', '青春', '生活', '日常'],
+    audienceTags: ['文艺向', '女性向', '18-35岁'],
+    platformTags: ['bilibili', 'wechat_mini', 'douyin'],
+  },
+  {
+    styleKey: '2d_british_comic',
+    displayName: '2D英式漫画',
+    description: '粗黑描边线条，高饱和波普色彩，网点效果，夸张表情，动感张力构图',
+    styleCategory: '2d_art',
+    tags: ['英式', '漫画', '波普', '粗描边', '网点'],
+    visualGuide: {
+      overallAesthetic: '英美漫画波普美学，粗黑描边，高饱和原色，夸张动感，网点纹理；漫威DC漫画原版质感',
+      colorGrading: '高饱和原色（红#FF0000黄#FFFF00蓝#0000FF），Ben-Day网点效果，高对比度，无中间色渐变',
+      lightingStyle: '漫画式简化光影（大色块高光），无渐变阴影（flat shadow），强调轮廓线，速度线背景',
+      era: 'contemporary',
+      renderTechnique: '手绘漫画风格，粗黑轮廓线（3-4px），平涂着色（flat color），Ben-Day网点贴图',
+      textureStyle: 'Ben-Day网点纹理（halftone dots），粗糙油墨质感（rough ink），印刷漫画感',
+      referenceStyle: '漫威《蜘蛛侠》漫画原版，DC《蝙蝠侠》，Andy Warhol波普艺术，Jack Kirby画风',
+      styleReferencePrompt: 'comic book illustration masterpiece, bold thick black outline, pop art Ben-Day halftone dots, vibrant primary colors, Marvel DC western comic aesthetic, dynamic action composition, speech bubble comic panel, best quality, highly detailed comic book art, masterpiece',
+      characterStylePrompt: 'western comic book character, bold thick outline, flat pop art colors, Ben-Day dot texture, heroic dynamic pose, Marvel Jack Kirby style illustration, masterpiece comic art quality, best quality, highly detailed',
+      facePromptRule: '本剧为【英美漫画 / 波普漫画风格】。faceReferencePrompt 必须以 "western comic book style" 或 "Marvel DC comic book style" 开头，例如："western comic book style hero, square jaw, bold feature lines, heroic determined expression, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['comic book', 'bold outline', 'pop art', 'Ben-Day dots', 'vibrant', 'Marvel style', 'dynamic', 'primary colors', 'masterpiece', 'best quality', 'highly detailed'],
+      negativeKeywords: ['subtle', 'realistic', 'watercolor', 'minimalist', 'dark horror', 'Japanese manga', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '美式漫画英雄风格，粗黑描边，夸张肌肉或身材，高饱和服装（英雄制服），Ben-Day网点阴影',
+      backgroundStyle: '漫画格子布局，爆炸背景（POW! BAM!），动感速度线，波普几何背景，城市场景简化',
+    },
+    genreCompatibility: ['超级英雄', '动作', '冒险', '喜剧', '热血'],
+    audienceTags: ['年轻向', '男性向', '13-35岁'],
+    platformTags: ['douyin', 'bilibili', 'kuaishou'],
+  },
+  {
+    styleKey: '2d_rubber_hose',
+    displayName: '2D橡皮管',
+    description: '1920-30年代早期动画美学，弯曲弹性四肢，圆形大眼，黑白胶片质感，复古欢快',
+    styleCategory: '2d_art',
+    tags: ['橡皮管', '复古', '1920年代', '弹性', '欢快'],
+    visualGuide: {
+      overallAesthetic: '1920-30年代早期卡通动画美学，橡皮管弯曲弹性，圆润欢快，复古黑白或简彩；Cuphead游戏级别精品',
+      colorGrading: '黑白胶片感（black white sepia）或简单原色（2-3色），无复杂调色，复古感强，偶有手工着色感',
+      lightingStyle: '平面无光影（flat lighting），早期动画简化光，无体积感，轮廓线定义形状',
+      era: 'ancient',
+      renderTechnique: '早期卡通动画风格，橡皮管弹性四肢（无骨节），圆形大眼（pie cut eyes），夸张变形，胶片颗粒',
+      textureStyle: '黑白胶片颗粒（film grain），早期印刷感（halftone shadow），无数字平滑',
+      referenceStyle: '费利克斯猫，早期迪士尼蒸汽船威利，贝蒂布普，《Cuphead》游戏风格（最高参考标准）',
+      styleReferencePrompt: 'rubber hose animation style masterpiece, 1930s vintage cartoon aesthetic, Cuphead game art quality, bendy rubber limbs, round circle pie-cut eyes, black white film grain texture, vintage cartoon retro feel, cheerful bouncy character design, best quality, highly detailed vintage cartoon illustration, masterpiece',
+      characterStylePrompt: 'rubber hose vintage cartoon character, Cuphead art style, bendy elastic limbs, large round pie-cut eyes, simple round body, black white sepia palette, film grain texture, masterpiece vintage cartoon quality, best quality',
+      facePromptRule: '本剧为【橡皮管 / 1930年代复古卡通风格】。faceReferencePrompt 必须以 "rubber hose vintage cartoon style" 或 "Cuphead art style character" 开头，例如："rubber hose vintage cartoon style character, round head, pie-cut circle eyes, big grin, bendy limbs, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['rubber hose', 'Cuphead', '1930s cartoon', 'vintage', 'bendy', 'round eyes', 'retro animation', 'black white', 'masterpiece', 'best quality', 'highly detailed'],
+      negativeKeywords: ['modern', 'realistic', 'angular', 'dark', 'complex', 'contemporary', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '橡皮管弹性卡通角色，圆形大眼（pie-cut），弯曲四肢（无关节），夸张表情，复古装扮（礼帽/燕尾服）',
+      backgroundStyle: '复古卡通背景，简洁手绘场景，黑白或简单彩色，爵士乐时代氛围，音乐节奏感强',
+    },
+    genreCompatibility: ['喜剧', '音乐', '冒险', '亲子', '怀旧'],
+    audienceTags: ['全年龄', '文艺向', '亲子向'],
+    platformTags: ['bilibili', 'douyin', 'wechat_mini'],
+  },
+  {
+    styleKey: '2d_golden',
+    displayName: '黄金光堂',
+    description: '华丽金色光效，奢华宫殿质感，金属光泽渲染，暖金色调，高贵典雅的视觉盛宴',
+    styleCategory: '2d_art',
+    tags: ['金色', '华丽', '奢华', '光效', '典雅'],
+    visualGuide: {
+      overallAesthetic: '华丽金色光效美学，奢华宫殿质感，金属光泽，贵气逼人的视觉盛宴；奢侈品级别的美术设计',
+      colorGrading: '暖金色主调（#FFD700 + #B8860B），金色、深棕（#3E1F00）、暗红（#8B0000）三色组合，金属光泽高光',
+      lightingStyle: '金光放射效果（god ray，radial gradient），烛光与吊灯暖光（2800K），光晕感强（golden bokeh），华丽光束',
+      era: 'ancient',
+      renderTechnique: '数字绘画金属光效（specular highlight），金箔纹理叠加（gold leaf overlay），粒子光效（sparkle），奢华构图',
+      textureStyle: '金箔质感（brushed gold），大理石纹理（marble），丝绒布料（velvet），金属雕花（ornate relief）',
+      referenceStyle: '古典欧洲宫廷画（克利姆特金色画风）、奢侈品广告视觉、中国皇家龙袍纹样',
+      styleReferencePrompt: 'golden luxury aesthetic illustration masterpiece, ornate gold decorations gold leaf texture, warm golden radiant light god rays, baroque royal palace opulence, metallic sheen and gloss, rich elegant color palette, Gustav Klimt golden art style inspiration, highly detailed luxury art, best quality, masterpiece golden illustration, award-winning',
+      characterStylePrompt: 'golden luxury aesthetic character illustration, ornate gold costume with precious gem accents, warm golden light glow on skin, metallic gold hair ornament, luxurious elegant design, masterpiece golden art quality, best quality, highly detailed',
+      facePromptRule: '本剧为【黄金光堂 / 奢华金色风格】。faceReferencePrompt 必须以 "golden luxury art style character" 或 "Gustav Klimt inspired golden aesthetic character" 开头，例如："golden luxury art style character, radiant golden light on face, ornate gold crown and jewelry, aristocratic beauty, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['golden', 'luxury', 'ornate', 'metallic', 'baroque', 'royal', 'opulent', 'warm gold light', 'masterpiece', 'best quality', 'highly detailed', 'Gustav Klimt'],
+      negativeKeywords: ['simple', 'minimalist', 'dark', 'cool tones', 'rough', 'sketch', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '金色华服角色，金色头饰与配饰（宝石镶嵌），奢华刺绣（金线纹样），高贵气质，金光笼罩',
+      backgroundStyle: '金碧辉煌宫殿内室（金色柱廊），烛台吊灯（暖光），大理石地板，奢华装饰（浮雕/雕刻）',
+    },
+    genreCompatibility: ['古装', '宫斗', '奇幻', '霸总', '贵族'],
+    audienceTags: ['女性向', '18-40岁'],
+    platformTags: ['douyin', 'hongguo', 'bilibili'],
+  },
+
+  /* ─── 真人实拍（补充） ─── */
+  {
+    styleKey: 'western_film',
+    displayName: '欧美大片',
+    description: '好莱坞商业片视觉语言，高对比度调色，宽画幅，戏剧性光影，IMAX级视觉冲击',
+    styleCategory: 'live_action',
+    tags: ['好莱坞', '欧美', '大片', '宽画幅', '高对比'],
+    visualGuide: {
+      overallAesthetic: '好莱坞商业大片视觉，宽画幅，高对比度，戏剧性光影，视觉冲击力强；MCU/诺兰级别制作',
+      colorGrading: '橙青对比调色（Orange & Teal LUT，+40对比），高对比，暗部深邃（-50 shadows），高光轻微过曝',
+      lightingStyle: '戏剧性三点光，IMAX感宏大（big light source），对角线光轴，强烈明暗对比',
+      era: 'contemporary',
+      renderTechnique: '电影级摄影，宽画幅（2.39:1 letterbox），可适配竖屏裁切，超清数字（ARRI Alexa Mini LF）',
+      textureStyle: '无胶片颗粒（数字超清），镜头光晕（anamorphic flare），浅景深（f/1.4-f/2.8），大气雾霾效果',
+      referenceStyle: '漫威MCU（《复仇者联盟4》），克里斯托弗·诺兰（《星际穿越》），迈克尔·贝（《变形金刚》视效）',
+      styleReferencePrompt: 'Hollywood blockbuster cinematography, orange teal cinematic color grade, dramatic IMAX quality lighting, high contrast commercial film aesthetic, anamorphic lens flare, photorealistic RAW photo, award-winning blockbuster photography, 4K ultra detailed, professional Hollywood production quality, masterpiece',
+      characterStylePrompt: 'Hollywood blockbuster style portrait, photorealistic skin with natural pores, cinematic dramatic lighting, commercial film production quality, 85mm lens compression, 4K ultra-detailed portrait, award-winning cinematography quality, masterpiece',
+      facePromptRule: '本剧为【西方影视风格 / 好莱坞大片】。faceReferencePrompt 必须以 "cinematic Hollywood-style" 开头，例如："cinematic Hollywood-style American hero, chiseled weathered face, piercing eyes, dramatic lighting, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。真人风格质量要求：faceReferencePrompt 末尾必须加入 "eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, no airbrushing, not plastic skin, 4K portrait masterpiece quality"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['Hollywood', 'blockbuster', 'cinematic', 'orange teal', 'high contrast', 'dramatic', 'IMAX', 'commercial film', 'photorealistic', 'high quality', '4K', 'award-winning', 'masterpiece'],
+      negativeKeywords: ['anime', 'illustration', 'documentary', 'low budget', 'dark indie', 'muted', 'low quality', 'worst quality', 'blurry', 'plastic skin', 'airbrushed'],
+      characterStyle: '好莱坞级别真人角色，商业妆造，肌肉线条或英雄气质，精心打光（三点布光），真实皮肤质感',
+      backgroundStyle: '大都市或特效场景，宏大场面，城市天际线，建筑或特效背景，视觉冲击力强',
+    },
+    genreCompatibility: ['动作', '科幻', '冒险', '超级英雄', '都市'],
+    audienceTags: ['全年龄', '18-40岁'],
+    platformTags: ['douyin', 'kuaishou', 'reelshort'],
+  },
+
+  /* ─── 定格动画 ─── */
+  {
+    styleKey: 'stop_motion',
+    displayName: '定格动画',
+    description: '手工制作质感，实物模型感，帧帧拍摄的微妙抖动，温暖手作美感',
+    styleCategory: 'stop_motion',
+    tags: ['定格', '手工', '模型', '实物', '温暖'],
+    visualGuide: {
+      overallAesthetic: '手工实物定格动画质感，微妙的手拍抖动感，暖色调，DIY工匠美感；Laika工作室级别精品',
+      colorGrading: '温暖自然光色调（warm 3400K），轻微过曝（+0.5EV），柔和暖白光，无强烈调色，手工感色彩',
+      lightingStyle: '自然光或摄影棚柔光（softbox），温暖均匀，无强烈对比，手工世界的温馨感',
+      era: 'contemporary',
+      renderTechnique: '实物模型逐帧拍摄模拟，轻微抖动感（stop-motion jitter），景深浅（tilt-shift），背焦虚化',
+      textureStyle: '手工制作材质（fingerprint texture），指痕感，布料纤维（felt/cotton），木材纹理，金属质感',
+      referenceStyle: 'Laika工作室《隐形小英雄》《鬼妈妈》，蒂姆·伯顿定格美学',
+      styleReferencePrompt: 'stop motion animation masterpiece, handmade puppet model aesthetic, warm cozy lighting, physical tactile material texture, claymation-feel tilt-shift blur, artisan handcraft miniature world, Laika studio quality stop motion, best quality, highly detailed stop motion photography, masterpiece',
+      characterStylePrompt: 'stop motion puppet character, handmade model aesthetic, physical craft texture visible, warm lighting on handmade figure, artisan quality puppetry, stop motion animation masterpiece quality, best quality',
+      facePromptRule: '本剧为【定格动画 / 实物模型】。faceReferencePrompt 必须以 "stop motion puppet character" 或 "handmade model character" 开头，例如："stop motion puppet character, handmade fabric and wire frame, tactile texture visible, button or glass bead eyes, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['stop motion', 'handmade', 'model', 'puppet', 'miniature', 'warm lighting', 'artisan', 'tactile', 'masterpiece', 'best quality', 'craft quality'],
+      negativeKeywords: ['digital', 'smooth', '2D flat', 'anime', 'CGI', 'virtual', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '定格动画模型角色，手工感形态（轻微不完美），布料或粘土材质（纹理清晰），略显粗糙但可爱',
+      backgroundStyle: '微缩景观模型（精心搭建的布景），实物道具，温暖灯光下的小世界，比例感强（微缩感）',
+    },
+    genreCompatibility: ['童话', '治愈', '冒险', '悬疑', '奇幻'],
+    audienceTags: ['全年龄', '亲子向'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+  {
+    styleKey: 'clay_stop',
+    displayName: '粘土定格',
+    description: '彩色黏土角色，手指捏制纹理，阿德曼动画式质感，圆润可爱的黏土世界',
+    styleCategory: 'stop_motion',
+    tags: ['粘土', '定格', '黏土', '可爱', '阿德曼'],
+    visualGuide: {
+      overallAesthetic: '彩色黏土手工定格动画，圆润可爱，手指捏制质感清晰可见；阿德曼Aardman制作水准',
+      colorGrading: '鲜艳饱和粘土色调（+40），无冷调，温暖明亮的糖果色彩（plasticine colors）',
+      lightingStyle: '温暖柔光（softbox warm），均匀布光，黏土表面漫反射（matte clay），无强烈阴影',
+      era: 'contemporary',
+      renderTechnique: '真实黏土逐帧拍摄模拟，圆润形态（no sharp edges），手工感纹理，指痕清晰可见',
+      textureStyle: '黏土指痕纹理（fingerprint on clay），半光泽表面（semi-matte），圆滑形态无锐角，塑料泥质感',
+      referenceStyle: '《超级无敌掌门狗》《小羊肖恩》Aardman动画，Nick Park创作风格',
+      styleReferencePrompt: 'claymation stop motion masterpiece, Aardman animation quality, colorful vibrant clay plasticine texture, rounded expressive figures, handmade fingerprint visible surface texture, cheerful bright colors, charming clay world miniature set, best quality, highly detailed claymation photography, masterpiece',
+      characterStylePrompt: 'claymation character, Aardman style colorful clay, round expressive figure, visible clay fingerprint texture, bright saturated plasticine colors, cheerful character design, masterpiece claymation quality, best quality',
+      facePromptRule: '本剧为【粘土定格动画】。faceReferencePrompt 必须以 "claymation stop motion character" 或 "Aardman clay animation character" 开头，例如："claymation stop motion character, colorful clay skin texture, visible fingerprint marks, round expressive clay face, button nose, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['claymation', 'Aardman', 'clay texture', 'handmade', 'rounded', 'colorful', 'cheerful', 'stop motion', 'masterpiece', 'best quality', 'highly detailed'],
+      negativeKeywords: ['realistic', 'dark', 'horror', 'sharp edges', 'digital smooth', 'serious', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '圆润黏土角色，夸张表情（眉毛可塑），鲜艳颜色，可见手指捏制纹理，萌趣造型',
+      backgroundStyle: '黏土搭建微缩场景（比例精准），鲜艳色彩装饰，温馨家居或户外小景，布景精心',
+    },
+    genreCompatibility: ['童话', '喜剧', '冒险', '治愈', '亲子'],
+    audienceTags: ['全年龄', '亲子向', '儿童向'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+  {
+    styleKey: 'felt_stop',
+    displayName: '毛毡定格',
+    description: '毛毡/羊毛材质质感，针织温暖感，柔和模糊边缘，手工缝制美感，温馨可爱',
+    styleCategory: 'stop_motion',
+    tags: ['毛毡', '定格', '羊毛', '手工', '温馨'],
+    visualGuide: {
+      overallAesthetic: '毛毡手工艺定格动画，柔软温暖的织物质感，针织边缘，手工缝制美感；北欧手工艺美学',
+      colorGrading: '柔和温暖色调（muted warm），低饱和毛绒色彩（wool palette），棉麻纹理感，不饱和自然色系',
+      lightingStyle: '柔光散射（diffuse lighting），温暖光源，织物表面柔和漫反射，无强光高光',
+      era: 'contemporary',
+      renderTechnique: '真实毛毡布料逐帧拍摄模拟，纤维质感突出（fiber texture），边缘柔软（soft edge）',
+      textureStyle: '毛毡纤维纹理（felt fiber weave），针脚细节（visible stitch），羊毛绒感（wool fuzz），布料悬垂感',
+      referenceStyle: '《毛线卡比》游戏风格，儿童毛毡教育视频，北欧手工艺美学，Waldorf玩具风格',
+      styleReferencePrompt: 'felt stop motion masterpiece, wool fabric textile texture animation, knitted handcraft aesthetic, soft handmade character with visible stitch detail, warm cozy Scandinavian craft colors, artisan fiber art quality, best quality, highly detailed felt craft photography, masterpiece',
+      characterStylePrompt: 'felt puppet character, visible wool fiber stitched texture, soft round form, warm muted fabric color palette, handmade craft aesthetic, cozy Scandinavian wool craft quality, masterpiece felt animation, best quality',
+      facePromptRule: '本剧为【毛毡 / 羊毛定格动画】。faceReferencePrompt 必须以 "felt puppet character" 或 "wool craft stop motion character" 开头，例如："felt puppet character, stitched fabric wool texture face, soft rounded felt features, button eyes, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['felt', 'wool', 'fabric', 'handmade', 'knitted', 'soft', 'cozy', 'warm', 'artisan', 'masterpiece', 'best quality', 'craft quality'],
+      negativeKeywords: ['sharp', 'hard', 'plastic', 'smooth', 'digital', 'cold', 'dark', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '毛毡布料缝制角色，柔软边缘，针脚装饰（可见线迹），布偶感温馨造型，毛绒质感',
+      backgroundStyle: '布料铺设的温馨场景，毛毡树木花草，针织地毯，家庭手作布置感，比例精心设计',
+    },
+    genreCompatibility: ['童话', '治愈', '亲子', '奇幻', '教育'],
+    audienceTags: ['全年龄', '亲子向', '女性向'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+  {
+    styleKey: 'lego_stop',
+    displayName: '积木定格',
+    description: '乐高积木质感，鲜艳塑料色彩，方块化场景与角色，玩具模型般的趣味世界',
+    styleCategory: 'stop_motion',
+    tags: ['乐高', '积木', '定格', '方块', '趣味'],
+    visualGuide: {
+      overallAesthetic: '乐高积木定格动画质感，方块化塑料角色，鲜艳原色，玩具世界趣味感；《乐高大电影》制作水准',
+      colorGrading: '高饱和塑料原色（红#E3000B黄#FFD700蓝#006CB7绿#00A950），明亮无阴影，玩具感十足',
+      lightingStyle: '均匀明亮光（product photography lighting），塑料高光点（specular on ABS），无阴影感，玩具棚拍质感',
+      era: 'contemporary',
+      renderTechnique: '乐高积木材质模拟，方块化几何（ABS plastic），塑料光泽（glossy ABS shader），积木卡扣纹理',
+      textureStyle: '塑料光泽（ABS gloss），乐高圆钮纹理（stud detail），方块化表面，鲜艳无材质噪点',
+      referenceStyle: '乐高官方电影《乐高大电影》《乐高蝙蝠侠》，乐高官方定格动画频道',
+      styleReferencePrompt: 'LEGO stop motion style masterpiece, plastic brick minifigure character, colorful ABS building blocks, toy world miniature aesthetic, blocky character design, LEGO Movie quality render, playful primary colors, best quality, highly detailed LEGO photography, masterpiece',
+      characterStylePrompt: 'LEGO minifigure character, ABS plastic cylindrical head, printed face expression, claw hands, square torso, bright primary color costume, LEGO Movie quality, masterpiece LEGO animation, best quality',
+      facePromptRule: '本剧为【乐高积木定格动画】。faceReferencePrompt 必须以 "LEGO minifigure style character" 开头，例如："LEGO minifigure style character, ABS plastic cylindrical head, printed face with dot eyes, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['LEGO', 'brick', 'plastic', 'colorful', 'blocky', 'toy', 'minifigure', 'primary colors', 'playful', 'masterpiece', 'best quality', 'highly detailed'],
+      negativeKeywords: ['organic', 'realistic', 'dark', 'complex', 'smooth curves', 'serious', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '乐高小人仔造型，圆柱头方形身体，钳子手，印刷式面部表情，鲜艳服装，ABS塑料光泽',
+      backgroundStyle: '乐高积木搭建场景（卡扣纹理可见），方块化建筑与地形，鲜艳颜色组合，比例统一',
+    },
+    genreCompatibility: ['冒险', '喜剧', '亲子', '超级英雄', '奇幻'],
+    audienceTags: ['全年龄', '亲子向', '儿童向'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+  {
+    styleKey: 'paper_stop',
+    displayName: '纸艺定格',
+    description: '剪纸与折纸质感，层叠纸张立体感，皮影戏式光影，纸张纹理，中国剪纸艺术',
+    styleCategory: 'stop_motion',
+    tags: ['剪纸', '纸艺', '定格', '折纸', '皮影'],
+    visualGuide: {
+      overallAesthetic: '剪纸/折纸定格动画质感，层叠纸张立体感，皮影戏影子效果，手工艺术美感；中国民间剪纸传承',
+      colorGrading: '红、橙、黄、绿等传统剪纸色彩（鲜艳纸质色），边缘投影，纸张白底（white paper base）',
+      lightingStyle: '背光皮影效果（backlight silhouette），纸张边缘阴影（edge shadow），从下打光的立体感，折叠处阴影',
+      era: 'ancient',
+      renderTechnique: '纸张层叠模拟（Z-depth layering），剪纸边缘质感（cut paper edge），折纸立体结构（origami crease）',
+      textureStyle: '纸张纤维纹理（paper grain），剪切边缘（crisp cut edge），折叠痕迹（crease line），手工剪裁感',
+      referenceStyle: '中国传统剪纸艺术（民间年画），韩国纸艺动画，《喜羊羊》早期剪纸风，中央美术学院实验动画',
+      styleReferencePrompt: 'paper cut stop motion masterpiece, Chinese folk paper art style, layered paper craft depth effect, shadow puppet backlight aesthetic, handmade paper texture cut edge, origami character design, traditional folk art animation quality, best quality, highly detailed paper craft photography, masterpiece',
+      characterStylePrompt: 'paper cut folk art character, layered paper silhouette with crisp cut edge detail, traditional Chinese paper art color pattern, shadow depth effect, origami-like construction, masterpiece paper craft animation, best quality',
+      facePromptRule: '本剧为【纸艺 / 剪纸定格动画】。faceReferencePrompt 必须以 "paper cut art style character" 或 "Chinese folk paper craft character" 开头，例如："paper cut art style character, layered paper silhouette design, traditional folk pattern, crisp paper cut edge, front-facing, looking at camera, ..."。必须包含 "front-facing, looking at camera"。',
+    },
+    promptGuidance: {
+      positiveKeywords: ['paper cut', 'paper craft', 'origami', 'layered', 'folk art', 'handmade', 'shadow puppet', 'traditional', 'masterpiece', 'best quality', 'highly detailed'],
+      negativeKeywords: ['digital', 'smooth', 'plastic', 'photorealistic', 'dark', 'modern', 'low quality', 'worst quality', 'blurry'],
+      characterStyle: '剪纸/折纸风格人物，平面层叠构成，传统图案（云纹/回纹），民间艺术造型，边缘剪裁精准',
+      backgroundStyle: '纸艺布景（层叠景深），剪纸图案背景，皮影舞台感，传统民间场景（庭院/山水）',
+    },
+    genreCompatibility: ['童话', '传统文化', '民间故事', '亲子', '历史'],
+    audienceTags: ['全年龄', '亲子向', '文化向'],
+    platformTags: ['douyin', 'bilibili', 'wechat_mini'],
+  },
+];
+
+/**
+ * 场景 visualPrompt 写法引导——按 styleKey 精准匹配（优先），否则按 styleCategory 兜底。
+ * 注入到 seedSystemTemplates，替代 drama-playbook.ts 中的多风格示例硬编码 switch。
+ */
+const SCENE_PROMPT_GUIDANCE: Record<string, string> = {
+  // ── 真人影视 ──────────────────────────────────────────────────────────────
+  live_action:
+    '示例：\n"modern urban office interior, Korean drama premium lighting, warm key light with cool shadow, shallow depth of field bokeh, 9:16 vertical composition, film grain texture, photorealistic, 4K, masterpiece"\n⚠️ 场景 visualPrompt 只写场景特有细节（空间/光线/材质/道具/氛围），全剧风格词（cinematic live action photography 等）已由系统自动注入，禁止在场景 visualPrompt 中重复写。\n⚠️ 必须包含写实质量词（photorealistic / film grain / 4K），禁止动漫类材质词。\ntextureStyle 使用：film grain / natural bokeh / realistic fabric / photorealistic skin。',
+
+  period_live:
+    '示例：\n"Tang dynasty imperial palace throne room, warm golden candlelight amber light, film grain, rich silk and linen textures, dougong wooden architecture, photorealistic, 4K, masterpiece"\n⚠️ 场景 visualPrompt 只写场景特有细节（空间/光线/材质/道具/氛围），全剧风格词（realistic cinematic photography / inspired by ... aesthetic 等）已由系统自动注入，禁止在场景 visualPrompt 中重复写，否则会造成 prompt 冗余和前缀跳过。\n⚠️ 严禁使用 ink wash edges / brush stroke / painterly 等绘画类材质词——这些属于水墨风格，会导致生成写实真人古装时出现水墨画感。\ntextureStyle 只能使用写实材质词：film grain / natural skin texture / rich fabric textures / stone and wood details。',
+
+  retro_wuxia:
+    '示例：\n"ancient Chinese tavern interior, warm earth tones, 35mm film grain, bamboo forest exterior dappled light, worn leather sword scabbard detail, photorealistic, 4K, masterpiece"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（retro wuxia film photography / 1990s HK wuxia Tsui Hark aesthetic 等）已由系统自动注入，禁止重复写。\n⚠️ 严禁使用绘画类材质词（ink wash / painterly / brush stroke），只用 film grain / dust / leather / worn fabric。',
+
+  hk_film:
+    '示例：\n"rain-wet Hong Kong alley at night, neon sign reflections teal and orange on wet pavement, 35mm film grain texture, high contrast moody shadows, photorealistic, 4K, masterpiece"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Hong Kong noir film photography / Wong Kar-wai visual poetry 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：film grain / rain-wet surfaces / neon glow reflections / glass reflections。',
+
+  western_film:
+    '示例：\n"urban rooftop confrontation at dusk, orange teal shadow color grade, dramatic side lighting, anamorphic lens flare, photorealistic, 4K ultra-detailed, masterpiece"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Hollywood blockbuster cinematography / IMAX quality lighting 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：lens flare / photorealistic / anamorphic bokeh / realistic concrete。',
+
+  // ── 中国传统 / 水墨 ────────────────────────────────────────────────────────
+  chinese_ink:
+    '示例：\n"misty mountain pavilion with ancient pine trees, soft ink wash brushstroke texture, traditional ink black white grey tones, rice paper negative space composition, highly detailed, masterpiece"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Chinese ink wash painting masterpiece / sumi-e calligraphy brushstroke style 等）已由系统自动注入，禁止重复写。\ntextureStyle 必须使用水墨画材质词：ink wash edges / brush stroke texture / rice paper texture / ink diffusion bloom。',
+
+  chinese_style:
+    '示例：\n"red lanterns and palace corridor walls, vibrant mineral pigment atmosphere, gold accent architectural ornaments, silk texture background, soft warm light, highly detailed, masterpiece"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Chinese gongbi traditional painting style / mineral pigments azure crimson 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：mineral pigment / gongbi line art / silk texture / gold leaf accent。',
+
+  '2d_gongbi':
+    '示例：\n"ancient courtyard pavilion scene, meticulous line detail, vibrant azure crimson ochre atmosphere, silk weave background texture, Tang dynasty classical ambiance, highly detailed, masterpiece"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Chinese gongbi fine brushwork painting masterpiece 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：gongbi ink line / mineral pigment wash / silk weave texture。',
+
+  // ── 2D 动画 / 动漫 ──────────────────────────────────────────────────────────
+  '2d_anime':
+    '示例：\n"urban classroom interior at sunset, vibrant saturated colors, clean cel-shading hard shadow, detailed background art, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（anime style illustration / Japanese animation masterpiece quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：cel-shading / clean line art / flat color fill。严禁使用写实材质词（film grain / photorealistic）。',
+
+  '2d_ghibli':
+    '示例：\n"lush countryside meadow in summer, dappled sunlight through trees, gentle natural soft atmosphere, highly detailed background art, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Studio Ghibli style masterpiece / Miyazaki Hayao animation 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：watercolor wash / hand-drawn texture / soft color gradient。',
+
+  '2d_korean_anime':
+    '示例：\n"modern apartment interior warm natural light, pastel pink and cream tones, soft gradient shading, delicate decorative details, 9:16 vertical, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Korean webtoon style illustration / manhwa artwork 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：soft gradient / delicate line art / pastel color fill。',
+
+  '2d_shoujo':
+    '示例：\n"school rooftop at golden sunset, cherry blossom petals floating, sparkle star effects, screen tone halftone dots, romantic dreamy pink atmosphere, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（shoujo manga style illustration / screen tone halftone 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：screen tone / sparkle effects / flower decorations / pastel gradient。',
+
+  '2d_film':
+    '示例：\n"train station platform at golden hour, volumetric light rays streaming through windows, atmospheric perspective gradient, detailed environment, vibrant realistic colors, highly detailed, anime film masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Makoto Shinkai anime film style / cinematic 2D animation masterpiece 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：atmospheric perspective / volumetric light / detailed background art / film quality gradient。',
+
+  '2d_retro_anime':
+    '示例：\n"Japanese school hallway afternoon, warm vintage color palette, cel animation quality lighting, nostalgic old-school atmosphere, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（1990s anime style illustration / retro Japanese animation aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：cel animation / film grain / vintage warm palette / retro grain。',
+
+  '2d_action':
+    '示例：\n"rooftop battle scene at night, speed lines radiating background, explosion sparks impact effects, vibrant saturated energy glow, dynamic extreme camera angle, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（shounen action anime illustration / ufotable animation quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：speed lines / explosion sparks / energy glow / dynamic motion blur。',
+
+  '2d_cybercity':
+    '示例：\n"dystopian alley at night, rain-wet streets neon teal pink reflections, high contrast dark shadows, futuristic holographic billboard overlay, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（2D cyberpunk anime illustration / Ghost in the Shell aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：neon glow / holographic layer / rain reflections / digital noise。',
+
+  '2d_death_note':
+    '示例：\n"shadowy gothic library interior at night, high contrast black shadow dramatic split lighting, moody thriller oppressive atmosphere, deeply psychological composition, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（dark psychological thriller anime illustration / Death Note aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：high contrast shadow / gothic texture / dark atmosphere / precise line art。',
+
+  '2d_horror':
+    '示例：\n"abandoned hospital corridor at night, grotesque spiral pattern on walls, deep disturbing shadows, unsettling asymmetric composition, decay atmosphere, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Junji Ito horror manga style illustration / grotesque body horror aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：horror shadow / grotesque texture / ink line detail / disturbing distortion。',
+
+  '2d_fantasy_anime':
+    '示例：\n"magical enchanted forest clearing, glowing spell particle effects, vibrant jewel tone atmosphere, detailed European fantasy tree architecture, epic adventurous scale, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（2D fantasy anime illustration / magical adventure epic aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：magical glow / particle effects / vibrant jewel color / detailed fantasy texture。',
+
+  '2d_british_anime':
+    '示例：\n"cozy English countryside cottage afternoon, warm muted pastel atmosphere, watercolor paper texture feel, precise symmetrical composition, soft diffuse natural lighting, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（British animation style illustration / Wes Anderson animation style 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：watercolor texture / warm muted palette / paper grain / soft diffuse。',
+
+  // ── 3D 动画 ─────────────────────────────────────────────────────────────────
+  '3d_fantasy':
+    '示例：\n"immortal mountain cloud sea realm, glowing spiritual aura effects purple gold, volumetric cloud atmosphere layers, divine realm epic scale environment, highly detailed, masterpiece, best quality, 8K"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D Chinese xianxia fantasy render / immortal cultivation divine realm 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：3D PBR silk material / magical particle glow / volumetric cloud / deity ornament detail。',
+
+  '3d_chibi':
+    '示例：\n"cozy kawaii bedroom interior, pastel candy pink and blue colors, round simplified furniture shapes, cheerful bright lighting atmosphere, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D chibi Q-version cute render / Nintendo Switch game aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：smooth cel-shading / pastel fill / simplified 3D surface / candy color。',
+
+  '3d_realistic':
+    '示例：\n"modern luxury apartment interior, detailed surface materials wood and glass, HDRI studio lighting, physically based rendering quality, masterpiece, best quality, 8K"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D photorealistic render / Unreal Engine 5 quality / subsurface scattering 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：PBR material / subsurface scattering / HDRI reflection / detailed texture maps。',
+
+  '3d_toon_render':
+    '示例：\n"anime-style school classroom bright interior, vibrant flat colors, hard cel-shading shadow edges, clean outline strokes, cheerful cartoon atmosphere, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D NPR toon render animation / Spider-verse animation quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：cel-shading hard shadow / clean outline / flat color / NPR stylized surface。',
+
+  '3d_japanese_npr':
+    '示例：\n"sakura park spring afternoon, soft atmospheric natural lighting, delicate cherry blossom detail, beautiful environment ambiance, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Japanese 3D anime NPR render / ufotable studio quality masterpiece 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：soft cel shading / atmospheric glow / anime film quality surface / delicate material。',
+
+  '3d_cyberpunk':
+    '示例：\n"neon-drenched rain-wet city street at night, teal magenta color scheme shadows, volumetric fog atmosphere, holographic billboard reflections in wet ground, highly detailed, masterpiece, best quality, 8K"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D cyberpunk render / holographic display screens / ray tracing reflections 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：PBR metallic wet surface / neon glow / volumetric fog / ray tracing reflection。',
+
+  '3d_disney':
+    '示例：\n"enchanted forest clearing at golden hour, warm sunlight filtering through trees, emotional heartwarming atmosphere, family friendly environment, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Pixar Disney 3D animation film style / RenderMan quality render 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：SSS skin / physically simulated cloth / HDRI soft light / Pixar quality surface。',
+
+  '3d_mobile_game':
+    '示例：\n"fantasy ancient city street at dusk, vibrant saturated colors, beautiful game environment quality, detailed architecture and lighting, highly detailed, masterpiece, best quality, 8K"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（mobile game 3D style / Genshin Impact anime aesthetic quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：game quality NPR material / rim light outline / vibrant toon surface / ornate costume texture。',
+
+  // ── 定格动画 ─────────────────────────────────────────────────────────────────
+  clay_stop:
+    '示例：\n"cozy kitchen miniature set, warm soft lighting, clay plasticine surface texture, visible fingerprint marks, handmade puppet material detail, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（claymation stop motion masterpiece / Aardman animation quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：clay texture / handmade feel / fingerprint marks / matte plasticine surface。',
+
+  felt_stop:
+    '示例：\n"miniature Scandinavian garden scene, soft fabric material surfaces, handmade wool fiber texture detail, warm cozy natural lighting, visible stitch design, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（felt stop motion masterpiece / wool fabric textile texture animation 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：felt fabric texture / wool fiber / soft matte stitch material。',
+
+  paper_stop:
+    '示例：\n"Chinese folk paper art silhouette scene, layered cut-out paper depth effect, traditional folk pattern detail, crisp paper cut edge, artisanal hand-cut construction, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（paper cut stop motion masterpiece / Chinese folk paper art style 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：paper texture / cut-out edge / layered paper depth / origami crease。',
+
+  stop_motion:
+    '示例：\n"handmade miniature world interior, warm soft cozy lighting, physical puppet texture detail, tilt-shift blur background, artisan craftwork quality, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（stop motion animation masterpiece / Laika studio quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：physical puppet material / tilt-shift blur / warm light / handmade tactile surface。',
+
+  lego_stop:
+    '示例：\n"plastic brick miniature city, colorful primary colors ABS blocks, stud detail surfaces visible, toy world scale environment, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（LEGO stop motion style masterpiece / plastic brick minifigure 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：ABS plastic gloss / stud texture / primary color block / toy world lighting。',
+
+  // ── 2D 绘画艺术 ──────────────────────────────────────────────────────────────
+  '2d_watercolor':
+    '示例：\n"soft blooming color wash scene, cold press paper texture visible, hand-painted gentle wet-on-wet technique, transparent color layers, highly detailed, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（watercolor illustration masterpiece / transparent paint wash technique 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：watercolor paper texture / color bloom granulation / brushstroke wash。',
+
+  '2d_pixel':
+    '示例：\n"retro JRPG game indoor scene, 16-bit style chunky pixel blocks, limited color palette, tile map design, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（pixel art 16-bit retro game style / limited color palette 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：pixel blocks / limited palette / dithering pattern / tile texture。',
+
+  '2d_sketch':
+    '示例：\n"graphite hand-drawn interior scene, paper texture visible, cross-hatching shadow detail, gestural loose pencil strokes, sketchbook aesthetic, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（pencil sketch illustration masterpiece / hand-drawn graphite style 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：graphite pencil texture / paper fiber / hatching lines / erasure mark。',
+
+  '2d_simple':
+    '示例：\n"sparse simple stroke composition, generous white negative space, editorial minimalist design, black and white, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（minimalist line art illustration masterpiece / simple clean elegant strokes 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：clean white paper / single line stroke / minimal detail / negative space。',
+
+  '2d_british_comic':
+    '示例：\n"bold thick black outline comic panel composition, Ben-Day halftone dots shadow, vibrant primary pop art colors, dynamic action scene, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（comic book illustration masterpiece / Marvel DC western comic aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：Ben-Day dots / bold ink outline / flat primary color / halftone shadow。',
+
+  '2d_rubber_hose':
+    '示例：\n"1930s jazz club interior, black white film grain texture, simple two-color vintage palette, cheerful retro bouncy feel, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（rubber hose animation style masterpiece / Cuphead game art quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：film grain / halftone vintage / black white sepia / pie-cut eye reflection。',
+
+  '2d_golden':
+    '示例：\n"baroque royal palace grand hall, warm golden radiant light god rays, gold leaf texture ornament, metallic sheen surfaces, opulent rich atmosphere, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（golden luxury aesthetic illustration masterpiece / Gustav Klimt golden art style 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：gold leaf texture / metallic specular / velvet surface / marble floor。',
+
+  '2d_chibi':
+    '示例：\n"cute cozy school classroom, candy pastel pink and blue colors, round simplified furniture design, kawaii cheerful bright atmosphere, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（chibi anime style illustration / Q-version super deformed 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：flat pastel fill / simple cel shading / round smooth surface / candy color。',
+
+  '2d_thick_line':
+    '示例：\n"urban alley night scene, high contrast bold black outline composition, limited flat color palette, graphic novel dramatic framing, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（bold thick outline illustration / graphic novel comic book style 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：bold ink outline / flat limited color / graphic novel texture / speed line。',
+
+  '2d_sports':
+    '示例：\n"indoor basketball court overhead stadium lighting, dynamic speed lines, high contrast dramatic shadows, competition atmosphere, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（sports manga illustration / Inoue Takehiko realistic human proportion 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：halftone shadow / motion speed line / realistic fabric / sweat shine。',
+
+  '2d_tezuka':
+    '示例：\n"retro Japanese school scene, clean simple rounded line atmosphere, warm flat color palette, classic vintage ambiance, friendly cozy environment, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Tezuka Osamu manga style illustration / Astro Boy 1960s animation aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：clean flat color / simple cel shading / rounded line / retro print texture。',
+
+  '3d_voxel':
+    '示例：\n"fantasy mountain landscape, bright saturated primary block colors, cubic block geometry environment, sandbox game feel, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（voxel art 3D style render / Minecraft aesthetic blocky cubic world 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：cubic voxel texture / limited pixel palette / block geometry / game color。',
+
+  '3d_british':
+    '示例：\n"foggy London study room interior, warm candlelight atmosphere, aged leather armchair and mahogany desk, brass lamp details, cozy Victorian ambiance, masterpiece, best quality"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D Victorian British style render / Pixar quality animation masterpiece 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：aged leather PBR / brass metal / fog atmosphere / warm candle light SSS。',
+
+  // ── 分类兜底（styleCategory 级别）──────────────────────────────────────────
+  '__cat_live_action':
+    '示例：\n"realistic scene specific location, shallow depth of field bokeh, film grain, photorealistic, 4K, masterpiece"\n⚠️ 全剧风格词已由系统自动注入，禁止在场景 visualPrompt 中重复写。\ntextureStyle 使用：film grain / natural skin texture / realistic fabric。⚠️ 严禁使用绘画类材质词。',
+
+  '__cat_2d_animation':
+    '示例：\n"specific scene location, vibrant colors, clean cel-shading, hand-drawn aesthetic, highly detailed, masterpiece, best quality"\n⚠️ 全剧风格词（动漫类型关键词等）已由系统自动注入，禁止在场景 visualPrompt 中重复写。\ntextureStyle 使用：cel-shading / clean line art / flat color fill。',
+
+  '__cat_3d_animation':
+    '示例：\n"specific 3D scene environment, vibrant colors, stylized or realistic render, detailed environment, highly detailed, masterpiece, best quality"\n⚠️ 全剧风格词已由系统自动注入，禁止在场景 visualPrompt 中重复写。\ntextureStyle 使用：3D surface material / cel-shading or PBR as appropriate。',
+
+  '__cat_stop_motion':
+    '示例：\n"specific handmade craft scene, physical material texture, masterpiece, best quality"\n⚠️ 全剧风格词（stop motion类型词等）已由系统自动注入，禁止在场景 visualPrompt 中重复写。\ntextureStyle 使用：clay / felt / paper / wood / fabric texture（按实际材质选择）。',
+
+  '__cat_chinese_traditional':
+    '示例：\n"specific traditional scene location, ink wash or gongbi technique, traditional color palette, highly detailed, masterpiece"\n⚠️ 全剧风格词已由系统自动注入，禁止在场景 visualPrompt 中重复写。\ntextureStyle 使用：ink wash edges / brush stroke / rice paper texture。',
+
+  '__cat_2d_art':
+    '示例：\n"specific scene location, distinctive art technique, hand-crafted aesthetic, highly detailed, masterpiece, best quality"\n⚠️ 全剧风格词已由系统自动注入，禁止在场景 visualPrompt 中重复写。\ntextureStyle 与本风格一致的材质词。',
+};
+
+function getScenePromptGuidance(styleKey: string, styleCategory: StyleCategory): string {
+  return SCENE_PROMPT_GUIDANCE[styleKey]
+    ?? SCENE_PROMPT_GUIDANCE[`__cat_${styleCategory}`]
+    ?? '';
+}
+
+/**
+ * 编剧台词风格引导——按 styleKey 精准匹配（优先），否则按 styleCategory 兜底。
+ * 替代 buildScriptwriterSystemPrompt 中的 styleDialogueTone if-else 关键词查找。
+ */
+const SCRIPT_DIALOGUE_GUIDANCE: Record<string, string> = {
+  // ── 2D 动漫 ────────────────────────────────────────────────────────────────
+  '__cat_2d_animation':
+    '【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许"中二"式情绪宣泄\n- 角色情绪要"大声说出来"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（"猛地站起来""攥紧双拳发抖"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的"金句"',
+
+  // ── 定格动画 ────────────────────────────────────────────────────────────────
+  '__cat_stop_motion':
+    '【视觉风格：定格动画/手工质感】\n- 台词简洁童趣，用短句和拟声词增强手工世界的质感\n- 角色动作描写要配合定格动画的"一帧一帧"节奏——不求流畅求生动\n- 允许夸张的肢体表达和拟人化物体，保持温暖治愈的叙事基调\n- 旁白可以更活泼，像在给朋友讲故事',
+
+  // ── 中国传统 / 水墨（含 period_live 古装） ──────────────────────────────────
+  '__cat_chinese_traditional':
+    '【视觉风格：中国传统艺术/水墨】\n- 台词与设定时代一致，禁止与该时代不符的用语（古代背景不用现代网络用语）\n- 称谓与时代一致（古装用陛下/朕/大人/公子等，民国用先生/小姐/太太等）\n- 情感表达方式符合时代感，可用隐喻与意象\n- 动作描写：服装/礼仪符合设定时代',
+
+  // period_live 是 live_action 分类但需要历史台词风格
+  period_live:
+    '【视觉风格：真人古装/历史剧】\n- 台词与设定时代一致，禁止与该时代不符的用语（古代背景不用现代网络用语）\n- 称谓与时代一致（古装用陛下/朕/大人/公子等，民国用先生/小姐/太太等）\n- 情感表达方式符合时代感，可用隐喻与意象\n- 动作描写：服装/礼仪符合设定时代',
+
+  retro_wuxia:
+    '【视觉风格：复古武侠】\n- 台词江湖气十足，硬朗简练，有武侠韵律感\n- 武侠惯用语和成语可以使用，但不可堆砌到生涩难懂\n- 情感表达含蓄，以义气和侠情替代直白爱意\n- 动作描写注重动作感和气势，力道劲道要通过台词节奏传递',
+
+  // ── 3D 动画 ─────────────────────────────────────────────────────────────────
+  '__cat_3d_animation':
+    '【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待"意外笑点"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性',
+
+  // ── 2D 艺术绘画 ──────────────────────────────────────────────────────────────
+  '2d_pixel':
+    '【视觉风格：像素/复古游戏】\n- 台词简短有力，模拟游戏对话框风格（单句不超过10个字）\n- 可使用"..."省略号表达沉默和犹豫，增强像素游戏叙事感\n- 允许游戏化表达（"获得了XX""HP-100"等梗），但不滥用\n- 叙事节奏明快，像游戏剧情推进一样高效',
+
+  // ── 真人影视（通用兜底）────────────────────────────────────────────────────
+  '__cat_live_action':
+    '【视觉风格：真人影视/写实】\n- 台词克制自然，情绪藏在潜台词里（"不说"比"说"更有力量）\n- 避免过度戏剧化的宣言式台词，用日常语言承载情感重量\n- 肢体语言胜过言语：沉默、回避、停顿是最强表达\n- 对话要有生活质感，允许不完整的句子和思维跳跃',
+
+  '__cat_2d_art':
+    '【视觉风格：2D插画/艺术风格】\n- 台词风格需与视觉风格协调，保持整体创作基调统一\n- 根据本剧艺术风格的气质（奇幻/温馨/悬疑/诗意等）调整台词的文学性',
+};
+
+/**
+ * 集导演镜头风格提示——按 styleKey 精准匹配（优先），否则按 styleCategory 兜底。
+ * 替代 buildEpisodeDirectorSystemPrompt 中的 shotStyleHint if-else 关键词查找。
+ */
+const SHOT_STYLE_GUIDANCE: Record<string, string> = {
+  // ── 2D 动漫 ────────────────────────────────────────────────────────────────
+  '__cat_2d_animation':
+    'masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达',
+
+  '2d_film':
+    'masterShotPlan镜头语言：偏好宽幅构图+精致环境空镜，新海诚式长镜头凝视（long take），用光线变化（窗边光/丁达尔）渲染情绪，情感场景用中近景细腻表情+背景虚化，空镜切入比例高（交代环境情绪）',
+
+  '2d_action':
+    'masterShotPlan镜头语言：战斗场景极端景别快切（extreme_wide→extreme_close_up），大量低角度仰拍（low_angle）突出气势，动作高潮用 slow_motion+impact_frame，招牌动作前必须有 reaction_shot 铺垫',
+
+  '2d_shoujo':
+    'masterShotPlan镜头语言：偏好唯美逆光+花卉背景大特写，情感高潮时用旋转构图或特写眼睛（eye close_up），背景虚化花瓣散落，多用仰拍突出角色高大感，告白场景必须用slow_push_in',
+
+  '2d_cybercity':
+    'masterShotPlan镜头语言：偏好从高处俯瞰（bird_eye）城市，霓虹反光场景用极近仰拍（low_angle），追逐场景手持感+快切，孤独场景用wide+大量负空间，全息投影用overlay合成视角',
+
+  '2d_death_note':
+    'masterShotPlan镜头语言：偏好阴阳对比构图（split light），心理博弈用交替特写（close_up切换），大量侧逆光制造压迫感，计划揭露场景用low_angle+slow_zoom，沉默优先于动作镜头',
+
+  // ── 定格动画 ────────────────────────────────────────────────────────────────
+  '__cat_stop_motion':
+    'masterShotPlan镜头语言：偏好中全景展示手工质感，镜头运动缓慢平稳（避免剧烈快切破坏定格感），情感场景用静止长镜凝视，道具特写用 extreme_close_up 展现手工细节',
+
+  // ── 中国传统 / 水墨 ─────────────────────────────────────────────────────────
+  '__cat_chinese_traditional':
+    'masterShotPlan镜头语言：偏好对称构图+诗意空镜，情感场景用长停留中景，水墨/工笔风格偏好大量负空间构图（rule_of_thirds+negative_space），避免快速切换破坏水墨写意感',
+
+  period_live:
+    'masterShotPlan镜头语言：偏好对称构图+慢节奏推镜，权力场景用低角度仰拍（low_angle），情感场景用浅景深特写，宫廷场景多用 bird_eye 展示空间权力关系，避免手持感破坏古装庄重感',
+
+  retro_wuxia:
+    'masterShotPlan镜头语言：动作场景偏好广角+快速切换，功夫对决用 slow_motion+extreme_close_up 捕捉动作细节，江湖豪情用 wide+bird_eye 展示宏大场面，情感场景用三角切法',
+
+  hk_film:
+    'masterShotPlan镜头语言：王家卫式慢推镜+长时间凝视，大量手持感（hand-held），霓虹场景用侧面轮廓剪影（silhouette），对话多用三角切+反应镜，孤独感场景用wide+路人背景虚化',
+
+  western_film:
+    'masterShotPlan镜头语言：好莱坞三段式构图（establishing→medium→close_up），动作高潮用快切（2秒以内），英雄登场必须low_angle仰拍，宏大场景用IMAX感wide_shot，爆炸/高潮用slow_motion',
+
+  // ── 3D 动画 ─────────────────────────────────────────────────────────────────
+  '__cat_3d_animation':
+    'masterShotPlan镜头语言：偏好动态跟镜+丰富景别切换，允许夸张喜剧动作，3D环境可使用大范围运镜（orbit/tracking），情感场景用精细表情特写配合丰富光线变化',
+
+  '3d_fantasy':
+    'masterShotPlan镜头语言：仙侠场景必须有bird_eye展示仙境宏大，法术释放用wide_shot+特效overlay，飞行场景用追镜（tracking），角色对峙用dramatic low_angle，云海场景必须有大范围orbital运镜',
+
+  '3d_cyberpunk':
+    'masterShotPlan镜头语言：偏好从高处俯瞰霓虹城市（bird_eye），追逐场景快切+极端low_angle，全息界面用overlay视角，黑客场景用close_up手部+快速数字切换，孤独感用wide+体积光',
+
+  // ── 真人影视（通用兜底）────────────────────────────────────────────────────
+  '__cat_live_action':
+    'masterShotPlan镜头语言：偏好手持感+冷静中景，对话场景用眼神反应镜（close_up+three_quarter交替），情绪用极简长镜头，写实风格避免超现实构图，高潮用 slow_push_in 而非快切',
+
+  '__cat_2d_art':
+    'masterShotPlan镜头语言：根据本风格气质选择构图策略，偏静态插画风格用长停留构图，偏动态漫画风格用景别快切',
+};
+
+function getScriptDialogueGuide(styleKey: string, styleCategory: StyleCategory): string {
+  return SCRIPT_DIALOGUE_GUIDANCE[styleKey]
+    ?? SCRIPT_DIALOGUE_GUIDANCE[`__cat_${styleCategory}`]
+    ?? '';
+}
+
+function getShotStyleGuide(styleKey: string, styleCategory: StyleCategory): string {
+  return SHOT_STYLE_GUIDANCE[styleKey]
+    ?? SHOT_STYLE_GUIDANCE[`__cat_${styleCategory}`]
+    ?? '';
+}
+
+@Injectable()
+export class DramaVisualStyleTemplateService implements OnModuleInit {
+  private readonly logger = new Logger(DramaVisualStyleTemplateService.name);
+
+  constructor(
+    @InjectRepository(DramaVisualStyleTemplateEntity)
+    private readonly repo: Repository<DramaVisualStyleTemplateEntity>,
+  ) {}
+
+  async onModuleInit() {
+    await this.seedSystemTemplates();
+  }
+
+  /** 当前系统模板版本号；每次需要更新存量模板时递增 */
+  private static readonly SYSTEM_VERSION = 8;
+
+  private async seedSystemTemplates() {
+    const VER = DramaVisualStyleTemplateService.SYSTEM_VERSION;
+    for (const rawSeed of SYSTEM_TEMPLATES) {
+      // 为每个模板注入 scenePromptGuidance / scriptDialogueGuide / shotStyleGuide（如模板内已有则保留）
+      const seed = {
+        ...rawSeed,
+        visualGuide: {
+          ...rawSeed.visualGuide,
+          scenePromptGuidance: rawSeed.visualGuide.scenePromptGuidance
+            ?? getScenePromptGuidance(rawSeed.styleKey, rawSeed.styleCategory),
+          scriptDialogueGuide: rawSeed.visualGuide.scriptDialogueGuide
+            ?? getScriptDialogueGuide(rawSeed.styleKey, rawSeed.styleCategory),
+          shotStyleGuide: rawSeed.visualGuide.shotStyleGuide
+            ?? getShotStyleGuide(rawSeed.styleKey, rawSeed.styleCategory),
+        },
+      };
+      try {
+        const existing = await this.repo.findOne({ where: { userId: null as any, styleKey: seed.styleKey } });
+        if (!existing) {
+          await this.repo.save(this.repo.create({
+            userId: null,
+            styleKey: seed.styleKey,
+            displayName: seed.displayName,
+            description: seed.description,
+            styleCategory: seed.styleCategory,
+            tags: seed.tags,
+            visualGuide: seed.visualGuide,
+            promptGuidance: seed.promptGuidance,
+            genreCompatibility: seed.genreCompatibility,
+            audienceTags: seed.audienceTags,
+            platformTags: seed.platformTags,
+            isSystem: true,
+            systemVersion: VER,
+            syncedSystemVersion: 0,
+          }));
+          this.logger.log(`Seeded visual style template: ${seed.styleKey}`);
+        } else if (existing.systemVersion < VER) {
+          // 版本升级时：对系统字段做全量更新，但保留用户修改过的 visualGuide 字段
+          const mergedVisualGuide = existing.isUserModified
+            // 用户改过的模板：只补充系统新增字段，不覆盖用户修改过的其他字段
+            ? {
+                ...existing.visualGuide,
+                facePromptRule: existing.visualGuide.facePromptRule ?? seed.visualGuide.facePromptRule,
+                scenePromptGuidance: existing.visualGuide.scenePromptGuidance ?? seed.visualGuide.scenePromptGuidance,
+                scriptDialogueGuide: existing.visualGuide.scriptDialogueGuide ?? seed.visualGuide.scriptDialogueGuide,
+                shotStyleGuide: existing.visualGuide.shotStyleGuide ?? seed.visualGuide.shotStyleGuide,
+                characterStylePrompt: existing.visualGuide.characterStylePrompt ?? seed.visualGuide.characterStylePrompt,
+              }
+            // 系统模板：全量更新
+            : seed.visualGuide;
+          await this.repo.save({ ...existing, ...seed, visualGuide: mergedVisualGuide, isSystem: true, systemVersion: VER });
+          this.logger.log(`Updated visual style template: ${seed.styleKey} → v${VER}`);
+        }
+      } catch (err) {
+        this.logger.error(`Failed to seed visual style template ${seed.styleKey}: ${err}`);
+      }
+    }
+  }
+
+  async list(userId?: string): Promise<DramaVisualStyleTemplateEntity[]> {
+    if (!userId) {
+      return this.repo.find({ where: { userId: null as any }, order: { styleCategory: 'ASC', styleKey: 'ASC' } });
+    }
+    // 用户拥有自己的副本 + 系统模板（未被用户克隆覆盖的）
+    const [userCopies, systemRoots] = await Promise.all([
+      this.repo.find({ where: { userId }, order: { styleCategory: 'ASC', styleKey: 'ASC' } }),
+      this.repo.find({ where: { userId: null as any }, order: { styleCategory: 'ASC', styleKey: 'ASC' } }),
+    ]);
+    // 同步：为用户创建尚未拥有的系统模板副本
+    await this.syncSystemTemplates(userId, userCopies, systemRoots);
+    // 重新查询以获取最新
+    return this.repo.find({ where: [{ userId }, { userId: null as any }], order: { styleCategory: 'ASC', styleKey: 'ASC' } });
+  }
+
+  private async syncSystemTemplates(
+    userId: string,
+    userCopies: DramaVisualStyleTemplateEntity[],
+    systemRoots: DramaVisualStyleTemplateEntity[],
+  ) {
+    const userCopyMap = new Map(userCopies.map(c => [c.styleKey, c]));
+    for (const sys of systemRoots) {
+      const existing = userCopyMap.get(sys.styleKey);
+      if (!existing) {
+        // 用户没有此模板副本：创建
+        try {
+          await this.repo.save(this.repo.create({
+            userId,
+            styleKey: sys.styleKey,
+            displayName: sys.displayName,
+            description: sys.description,
+            styleCategory: sys.styleCategory,
+            tags: sys.tags,
+            visualGuide: sys.visualGuide,
+            promptGuidance: sys.promptGuidance,
+            genreCompatibility: sys.genreCompatibility,
+            audienceTags: sys.audienceTags,
+            platformTags: sys.platformTags,
+            isSystem: true,
+            parentTemplateId: sys.id,
+            systemVersion: sys.systemVersion,
+            syncedSystemVersion: sys.systemVersion,
+            isUserModified: false,
+          }));
+        } catch {
+          // 可能并发重复创建，忽略
+        }
+      } else if (existing.syncedSystemVersion < sys.systemVersion) {
+        // 用户已有副本，但系统模板有更新：差量同步
+        try {
+          const mergedVisualGuide = existing.isUserModified
+            // 用户修改过的副本：只补充系统新增字段（null/undefined 才填入），不覆盖用户已有设置
+            ? {
+                ...existing.visualGuide,
+                facePromptRule: existing.visualGuide.facePromptRule ?? sys.visualGuide.facePromptRule,
+                scenePromptGuidance: existing.visualGuide.scenePromptGuidance ?? sys.visualGuide.scenePromptGuidance,
+                scriptDialogueGuide: existing.visualGuide.scriptDialogueGuide ?? sys.visualGuide.scriptDialogueGuide,
+                shotStyleGuide: existing.visualGuide.shotStyleGuide ?? sys.visualGuide.shotStyleGuide,
+              }
+            // 用户未修改过的副本：全量同步系统最新内容
+            : sys.visualGuide;
+          await this.repo.save({
+            ...existing,
+            displayName: existing.isUserModified ? existing.displayName : sys.displayName,
+            description: existing.isUserModified ? existing.description : sys.description,
+            tags: existing.isUserModified ? existing.tags : sys.tags,
+            visualGuide: mergedVisualGuide,
+            promptGuidance: existing.isUserModified ? existing.promptGuidance : sys.promptGuidance,
+            genreCompatibility: existing.isUserModified ? existing.genreCompatibility : sys.genreCompatibility,
+            audienceTags: existing.isUserModified ? existing.audienceTags : sys.audienceTags,
+            platformTags: existing.isUserModified ? existing.platformTags : sys.platformTags,
+            systemVersion: sys.systemVersion,
+            syncedSystemVersion: sys.systemVersion,
+          });
+          this.logger.log(`Synced visual style template for user ${userId}: ${sys.styleKey} → v${sys.systemVersion}`);
+        } catch (err) {
+          this.logger.warn(`Failed to sync template ${sys.styleKey} for user ${userId}: ${err}`);
+        }
+      }
+    }
+  }
+
+  async getById(id: string): Promise<DramaVisualStyleTemplateEntity> {
+    const tpl = await this.repo.findOne({ where: { id } });
+    if (!tpl) throw new NotFoundException(`Visual style template ${id} not found`);
+    return tpl;
+  }
+
+  async create(userId: string, dto: CreateDramaVisualStyleTemplateDto): Promise<DramaVisualStyleTemplateEntity> {
+    return this.repo.save(this.repo.create({
+      userId,
+      styleKey: dto.styleKey,
+      displayName: dto.displayName,
+      description: dto.description ?? '',
+      styleCategory: (dto.styleCategory as any) ?? 'live_action',
+      tags: dto.tags ?? [],
+      visualGuide: (dto.visualGuide as any) ?? { overallAesthetic: '', colorGrading: '', lightingStyle: '', era: 'contemporary' },
+      promptGuidance: (dto.promptGuidance as any) ?? null,
+      genreCompatibility: dto.genreCompatibility ?? [],
+      audienceTags: dto.audienceTags ?? [],
+      platformTags: dto.platformTags ?? [],
+      isSystem: false,
+      systemVersion: 1,
+      syncedSystemVersion: 0,
+      isUserModified: false,
+    }));
+  }
+
+  async update(id: string, userId: string, dto: UpdateDramaVisualStyleTemplateDto): Promise<DramaVisualStyleTemplateEntity> {
+    const tpl = await this.getById(id);
+    if (tpl.isSystem && tpl.userId === null) {
+      throw new Error('Cannot modify system root template');
+    }
+    const updated: Partial<DramaVisualStyleTemplateEntity> = { isUserModified: true };
+    if (dto.displayName !== undefined) updated.displayName = dto.displayName;
+    if (dto.description !== undefined) updated.description = dto.description;
+    if (dto.styleCategory !== undefined) updated.styleCategory = dto.styleCategory as any;
+    if (dto.tags !== undefined) updated.tags = dto.tags;
+    if (dto.visualGuide !== undefined) updated.visualGuide = dto.visualGuide as any;
+    if (dto.promptGuidance !== undefined) updated.promptGuidance = dto.promptGuidance as any;
+    if (dto.genreCompatibility !== undefined) updated.genreCompatibility = dto.genreCompatibility;
+    if (dto.audienceTags !== undefined) updated.audienceTags = dto.audienceTags;
+    if (dto.platformTags !== undefined) updated.platformTags = dto.platformTags;
+    await this.repo.save({ ...tpl, ...updated });
+    return this.getById(id);
+  }
+
+  async remove(id: string, userId: string): Promise<{ success: boolean }> {
+    const tpl = await this.getById(id);
+    if (tpl.isSystem && tpl.userId === null) {
+      throw new Error('Cannot delete system root template');
+    }
+    await this.repo.remove(tpl);
+    return { success: true };
+  }
+
+  async clone(id: string, userId: string): Promise<DramaVisualStyleTemplateEntity> {
+    const tpl = await this.getById(id);
+    const newKey = `${tpl.styleKey}_copy_${Date.now()}`;
+    return this.repo.save(this.repo.create({
+      userId,
+      styleKey: newKey,
+      displayName: `${tpl.displayName} (副本)`,
+      description: tpl.description,
+      styleCategory: tpl.styleCategory,
+      tags: [...tpl.tags],
+      visualGuide: { ...tpl.visualGuide },
+      promptGuidance: tpl.promptGuidance ? { ...tpl.promptGuidance } : null,
+      genreCompatibility: [...tpl.genreCompatibility],
+      audienceTags: [...tpl.audienceTags],
+      platformTags: [...tpl.platformTags],
+      isSystem: false,
+      parentTemplateId: tpl.id,
+      systemVersion: 1,
+      syncedSystemVersion: 0,
+      isUserModified: false,
+    }));
+  }
+
+  /** 根据风格提示文本找到最匹配的模板 */
+  async findBestMatch(styleHint: string, userId?: string): Promise<DramaVisualStyleTemplateEntity | null> {
+    const templates = await this.list(userId);
+    if (!templates.length) return null;
+    const hint = styleHint.toLowerCase();
+    // 简单关键词匹配
+    for (const tpl of templates) {
+      const allText = [tpl.styleKey, tpl.displayName, ...tpl.tags].join(' ').toLowerCase();
+      if (allText.includes(hint)) return tpl;
+    }
+    return templates[0];
+  }
+}

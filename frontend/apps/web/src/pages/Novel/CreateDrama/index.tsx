@@ -15,8 +15,12 @@ import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import {
   createDrama, retryCreateDrama, getDrama, getCreateDramaSseUrl, listDramaGenreTemplates,
+  listDramaVisualStyleTemplates,
   enhanceDramaIdea, generateDramaGoal, recommendGenreAndAudience,
+  getMarketSnapshot, getMarketRecommendedGenres, getCreationRecommendations,
   type CreateDramaParams, type DramaGenreTemplate, type DramaSseEvent,
+  type MarketSnapshot, type MarketGenreTrend, type MarketTopDrama,
+  type DramaVisualStyleTemplate, type CreationRecommendations,
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
 
@@ -277,17 +281,20 @@ const GEN_STEPS = [
   { label: '完成', step: 'create_5' },
 ];
 
-interface FormState extends CreateDramaParams { customAudience: string; useCustomAudience: boolean; selectedVisualStyle: string; }
+interface FormState extends CreateDramaParams { customAudience: string; useCustomAudience: boolean; selectedVisualStyle: string; selectedVisualStyleTemplateId?: string; }
 
 const CreateDrama: React.FC = () => {
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(() =>
+    new URLSearchParams(window.location.search).get('monitoring') ? 5 : 0,
+  );
   const [loading, setLoading] = useState(false);
   const [genProgress, setGenProgress] = useState(0);
   const [genSteps, setGenSteps] = useState(GEN_STEPS.map(s => ({ ...s, done: false })));
   const [genError, setGenError] = useState<string | null>(null);
   const failedDramaIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  useEffect(() => () => { abortRef.current?.abort(); }, []);
+  const unmountedRef = useRef(false);
+  useEffect(() => () => { unmountedRef.current = true; abortRef.current?.abort(); }, []);
 
   const [enhancing, setEnhancing] = useState(false);
   const [highlights, setHighlights] = useState<string[]>([]);
@@ -297,10 +304,20 @@ const CreateDrama: React.FC = () => {
   const [recommending, setRecommending] = useState(false);
 
   const [templates, setTemplates] = useState<DramaGenreTemplate[]>([]);
+  const [visualStyleTemplates, setVisualStyleTemplates] = useState<DramaVisualStyleTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [marketSnapshot, setMarketSnapshot] = useState<MarketSnapshot | null>(null);
+  const [marketRecommended, setMarketRecommended] = useState<Array<{ genre: string; hotScore: number; count: number; topTitles: string[]; platforms: string[] }>>([]);
+  const [creationRec, setCreationRec] = useState<CreationRecommendations | null>(null);
   useEffect(() => {
     setTemplatesLoading(true);
-    listDramaGenreTemplates().then(setTemplates).catch(() => {}).finally(() => setTemplatesLoading(false));
+    Promise.all([listDramaGenreTemplates(), listDramaVisualStyleTemplates()])
+      .then(([genreList, visualList]) => { setTemplates(genreList); setVisualStyleTemplates(visualList); })
+      .catch(() => {})
+      .finally(() => setTemplatesLoading(false));
+    getMarketSnapshot().then(setMarketSnapshot).catch(() => {});
+    getMarketRecommendedGenres().then(setMarketRecommended).catch(() => {});
+    getCreationRecommendations().then(setCreationRec).catch(() => {});
   }, []);
 
   const [form, setForm] = useState<FormState>({
@@ -309,7 +326,7 @@ const CreateDrama: React.FC = () => {
     platformTarget: 'generic', aspectRatio: '9:16',
     targetEpisodeDurationSec: 180, plannedMinEpisodes: 60, plannedMaxEpisodes: 100,
     generationMode: 'balanced',
-    customAudience: '', useCustomAudience: false, selectedVisualStyle: '',
+    customAudience: '', useCustomAudience: false, selectedVisualStyle: '', selectedVisualStyleTemplateId: undefined,
   });
 
   const effectiveAudience = form.useCustomAudience ? form.customAudience : form.targetAudience;
@@ -382,50 +399,17 @@ const CreateDrama: React.FC = () => {
     finally { setRecommending(false); }
   };
 
-  const handleSubmit = async () => {
-    const isRetry = !!(genError && failedDramaIdRef.current);
-    setStep(5);
-    setLoading(true);
-    setGenProgress(0);
-    if (!isRetry) setGenError(null);
-    setGenSteps(GEN_STEPS.map(s => ({ ...s, done: false })));
-
-    const params: CreateDramaParams = {
-      mainIdea: form.mainIdea, genre: form.genre, targetAudience: effectiveAudience,
-      protagonistFocus: form.protagonistFocus, tonePreference: form.tonePreference || undefined,
-      audienceTags: form.audienceTags?.length ? form.audienceTags : undefined,
-      titleHint: form.titleHint || undefined, mainStoryGoal: form.mainStoryGoal || undefined,
-      platformTarget: form.platformTarget, aspectRatio: form.aspectRatio,
-      targetEpisodeDurationSec: form.targetEpisodeDurationSec,
-      plannedMinEpisodes: form.plannedMinEpisodes, plannedMaxEpisodes: form.plannedMaxEpisodes,
-      generationMode: form.generationMode,
-      genreTemplateId: form.genreTemplateId || undefined,
-      visualStyleHint: form.selectedVisualStyle
-        ? ALL_STYLES.find(s => s.value === form.selectedVisualStyle)?.aiHint || undefined
-        : undefined,
-    };
-
+  // ─── SSE monitoring (also used on page refresh recovery) ────────────────────
+  const startSseMonitoring = async (currentDramaId: string) => {
     const STALE_MS = 600_000;
     let staleTimer!: ReturnType<typeof setTimeout>;
-    let dramaId: string | undefined;
+    let terminalHandled = false;
     const controller = new AbortController();
     abortRef.current = controller;
     const touchStale = () => { clearTimeout(staleTimer); staleTimer = setTimeout(() => controller.abort(), STALE_MS); };
 
     try {
-      if (isRetry) {
-        dramaId = failedDramaIdRef.current!;
-        await retryCreateDrama(dramaId);
-        setGenError(null);
-      } else {
-        failedDramaIdRef.current = null;
-        const res = await createDrama(params);
-        dramaId = res.dramaId;
-      }
-      if (!dramaId) throw new Error('创建失败：dramaId缺失');
-      const currentDramaId = dramaId;
       touchStale();
-
       const response = await fetch(getCreateDramaSseUrl(currentDramaId), {
         method: 'GET',
         headers: { Accept: 'text/event-stream', Authorization: `Bearer ${getToken()}` },
@@ -459,7 +443,6 @@ const CreateDrama: React.FC = () => {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-      let terminalHandled = false;
 
       while (true) {
         const { done: streamDone, value } = await reader.read();
@@ -480,6 +463,7 @@ const CreateDrama: React.FC = () => {
               const msg = payload.error || payload.message || '创建失败';
               setGenError(msg);
               setLoading(false);
+              reader.cancel();
               return;
             }
             if (payload._type === 'progress') {
@@ -506,6 +490,7 @@ const CreateDrama: React.FC = () => {
               setGenSteps(prev => prev.map(s => ({ ...s, done: true })));
               message.success(payload.message || '短剧创建成功');
               setTimeout(() => history.push(`/novel/drama/${currentDramaId}`), 600);
+              reader.cancel();
               return;
             }
           } catch { /* skip malformed */ }
@@ -520,12 +505,80 @@ const CreateDrama: React.FC = () => {
       }
     } catch (error: any) {
       clearTimeout(staleTimer!);
-      if (dramaId) failedDramaIdRef.current = dramaId;
+      if (error?.name === 'AbortError' && (terminalHandled || unmountedRef.current)) return;
+      failedDramaIdRef.current = currentDramaId;
       const errMsg = error?.message || '创建失败';
       message.error(errMsg);
       setGenError(errMsg);
       setLoading(false);
     }
+  };
+
+  // Resume monitoring if page was refreshed during drama creation
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const monitoringId = new URLSearchParams(window.location.search).get('monitoring');
+    if (monitoringId) {
+      failedDramaIdRef.current = monitoringId;
+      setStep(5);
+      setLoading(true);
+      setGenProgress(0);
+      setGenError(null);
+      setGenSteps(GEN_STEPS.map(s => ({ ...s, done: false })));
+      startSseMonitoring(monitoringId);
+    }
+  }, []); // intentionally empty — only runs on mount to recover from page refresh
+
+  const handleSubmit = async () => {
+    const isRetry = !!(genError && failedDramaIdRef.current);
+    setStep(5);
+    setLoading(true);
+    setGenProgress(0);
+    if (!isRetry) setGenError(null);
+    setGenSteps(GEN_STEPS.map(s => ({ ...s, done: false })));
+
+    const params: CreateDramaParams = {
+      mainIdea: form.mainIdea, genre: form.genre, targetAudience: effectiveAudience,
+      protagonistFocus: form.protagonistFocus, tonePreference: form.tonePreference || undefined,
+      audienceTags: form.audienceTags?.length ? form.audienceTags : undefined,
+      titleHint: form.titleHint || undefined, mainStoryGoal: form.mainStoryGoal || undefined,
+      platformTarget: form.platformTarget, aspectRatio: form.aspectRatio,
+      targetEpisodeDurationSec: form.targetEpisodeDurationSec,
+      plannedMinEpisodes: form.plannedMinEpisodes, plannedMaxEpisodes: form.plannedMaxEpisodes,
+      generationMode: form.generationMode,
+      genreTemplateId: form.genreTemplateId || undefined,
+      visualStyleTemplateId: form.selectedVisualStyleTemplateId || undefined,
+      visualStyleHint: form.selectedVisualStyle
+        ? ALL_STYLES.find(s => s.value === form.selectedVisualStyle)?.aiHint || undefined
+        : undefined,
+      suggestedVisualStyle: form.selectedVisualStyle || undefined,
+    };
+
+    let dramaId: string | undefined;
+
+    try {
+      if (isRetry) {
+        dramaId = failedDramaIdRef.current!;
+        await retryCreateDrama(dramaId);
+        setGenError(null);
+      } else {
+        failedDramaIdRef.current = null;
+        const res = await createDrama(params);
+        dramaId = res.dramaId;
+        // Persist dramaId in URL so page refresh during generation can resume monitoring
+        history.replace(`/novel/create-drama?monitoring=${dramaId}`);
+      }
+      if (!dramaId) throw new Error('创建失败：dramaId缺失');
+    } catch (error: any) {
+      if (dramaId) failedDramaIdRef.current = dramaId;
+      const errMsg = error?.message || '创建失败';
+      message.error(errMsg);
+      setGenError(errMsg);
+      setLoading(false);
+      return;
+    }
+
+    await startSseMonitoring(dramaId);
   };
 
   const goBack = () => {
@@ -537,10 +590,16 @@ const CreateDrama: React.FC = () => {
   // ─── Style thumbnail card ─────────────────────────────────────────
   const StyleCard: React.FC<{ style: StyleOption }> = ({ style }) => {
     const isSelected = form.selectedVisualStyle === style.value;
+    const handleStyleSelect = () => {
+      const newValue = isSelected ? '' : style.value;
+      // 尝试匹配对应的视觉风格模板（styleKey 与 style.value 一致）
+      const matchedTemplate = newValue ? visualStyleTemplates.find(t => t.styleKey === newValue) : undefined;
+      setForm({ ...form, selectedVisualStyle: newValue, selectedVisualStyleTemplateId: matchedTemplate?.id });
+    };
     return (
       <button
         type="button"
-        onClick={() => setForm({ ...form, selectedVisualStyle: isSelected ? '' : style.value })}
+        onClick={handleStyleSelect}
         className={cn(
           'group relative flex flex-col rounded-xl overflow-hidden border-2 transition-all duration-200',
           'hover:scale-[1.03] hover:shadow-md active:scale-100',
@@ -563,6 +622,12 @@ const CreateDrama: React.FC = () => {
           {style.featured && (
             <span className="absolute top-1 left-1 px-1.5 py-0.5 text-[9px] font-bold rounded bg-amber-500/90 text-white leading-none">
               精选
+            </span>
+          )}
+          {/* Template badge — show when a visual style template exists for this style */}
+          {visualStyleTemplates.some(t => t.styleKey === style.value) && (
+            <span className="absolute top-1 right-1 px-1 py-0.5 text-[9px] font-bold rounded bg-blue-500/80 text-white leading-none">
+              模板
             </span>
           )}
           {/* Selected overlay */}
@@ -639,6 +704,50 @@ const CreateDrama: React.FC = () => {
       {/* Step 1: Core Idea */}
       {step === 0 && (
         <div className="animate-fade-in space-y-5">
+          {creationRec && creationRec.suggestedGenres.length > 0 && (
+            <Card className="border-amber-200/60 bg-gradient-to-br from-amber-50/80 via-orange-50/30 to-rose-50/50 dark:border-amber-800/40 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-rose-950/20">
+              <CardContent className="p-4 sm:p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <Target className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">根据市场数据推荐你创作</span>
+                  <span className="text-[10px] text-muted-foreground ml-1">{creationRec.dataDate}</span>
+                </div>
+                <p className="text-sm text-amber-900/90 dark:text-amber-200/90 mb-4">{creationRec.summary}</p>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <span className="text-[11px] text-muted-foreground shrink-0">推荐题材：</span>
+                  {creationRec.suggestedGenres.map((g, i) => (
+                    <Badge key={g.genre} variant="secondary" className="text-[11px] h-6 px-2 bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 border-0">
+                      {g.genre} · {g.count}部
+                    </Badge>
+                  ))}
+                </div>
+                {creationRec.topicTrends.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    <span className="text-[11px] text-muted-foreground shrink-0">热门话题：</span>
+                    {creationRec.topicTrends.map(t => (
+                      <Badge key={t} variant="outline" className="text-[11px] h-5 px-2 border-amber-300/60 text-amber-700 dark:text-amber-400">
+                        {t}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                {creationRec.styleHints.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                    <span className="text-[11px] text-muted-foreground shrink-0">风格参考：</span>
+                    <span className="text-[11px] text-amber-800/90 dark:text-amber-200/90">{creationRec.styleHints.join('、')}</span>
+                  </div>
+                )}
+                {creationRec.hotDramaReferences.length > 0 && (
+                  <div>
+                    <span className="text-[11px] text-muted-foreground">热播参考：</span>
+                    <p className="text-[11px] text-amber-800/90 dark:text-amber-200/90 mt-1 line-clamp-2">
+                      {creationRec.hotDramaReferences.slice(0, 6).join(' · ')}
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
           <div>
             <h2 className="text-xl sm:text-2xl font-bold">你的创作灵感是什么？</h2>
             <p className="mt-1.5 text-sm text-muted-foreground">越具体越好——可以是短剧故事、历史人物介绍、科普知识、神话传说等任何内容。AI 会据此构建完整的内容世界。</p>
@@ -707,21 +816,86 @@ const CreateDrama: React.FC = () => {
               <div className="flex items-center justify-center py-6 text-sm text-muted-foreground"><Loader2 className="w-4 h-4 mr-2 animate-spin" />加载题材模板...</div>
             ) : templates.length > 0 ? (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-                {templates.map(t => (
-                  <button key={t.id} type="button" className={cn(
-                    'flex flex-col items-center gap-1 rounded-lg border p-2.5 text-center transition-all hover:border-primary/50',
-                    form.genreTemplateId === t.id ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : 'border-border',
-                  )} onClick={() => setForm({ ...form, genre: t.displayName, genreTemplateId: t.id })}>
-                    <span className="text-lg">{GENRE_ICONS[t.genreKey] ?? '📝'}</span>
-                    <span className="text-xs font-medium">{t.displayName}</span>
-                    <span className="text-[10px] text-muted-foreground line-clamp-1">{t.description}</span>
-                    {!t.isSystem && <span className="text-[9px] text-primary/60">自定义</span>}
-                  </button>
-                ))}
+                {templates.map(t => {
+                  const marketGenre = marketRecommended.find(m => m.genre === t.displayName || t.genreKeywords?.some(kw => m.genre.includes(kw)));
+                  return (
+                    <button key={t.id} type="button" className={cn(
+                      'flex flex-col items-center gap-1 rounded-lg border p-2.5 text-center transition-all hover:border-primary/50 relative',
+                      form.genreTemplateId === t.id ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : 'border-border',
+                    )} onClick={() => setForm({ ...form, genre: t.displayName, genreTemplateId: t.id })}>
+                      <span className="text-lg">{GENRE_ICONS[t.genreKey] ?? '📝'}</span>
+                      <span className="text-xs font-medium">{t.displayName}</span>
+                      <span className="text-[10px] text-muted-foreground line-clamp-1">{t.description}</span>
+                      {!t.isSystem && <span className="text-[9px] text-primary/60">自定义</span>}
+                      {marketGenre && marketGenre.count > 0 && (
+                        <span className="text-[9px] text-rose-500 mt-0.5 font-medium">
+                          🔥 {marketGenre.count}部热播
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             ) : (
               <div className="text-center py-6 text-sm text-muted-foreground">
                 <p>暂无题材模板，请先去<button type="button" className="text-primary hover:underline mx-1" onClick={() => history.push('/novel/templates')}>题材模板管理</button>添加</p>
+              </div>
+            )}
+
+            {marketSnapshot && marketSnapshot.totalEntries > 0 && (
+              <div className="rounded-lg border border-dashed border-rose-300/50 bg-rose-50/30 dark:bg-rose-950/10 p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-semibold text-rose-600/80 dark:text-rose-400/80">
+                    🔥 全网热播趋势（{marketSnapshot.date}，{marketSnapshot.totalEntries} 部短剧数据）
+                  </p>
+                  <span className="text-[9px] text-muted-foreground">
+                    来源：{Object.entries(marketSnapshot.platforms).map(([p, c]) => `${p}(${c})`).join(' · ')}
+                  </span>
+                </div>
+
+                {marketSnapshot.topGenres.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {marketSnapshot.topGenres.slice(0, 8).map((g, i) => (
+                      <button
+                        key={g.genre}
+                        type="button"
+                        className={cn(
+                          'text-[10px] flex items-center gap-1.5 rounded px-2 py-1.5 border transition-colors',
+                          templates.some(t => t.displayName === g.genre) && form.genre !== g.genre
+                            ? 'bg-background border-border/50 hover:border-rose-300'
+                            : form.genre === g.genre
+                              ? 'bg-rose-100 border-rose-300 dark:bg-rose-900/30 dark:border-rose-700'
+                              : 'bg-background border-border/50',
+                        )}
+                        onClick={() => {
+                          const matched = templates.find(t => t.displayName === g.genre);
+                          if (matched) setForm({ ...form, genre: matched.displayName, genreTemplateId: matched.id });
+                        }}
+                      >
+                        {i < 3 && <span className="text-rose-500 font-bold">#{i + 1}</span>}
+                        <span className="font-medium">{g.genre}</span>
+                        <span className="text-muted-foreground">{g.totalEntries}部</span>
+                        <span className="text-amber-600">热度{(g.avgHotScore / 10000).toFixed(0)}w</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {marketSnapshot.topDramas.length > 0 && (
+                  <div>
+                    <p className="text-[10px] text-muted-foreground mb-1">📈 热播 Top 5</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-5 gap-1.5">
+                      {marketSnapshot.topDramas.slice(0, 5).map((d, i) => (
+                        <div key={`${d.title}-${i}`} className="text-[10px] rounded bg-background border border-border/40 px-2 py-1.5">
+                          <p className="font-medium truncate">
+                            <span className="text-rose-500 mr-1">#{i + 1}</span>{d.title}
+                          </p>
+                          <p className="text-muted-foreground">{d.genre || d.platform} · 热度{(d.hotScore / 10000).toFixed(0)}w</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -782,7 +956,7 @@ const CreateDrama: React.FC = () => {
                 <Button
                   variant="ghost" size="sm"
                   className="text-xs text-muted-foreground hover:text-foreground shrink-0"
-                  onClick={() => setForm({ ...form, selectedVisualStyle: '' })}
+                  onClick={() => setForm({ ...form, selectedVisualStyle: '', selectedVisualStyleTemplateId: undefined })}
                 >
                   清除选择
                 </Button>
@@ -794,10 +968,13 @@ const CreateDrama: React.FC = () => {
           {form.selectedVisualStyle && (() => {
             const sel = ALL_STYLES.find(s => s.value === form.selectedVisualStyle);
             if (!sel) return null;
+            const tpl = form.selectedVisualStyleTemplateId
+              ? visualStyleTemplates.find(t => t.id === form.selectedVisualStyleTemplateId)
+              : null;
             return (
               <Card className="border-primary/30 bg-primary/5 overflow-hidden">
                 <CardContent className="p-0">
-                  <div className="flex items-center gap-4 p-4">
+                  <div className="flex items-start gap-4 p-4">
                     <div
                       className="shrink-0 w-16 h-12 rounded-lg flex items-center justify-center overflow-hidden"
                       style={{ background: sel.thumbnailUrl ? undefined : sel.gradient }}
@@ -812,8 +989,22 @@ const CreateDrama: React.FC = () => {
                         <Check className="h-4 w-4 text-primary shrink-0" />
                         <span className="text-sm font-bold text-primary">{sel.label}</span>
                         <span className="text-xs text-muted-foreground">· {sel.desc}</span>
+                        {tpl && (
+                          <Badge className="text-[9px] px-1.5 py-0 bg-blue-500/80 text-white border-0">模板已绑定</Badge>
+                        )}
                       </div>
                       <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{sel.aiHint}</p>
+                      {tpl && (
+                        <div className="mt-2 rounded-md border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 p-2 space-y-1">
+                          <p className="text-[10px] font-semibold text-blue-700 dark:text-blue-300">视觉风格模板: {tpl.displayName}</p>
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
+                            {tpl.visualGuide.overallAesthetic && <span><span className="font-medium">美学：</span>{tpl.visualGuide.overallAesthetic}</span>}
+                            {tpl.visualGuide.colorGrading && <span><span className="font-medium">调色：</span>{tpl.visualGuide.colorGrading}</span>}
+                            {tpl.visualGuide.lightingStyle && <span><span className="font-medium">光影：</span>{tpl.visualGuide.lightingStyle}</span>}
+                            {tpl.visualGuide.referenceStyle && <span><span className="font-medium">参考：</span>{tpl.visualGuide.referenceStyle}</span>}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -984,7 +1175,7 @@ const CreateDrama: React.FC = () => {
               {[
                 { label: '创意', value: form.mainIdea.slice(0, 60) + (form.mainIdea.length > 60 ? '...' : ''), clamp: true },
                 { label: '题材', value: form.genre || '—' },
-                { label: '风格', value: ALL_STYLES.find(s => s.value === form.selectedVisualStyle)?.label || 'AI 自动' },
+                { label: '风格', value: (() => { const styleName = ALL_STYLES.find(s => s.value === form.selectedVisualStyle)?.label || 'AI 自动'; const tpl = form.selectedVisualStyleTemplateId ? visualStyleTemplates.find(t => t.id === form.selectedVisualStyleTemplateId) : null; return tpl ? `${styleName}（模板: ${tpl.displayName}）` : styleName; })() },
                 { label: '平台', value: PLATFORM_PRESETS.find(p => p.value === form.platformTarget)?.label || '通用' },
                 { label: '观众', value: effectiveAudience || '—' },
                 { label: '冲突', value: form.mainStoryGoal || '—', clamp: true },

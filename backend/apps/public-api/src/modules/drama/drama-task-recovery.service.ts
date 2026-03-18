@@ -2,7 +2,15 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { DramaWorkflowExecutionService } from './workflow/drama-workflow-execution.service';
 
-const STARTUP_STALE_TIMEOUT_MS = 5 * 60 * 1000; // 启动时5分钟未完成即判定为残留running
+/**
+ * 启动恢复阈值：服务重启时，超过此时间仍处于 running 状态的执行记录视为残留，标记为 interrupted。
+ * 设置为 5 分钟（保守值），因为重启时无法确认上一个实例是否正常完成了最后步骤。
+ *
+ * 与 DramaWorkflowExecutionService.STALE_THRESHOLD_MS(60s) 的区别：
+ *  - 此阈值：服务重启后批量清理用，只在 onModuleInit 执行一次
+ *  - STALE_THRESHOLD_MS：运行中实例抢占检测，用于判断某个 running 记录的心跳是否过期（多实例场景）
+ */
+const STARTUP_STALE_TIMEOUT_MS = 5 * 60 * 1000;
 
 @Injectable()
 export class DramaTaskRecoveryService implements OnModuleInit, OnModuleDestroy {

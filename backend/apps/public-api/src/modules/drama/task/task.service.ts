@@ -2,7 +2,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, In, LessThan } from 'typeorm';
-import { DramaTaskEntity } from './entities/task.entity';
+import { DramaTaskEntity } from '../entities/task.entity';
 import { DramaTaskPayload, DramaTaskStatus, DRAMA_TASK_STATUS, isTerminal } from './types';
 
 @Injectable()

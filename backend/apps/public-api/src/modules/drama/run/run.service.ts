@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, MoreThan, In } from 'typeorm';
 import type { AppendEventInput } from '../interfaces';
-import { DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity } from './entities/run.entity';
+import { DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity } from '../entities/run.entity';
 
 export type { RunEventType, AppendEventInput } from '../interfaces';
 

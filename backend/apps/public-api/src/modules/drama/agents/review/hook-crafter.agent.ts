@@ -46,15 +46,25 @@ export class HookCrafterAgent {
       ? `\n=== 可用闪回镜头（可在 previewShots 中引用为闪回） ===\n${flashbackCandidates.map(fb => `E${fb.episodeNumber} ${fb.shotId}: ${fb.reason} [${fb.emotionalWeight}]`).join('\n')}`
       : '';
 
+    // 收集所有已注册角色 ID（主要角色 + 可复用临时角色池）
+    const permanentIds = (state.characters ?? []).map((c: any) => c.characterId).filter(Boolean);
+    const poolIds = (state.minorRolePool ?? []).map((c: any) => c.characterId).filter(Boolean);
+    const validCharacterIds = [...new Set([...permanentIds, ...poolIds])];
+
     const raw = await this.llm.generateStructured({
       taskName: 'drama-hook-crafter',
       schema: hookOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'hook-crafter', buildHookCrafterSystemPrompt({ strategy, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules })),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'hook-crafter', buildHookCrafterSystemPrompt({
+        strategy,
+        genreRules: state.promptProfile?.scriptwriterGuide?.genreRules,
+        genreArchetype: state.promptProfile?.genreArchetype,
+        validCharacterIds: validCharacterIds.length ? validCharacterIds : undefined,
+      })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: epNum },
       userPrompt: `为第 ${epNum} 集设计悬念钩子：
 
 本集最后3个Shot概要：
-${lastShots.map(s => `shot${s.shotIndex}: ${s.camera?.angle} — ${(s.characters ?? []).map((c: any) => `${c.characterId}(${c.emotion})`).join(',')} ${s.dialogue?.text ?? '无台词'}`).join('\n')}
+${lastShots.map(s => `shot${s.shotIndex}: ${s.camera?.shotSize}+${s.camera?.cameraAngle} — ${(s.characters ?? []).map((c: any) => `${c.characterId}(${c.emotion})`).join(',')} ${s.dialogue?.text ?? '无台词'}`).join('\n')}
 ${emotionalArc}
 最近悬念记录：${recentHooks || '无（第一集）'}
 是否付费集：${state.seriesOutline?.paywallEpisodes?.includes(epNum) ? '是' : '否'}

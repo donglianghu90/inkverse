@@ -7,25 +7,29 @@ export interface FailedCheck { rule: string; detail: string; severity: CheckSeve
 
 const HARD_RULES = new Set([
   'unknown_character', 'empty_visual_prompt', 'too_few_shots',
-  // shot_index_gap → 自动修复，不再阻断
-  // too_few_scenes → 降为软规则
-  // dialogue_too_long → 降为软规则，由 ScriptEditor 定向修复
+  'missing_first_frame_prompt',
 ]);
 const VP_MAX_WORDS = 80; // visualPrompt词数上限（含face描述后放宽）
 /**
  * 台词长度三层标准（Prompt 建议 → Checker 软告警 → ScriptEditor 修复）：
  *  ≤ 15 字：理想目标（Scriptwriter/DialogueCoach Prompt 中的创作建议）
  *  ≤ 20 字：可接受（超过此比例 >30% 触发 too_many_long_dialogues 软告警）
- *  ≤ 30 字：允许上限（超过则记入 dialogueFixes，由 ScriptEditor 定向修复）
- *  > 30 字：不合格，Checker 软告警 + 必须修复
+ *  ≤ 25 字：允许上限（超过则记入 dialogueFixes，由 ScriptEditor 定向修复）
+ *  > 25 字：不合格，TTS 时长将超过单 Shot 目标时长（2-6s），需强制修复
+ *
+ * 25 字阈值依据：正常语速 ~3 字/秒，25 字 ≈ 8s TTS；MediaOrchestrator 支持最高 1.5× 视频减速，
+ * 超过 25 字后 TTS/视频时长比率会超过 1.5，触发 duration 扩展，导致整集时长严重偏移。
  */
 const DIALOGUE_MAX_CHARS = 20; // 超过 20 字计入"偏长台词"统计
-const DIALOGUE_SOFT_MAX = 30;  // 超过 30 字触发软告警 + 加入 ScriptEditor 修复列表
+const DIALOGUE_SOFT_MAX = 25;  // 超过 25 字触发软告警 + 加入 ScriptEditor 修复列表
 
-/** 根据目标时长动态计算最低 Shot 数：时长越长，期望的镜头数越多 */
+/**
+ * 根据目标时长动态计算最低 Shot 数。
+ * 短剧平均 shot 时长 ~4-5s，最低基准按 6s/shot 计算，确保节奏不至于过慢。
+ * 例：180s → 30 shots(最低)，60s → 10 shots(最低)
+ */
 function minShotsForDuration(targetSec: number): number {
-  // 每 30s 约需 1 个最低基准 Shot，下限 3，上限 8
-  return Math.min(8, Math.max(3, Math.round(targetSec / 30)));
+  return Math.min(60, Math.max(6, Math.round(targetSec / 6)));
 }
 
 export type DeterministicCheckResult = DramaDeterministicCheck & {
