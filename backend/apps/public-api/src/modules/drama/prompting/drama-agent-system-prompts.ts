@@ -858,28 +858,7 @@ export const DEFAULT_VOICE_ACTING_STYLE = '自然偏克制';
 export const DEFAULT_MALE_LEAD_FORMULA = '男主：轮廓立体，气质强势，符合题材视觉类型。';
 export const DEFAULT_FEMALE_LEAD_FORMULA = '女主：自然好看，符合题材审美。';
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 创建阶段默认值（genreGuidance 字段缺失时的 fallback）
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export const DEFAULT_NARRATIVE_MODE_TIP = '台词 > 动作 > 旁白，禁止大段心理描写（观众看不到你的内心戏）';
-export const DEFAULT_CORE_CONFLICT_EXAMPLE = '（如：被抛弃的前妻其实是隐藏富豪）';
-export const DEFAULT_CORE_LOOP_BLOCK = '=== 核心循环 ===\n每3-5集完成一个小循环，每循环结尾必须抬升stakes，让观众无法停下来。';
-export const DEFAULT_CONFLICT_DESIGN_BLOCK = '=== 冲突设计原则 ===\n- 反派必须明确，冲突要"可视化"——观众能用眼睛看到冲突\n- "打脸"是短剧第一生产力：被欺负者反杀，越狠越爽';
-export const DEFAULT_PAYWALL_TIP = 'catharsisType 决定付费卡点：身份揭露型→卡在"即将揭露"的前一秒';
-export const DEFAULT_ANTAGONIST_TIP = '反派：动机清晰，最好和主角有私人纠葛（前夫/继母/商业对手）';
-export const DEFAULT_ARC_STRUCTURE_HINT = `=== arcOverview 段落结构参考（以 {{targetEp}} 集为例）===
-- 段落1（第1-{{seg1End}}集）：建立+第一个大冲突+身份反差初露
-- 段落2（第{{seg2Start}}-{{seg2End}}集）：矛盾升级+新角色介入+第一次大反击
-- 段落3（第{{seg3Start}}-{{seg3End}}集）：全面对抗+真相碎片+关系裂变
-- 段落4（第{{seg4Start}}-{{targetEp}}集）：终极反转+大结局`;
-export const DEFAULT_PAYWALL_STRATEGY_HINT = '- 第8-15集设置第一个付费卡点：卡在"观众最不能停下来"的位置\n- 之后每5-8集设一个付费卡点，节奏：2-3集紧张 → 1集缓冲 → 再紧张 → 大爆发';
-export const DEFAULT_EPISODE_TITLE_EXAMPLE = '"打脸时刻"';
 export const HISTORICAL_CONSTRAINT_NOTE = '\n⚠️ 历史题材约束：detailedEpisodes 中的剧情必须与已知历史事实兼容，禁止编造核心历史人物的重大行为。';
-export const DEFAULT_CONTRACT_HINT = '（示例："只要你追下去，每5集就有一次大反转"）';
-export const DEFAULT_TONE_HINT = 'toneGuardrails 参考：允许虐但不允许窒息感超过2集；禁止无底线恶搞；禁止角色智商下线';
-export const DEFAULT_HOOK_TYPES_HINT = 'preferredTypes 参考：["身份揭露","真相碎片","关系反转","新敌出现"]';
-export const DEFAULT_FREE_EPISODE_HINT = '"免费集展示爽感，付费集才揭真相"';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 创建阶段 Agent 模板（不写入 basePromptSnapshot，建剧流程中一次性使用）

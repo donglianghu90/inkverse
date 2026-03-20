@@ -27,21 +27,7 @@ import {
   PROFILER_TEMPLATE,
   STRATEGY_TEMPLATE,
   ARC_EXPANSION_TEMPLATE,
-  // creation-stage defaults
-  DEFAULT_NARRATIVE_MODE_TIP,
-  DEFAULT_CORE_CONFLICT_EXAMPLE,
-  DEFAULT_CORE_LOOP_BLOCK,
-  DEFAULT_CONFLICT_DESIGN_BLOCK,
-  DEFAULT_PAYWALL_TIP,
-  DEFAULT_ANTAGONIST_TIP,
-  DEFAULT_ARC_STRUCTURE_HINT,
-  DEFAULT_PAYWALL_STRATEGY_HINT,
-  DEFAULT_EPISODE_TITLE_EXAMPLE,
   HISTORICAL_CONSTRAINT_NOTE,
-  DEFAULT_CONTRACT_HINT,
-  DEFAULT_TONE_HINT,
-  DEFAULT_HOOK_TYPES_HINT,
-  DEFAULT_FREE_EPISODE_HINT,
   DEFAULT_MALE_LEAD_FORMULA,
   DEFAULT_FEMALE_LEAD_FORMULA,
   // pipeline agent simple config defaults
@@ -119,12 +105,12 @@ export function buildSeedAnalyzerSystemPrompt(ctx: {
     epMax: String(epMax),
     durSec: String(durSec),
     durMin: String(Math.round(durSec / 60)),
-    narrativeModeTip: g?.narrativeModeTip ?? DEFAULT_NARRATIVE_MODE_TIP,
-    coreConflictExample: g?.coreConflictExample ?? DEFAULT_CORE_CONFLICT_EXAMPLE,
-    coreLoopBlock: g?.coreLoopBlock ?? DEFAULT_CORE_LOOP_BLOCK,
-    conflictBlock: g?.conflictBlock ?? DEFAULT_CONFLICT_DESIGN_BLOCK,
-    paywallTip: g?.paywallTip ?? DEFAULT_PAYWALL_TIP,
-    antagonistTip: g?.antagonistTip ?? DEFAULT_ANTAGONIST_TIP,
+    narrativeModeTip: g?.narrativeModeTip ?? '',
+    coreConflictExample: g?.coreConflictExample ?? '',
+    coreLoopBlock: g?.coreLoopBlock ?? '',
+    conflictBlock: g?.conflictBlock ?? '',
+    paywallTip: g?.paywallTip ?? '',
+    antagonistTip: g?.antagonistTip ?? '',
     historicalConstraint: g?.historicalConstraint ?? '',
   });
 }
@@ -138,26 +124,16 @@ export function buildSeriesDirectorSystemPrompt(ctx: {
   const { targetEp, epMin, epMax, durSec } = ctx;
   const g = ctx.genreGuidance;
 
-  const arcStructureHint = g?.arcStructureHint
-    ? g.arcStructureHint
-    : resolveTemplate(DEFAULT_ARC_STRUCTURE_HINT, {
-        targetEp: String(targetEp),
-        seg1End: String(Math.round(targetEp * 0.3)),
-        seg2Start: String(Math.round(targetEp * 0.3) + 1),
-        seg2End: String(Math.round(targetEp * 0.6)),
-        seg3Start: String(Math.round(targetEp * 0.6) + 1),
-        seg3End: String(Math.round(targetEp * 0.85)),
-        seg4Start: String(Math.round(targetEp * 0.85) + 1),
-      });
+  const arcStructureHint = g?.arcStructureHint ?? '';
 
   return resolveTemplate(SERIES_DIRECTOR_CREATION_TEMPLATE, {
     targetEp: String(targetEp),
     epMin: String(epMin),
     epMax: String(epMax),
     durSec: String(durSec),
-    paywallHint: g?.paywallStrategyHint ?? DEFAULT_PAYWALL_STRATEGY_HINT,
+    paywallHint: g?.paywallStrategyHint ?? '',
     arcStructureHint,
-    episodeTitleExample: g?.episodeTitleExample ?? DEFAULT_EPISODE_TITLE_EXAMPLE,
+    episodeTitleExample: g?.episodeTitleExample ?? '',
     durSecMin: String(Math.round(durSec * 0.8)),
     durSecMax: String(Math.round(durSec * 1.2)),
     historicalConstraint: g?.historicalConstraint ? HISTORICAL_CONSTRAINT_NOTE : '',
@@ -256,13 +232,13 @@ export function buildStrategySystemPrompt(ctx?: {
 }): string {
   const g = ctx?.genreGuidance;
   return resolveTemplate(STRATEGY_TEMPLATE, {
-    contractHint: g?.contractHint ?? DEFAULT_CONTRACT_HINT,
-    toneHint: g?.toneHint ?? DEFAULT_TONE_HINT,
+    contractHint: g?.contractHint ?? '',
+    toneHint: g?.toneHint ?? '',
     paywallHint: g?.paywallStrategyHint
       ? `   ${g.paywallStrategyHint}`
       : `   - firstPaywallEpisode：第一个付费卡点集号（通常8-15集）\n   - paywallInterval：后续付费间隔（3-8集）`,
-    hookTypesHint: g?.hookTypesHint ?? DEFAULT_HOOK_TYPES_HINT,
-    freeEpHint: g?.freeEpisodeHint ?? DEFAULT_FREE_EPISODE_HINT,
+    hookTypesHint: g?.hookTypesHint ?? '',
+    freeEpHint: g?.freeEpisodeHint ?? '',
   });
 }
 
