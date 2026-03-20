@@ -21,6 +21,8 @@ export interface DramaAgentNodeConfig {
   additionalSystemPrompt: string;
   /** 用户固定并编辑后的基础提示词快照。存在时替代代码自动生成的 basePrompt。 */
   basePromptSnapshot?: string;
+  /** DramaPromptBakerService 最近一次烘焙的时间（ISO 字符串），供前端展示 */
+  promptBakedAt?: string;
   customConfig?: { systemPrompt: string; userPromptTemplate: string; temperature: number };
 }
 

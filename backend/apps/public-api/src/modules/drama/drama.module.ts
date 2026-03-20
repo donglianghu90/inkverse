@@ -46,6 +46,7 @@ import { StoryboardDirectorAgent, AudioDirectorAgent } from './agents/production
 import { ScriptReviewerAgent, ScriptEditorAgent, PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent } from './agents/review';
 // ── Prompt & 任务恢复 ──
 import { DramaPromptTemplateService } from './prompting/drama-prompt-template.service';
+import { DramaPromptBakerService } from './prompting/drama-prompt-baker.service';
 import { DramaTaskRecoveryService } from './drama-task-recovery.service';
 import { DRAMA_QUEUE } from './task/types';
 // ── 市场数据 ──
@@ -85,7 +86,7 @@ import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.s
     ArcDirectorAgent, EpisodeDirectorAgent, ContinuityGuardAgent, ScriptwriterAgent, DialogueCoachAgent,
     StoryboardDirectorAgent, AudioDirectorAgent,
     ScriptReviewerAgent, ScriptEditorAgent, PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent,
-    DramaDeterministicCheckerService, DramaPromptTemplateService, DramaCalibrationService,
+    DramaDeterministicCheckerService, DramaPromptTemplateService, DramaPromptBakerService, DramaCalibrationService,
     DramaTaskRecoveryService,
     MarketDataService, MarketSchedulerService, DouyinDramaCrawler, HongguoDramaCrawler,
     DramaGlobalPromptSettingService,

@@ -108,6 +108,48 @@ export const dramaPromptProfileSchema = z.object({
      *  纯文本，无运行时变量占位符。分镜导演会将其整段注入 system prompt。
      *  示例内容："■ 霸总登场：medium+low_angle 仰拍；■ 权力对话：over_shoulder+high/low_angle 对比..." */
     cinematographyDirective: ns(),
+    /**
+     * 题材专属动作场景摄影语言（purpose=action 时注入，完全替换通用动作规则）。
+     * 仙侠用飞天+法术描述，科幻用赛博+能量武器，战神用写实格斗，古装用刀剑对决——各自有完全不同的 visualPrompt 词汇和运镜公式。
+     * 为空时回退到通用动作规则。
+     */
+    genreActionDirective: ns(),
+    /**
+     * 题材专属情绪-运镜映射补充说明（注入在通用映射表之后）。
+     * 覆盖或扩展通用表中的行：仙侠的"霸者登场"是"仙尊降临"（极广角+crane_down），
+     * 科幻的"追逐"是"飞船追击"（tracking+wide+HUD叠加），等等。
+     * 无需重复通用规则，只写本题材与通用规则的差异部分。
+     */
+    genreEmotionNotes: ns(),
+    /**
+     * 题材专属场景类型覆盖指令（purpose → 专属摄影规则）。
+     * 与 genreActionDirective（action 专用）并列，覆盖其余所有 purpose 类型。
+     * key = scenePurpose 值（如 "climax"/"confrontation"/"revelation"/"romantic"/"cliffhanger"）。
+     * value = 该场景类型的题材专属摄影规则，完全替代通用规则。
+     * 示例：
+     *   climax: "■ 仙侠高潮=法术大招五镜：蓄力ECU→灵力汇聚wide→大招爆发extreme_wide→震撼wide→胜负定格"
+     *   confrontation: "■ 宫斗对峙=反将一军五镜：亮底牌→淡定→出底牌→惊愕→高角度俯拍落败"
+     *   revelation: "■ 穿越揭秘=色调骤变三镜：现代末帧→特效帧→古代首帧"
+     */
+    genrePurposeDirectives: z.record(z.string(), z.string()).nullish(),
+    /**
+     * 题材专属导演身份（替换通用"你是短剧分镜导演"身份定位）。
+     * 定义此导演的专业领域、思维框架和核心美学原则。
+     * 示例："你是仙侠短剧分镜导演，精通神力视觉语言与奇幻规模感..."
+     */
+    genreIdentity: ns(),
+    /**
+     * 题材专属分镜核心原则（替换通用"分镜核心原则"4条规则）。
+     * 必须包含：① 题材反转公式 ② 高潮爽感来源 ③ 情绪-权力视觉化方式 ④ 题材禁忌
+     * 通用版的"反转=slow_push_in→fast_push+打脸"是霸总公式，仙侠/战神/宫斗各有不同。
+     */
+    genreCoreRules: ns(),
+    /**
+     * 题材专属叙事镜头思维（替换通用"叙事镜头语言"4条规则）。
+     * 必须覆盖：① 第一帧设计（题材版） ② 信息差视角（题材版） ③ 沉默比台词更有力（题材版）
+     * 通用版的"禁止空镜开场"对仙侠/科幻是错误的；"签字/握拳"是现代都市动作，不适用于古代/奇幻。
+     */
+    genreNarrativePrinciples: ns(),
   }),
   audioStyleGuide: z.object({
     bgmMoodPreferences: na(z.string()),
@@ -140,6 +182,88 @@ export const dramaPromptProfileSchema = z.object({
       z.null(),
     ]).transform(v => v ?? []).default([]),
   }),
+
+  /**
+   * 段落导演题材手册。
+   * 覆盖 buildArcDirectorSystemPrompt 里与现代都市绑定的框架示例。
+   * 由 DramaProfilerAgent 生成，buildArcDirectorSystemPrompt 优先使用这里的内容，无则回退硬编码。
+   */
+  arcDirectorGuide: z.object({
+    /** 题材专属段落规划原则（替换/补充通用5条），如仙侠"境界突破段"、历史剧"朝代更迭段"、传记"人生阶段段" */
+    genreSegmentPrinciples: ns(),
+    /** 题材专属角色弧线设计（替换"好人变坏人"都市示例），如宫斗"站队-反目-复合"三步弧 */
+    characterArcPrinciples: ns(),
+    /** 题材专属冲突密度节奏（传记剧与爽剧与悬疑剧各不同），描述本题材前/中/后段的节奏比例与卡点位置 */
+    conflictRhythm: ns(),
+  }).optional(),
+
+  /**
+   * 集导演题材手册。
+   * 覆盖 buildEpisodeDirectorSystemPrompt 里的现代都市emotionBeat示例和张力曲线描述。
+   * 由 DramaProfilerAgent 生成，buildEpisodeDirectorSystemPrompt 优先使用这里的内容，无则回退硬编码。
+   */
+  episodeDirectorGuide: z.object({
+    /** 题材专属 emotionBeats 示例（9行表格，替换通用现代都市办公室场景示例） */
+    emotionBeatExample: ns(),
+    /** 题材专属单集张力曲线补充说明（如仙侠：开场神迹→铺垫→大招高潮；传记：平铺人生积累→命运转折） */
+    tensionCurveNotes: ns(),
+    /** 题材专属集末钩子设计模式（如宫斗偏"身份揭穿"、仙侠偏"强者降临"、悬疑偏"证据碎片化"） */
+    hookPatterns: ns(),
+  }).optional(),
+
+  /**
+   * 节奏分析师题材手册。
+   * 覆盖 buildPacingAnalyzerSystemPrompt 里的通用节奏判断标准。
+   * 由 DramaProfilerAgent 生成，buildPacingAnalyzerSystemPrompt 优先使用这里的内容，无则回退硬编码。
+   */
+  pacingAnalyzerGuide: z.object({
+    /** 题材专属理想节奏模板（各阶段时间比例 + 对应的情绪密度要求），如传记剧允许铺垫段偏慢 */
+    genreRhythmTemplate: ns(),
+    /** 题材专属节奏快/慢的视觉指标（现代都市=台词密度，仙侠=法术描述密度，传记=叙事跨度） */
+    paceIndicators: ns(),
+  }).optional(),
+
+  /**
+   * 各 Agent 的「本剧专属灵魂视图」——Profiler 针对每个 Agent 生成精准的本剧适配内容。
+   * 生成一次，创建完成后写入 basePromptSnapshot（不在运行时重算）。
+   * 用户在工坊编辑的是已解析好的 basePromptSnapshot，soulViews 是原始变量存档（用于重新解析）。
+   */
+  soulViews: z.object({
+    /** 编剧 + 台词润色：本剧编剧手册核心（等同于原 scriptwriterGuide，更名以明确语义） */
+    scriptwriter: z.object({
+      coreIdentity: z.string().default(''),
+      genreRules: na(z.string()),
+      dialogueGuide: z.string().default(''),
+      pacingGuide: z.string().default(''),
+      visualNarrativeGuide: z.string().default(''),
+      forbiddenPatterns: na(z.string()),
+    }),
+    /**
+     * 段落导演：本剧专属的段落规划适配规则（超出题材模板的本剧个性化部分）。
+     * 注入 arc-director 的 system prompt，补充题材基线之上的本剧叙事规律。
+     */
+    arcDirector: z.string().default(''),
+    /**
+     * 集导演：本剧专属的集级规划适配规则。
+     * 注入 episode-director 的 system prompt，补充情绪节拍和张力曲线的本剧特色。
+     */
+    episodeDirector: z.string().default(''),
+    /**
+     * 节奏分析师：本剧专属节奏模式说明（基于题材基线+本剧 seed 生成）。
+     * 注入 pacing-analyzer 的 system prompt。
+     */
+    pacingAnalyzer: z.string().optional(),
+    /**
+     * 悬念工匠：本剧专属悬念风格扩展（本剧 catharsisType 决定哪类钩子最强）。
+     * 注入 hook-crafter 的 system prompt，补充题材通用悬念库之上的本剧特色类型。
+     */
+    hookCrafter: z.string().optional(),
+    /**
+     * 连续性守卫：本剧世界观专项检查条目（超出通用12项的本剧特有约束）。
+     * 注入 continuity-guard 的 system prompt。
+     */
+    continuityGuardChecks: na(z.string()),
+  }).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -580,16 +704,20 @@ const shotSubtitleSchema = z.object({
  * 与 camera.movement 正交：movement 描述镜头物理运动，specialTechnique 描述光学/时态效果。
  */
 export const SPECIAL_TECHNIQUES = [
-  'dolly_zoom',    // 希区柯克变焦
-  'time_lapse',    // 延时摄影
-  'fast_push',     // 急推镜头
-  'fast_pull',     // 急拉镜头
-  'bullet_time',   // 子弹时间
-  'fpv',           // FPV 穿梭
-  'macro',         // 微距特写
-  'slow_motion',   // 慢镜头
-  'probe_lens',    // 探针镜头
-  'dutch_tilt',    // 旋转倾斜
+  'dolly_zoom',          // 希区柯克变焦（推拉同步变焦，营造眩晕/焦虑感）
+  'time_lapse',          // 延时摄影（快速展示时间流逝）
+  'fast_push',           // 急推镜头（突然向主体推近，制造冲击）
+  'fast_pull',           // 急拉镜头（突然后退揭示环境/人物渺小）
+  'bullet_time',         // 子弹时间（主体静止，镜头环绕移动）
+  'fpv',                 // FPV 穿梭（第一人称高速穿梭）
+  'macro',               // 微距特写（极度放大细节：颤抖的手/瞳孔/眼泪）
+  'slow_motion',         // 慢镜头（放慢动作，强调情感/打击感）
+  'probe_lens',          // 探针镜头（从狭缝/缝隙穿入，窥视感强）
+  'dutch_tilt',          // 旋转倾斜（画面倾斜=心理失衡/崩溃/混乱）
+  'speed_ramp',          // 升降格（先慢后快或先快后慢，创造节奏冲击）
+  'split_screen',        // 分屏（同时展示两个视角/两个时空）
+  'fisheye',             // 鱼眼镜头（超广角球形畸变，强调空间扭曲/癫狂）
+  'whip_zoom',           // 甩变焦（高速推拉+运动模糊，情绪急转）
 ] as const;
 
 export type SpecialTechnique = typeof SPECIAL_TECHNIQUES[number];
@@ -611,7 +739,7 @@ export const shotSchema = z.object({
   visualPrompt: z.string(), // T2V 视觉提示词（英文，含风格/光影/构图/角色参考）
   subtitle: shotSubtitleSchema.nullish(),
   estimatedDurationSec: z.number().min(0.5).max(30),
-  transitionToNext: z.enum(['cut', 'fade_black', 'fade_white', 'dissolve', 'wipe_left', 'wipe_right', 'flash', 'match_cut']).default('cut'),
+  transitionToNext: z.enum(['cut', 'fade_black', 'fade_white', 'dissolve', 'wipe_left', 'wipe_right', 'flash', 'match_cut', 'occlusion_cut']).default('cut'),
   isFlashback: z.boolean().default(false), // 是否为闪回镜头
   flashbackSourceEpisode: z.number().int().min(1).nullish(), // AI 可能输出 null
   flashbackSourceShotId: z.string().nullish(),

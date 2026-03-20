@@ -59,6 +59,154 @@ export interface DramaSeedHints {
   dialogueStyleHints?: string; // 台词风格提示
 }
 
+/**
+ * 题材 Profiler 专属示例数据 — 存储于 profileJson.profilerExamples。
+ * 替代 drama-playbook 中的 GENRE_PROFILER_EXAMPLES 硬编码。
+ */
+export interface GenreProfilerExamples {
+  genreName: string;
+  segmentPrinciples: string;
+  emotionBeatTable: string;
+  rhythmTemplate: string;
+}
+
+/** 段落导演专属指南 — 注入 buildArcDirectorSystemPrompt */
+export interface GenreArcDirectorGuide {
+  /** 题材专属段落规划原则，替代"通用都市/霸总"默认说明 */
+  genreSegmentPrinciples?: string | null;
+  /** 题材专属角色弧线设计，替代"通用都市/霸总"默认说明 */
+  characterArcPrinciples?: string | null;
+  /** 题材专属冲突密度节奏，替代"通用都市/霸总"默认模板 */
+  conflictRhythm?: string | null;
+}
+
+/** 集导演专属指南 — 注入 buildEpisodeDirectorSystemPrompt */
+export interface GenreEpisodeDirectorGuide {
+  /** 题材专属情绪节拍示例（表格格式），替代"通用现代都市"示例 */
+  emotionBeatExample?: string | null;
+  /** 题材专属张力曲线补充说明 */
+  tensionCurveNotes?: string | null;
+  /** 题材专属集末钩子模式 */
+  hookPatterns?: string | null;
+}
+
+/** 节奏分析师专属指南 — 注入 buildPacingAnalyzerSystemPrompt */
+export interface GenrePacingAnalyzerGuide {
+  /** 题材专属理想节奏模板，评估时以此为参照 */
+  genreRhythmTemplate?: string | null;
+  /** 题材专属节奏快/慢判断指标，补充通用标准 */
+  paceIndicators?: string | null;
+}
+
+/**
+ * 题材 genreArchetype 预置值 — 存储于 profileJson.genreArchetypePreset。
+ * 所有字段均为题材确定值，Profiler LLM 无需推断，直接采用。
+ * adaptationNotes 为注入所有下游 Agent system prompt 的题材生产规则基线文本。
+ */
+export interface GenreArchetypePreset {
+  narrativeArc: 'conflict_resolution' | 'life_journey' | 'mystery_reveal' | 'quest' | 'rise_and_fall';
+  narrationRatio: number;
+  factConstraint: 'none' | 'inspired_by' | 'period_accurate';
+  hookMechanism: 'plot_cliffhanger' | 'revelation' | 'emotional_peak' | 'mystery' | 'curiosity';
+  conflictType: 'interpersonal' | 'fate_vs_will' | 'good_vs_evil' | 'internal' | 'society';
+  characterEvolution: 'costume_only' | 'age_progression' | 'power_level' | 'relationship' | 'status';
+  visualTone: 'glamorous' | 'gritty' | 'ethereal' | 'period' | 'dark' | 'whimsical' | 'epic';
+  /** 题材生产规则基线，注入所有下游 Agent system prompt，替代 if-else 硬编码分支 */
+  adaptationNotes: string;
+}
+
+/**
+ * 各 Agent 专属灵魂生成指引 — 存储于 profileJson.agentSoulPrompts。
+ * 告知 Profiler 如何为本题材的每个下游 Agent 生成高质量的专属灵魂视图（soulViews）。
+ * 这些指引是「编剧哲学」层面的精华，直接决定生成短剧的题材纯度。
+ *
+ * 注意：这些字段是「生成指引」（给 Profiler 看的），而非「prompt 模板」（给 Agent 看的）。
+ * 实际写入 basePromptSnapshot 的内容由 DramaPromptBakerService 烘焙，用户编辑的是已烘焙的完整 prompt。
+ */
+export interface GenreAgentSoulPrompts {
+  /**
+   * 编剧核心身份定位（用于 soulViews.scriptwriter.coreIdentity）。
+   * 告诉 Profiler：本题材的编剧 coreIdentity 应该强调什么独特视角。
+   * 示例（霸总）："精通权力美学与情感积压"
+   * 示例（战神）："精通能力觉醒节奏与爽点爆发"
+   */
+  scriptwriterCoreIdentityHint?: string;
+
+  /**
+   * 编剧铁律生成指引（影响 soulViews.scriptwriter.genreRules 的生成方向）。
+   * 列出本题材编剧铁律必须覆盖的核心维度（Profiler 参考这些维度生成 genreRules）。
+   */
+  scriptwriterGenreRulesHint?: string[];
+
+  /**
+   * 台词风格指引（影响 soulViews.scriptwriter.dialogueGuide）。
+   * 本题材台词的核心语言特征（Profiler 生成 dialogueGuide 时参考）。
+   */
+  dialogueStyleHint?: string;
+
+  /**
+   * 段落导演适配指引（影响 soulViews.arcDirector 的生成内容）。
+   * 告知 Profiler 本题材的段落感来自哪里、冲突密度节奏如何。
+   */
+  arcDirectorAdaptationHint?: string;
+
+  /**
+   * 集导演适配指引（影响 soulViews.episodeDirector 的生成内容）。
+   * 本题材单集情绪曲线的典型模式（Profiler 生成时参考）。
+   */
+  episodeDirectorAdaptationHint?: string;
+
+  /**
+   * 悬念工匠指引（影响 soulViews.hookCrafter 的生成内容）。
+   * 本题材最有效的悬念类型和设计思路（Profiler 生成时参考）。
+   */
+  hookCrafterHint?: string;
+}
+
+/**
+ * 题材完整配置 — profileJson 的完整结构。
+ * 每个题材 = 一个 JSON 初始化数据，统一存储在用户表/短剧表中。
+ */
+export interface GenreFullProfile {
+  productionGuidance?: GenreProductionGuidance;
+  profilerGuide?: string;
+  profilerExamples?: GenreProfilerExamples;
+  /** genreArchetype 题材确定值预置，Profiler agent merge 时直接采用，无需 LLM 推断 */
+  genreArchetypePreset?: GenreArchetypePreset;
+  /**
+   * buildProfilerSystemPrompt Section 0 的完整文本，直接注入提示词。
+   * 已知题材：包含预置的枚举值 + adaptationNotes 基线，告知 LLM 直接输出这些值。
+   * 自定义题材（_custom）：包含枚举可选值描述，让 LLM 自行推断。
+   * 代码不做任何条件判断，直接读取此字段。
+   */
+  profilerArchetypeSection?: string;
+  cameraStyleGuide?: Record<string, unknown>;
+  audioStyleGuide?: Record<string, unknown>;
+  reviewerCalibration?: Record<string, unknown>;
+  arcDirectorGuide?: GenreArcDirectorGuide;
+  episodeDirectorGuide?: GenreEpisodeDirectorGuide;
+  pacingAnalyzerGuide?: GenrePacingAnalyzerGuide;
+  /**
+   * 各 Agent 专属灵魂生成指引。
+   * 注入 Profiler 的 system prompt，引导其为本题材生成高质量的 soulViews（per-agent 灵魂视图）。
+   * Baker 烘焙时使用这些 soul views 填充各 Agent 的 basePromptSnapshot。
+   */
+  agentSoulPrompts?: GenreAgentSoulPrompts;
+  /**
+   * 每个 pipeline agent 的完整 system prompt 模板（含 {{variable}} 占位符）。
+   * Baker 在建剧完成后通过变量替换生成 basePromptSnapshot，用户可在创作工坊直接编辑烘焙后的完整 prompt。
+   *
+   * key = pipeline nodeId（如 'arc-director' / 'scriptwriter' / 'storyboard-director'）。
+   * value = 完整 prompt 模板字符串，支持以下占位符（由 Baker 的 resolveTemplate 负责替换）：
+   *   - 编剧手册变量（来自 DramaPromptProfile）
+   *   - 策略变量（来自 DramaStrategy）
+   *   - 视觉风格变量（来自 VisualStyleGuide）
+   *
+   * 未指定的 agent 回退到 _custom 题材的默认模板（BASE_AGENT_SYSTEM_PROMPTS）。
+   */
+  agentSystemPrompts?: Record<string, string>;
+}
+
 @Entity('drama_genre_templates')
 @Unique('uq_drama_genre_tpl_user_genre', ['userId', 'genreKey'])
 export class DramaGenreTemplateEntity {

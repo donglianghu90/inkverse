@@ -40,6 +40,7 @@ export class PacingAnalyzerAgent {
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'pacing-analyzer', buildPacingAnalyzerSystemPrompt({
         genreArchetype: state.promptProfile?.genreArchetype,
         genreRules: state.promptProfile?.scriptwriterGuide?.genreRules,
+        pacingAnalyzerGuide: state.promptProfile?.pacingAnalyzerGuide ?? undefined,
       })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: storyboard.episodeNumber },
       userPrompt: `分析第 ${storyboard.episodeNumber} 集节奏：

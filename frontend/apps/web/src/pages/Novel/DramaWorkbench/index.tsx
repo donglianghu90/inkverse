@@ -1332,6 +1332,63 @@ const LocationPromptPanel: React.FC<{ loc: Location; visualStyle?: Record<string
   );
 };
 
+// ─── VariationItem ────────────────────────────────────────────────────────────
+
+const VariationItem: React.FC<{
+  variation: CharacterVariation;
+  imageUrl?: string;
+  busy?: boolean;
+  onRegenerate: () => void;
+}> = ({ variation: v, imageUrl: vImg, busy: vBusy = false, onRegenerate }) => {
+  const [showPrompt, setShowPrompt] = useState(false);
+  return (
+    <div className="rounded-lg border border-border/60 overflow-hidden bg-background">
+      {vImg ? (
+        <img src={vImg} alt={v.name} className="w-full aspect-[3/4] object-cover" />
+      ) : (
+        <div className="w-full aspect-[3/4] bg-muted/50 flex items-center justify-center text-[10px] text-muted-foreground">
+          待生成
+        </div>
+      )}
+      <div className="p-1.5 space-y-1">
+        <p className="text-[11px] font-medium truncate">{v.name}</p>
+        {v.costume && (
+          <p className="text-[10px] text-muted-foreground line-clamp-2">{v.costume}</p>
+        )}
+        {v.visualPromptOverride && (
+          <div>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setShowPrompt((p) => !p); }}
+              className="text-[9px] text-blue-500 hover:text-blue-700 dark:hover:text-blue-300 underline underline-offset-2"
+            >
+              {showPrompt ? '收起提示词' : '图片提示词 ↓'}
+            </button>
+            {showPrompt && (
+              <p className="text-[10px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all font-mono mt-1 bg-blue-50 dark:bg-blue-950/30 rounded p-1.5">
+                {v.visualPromptOverride}
+              </p>
+            )}
+          </div>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 text-[10px] gap-1 w-full"
+          disabled={vBusy}
+          onClick={onRegenerate}
+        >
+          {vBusy
+            ? <><Loader2 className="h-3 w-3 animate-spin" />生成中</>
+            : vImg
+              ? <><RotateCcw className="h-3 w-3" />重新生成</>
+              : <><Wand2 className="h-3 w-3" />生成</>}
+        </Button>
+      </div>
+    </div>
+  );
+};
+
 // ─── CharacterCard ────────────────────────────────────────────────────────────
 
 const CharacterCard: React.FC<{
@@ -1585,40 +1642,15 @@ const CharacterCard: React.FC<{
                 <div className="pt-2 border-t border-border/40">
                   <p className="text-[10px] font-semibold text-muted-foreground mb-2">服装变体（衣橱）</p>
                   <div className="grid grid-cols-2 gap-2">
-                    {char.variations.map((v) => {
-                      const vImg = variationImages?.get(v.variationId);
-                      const vBusy = variationBusyKeys?.has(`${char.characterId}:${v.variationId}`);
-                      return (
-                        <div key={v.variationId} className="rounded-lg border border-border/60 overflow-hidden bg-background">
-                          {vImg ? (
-                            <img src={vImg} alt={v.name} className="w-full aspect-[3/4] object-cover" />
-                          ) : (
-                            <div className="w-full aspect-[3/4] bg-muted/50 flex items-center justify-center text-[10px] text-muted-foreground">
-                              待生成
-                            </div>
-                          )}
-                          <div className="p-1.5 space-y-1">
-                            <p className="text-[11px] font-medium truncate">{v.name}</p>
-                            {(v.costume || v.visualPromptOverride) && (
-                              <p className="text-[10px] text-muted-foreground line-clamp-2">{v.costume || v.visualPromptOverride}</p>
-                            )}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-6 text-[10px] gap-1 w-full"
-                              disabled={vBusy || busy}
-                              onClick={() => onRegenerateVariation?.(v.variationId)}
-                            >
-                              {vBusy
-                                ? <><Loader2 className="h-3 w-3 animate-spin" />生成中</>
-                                : vImg
-                                  ? <><RotateCcw className="h-3 w-3" />重新生成</>
-                                  : <><Wand2 className="h-3 w-3" />生成</>}
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
+                    {char.variations.map((v) => (
+                      <VariationItem
+                        key={v.variationId}
+                        variation={v}
+                        imageUrl={variationImages?.get(v.variationId)}
+                        busy={variationBusyKeys?.has(`${char.characterId}:${v.variationId}`) || busy}
+                        onRegenerate={() => onRegenerateVariation?.(v.variationId)}
+                      />
+                    ))}
                   </div>
                 </div>
               )}
@@ -1766,6 +1798,7 @@ const PropCard: React.FC<{
 }> = ({ prop, busy = false, onRegenerate, onRefine }) => {
   const [refineOpen, setRefineOpen] = useState(false);
   const [instruction, setInstruction] = useState('');
+  const [showPrompt, setShowPrompt] = useState(false);
   const imageUrl = prop.referenceImageUrl;
   const propData = prop.data as {
     name?: string; description?: string; visualPrompt?: string;
@@ -1809,6 +1842,28 @@ const PropCard: React.FC<{
               <p className="text-[10px] text-muted-foreground mt-1 line-clamp-2 leading-relaxed">{propData.description}</p>
             )}
           </div>
+          {propData.visualPrompt && (
+            <div className="rounded-md border border-blue-200 dark:border-blue-800/50 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowPrompt((p) => !p)}
+                className="w-full flex items-center justify-between px-2.5 py-1.5 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+              >
+                <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400 flex items-center gap-1">
+                  <Lock className="h-3 w-3" />
+                  图片生成提示词
+                </span>
+                {showPrompt
+                  ? <ChevronUp className="h-3 w-3 text-blue-500" />
+                  : <ChevronDown className="h-3 w-3 text-blue-500" />}
+              </button>
+              {showPrompt && (
+                <div className="bg-blue-50/50 dark:bg-blue-950/20 px-2.5 py-2">
+                  <p className="text-[11px] text-blue-900 dark:text-blue-200 leading-relaxed break-all select-all font-mono">{propData.visualPrompt}</p>
+                </div>
+              )}
+            </div>
+          )}
           {/* Actions */}
           <div className="flex gap-1 mt-auto pt-1">
             <Button

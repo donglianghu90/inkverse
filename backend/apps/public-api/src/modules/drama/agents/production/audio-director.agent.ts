@@ -8,7 +8,7 @@ import { z } from 'zod';
 import {
   shotSchema, episodeStoryboardSchema, EpisodeStoryboard, EpisodeIntent, DramaState, Shot,
 } from '../../schemas/drama-state.schemas';
-import { buildAudioDirectorSystemPrompt } from '../../prompting/drama-playbook';
+import { buildAudioDirectorStaticPrompt, buildAudioEpisodeContext } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 
 const MAX_SHOTS_PER_BATCH = 10; // 每批最多处理的 Shot 数
@@ -28,10 +28,12 @@ export class AudioDirectorAgent {
       `${c.characterId}(${c.name}): ttsVoiceId=${c.voiceProfile.ttsVoiceId || '待分配'}, pitch=${c.voiceProfile.pitch}, speed=${c.voiceProfile.speed}, timbre=${c.voiceProfile.timbre}`
     ).join('\n');
     const locAmbience = state.locations.map(l => `${l.locationId}: ${l.ambientSoundDefault}`).join('\n');
-    const sysPrompt = await this.promptService.buildPrompt(state.dramaId, 'audio-director', buildAudioDirectorSystemPrompt({
-      audioGuide,
-      emotionBeats: intent?.emotionBeats,
-    }));
+    const sysPrompt = await this.promptService.buildPrompt(
+      state.dramaId,
+      'audio-director',
+      buildAudioDirectorStaticPrompt({ audioGuide }),
+      buildAudioEpisodeContext({ emotionBeats: intent?.emotionBeats }),
+    );
 
     const shots = [...shotsArr];
     const allBgm: any[] = [], allSilence: any[] = [];

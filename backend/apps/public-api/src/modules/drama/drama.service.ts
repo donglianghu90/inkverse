@@ -37,13 +37,14 @@ import { DramaTaskService } from './task/task.service';
 import { DramaRunService } from './run/run.service';
 import { DramaAgentPipelineService } from './workflow/drama-agent-pipeline.service';
 import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.service';
+import { DramaPromptBakerService } from './prompting/drama-prompt-baker.service';
 import {
   buildArcDirectorSystemPrompt, buildEpisodeDirectorSystemPrompt,
   buildContinuityGuardSystemPrompt, buildScriptwriterSystemPrompt,
-  buildDialogueCoachSystemPrompt, buildStoryboardDirectorSystemPrompt,
-  buildAudioDirectorSystemPrompt, buildScriptReviewerSystemPrompt,
+  buildDialogueCoachSystemPrompt, buildStoryboardDirectorStaticPrompt,
+  buildAudioDirectorStaticPrompt, buildScriptReviewerSystemPrompt,
   buildScriptEditorSystemPrompt, buildPacingAnalyzerSystemPrompt,
-  buildHookCrafterSystemPrompt, buildEpisodeRecorderSystemPrompt,
+  buildHookCrafterStaticPrompt, buildEpisodeRecorderSystemPrompt,
   // 创建阶段 Agent
   buildSeedAnalyzerSystemPrompt, buildSeriesDirectorSystemPrompt,
   buildVisualAssetDesignerSystemPrompt, buildProfilerSystemPrompt, buildStrategySystemPrompt,
@@ -98,6 +99,7 @@ export class DramaService implements OnModuleInit {
     private readonly dramaRunService: DramaRunService,
     private readonly pipelineService: DramaAgentPipelineService,
     private readonly globalPromptSettingService: DramaGlobalPromptSettingService,
+    private readonly promptBaker: DramaPromptBakerService,
     private readonly mediaJobService: MediaJobService,
     private readonly localStorage: LocalStorageService,
     private readonly imageRouter: ImageProviderRouterService,
@@ -320,6 +322,7 @@ export class DramaService implements OnModuleInit {
             out.seed, out.visualStyle, out.outline, dramaId, opts.userId,
             genreTemplate?.profileJson ?? undefined,
             getGlobalPrompt('drama-profiler') || undefined,
+            genreTemplate?.genreKey,
           ),
           this.strategist.generate(out.seed, out.outline, dramaId, opts.userId, productionGuidance, getGlobalPrompt('drama-strategy') || undefined),
         ]);
@@ -327,6 +330,24 @@ export class DramaService implements OnModuleInit {
         logDrama('profile_strategy_done', 'ok', '编剧手册完成');
         emitCreate(4, '编剧手册完成', true);
         await saveCP('profile_ready', { promptProfile, strategy });
+
+        // ── 建剧完成后：烘焙所有集级 Agent 的完整 basePromptSnapshot ──────────
+        // 所有「已知变量」（题材规则/编剧手册/摄影手册/叙事策略）在此一次性解析并写表。
+        // 运行时 Agent 直接读取 basePromptSnapshot，不再重复组装。
+        logDrama('base_prompt_bake_start', 'ok', '烘焙 Agent 提示词快照');
+        try {
+          await this.promptBaker.bakeAndPublish({
+            dramaId,
+            profile: promptProfile,
+            strategy: out.strategy,
+            visualStyle: out.visualStyle,
+            genreKey: genreTemplate?.genreKey,
+          });
+          logDrama('base_prompt_bake_done', 'ok', '所有 Agent 提示词快照烘焙完成');
+        } catch (bakeErr: any) {
+          logDrama('base_prompt_bake_failed', 'error', `提示词烘焙失败（不影响建剧）: ${bakeErr.message}`);
+          this.logger.warn(`[Drama] promptBaker.bakeAndPublish 失败 dramaId=${dramaId}: ${bakeErr.message}`);
+        }
       }
 
       logDrama('state_assembly_start', 'ok', '最终状态组装');
@@ -911,66 +932,8 @@ export class DramaService implements OnModuleInit {
     await this.runConcurrent(phase2bTasks, 3);
 
     // ═══ Phase 3: 角色外观变体参考图 ═══
-    await this.generateVariationImages(dramaId, characters, charStylePrefix, assetStyleBucket, userId);
-  }
-
-  /** 为角色外观变体生成参考图（以 face_front 为参考保持面部一致） */
-  private async generateVariationImages(dramaId: string, characters: DramaState['characters'], stylePrefix?: string, styleBucket?: string, userId?: string): Promise<void> {
-    const baseAssets = await this.visualAssetRepo.find({ where: { dramaId, assetType: 'character' as any } });
-    const baseMap = new Map(baseAssets.filter(a => a.referenceImageUrl).map(a => [a.refId, a.referenceImageUrl]));
-    const assetByRefId = new Map(baseAssets.map(a => [a.refId, a]));
-    for (const ch of characters) {
-      if (this.cancelledDramas.has(dramaId)) break;
-      if (!ch.variations?.length) continue;
-      const asset = assetByRefId.get(ch.characterId);
-      const baseImg = baseMap.get(ch.characterId);
-
-      // 从 asset.data.variations 同步已持久化的 URL 回 in-memory，确保跳过逻辑正确
-      // （drama.state.characters 不含变体图 URL，只有 asset.data 才是持久化的 source of truth）
-      const persistedVariations = ((asset?.data as any)?.variations ?? []) as Array<{ variationId: string; referenceImageUrl?: string }>;
-      const persistedUrlMap = new Map(persistedVariations.filter(v => v.referenceImageUrl).map(v => [v.variationId, v.referenceImageUrl!]));
-      for (const v of ch.variations) {
-        if (!v.referenceImageUrl && persistedUrlMap.has(v.variationId)) {
-          v.referenceImageUrl = persistedUrlMap.get(v.variationId);
-        }
-      }
-
-      let anyUpdated = false;
-      for (const v of ch.variations) {
-        if (this.cancelledDramas.has(dramaId)) break;
-        if (v.referenceImageUrl) continue;
-        try {
-          const refImages = baseImg ? [{ url: baseImg, weight: 0.6 }] : [];
-          // 变体 prompt：面部 + 发型 + 体型作为身份锚点，visualPromptOverride 只描述变化点（服饰/状态）
-          const rawPrompt = [
-            ch.faceReferencePrompt,
-            ch.hairStylePrompt || ch.hairStyle,
-            ch.bodyTypePrompt || ch.bodyType,
-            v.visualPromptOverride,
-            'same person as reference',
-          ].filter(Boolean).join(', ');
-          // flux-2-i2i: 最擅长受控的服装/外观变换（maintain identity, change outfit）
-          const varRoute = this.imageRouter.routeCharacterVariation(DramaService.CHAR_IMAGE_SIZE);
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'character', stylePrefix, varRoute.provider, styleBucket);
-          const result = await this.mediaService.generateImage({
-            prompt, negativePrompt,
-            size: DramaService.CHAR_IMAGE_SIZE, count: 1, referenceImages: refImages,
-            dramaId, assetType: 'character_variation', refId: `${ch.characterId}_${v.variationId}`, userId,
-            ...varRoute,
-          });
-          if (result.images?.[0]?.url) {
-            v.referenceImageUrl = result.images[0].url;
-            anyUpdated = true;
-          }
-          this.logger.log(`变体参考图完成: ${ch.characterId}/${v.variationId}`);
-        } catch (err) { this.logger.warn(`变体参考图失败: ${ch.characterId}/${v.variationId} — ${(err as Error).message}`); }
-      }
-      // 持久化：将含最新 referenceImageUrl 的 variations 写回 asset.data
-      if (anyUpdated && asset) {
-        const updatedData = { ...(asset.data as Record<string, unknown>), variations: ch.variations };
-        await this.visualAssetRepo.update(asset.id, { data: updatedData });
-      }
-    }
+    // 已迁移至媒体编排器懒加载：按需在 generateEpisodeMedia/generateEpisodeImages 中生成。
+    // 此处不再提前批量生成，避免生成未使用的变体图（浪费成本）并确保变体图与剧情语境匹配。
   }
 
   /** 重新生成单个角色外观变体参考图 */
@@ -1021,6 +984,18 @@ export class DramaService implements OnModuleInit {
     variation.referenceImageUrl = imageUrl;
     const updatedData = { ...charData, variations };
     await this.visualAssetRepo.update(asset.id, { data: updatedData });
+
+    // 同步更新 drama.state.characters[].variations[].referenceImageUrl，确保媒体编排器读 state 时能感知新 URL
+    if (drama) {
+      const stateObj = drama.state as unknown as DramaState;
+      const stateChar = stateObj.characters?.find(c => c.characterId === String(charData.characterId ?? ''));
+      const stateVariation = stateChar?.variations?.find(v => v.variationId === variationId);
+      if (stateVariation) {
+        stateVariation.referenceImageUrl = imageUrl;
+        await this.dramaRepo.save(drama);
+      }
+    }
+
     this.logger.log(`变体参考图重生完成: ${charData.characterId}/${variationId}`);
 
     return (await this.visualAssetRepo.findOne({ where: { id: asset.id } })) ?? asset;
@@ -1476,18 +1451,19 @@ export class DramaService implements OnModuleInit {
       case 'visual-asset-designer':
         return buildVisualAssetDesignerSystemPrompt();
       case 'drama-profiler':
-        return buildProfilerSystemPrompt();
+        return buildProfilerSystemPrompt(seed?.genreKey ?? undefined);
       case 'drama-strategy':
         return buildStrategySystemPrompt();
       // ── 集内容生成 Agent（创作工坊中按剧配置）──
       case 'arc-director':
-        return buildArcDirectorSystemPrompt({ genreRules: guide?.genreRules });
+        return buildArcDirectorSystemPrompt({ genreRules: guide?.genreRules, arcDirectorGuide: profile?.arcDirectorGuide });
       case 'episode-director':
         return buildEpisodeDirectorSystemPrompt({
           maxPresentPerEpisode: strategy?.characterBudget?.maxPresentPerEpisode,
           genreArchetype: ga,
           visualStyle: visualStyle ?? undefined,
           genreRules: guide?.genreRules,
+          episodeDirectorGuide: profile?.episodeDirectorGuide,
         });
       case 'continuity-guard':
         return buildContinuityGuardSystemPrompt({
@@ -1501,14 +1477,12 @@ export class DramaService implements OnModuleInit {
           adaptationNotes: ga?.adaptationNotes,
         });
       case 'storyboard-director':
-        return buildStoryboardDirectorSystemPrompt({
-          maxShots: 15,
-          targetDur: seed?.targetEpisodeDurationSec ?? 180,
+        return buildStoryboardDirectorStaticPrompt({
           visualStyle: visualStyle ?? undefined,
           camGuide: profile?.cameraStyleGuide,
         });
       case 'audio-director':
-        return buildAudioDirectorSystemPrompt({ audioGuide: profile?.audioGuide });
+        return buildAudioDirectorStaticPrompt({ audioGuide: profile?.audioStyleGuide });
       case 'deterministic-checker':
         return '硬规则校验器（非 LLM）— 执行确定性规则：镜头时长合规（每 Shot 不超过目标时长）、必填字段完整性、安全内容过滤。此节点不调用大模型，无系统提示词。';
       case 'script-reviewer':
@@ -1516,9 +1490,9 @@ export class DramaService implements OnModuleInit {
       case 'script-editor':
         return buildScriptEditorSystemPrompt({ dialogueGuide: guide?.dialogueGuide });
       case 'pacing-analyzer':
-        return buildPacingAnalyzerSystemPrompt({ genreArchetype: ga, genreRules: guide?.genreRules });
+        return buildPacingAnalyzerSystemPrompt({ genreArchetype: ga, genreRules: guide?.genreRules, pacingAnalyzerGuide: profile?.pacingAnalyzerGuide });
       case 'hook-crafter':
-        return buildHookCrafterSystemPrompt({ genreRules: guide?.genreRules, genreArchetype: ga });
+        return buildHookCrafterStaticPrompt({ genreRules: guide?.genreRules, genreArchetype: ga });
       case 'episode-recorder':
         return buildEpisodeRecorderSystemPrompt({ genreArchetype: ga, genreRules: guide?.genreRules });
       default:

@@ -37,10 +37,16 @@ export class DramaPromptTemplateService {
 
   /**
    * 组装最终系统提示词：
-   *   1. base = node.basePromptSnapshot || codeGeneratedBasePrompt
-   *   2. 本剧专属补充指令（node.additionalSystemPrompt，创建时从全局指令模版初始化）
+   *   1. base  = node.basePromptSnapshot（用户编辑版）|| codeGeneratedBasePrompt（代码回退）
+   *   2. dynamic = 集/场景级动态上下文（如 emotionBeats、scenePurpose 约束，可选）
+   *   3. additional = 本剧专属补充指令（node.additionalSystemPrompt）
    */
-  async buildPrompt(dramaId: string, nodeId: string, codeGeneratedBasePrompt: string): Promise<string> {
+  async buildPrompt(
+    dramaId: string,
+    nodeId: string,
+    codeGeneratedBasePrompt: string,
+    dynamicSection?: string,
+  ): Promise<string> {
     const nodes = await this.getCachedNodes(dramaId);
     const node = nodes.find(n => n.id === nodeId);
 
@@ -48,6 +54,7 @@ export class DramaPromptTemplateService {
     const dramaAdditional = node?.additionalSystemPrompt?.trim() ?? '';
 
     const parts = [base];
+    if (dynamicSection?.trim()) parts.push(dynamicSection.trim());
     if (dramaAdditional) parts.push(`=== 本剧补充指令 ===\n${dramaAdditional}`);
 
     return parts.join('\n\n');

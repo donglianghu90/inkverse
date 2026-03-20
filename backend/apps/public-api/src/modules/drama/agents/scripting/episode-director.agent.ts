@@ -93,7 +93,7 @@ export class EpisodeDirectorAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-episode-director',
       schema: intentOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-director', buildEpisodeDirectorSystemPrompt({ maxPresentPerEpisode: state.strategy?.characterBudget?.maxPresentPerEpisode, genreArchetype: state.promptProfile?.genreArchetype, visualStyle: state.visualStyle ?? undefined, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules })),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-director', buildEpisodeDirectorSystemPrompt({ maxPresentPerEpisode: state.strategy?.characterBudget?.maxPresentPerEpisode, genreArchetype: state.promptProfile?.genreArchetype, visualStyle: state.visualStyle ?? undefined, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules, episodeDirectorGuide: state.promptProfile?.episodeDirectorGuide ?? undefined })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: epNum },
       userPrompt: `本集信息：
 第 ${epNum} 集：${synopsis.title}

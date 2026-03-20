@@ -27,7 +27,7 @@ export class ArcDirectorAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-arc-director',
       schema: arcOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcDirectorSystemPrompt({ genreArchetype: state.promptProfile?.genreArchetype, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules })),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcDirectorSystemPrompt({ genreArchetype: state.promptProfile?.genreArchetype, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules, arcDirectorGuide: state.promptProfile?.arcDirectorGuide ?? undefined })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber },
       userPrompt: `当前状态：
 全剧标题：${state.seed.title}

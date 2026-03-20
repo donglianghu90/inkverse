@@ -1,6 +1,9 @@
 /**
  * 短剧编剧手册生成器 — 根据种子+视觉资产生成编剧手册（promptProfile）。
  * 编剧手册指导后续所有 Agent 的风格/规则/审核维度。
+ *
+ * 生成完成后自动派生 soulViews（per-agent 本剧灵魂视图），供 DramaPromptBakerService
+ * 烘焙 basePromptSnapshot 时使用。soulViews 不需要额外 LLM 调用——从现有字段组合派生。
  */
 import { Injectable } from '@nestjs/common';
 import { LlmService } from '../../../novel/llm/llm.service';
@@ -10,12 +13,70 @@ import {
   DramaSeed, SeriesOutline, VisualStyleGuide,
 } from '../../schemas/drama-state.schemas';
 import { buildProfilerSystemPrompt } from '../../prompting/drama-playbook';
+import { GENRE_TEMPLATES } from '../../prompting/drama-genre-data';
+
+/**
+ * 从已解析的 profile 派生 soulViews。
+ * soulViews 是各 Agent 的「本剧专属灵魂视图」——超出题材模板基线的本剧个性化规则。
+ * - scriptwriter soul：直接来自 scriptwriterGuide（Profiler 的核心 LLM 输出）。
+ * - arcDirector soul：来自 adaptationNotes + arcDirectorGuide 拼合，作为附加块注入 arc-director。
+ * - episodeDirector soul：来自 adaptationNotes + episodeDirectorGuide 关键规则。
+ * - pacingAnalyzer soul：来自 pacingAnalyzerGuide 中模板未覆盖的节奏规则。
+ * - hookCrafter soul：来自 adaptationNotes，传递本剧悬念偏好。
+ */
+function deriveSoulViews(profile: DramaPromptProfile): NonNullable<DramaPromptProfile['soulViews']> {
+  const guide = profile.scriptwriterGuide;
+  const archetype = profile.genreArchetype;
+  const arcGuide = profile.arcDirectorGuide;
+  const epGuide = profile.episodeDirectorGuide;
+  const pacingGuide = profile.pacingAnalyzerGuide;
+
+  const adaptationNotes = archetype?.adaptationNotes?.trim() ?? '';
+
+  // arcDirector soul = adaptationNotes（本剧适配规则）+ arcDirectorGuide 已填充的专属原则
+  const arcParts = [
+    adaptationNotes,
+    arcGuide?.genreSegmentPrinciples?.trim() ?? '',
+    arcGuide?.characterArcPrinciples?.trim() ?? '',
+    arcGuide?.conflictRhythm?.trim() ?? '',
+  ].filter(Boolean);
+
+  // episodeDirector soul = adaptationNotes + 集导演专属情绪/张力/钩子规则
+  const epParts = [
+    adaptationNotes,
+    epGuide?.tensionCurveNotes?.trim() ?? '',
+    epGuide?.hookPatterns ? `【题材集末钩子模式】\n${epGuide.hookPatterns}` : '',
+  ].filter(Boolean);
+
+  // pacingAnalyzer soul = 题材节奏模板（告知分析师何为「正常节奏」）
+  const pacingParts = [
+    pacingGuide?.genreRhythmTemplate?.trim() ?? '',
+    pacingGuide?.paceIndicators?.trim() ?? '',
+  ].filter(Boolean);
+
+  return {
+    scriptwriter: {
+      coreIdentity: guide.coreIdentity ?? '',
+      genreRules: guide.genreRules ?? [],
+      dialogueGuide: guide.dialogueGuide ?? '',
+      pacingGuide: guide.pacingGuide ?? '',
+      visualNarrativeGuide: guide.visualNarrativeGuide ?? '',
+      forbiddenPatterns: guide.forbiddenPatterns ?? [],
+    },
+    arcDirector: arcParts.join('\n\n'),
+    episodeDirector: epParts.join('\n\n'),
+    pacingAnalyzer: pacingParts.length ? pacingParts.join('\n\n') : undefined,
+    hookCrafter: adaptationNotes || undefined,
+    continuityGuardChecks: [],
+  };
+}
 
 const profilerOutputSchema = z.object({ profile: dramaPromptProfileSchema });
 
 /** 题材模板中需要覆盖 LLM 输出的固定字段子集 */
 type TemplateProfileOverride = Partial<Pick<DramaPromptProfile,
-  'cameraStyleGuide' | 'audioStyleGuide' | 'reviewerCalibration' | 'genreArchetype'
+  | 'cameraStyleGuide' | 'audioStyleGuide' | 'reviewerCalibration' | 'genreArchetype'
+  | 'arcDirectorGuide' | 'episodeDirectorGuide' | 'pacingAnalyzerGuide'
 >>;
 
 @Injectable()
@@ -31,6 +92,8 @@ export class DramaProfilerAgent {
     /** 题材模板中手工维护的固定字段，覆盖同名 LLM 输出（用户可在前台编辑） */
     templateProfile?: Record<string, unknown>,
     additionalSystemPrompt?: string,
+    /** 题材 key（如 "mythology"/"boss"/"warrior"），用于注入题材专属的编剧手册生成上下文 */
+    genreKey?: string,
   ): Promise<DramaPromptProfile> {
     const arcSummary = outline?.episodes
       ? (() => {
@@ -40,7 +103,7 @@ export class DramaProfilerAgent {
         })()
       : '';
 
-    let sysPrompt = buildProfilerSystemPrompt();
+    let sysPrompt = buildProfilerSystemPrompt(genreKey, templateProfile);
     if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
 
     const raw = await this.llm.generateStructured({
@@ -68,31 +131,68 @@ ${arcSummary ? `\n全剧结构参考：${arcSummary}` : ''}
     const p = typeof root.profile === 'object' && root.profile ? root.profile : root;
     const llmResult = dramaPromptProfileSchema.parse(p);
 
-    if (!templateProfile || Object.keys(templateProfile).length === 0) {
-      return llmResult;
+    // 优先级：templateProfile（drama 专属）> GENRE_TEMPLATES（题材库默认）> LLM 生成
+    const tpl = (templateProfile ?? {}) as TemplateProfileOverride;
+    const genre = genreKey ? GENRE_TEMPLATES[genreKey]?.profile : undefined;
+
+    // genreArchetype：drama 专属覆盖 > 题材库预置（枚举值确定，adaptationNotes 取 LLM 版本若更长）> LLM 生成
+    const genrePreset = genre?.genreArchetypePreset;
+    let resolvedArchetype: TemplateProfileOverride['genreArchetype'] | undefined = tpl.genreArchetype;
+    if (!resolvedArchetype && genrePreset) {
+      const llmNotes = llmResult.genreArchetype?.adaptationNotes ?? '';
+      const presetNotes = genrePreset.adaptationNotes;
+      resolvedArchetype = {
+        narrativeArc: genrePreset.narrativeArc,
+        narrationRatio: genrePreset.narrationRatio,
+        factConstraint: genrePreset.factConstraint,
+        hookMechanism: genrePreset.hookMechanism,
+        conflictType: genrePreset.conflictType,
+        characterEvolution: genrePreset.characterEvolution,
+        visualTone: genrePreset.visualTone,
+        // 若 LLM 在基线上补充了额外内容，使用 LLM 版本；否则用预置基线
+        adaptationNotes: llmNotes.length > presetNotes.length ? llmNotes : presetNotes,
+      };
     }
 
-    // 将题材模板的固定字段深度合并到 LLM 输出上（模板字段优先级更高）
-    const tpl = templateProfile as TemplateProfileOverride;
-    return {
-      ...llmResult,
-      ...(tpl.genreArchetype ? { genreArchetype: tpl.genreArchetype } : {}),
-      cameraStyleGuide: {
-        ...llmResult.cameraStyleGuide,
-        ...(tpl.cameraStyleGuide ?? {}),
-      },
-      audioStyleGuide: {
-        ...llmResult.audioStyleGuide,
-        ...(tpl.audioStyleGuide ?? {}),
-      },
-      reviewerCalibration: {
-        ...llmResult.reviewerCalibration,
-        dimensionWeights: tpl.reviewerCalibration?.dimensionWeights
-          ?? llmResult.reviewerCalibration.dimensionWeights,
-        genreSpecificChecks: tpl.reviewerCalibration?.genreSpecificChecks?.length
-          ? tpl.reviewerCalibration.genreSpecificChecks
-          : llmResult.reviewerCalibration.genreSpecificChecks,
-      },
-    };
+    const resolvedCamera = tpl.cameraStyleGuide ?? (genre?.cameraStyleGuide as Record<string, unknown> | undefined);
+    const resolvedAudio = tpl.audioStyleGuide ?? (genre?.audioStyleGuide as Record<string, unknown> | undefined);
+    const resolvedReviewer = tpl.reviewerCalibration ?? (genre?.reviewerCalibration as TemplateProfileOverride['reviewerCalibration'] | undefined);
+    const resolvedArc = tpl.arcDirectorGuide ?? (genre?.arcDirectorGuide as TemplateProfileOverride['arcDirectorGuide'] | undefined);
+    const resolvedEpisode = tpl.episodeDirectorGuide ?? (genre?.episodeDirectorGuide as TemplateProfileOverride['episodeDirectorGuide'] | undefined);
+    const resolvedPacing = tpl.pacingAnalyzerGuide ?? (genre?.pacingAnalyzerGuide as TemplateProfileOverride['pacingAnalyzerGuide'] | undefined);
+
+    let merged: DramaPromptProfile;
+
+    if (!resolvedArchetype && !resolvedCamera && !resolvedAudio && !resolvedReviewer && !resolvedArc && !resolvedEpisode && !resolvedPacing) {
+      merged = llmResult;
+    } else {
+      merged = {
+        ...llmResult,
+        ...(resolvedArchetype ? { genreArchetype: resolvedArchetype } : {}),
+        cameraStyleGuide: {
+          ...llmResult.cameraStyleGuide,
+          ...(resolvedCamera ?? {}),
+        },
+        audioStyleGuide: {
+          ...llmResult.audioStyleGuide,
+          ...(resolvedAudio ?? {}),
+        },
+        reviewerCalibration: {
+          ...llmResult.reviewerCalibration,
+          dimensionWeights: resolvedReviewer?.dimensionWeights
+            ?? llmResult.reviewerCalibration.dimensionWeights,
+          genreSpecificChecks: resolvedReviewer?.genreSpecificChecks?.length
+            ? resolvedReviewer.genreSpecificChecks
+            : llmResult.reviewerCalibration.genreSpecificChecks,
+        },
+        ...(resolvedArc ? { arcDirectorGuide: { ...llmResult.arcDirectorGuide, ...resolvedArc } } : {}),
+        ...(resolvedEpisode ? { episodeDirectorGuide: { ...llmResult.episodeDirectorGuide, ...resolvedEpisode } } : {}),
+        ...(resolvedPacing ? { pacingAnalyzerGuide: { ...llmResult.pacingAnalyzerGuide, ...resolvedPacing } } : {}),
+      };
+    }
+
+    // 派生 soulViews：从已合并的 profile 中提取各 Agent 的本剧专属灵魂视图。
+    // 供 DramaPromptBakerService 在创建完成时烘焙 basePromptSnapshot。
+    return { ...merged, soulViews: deriveSoulViews(merged) };
   }
 }

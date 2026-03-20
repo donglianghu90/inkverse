@@ -6,7 +6,7 @@ import {
   shotSchema, episodeStoryboardSchema, EpisodeStoryboard, EpisodeScript, EpisodeIntent,
   DramaState, ScriptScene, CharacterIdentity,
 } from '../../schemas/drama-state.schemas';
-import { buildStoryboardDirectorSystemPrompt } from '../../prompting/drama-playbook';
+import { buildStoryboardDirectorStaticPrompt, buildStoryboardSceneContext } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 
 const sceneShotsOutputSchema = z.object({ shots: z.array(shotSchema) });
@@ -65,7 +65,7 @@ export class StoryboardDirectorAgent {
       const costume = c.defaultCostumePrompt || c.defaultCostume || '';
       const parts = [`face="${face}"`, body && `body="${body}"`, hair && `hair="${hair}"`, costume && `costume="${costume}"`].filter(Boolean);
       return `${c.characterId}(${c.name}): ${parts.join(' ')}` +
-        (c.variations?.length ? ` variations=[${c.variations.map(v => `${v.variationId}:${v.name}`).join(',')}]` : '');
+        (c.variations?.length ? ` variations=[${c.variations.map(v => `${v.variationId}:${v.name}(${v.costume})`).join(',')}]` : '');
     }).join('\n');
 
     // 闪回候选：提供给分镜导演，支持标记 isFlashback + flashbackSourceShotId
@@ -92,16 +92,20 @@ export class StoryboardDirectorAgent {
       taskName: 'drama-storyboard-director',
       schema: sceneShotsOutputSchema,
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: epNum },
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'storyboard-director', buildStoryboardDirectorSystemPrompt({
-        camGuide,
-        visualStyle: state.visualStyle,
-        maxShots, targetDur,
-        scenePurpose,
-        isLastScene,
-        intentEmotionDirection: intent?.emotionDirection,
-        hookDirection: isLastScene ? intent?.hookDirection : undefined,
-        emotionBeats: intent?.emotionBeats,
-      })),
+      systemPrompt: await this.promptService.buildPrompt(
+        state.dramaId,
+        'storyboard-director',
+        buildStoryboardDirectorStaticPrompt({ camGuide, visualStyle: state.visualStyle }),
+        buildStoryboardSceneContext({
+          camGuide,
+          maxShots, targetDur,
+          scenePurpose,
+          isLastScene,
+          intentEmotionDirection: intent?.emotionDirection,
+          hookDirection: isLastScene ? intent?.hookDirection : undefined,
+          emotionBeats: intent?.emotionBeats,
+        }),
+      ),
       userPrompt: `场景 ${scene.sceneIndex + 1}【${scenePurpose}${isGolden ? ' ⭐黄金场景' : ''}${isLastScene ? ' 🎬全集结尾' : ''}】:
 ${JSON.stringify(scene, null, 0)}
 ${epNum === 1 && scene.sceneIndex === 0 ? `

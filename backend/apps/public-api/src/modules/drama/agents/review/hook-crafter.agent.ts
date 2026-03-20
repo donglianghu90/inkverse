@@ -6,7 +6,7 @@ import { Injectable } from '@nestjs/common';
 import { LlmService } from '../../../llm/llm.service';
 import { z } from 'zod';
 import { shotSchema, Shot, DramaState, EpisodeStoryboard } from '../../schemas/drama-state.schemas';
-import { buildHookCrafterSystemPrompt } from '../../prompting/drama-playbook';
+import { buildHookCrafterStaticPrompt, buildHookCharacterConstraint } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 
 const hookOutputSchema = z.object({
@@ -54,12 +54,16 @@ export class HookCrafterAgent {
     const raw = await this.llm.generateStructured({
       taskName: 'drama-hook-crafter',
       schema: hookOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'hook-crafter', buildHookCrafterSystemPrompt({
-        strategy,
-        genreRules: state.promptProfile?.scriptwriterGuide?.genreRules,
-        genreArchetype: state.promptProfile?.genreArchetype,
-        validCharacterIds: validCharacterIds.length ? validCharacterIds : undefined,
-      })),
+      systemPrompt: await this.promptService.buildPrompt(
+        state.dramaId,
+        'hook-crafter',
+        buildHookCrafterStaticPrompt({
+          strategy,
+          genreRules: state.promptProfile?.scriptwriterGuide?.genreRules,
+          genreArchetype: state.promptProfile?.genreArchetype,
+        }),
+        buildHookCharacterConstraint({ validCharacterIds: validCharacterIds.length ? validCharacterIds : undefined }),
+      ),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: epNum },
       userPrompt: `为第 ${epNum} 集设计悬念钩子：
 

@@ -34,6 +34,8 @@ export class MediaOrchestratorService implements OnModuleInit {
   private t2iMaxConcurrency = 3;
   private t2iNextSlotAt = 0; // 令牌槽：下一次允许提交的时间戳(ms)
   private acquireT2iSlot: () => Promise<void> = () => Promise.resolve();
+  /** 跨集并发防护：记录正在生成中的 variation（key = dramaId_charId_varId） */
+  private readonly pendingVariations = new Map<string, Promise<void>>();
   private static readonly LIVE_ACTION_NEGATIVE_EXTRA = [
     'painting', 'illustration', 'watercolor painting', 'ink painting',
     'comic panel', 'storyboard panel', 'split screen', 'grid layout',
@@ -163,6 +165,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
     const characterAnchorMap = this.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
+    await this.ensureVariationImages(dramaId, state, shots, charImageMap, variationImageMap, userId);
     const locationImageMap = await this.buildLocationImageMap(dramaId); // B1: 跨集常驻场景参考图
     const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
@@ -670,6 +673,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
     const characterAnchorMap = this.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
+    await this.ensureVariationImages(dramaId, state, [shot], charImageMap, variationImageMap, userId);
     const locationImageMap = await this.buildLocationImageMap(dramaId); // B1
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
 
@@ -817,6 +821,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
     const characterAnchorMap = this.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
+    await this.ensureVariationImages(dramaId, state, shots, charImageMap, variationImageMap, userId);
     const locationImageMap = await this.buildLocationImageMap(dramaId); // B1
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
@@ -1465,12 +1470,25 @@ export class MediaOrchestratorService implements OnModuleInit {
     return map;
   }
 
-  /** 构建角色变体图映射 characterId_variationId → imageUrl */
+  /** 构建角色变体图映射 characterId_variationId → imageUrl
+   *  双源合并：state.characters（内存最新）+ asset.data.variations（持久化兜底，处理 regenerateVariationImage 写入路径）。
+   *  state 优先，asset.data 仅补充 state 中没有的条目。
+   */
   private async buildVariationImageMap(dramaId: string, state: DramaState): Promise<Map<string, string>> {
     const map = new Map<string, string>();
     for (const ch of state.characters ?? []) {
       for (const v of ch.variations ?? []) {
         if (v.referenceImageUrl) map.set(`${ch.characterId}_${v.variationId}`, v.referenceImageUrl);
+      }
+    }
+    // 兜底：从 VisualAssetEntity.data.variations 补充（覆盖 regenerateVariationImage 只写 asset 未同步 state 的情况）
+    const charAssets = await this.assetRepo.find({ where: { dramaId, assetType: 'character' as any } });
+    for (const asset of charAssets) {
+      const assetVariations = ((asset.data as any)?.variations ?? []) as Array<{ variationId?: string; referenceImageUrl?: string }>;
+      for (const av of assetVariations) {
+        if (!av.variationId || !av.referenceImageUrl) continue;
+        const key = `${asset.refId}_${av.variationId}`;
+        if (!map.has(key)) map.set(key, av.referenceImageUrl); // state 优先，asset 仅补充缺失项
       }
     }
     return map;
@@ -1492,6 +1510,150 @@ export class MediaOrchestratorService implements OnModuleInit {
     if (fromAsset.length) return [...new Set(fromAsset)].slice(0, 2);
     const fromBible = state.visualBible?.stylePack?.styleRefImages ?? [];
     return [...new Set(fromBible.filter(Boolean))].slice(0, 2);
+  }
+
+  /**
+   * 懒加载角色变体参考图：在媒体生成前，根据 shots 中实际用到的 characterVariationIds 按需生成。
+   * 生成成功后写回 variationImageMap（供本次媒体生成使用）并持久化到 VisualAssetEntity + DramaState。
+   *
+   * 安全保证：
+   * - 并发防护：通过 pendingVariations 跨集去重，同一 key 同时只生成一次
+   * - 原子写入：持久化前重读 asset.data，避免并发覆盖丢失其他变体的 URL
+   * - 无 face 时跳过：新集角色没有 face_front 基础图时不生成变体（缺乏身份锚点）
+   * - 静默跳过改 warn：variationId 在角色档案中不存在时明确记录日志
+   */
+  private async ensureVariationImages(
+    dramaId: string,
+    state: DramaState,
+    shots: Shot[],
+    charImageMap: Map<string, CharacterImageSet>,
+    variationImageMap: Map<string, string>,
+    userId?: string,
+  ): Promise<void> {
+    // 收集所有 shots 需要但尚未生成的 variation
+    const needed = new Map<string, Set<string>>(); // characterId → Set<variationId>
+    for (const shot of shots) {
+      for (const [charId, varId] of Object.entries(shot.characterVariationIds ?? {})) {
+        if (!varId) continue;
+        if (variationImageMap.has(`${charId}_${varId}`)) continue;
+        if (!needed.has(charId)) needed.set(charId, new Set());
+        needed.get(charId)!.add(varId);
+      }
+    }
+    if (!needed.size) return;
+
+    this.logger.log(`[VariationLazy] 需懒加载变体图: ${[...needed.entries()].map(([c, vs]) => `${c}(${[...vs].join(',')})`).join(', ')}`);
+
+    const vs = state.visualStyle;
+    const charStylePrefix = vs ? ((vs.characterStylePrompt ?? '').trim() || undefined) : undefined;
+    const stylePrefix = charStylePrefix ? charStylePrefix + ', ' : undefined;
+    const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
+
+    const charAssets = await this.assetRepo.find({ where: { dramaId, assetType: 'character' as any } });
+    const assetByCharId = new Map(charAssets.map(a => [a.refId, a]));
+
+    let anyStateUpdated = false;
+    for (const [charId, varIds] of needed) {
+      const ch = state.characters?.find(c => c.characterId === charId);
+      if (!ch) continue;
+
+      const baseImg = charImageMap.get(charId)?.views?.face_front || charImageMap.get(charId)?.primary;
+      // 无 face 基础图（新集临时角色）→ 跳过变体生成，缺乏身份锚点会导致面部漂移
+      if (!baseImg) {
+        this.logger.warn(`[VariationLazy] 跳过 ${charId}：无 face_front 基础图，无法保证变体身份一致性`);
+        continue;
+      }
+
+      const asset = assetByCharId.get(charId);
+
+      for (const varId of varIds) {
+        const key = `${dramaId}_${charId}_${varId}`;
+
+        // 并发防护：若同一 key 已在生成中，等待其完成后读取结果
+        const pending = this.pendingVariations.get(key);
+        if (pending) {
+          this.logger.log(`[VariationLazy] 等待并发生成完成: ${charId}/${varId}`);
+          await pending;
+          const url = variationImageMap.get(`${charId}_${varId}`);
+          if (url) continue; // 已被并发任务填充
+        }
+
+        const v = ch.variations?.find(vv => vv.variationId === varId);
+        if (!v) {
+          // 分镜引用了角色档案中未定义的 variationId，应由 DeterministicChecker 捕获
+          this.logger.warn(`[VariationLazy] 跳过 ${charId}/${varId}：角色档案中无此 variationId（分镜可能使用了错误的变体ID）`);
+          continue;
+        }
+
+        let resolveGen!: () => void;
+        const genPromise = new Promise<void>(r => { resolveGen = r; });
+        this.pendingVariations.set(key, genPromise);
+
+        try {
+          const refImages = [{ url: baseImg, weight: 0.6 }];
+          const rawPrompt = [
+            (ch as any).faceReferencePrompt,
+            (ch as any).hairStylePrompt || (ch as any).hairStyle,
+            (ch as any).bodyTypePrompt || (ch as any).bodyType,
+            v.visualPromptOverride,
+            'same person as reference',
+          ].filter(Boolean).join(', ');
+
+          const varRoute = this.imageRouter.routeCharacterVariation('2:3');
+          const assembled = assembleT2iPrompt(rawPrompt, this.profile, { stylePrefix });
+          const optimized = this.promptOptimizer.optimizeForT2I(assembled, this.negPrompt ?? '', {
+            shotType: 'character',
+            qualityTier: 'golden',
+            provider: varRoute.provider,
+            styleBucket: mediaPolicy.styleBucket,
+          });
+
+          this.logger.log(`[VariationLazy] 生成 ${charId}/${varId} provider=${varRoute.provider ?? 'default'}`);
+          const result = await this.mediaService.generateImage({
+            prompt: optimized.prompt,
+            negativePrompt: optimized.negativePrompt || undefined,
+            size: '2:3',
+            count: 1,
+            referenceImages: refImages,
+            dramaId,
+            assetType: 'character_variation',
+            refId: `${charId}_${varId}`,
+            userId,
+          });
+
+          const imageUrl = result.images?.[0]?.url ?? '';
+          if (imageUrl) {
+            variationImageMap.set(`${charId}_${varId}`, imageUrl);
+            v.referenceImageUrl = imageUrl;
+            anyStateUpdated = true;
+
+            // 原子写入：重读 asset.data 后定点更新，避免并发覆盖其他变体的 URL
+            if (asset) {
+              const fresh = await this.assetRepo.findOne({ where: { id: asset.id } });
+              if (fresh) {
+                const freshData = (fresh.data ?? {}) as Record<string, unknown>;
+                const freshVars = (freshData.variations ?? []) as Array<Record<string, unknown>>;
+                const idx = freshVars.findIndex((fv: any) => fv.variationId === varId);
+                if (idx >= 0) freshVars[idx] = { ...freshVars[idx], referenceImageUrl: imageUrl };
+                else freshVars.push({ variationId: varId, referenceImageUrl: imageUrl });
+                await this.assetRepo.update(asset.id, { data: { ...freshData, variations: freshVars } });
+              }
+            }
+            this.logger.log(`[VariationLazy] 完成 ${charId}/${varId} → ${imageUrl.slice(-40)}`);
+          }
+        } catch (err) {
+          this.logger.warn(`[VariationLazy] 失败 ${charId}/${varId}: ${(err as Error).message}`);
+        } finally {
+          resolveGen();
+          this.pendingVariations.delete(key);
+        }
+      }
+    }
+
+    // 将更新后的 state.characters（含 variation referenceImageUrl）持久化到 drama 状态
+    if (anyStateUpdated) {
+      await this.dramaRepo.update({ id: dramaId }, { state: state as any });
+    }
   }
 
   private async buildFlashbackVideoMap(dramaId: string, shots: Shot[]): Promise<Record<string, string>> {
