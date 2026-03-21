@@ -281,7 +281,9 @@ ${flashbackCtx}`,
   /** 后处理：确保首尾帧T2I prompt包含角色face描述（visualPrompt用于T2V，不注入face以节省token） */
   private enforceFaceLock(shots: z.infer<typeof shotSchema>[], state: DramaState): void {
     const charMap = new Map(state.characters.map(c => [c.characterId, c]));
-    // 从视觉风格中提取风格前缀，注入首尾帧保证 T2I 风格一致性
+    // 仅截取 styleReferencePrompt 首段（逗号前）作为轻量风格锚定前缀。
+    // 完整 styleReferencePrompt 由 MediaOrchestrator 在 T2I 组装阶段全量注入，
+    // 此处只需一个简短关键词（如 "cinematic live action"）防止 LLM 生成的首尾帧偏离风格基调。
     const styleRef = state.visualStyle?.styleReferencePrompt ?? '';
     const stylePrefix = styleRef.split(',')[0]?.trim() ?? '';
     shots.forEach(shot => {

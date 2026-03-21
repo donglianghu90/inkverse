@@ -54,7 +54,7 @@ export const dramaSeedSchema = z.object({
     name: z.string(),
     motivation: z.string(),
     relationship: z.string(), // 与主角的关系
-  }).optional(),
+  }).optional().nullable(),
   tone: z.string(), // 风格调性
   coreConflict: z.string(), // 核心矛盾
   catharsisType: z.string(), // 核心体验类型：打脸逆袭/真相揭露/身份反转/命运震撼/认知颠覆 等
@@ -84,13 +84,13 @@ export const genreArchetypeSchema = z.object({
    * 替代原 genreAdaptiveBlock() 的 if-else 硬编码查找表。
    * 涵盖：旁白比例规则、史实约束、叙事弧线特殊要求、集末钩子风格、角色视觉演变、台词风格示例等。
    */
-  adaptationNotes: z.string().optional(),
+  adaptationNotes: z.string().optional().nullable(),
 });
 
 export const dramaPromptProfileSchema = z.object({
   generatedForGenre: z.string(),
   generatedForAudience: z.string(),
-  genreArchetype: genreArchetypeSchema.optional(),
+  genreArchetype: genreArchetypeSchema.optional().nullable(),
   scriptwriterGuide: z.object({
     coreIdentity: z.string(),
     genreRules: na(z.string()),
@@ -195,7 +195,7 @@ export const dramaPromptProfileSchema = z.object({
     characterArcPrinciples: ns(),
     /** 题材专属冲突密度节奏（传记剧与爽剧与悬疑剧各不同），描述本题材前/中/后段的节奏比例与卡点位置 */
     conflictRhythm: ns(),
-  }).optional(),
+  }).optional().nullable(),
 
   /**
    * 集导演题材手册。
@@ -209,7 +209,7 @@ export const dramaPromptProfileSchema = z.object({
     tensionCurveNotes: ns(),
     /** 题材专属集末钩子设计模式（如宫斗偏"身份揭穿"、仙侠偏"强者降临"、悬疑偏"证据碎片化"） */
     hookPatterns: ns(),
-  }).optional(),
+  }).optional().nullable(),
 
   /**
    * 节奏分析师题材手册。
@@ -221,7 +221,7 @@ export const dramaPromptProfileSchema = z.object({
     genreRhythmTemplate: ns(),
     /** 题材专属节奏快/慢的视觉指标（现代都市=台词密度，仙侠=法术描述密度，传记=叙事跨度） */
     paceIndicators: ns(),
-  }).optional(),
+  }).optional().nullable(),
 
   /**
    * 各 Agent 的「本剧专属灵魂视图」——Profiler 针对每个 Agent 生成精准的本剧适配内容。
@@ -252,18 +252,18 @@ export const dramaPromptProfileSchema = z.object({
      * 节奏分析师：本剧专属节奏模式说明（基于题材基线+本剧 seed 生成）。
      * 注入 pacing-analyzer 的 system prompt。
      */
-    pacingAnalyzer: z.string().optional(),
+    pacingAnalyzer: z.string().optional().nullable(),
     /**
      * 悬念工匠：本剧专属悬念风格扩展（本剧 catharsisType 决定哪类钩子最强）。
      * 注入 hook-crafter 的 system prompt，补充题材通用悬念库之上的本剧特色类型。
      */
-    hookCrafter: z.string().optional(),
+    hookCrafter: z.string().optional().nullable(),
     /**
      * 连续性守卫：本剧世界观专项检查条目（超出通用12项的本剧特有约束）。
      * 注入 continuity-guard 的 system prompt。
      */
     continuityGuardChecks: na(z.string()),
-  }).optional(),
+  }).optional().nullable(),
 });
 
 // ---------------------------------------------------------------------------
@@ -289,10 +289,10 @@ export const characterIdentitySchema = z.object({
   skinTone: z.string(),
   distinguishingFeatures: z.string(),
   age: z.string(),
-  agePrompt: z.string().optional().default(''),
+  agePrompt: z.string().default(''),
   faceReferencePrompt: z.string(),
-  bodyTypePrompt: z.string().optional().default(''),
-  hairStylePrompt: z.string().optional().default(''),
+  bodyTypePrompt: z.string().default(''),
+  hairStylePrompt: z.string().default(''),
 
   // ─── 灵魂层：行为/心理人设 ───
   soulProfile: z.object({
@@ -304,7 +304,7 @@ export const characterIdentitySchema = z.object({
     emotionalTriggers: na(z.string()),
     behavioralHabits: na(z.string()),
     internalContradiction: ns(),
-  }).optional(),
+  }).optional().nullable(),
 
   voiceProfile: z.object({
     ttsVoiceId: ns(),
@@ -315,7 +315,7 @@ export const characterIdentitySchema = z.object({
     catchphrase: ns(),
   }),
   defaultCostume: z.string(),
-  defaultCostumePrompt: z.string().optional().default(''),
+  defaultCostumePrompt: z.string().default(''),
   variations: na(characterVariationSchema),
 });
 
@@ -510,7 +510,7 @@ export const episodeIntentSchema = z.object({
     characterId: z.string(),
     costumeOverride: z.string().nullish().transform(v => v ?? ''), // AI 可能输出 null
     emotionalState: z.string(), // 本集情绪基调（静态快照，用于兼容）
-    emotionalJourney: z.string().optional(), // 本集情绪旅程（三段式，如"从假装平静→内心崩溃→决定反击"）
+    emotionalJourney: z.string().optional().nullable(), // 本集情绪旅程（三段式，如"从假装平静→内心崩溃→决定反击"）
     role: z.string(), // 本集角色定位（如"被揭穿者""复仇者""旁观者"）
   })),
   proposedNewCharacters: na(z.object({

@@ -37,7 +37,8 @@ import { DramaTaskService } from './task/task.service';
 import { DramaRunService } from './run/run.service';
 import { DramaAgentPipelineService } from './workflow/drama-agent-pipeline.service';
 import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.service';
-import { DramaPromptBakerService } from './prompting/drama-prompt-baker.service';
+import { DramaPromptBakerService, BakeContext } from './prompting/drama-prompt-baker.service';
+import { resolveGenreKey } from './prompting/drama-genre-data';
 import {
   buildArcDirectorSystemPrompt, buildEpisodeDirectorSystemPrompt,
   buildContinuityGuardSystemPrompt, buildScriptwriterSystemPrompt,
@@ -218,6 +219,8 @@ export class DramaService implements OnModuleInit {
       const genreTemplate = dto.genreTemplateId
         ? await this.genreTemplateService.getById(dto.genreTemplateId).catch(() => null)
         : null;
+      // 优先使用模板自带的 genreKey，否则从中文题材名推断（如 '霸总' → 'boss'）
+      const effectiveGenreKey = genreTemplate?.genreKey ?? resolveGenreKey(dto.genre);
       const productionGuidance = (genreTemplate?.profileJson as any)?.productionGuidance ?? undefined;
 
       // 加载用户的全局 AI 补充指令（仅创建阶段 5 个准备 Agent 使用）
@@ -322,7 +325,7 @@ export class DramaService implements OnModuleInit {
             out.seed, out.visualStyle, out.outline, dramaId, opts.userId,
             genreTemplate?.profileJson ?? undefined,
             getGlobalPrompt('drama-profiler') || undefined,
-            genreTemplate?.genreKey,
+            effectiveGenreKey,
           ),
           this.strategist.generate(out.seed, out.outline, dramaId, opts.userId, productionGuidance, getGlobalPrompt('drama-strategy') || undefined),
         ]);
@@ -336,12 +339,27 @@ export class DramaService implements OnModuleInit {
         // 运行时 Agent 直接读取 basePromptSnapshot，不再重复组装。
         logDrama('base_prompt_bake_start', 'ok', '烘焙 Agent 提示词快照');
         try {
+          // 加载视觉风格模板的扩展字段（shotStyleGuide / scriptDialogueGuide 等），
+          // 确保视觉风格驱动的台词提示和镜头指导正确烘焙到 scriptwriter / episode-director 快照中。
+          let bakeVisualStyleExtras: BakeContext['visualStyleExtras'];
+          if (dto.visualStyleTemplateId) {
+            const vsTpl = await this.visualStyleTemplateService.getById(dto.visualStyleTemplateId).catch(() => null);
+            if (vsTpl?.visualGuide) {
+              bakeVisualStyleExtras = {
+                shotStyleGuide: vsTpl.visualGuide.shotStyleGuide as string | undefined,
+                scriptDialogueGuide: vsTpl.visualGuide.scriptDialogueGuide as string | undefined,
+                facePromptRule: vsTpl.visualGuide.facePromptRule as string | undefined,
+                scenePromptGuidance: vsTpl.visualGuide.scenePromptGuidance as string | undefined,
+              };
+            }
+          }
           await this.promptBaker.bakeAndPublish({
             dramaId,
             profile: promptProfile,
             strategy: out.strategy,
             visualStyle: out.visualStyle,
-            genreKey: genreTemplate?.genreKey,
+            genreKey: effectiveGenreKey,
+            visualStyleExtras: bakeVisualStyleExtras,
           });
           logDrama('base_prompt_bake_done', 'ok', '所有 Agent 提示词快照烘焙完成');
         } catch (bakeErr: any) {
@@ -2035,7 +2053,7 @@ export class DramaService implements OnModuleInit {
         aspectRatio: z.enum(ASPECT_RATIO_OPTS),
         targetEpisodeDurationSec: z.number().int(),
         plannedEpisodes: z.object({ min: z.number().int(), max: z.number().int() }),
-        reason: z.string().optional(),
+        reason: z.string().optional().nullable(),
       }),
       tags: ['setup', 'drama-recommend'],
       systemPrompt: `你是一位资深短剧策划，根据用户的核心创意推荐最匹配的题材、平台、受众、叙事聚焦、视觉风格和规模配置。

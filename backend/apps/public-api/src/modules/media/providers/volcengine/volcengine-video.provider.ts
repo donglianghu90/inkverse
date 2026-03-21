@@ -113,8 +113,8 @@ export class VolcengineVideoProvider implements VideoProvider {
     let coverUrl: string | undefined;
     let durationSeconds: number | undefined;
 
-    // 新版 API：从 content 数组中解析视频
-    if (res.content?.length) {
+    // 新版 API：content 多为数组；部分模型返回单对象 { video_url }
+    if (Array.isArray(res.content) && res.content.length) {
       const item = res.content.find(c => c.type === 'video' || c.type === 'video_url');
       if (item?.video_url) {
         if (typeof item.video_url === 'string') {
@@ -124,6 +124,16 @@ export class VolcengineVideoProvider implements VideoProvider {
           coverUrl = item.video_url.cover_image_url;
           durationSeconds = item.video_url.duration;
         }
+      }
+    } else if (res.content && typeof res.content === 'object') {
+      const c = res.content as { video_url?: string | { url?: string; cover_image_url?: string; duration?: number } };
+      const vu = c.video_url;
+      if (typeof vu === 'string') {
+        videoUrl = vu;
+      } else if (vu && typeof vu === 'object') {
+        videoUrl = vu.url;
+        coverUrl = vu.cover_image_url;
+        durationSeconds = vu.duration;
       }
     } else if (res.output) {
       // 兼容旧版 API 响应

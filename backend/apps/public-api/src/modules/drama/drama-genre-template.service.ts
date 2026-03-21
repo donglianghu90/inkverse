@@ -210,10 +210,10 @@ ${dto.platformTarget ? `目标平台：${dto.platformTarget}` : ''}
       visualStyleHints: z.string(),
       dialogueStyleHints: z.string(),
       platformDefaults: z.object({
-        platformTarget: z.string().optional(),
-        aspectRatio: z.string().optional(),
-        durationSec: z.number().optional(),
-      }).optional(),
+        platformTarget: z.string().optional().nullable(),
+        aspectRatio: z.string().optional().nullable(),
+        durationSec: z.number().optional().nullable(),
+      }).optional().nullable(),
     });
     const seedHintsRaw = await this.llm.generateStructured({
       taskName: 'drama-genre-seed-hints',

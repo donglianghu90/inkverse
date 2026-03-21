@@ -1,15 +1,14 @@
 /**
- * Drama Agent System Prompts — 所有 pipeline agent 的完整 system prompt 模板集中管理。
+ * Drama Agent System Prompts — BASE 模板集（仅供 _custom 题材使用）+ 共享常量。
  *
  * 设计原则：
- *   - BASE 模板字符串是提示词内容的唯一来源，drama-playbook.ts 不再包含任何提示词文本。
- *   - 变量分两层：
- *     ① 题材数据变量（per-genre）：arcPrinciples / emotionBeatSection / genreIdentity 等——
- *       值来自 drama-genre-data.ts 的 profile 字段（如 arcDirectorGuide.genreSegmentPrinciples），
- *       在模块初始化时由 buildGenreAgentPrompts() 预烘入，生成每个题材独立的模板。
- *     ② 运行时变量（per-drama）：genreRules / coreIdentity / maxChars / visualStyleSection 等——
- *       值由 Profiler / Strategy / VisualAssetDesigner 在建剧流程中生成，
- *       由 DramaPromptBakerService 调用 resolveTemplate 完成替换，写入 basePromptSnapshot。
+ *   - 14 个预配置题材的全部 8 个 pipeline agent 提示词已迁移至 genres/*.prompts.ts（WYSIWYG 文件）。
+ *     每个题材文件包含完整的、独立的提示词，题材专属内容直接内联——不依赖任何 BASE 模板。
+ *   - 本文件的 BASE 模板（ARC_DIRECTOR_TEMPLATE 等）仅用于 _custom 题材回退，
+ *     _custom 的提示词由 Profiler 运行时填充所有 {{}} 变量。
+ *   - 共享语言规则常量（DRAMA_LANG_RULE / DRAMA_T2I_LANG_RULE）由 genres/*.prompts.ts 通过
+ *     ${DRAMA_LANG_RULE} 在模块加载时注入（import-time），不是运行时替换。
+ *   - resolveTemplate 用于 drama-playbook.ts 中对各 build* 函数的运行时变量填充。
  *   - 用户在「创作工坊」看到并编辑的是已解析的 basePromptSnapshot（完整 prompt），不再是碎片。
  *
  * 运行时变量命名（Baker 负责构建 key → value 映射）：
@@ -29,8 +28,6 @@
  *   {{preferredTypes}}         悬念偏好类型（Strategy）
  *   {{urgencyBias}}            紧迫感倾向（Strategy）
  */
-
-import type { GenreFullProfile } from '../entities/drama-genre-template.entity';
 
 // ─── 共享语言规则常量（原位于 drama-playbook.ts）───────────────────────────────
 
@@ -325,6 +322,7 @@ camera 字段包含三个正交维度，必须分别填写：
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 
 {{genreNarrativePrinciplesSection}}
+{{colorPaletteSection}}
 === visualPrompt 规则（用于 I2V 视频生成，描述运动过程）===
 - 英文，30-60 words，描述"画面中发生了什么动作/运动"
 - 格式："{镜头运动描述}, {主体动作}, {速度/节奏}, {环境变化}, {情绪氛围}"
@@ -653,7 +651,7 @@ export const HOOK_CRAFTER_TEMPLATE = `你是短剧悬念工匠。你的任务是
 2. 付费卡点集的悬念必须是 hookStrengthSelfScore ≥ 8
 3. 悬念要用画面传递，不要用旁白解释
 4. 下集预告Shot：最多3个，快剪风格（每个1-2秒），isPreview=true
-
+{{genreHookGuidance}}
 === 偏好类型 ===
 {{preferredTypes}}
 紧迫感倾向：{{urgencyBias}}
@@ -680,10 +678,10 @@ export const EPISODE_RECORDER_TEMPLATE = `你是短剧知识记录员。你的�
 
 // ─── 所有 pipeline agent 的基础模板集合 ───────────────────────────────────────
 
-/** 所有 pipeline agent 的完整 system prompt 模板。
- *  key = pipeline nodeId（对应 DramaAgentNodeConfig.id）。
- *  在 drama-genre-data.ts 中，每个题材的 profile.agentSystemPrompts 引用此对象。
- *  题材可以用 { ...BASE_AGENT_SYSTEM_PROMPTS, 'arc-director': '...自定义...' } 覆盖特定 agent。
+/**
+ * _custom 题材使用的 BASE 模板集（14 个预配置题材通过 genres/*.prompts.ts 覆盖）。
+ * key = pipeline nodeId（对应 DramaAgentNodeConfig.id）。
+ * 预配置题材：`{ ...BASE_AGENT_SYSTEM_PROMPTS, 'arc-director': GENRE_ARC_DIRECTOR_PROMPT, ... }`
  */
 export const BASE_AGENT_SYSTEM_PROMPTS: Record<string, string> = {
   'arc-director': ARC_DIRECTOR_TEMPLATE,
@@ -701,156 +699,30 @@ export const BASE_AGENT_SYSTEM_PROMPTS: Record<string, string> = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 题材模板预烘焙：将 profile 中的 per-genre 数据解析进 BASE 模板
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * 将题材 profile 的预配置数据（arcDirectorGuide / cameraStyleGuide / audioStyleGuide 等）
- * 解析进 BASE 模板，生成只剩 per-drama {{variable}} 的模板集合。
- *
- * 预配置题材（boss / sweet / ...）：所有 per-genre 变量被实际内容替换。
- * _custom 题材：profile 字段为空，使用 DEFAULT_* 值填充。
- *
- * 返回的模板中保留的 {{variable}} 均为 per-drama 运行时变量，
- * 由 Baker 在 Profiler/Strategy 完成后解析。
- */
-export function buildGenreAgentPrompts(
-  profile: Omit<GenreFullProfile, 'agentSystemPrompts'>,
-): Record<string, string> {
-  const arc = profile.arcDirectorGuide;
-  const ep = profile.episodeDirectorGuide;
-  const pacing = profile.pacingAnalyzerGuide;
-  const archetype = profile.genreArchetypePreset;
-
-  const cam = profile.cameraStyleGuide as {
-    preferredAngles?: string[]; signatureTechniques?: string[];
-    transitionStyle?: string; cinematographyDirective?: string;
-    genreEmotionNotes?: string; genreIdentity?: string;
-    genreCoreRules?: string; genreNarrativePrinciples?: string;
-  } | undefined;
-
-  const audio = profile.audioStyleGuide as {
-    bgmMoodPreferences?: string[]; sfxDensity?: string;
-    silenceUsage?: string; voiceActingStyle?: string;
-    genreBrandingDirective?: string;
-  } | undefined;
-
-  const reviewer = profile.reviewerCalibration as {
-    dimensionWeights?: Record<string, number>;
-    genreSpecificChecks?: string[];
-  } | undefined;
-
-  const adaptationBlock = archetype?.adaptationNotes
-    ? `\n=== 题材适配规则 ===\n${archetype.adaptationNotes}\n`
-    : '';
-
-  const adaptationSection = archetype?.adaptationNotes
-    ? `\n=== 本剧台词适配规则（题材专属，最高优先级）===\n${archetype.adaptationNotes}\n`
-    : '';
-
-  const fmtChecks = (checks: string[] | undefined, start: number) =>
-    checks?.length
-      ? `\n=== 题材专项检查 ===\n${checks.map((c, i) => `${start + i}. ${c}`).join('\n')}\n`
-      : '';
-
-  const buildCamTech = (): string => {
-    if (cam?.cinematographyDirective) {
-      let s = `=== 【题材摄影核心手册】（本导演专属，优先级最高，覆盖一切通用规则）===\n${cam.cinematographyDirective}\n`;
-      if (cam.preferredAngles?.length) s += `偏好角度：${cam.preferredAngles.join('、')}\n`;
-      if (cam.signatureTechniques?.length) s += `标志手法：${cam.signatureTechniques.join('、')}\n`;
-      if (cam.transitionStyle) s += `转场偏好：${cam.transitionStyle}\n`;
-      return s;
-    }
-    return [
-      cam?.preferredAngles?.length ? `偏好角度（cameraAngle）：${cam.preferredAngles.join('、')}` : '',
-      cam?.signatureTechniques?.length ? `标志手法：${cam.signatureTechniques.join('、')}` : '',
-      cam?.transitionStyle ? `转场偏好：${cam.transitionStyle}` : '',
-    ].filter(Boolean).join('\n');
-  };
-
-  const dw = reviewer?.dimensionWeights;
-
-  const agentVars: Record<string, Record<string, string>> = {
-    'arc-director': {
-      arcPrinciples: arc?.genreSegmentPrinciples?.trim() || '',
-      characterArcPrinciples: arc?.characterArcPrinciples?.trim() || '',
-      conflictRhythm: arc?.conflictRhythm?.trim() || '',
-      adaptationNotes: adaptationBlock,
-    },
-    'episode-director': {
-      emotionBeatSection: ep?.emotionBeatExample?.trim() || '',
-      tensionCurveSection: ep?.tensionCurveNotes?.trim()
-        ? `\n【题材专属张力曲线补充（来自编剧手册）】\n${ep.tensionCurveNotes.trim()}\n`
-        : '',
-      hookPatternsSection: ep?.hookPatterns?.trim()
-        ? `\n=== 题材专属集末钩子模式（来自编剧手册）===\n${ep.hookPatterns.trim()}\n`
-        : '',
-      adaptationNotes: adaptationBlock,
-    },
-    'continuity-guard': {
-      genreSpecificChecks: fmtChecks(reviewer?.genreSpecificChecks, 13),
-    },
-    'scriptwriter': {
-      adaptationNotes: adaptationBlock,
-    },
-    'dialogue-coach': {
-      adaptationSection,
-    },
-    'storyboard-director': {
-      genreIdentity: cam?.genreIdentity?.trim() || '',
-      camTechSection: buildCamTech(),
-      genreCoreRulesSection: cam?.genreCoreRules?.trim()
-        ? `=== 【题材分镜核心原则】===\n${cam.genreCoreRules.trim()}\n`
-        : '',
-      genreEmotionSection: cam?.genreEmotionNotes?.trim()
-        ? `【本题材专属情绪-运镜映射（优先使用）】\n${cam.genreEmotionNotes.trim()}\n\n【通用参考表】\n`
-        : '',
-      genreNarrativePrinciplesSection: cam?.genreNarrativePrinciples?.trim()
-        ? `=== 【题材叙事镜头思维】===\n${cam.genreNarrativePrinciples.trim()}\n`
-        : '',
-    },
-    'audio-director': {
-      genreBrandingSection: audio?.genreBrandingDirective
-        ? `=== 题材专属音频品牌（由编剧手册定制，优先级高于通用规则）===\n${audio.genreBrandingDirective}\n`
-        : '',
-      bgmMoodPreferences: audio?.bgmMoodPreferences?.length
-        ? `BGM偏好：${audio.bgmMoodPreferences.join('、')}\n`
-        : '',
-      sfxDensity: audio?.sfxDensity ?? DEFAULT_SFX_DENSITY,
-      silenceUsage: audio?.silenceUsage ?? DEFAULT_SILENCE_USAGE,
-      voiceActingStyle: audio?.voiceActingStyle ?? DEFAULT_VOICE_ACTING_STYLE,
-    },
-    'script-reviewer': {
-      wt_visualImpact: String(dw?.visualImpact ?? 1.2),
-      wt_dialogueNaturalness: String(dw?.dialogueNaturalness ?? 1.2),
-      wt_pacing: String(dw?.pacing ?? 1.0),
-      wt_hookStrength: String(dw?.hookStrength ?? 1.3),
-      wt_consistency: String(dw?.consistency ?? 1.0),
-      wt_emotionalImpact: String(dw?.emotionalImpact ?? 1.0),
-      genreChecksSection: fmtChecks(reviewer?.genreSpecificChecks, 1),
-    },
-    'pacing-analyzer': {
-      paceIndicatorsBlock: pacing?.paceIndicators?.trim() || '',
-      genreRhythmBlock: pacing?.genreRhythmTemplate?.trim()
-        ? `\n【题材专属理想节奏模板（来自编剧手册，评估时以此为参照而非通用模板）】\n${pacing.genreRhythmTemplate.trim()}\n`
-        : '',
-      adaptationNotes: adaptationBlock,
-    },
-    'episode-recorder': {
-      adaptationNotes: adaptationBlock,
-    },
-  };
-
-  const result: Record<string, string> = {};
-  for (const [agentId, template] of Object.entries(BASE_AGENT_SYSTEM_PROMPTS)) {
-    result[agentId] = resolveTemplate(template, agentVars[agentId] ?? {});
-  }
-  return result;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // 简单配置默认值（非提示词内容，仅为单值字段兜底）
 // ═══════════════════════════════════════════════════════════════════════════════
+
+export interface CamGuideFields {
+  preferredAngles?: string[];
+  signatureTechniques?: string[];
+  transitionStyle?: string;
+  cinematographyDirective?: string | null;
+}
+
+export function buildCamTechSection(cam: CamGuideFields | undefined): string {
+  if (cam?.cinematographyDirective) {
+    let s = `=== 【题材摄影核心手册】（本导演专属，优先级最高，覆盖一切通用规则）===\n${cam.cinematographyDirective}\n`;
+    if (cam.preferredAngles?.length) s += `偏好角度：${cam.preferredAngles.join('、')}\n`;
+    if (cam.signatureTechniques?.length) s += `标志手法：${cam.signatureTechniques.join('、')}\n`;
+    if (cam.transitionStyle) s += `转场偏好：${cam.transitionStyle}\n`;
+    return s;
+  }
+  return [
+    cam?.preferredAngles?.length ? `偏好角度（cameraAngle）：${cam.preferredAngles.join('、')}` : '',
+    cam?.signatureTechniques?.length ? `标志手法：${cam.signatureTechniques.join('、')}` : '',
+    cam?.transitionStyle ? `转场偏好：${cam.transitionStyle}` : '',
+  ].filter(Boolean).join('\n');
+}
 
 export const DEFAULT_SFX_DENSITY = 'moderate';
 export const DEFAULT_SILENCE_USAGE = '关键反转前使用短暂静默';

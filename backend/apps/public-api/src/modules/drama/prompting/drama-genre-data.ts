@@ -23,7 +23,203 @@ import type {
   GenreArchetypePreset,
   GenreFullProfile,
 } from '../entities/drama-genre-template.entity';
-import { BASE_AGENT_SYSTEM_PROMPTS, buildGenreAgentPrompts } from './drama-agent-system-prompts';
+import { BASE_AGENT_SYSTEM_PROMPTS } from './drama-agent-system-prompts';
+import {
+  BOSS_STORYBOARD_PROMPT,
+  BOSS_ARC_DIRECTOR_PROMPT,
+  BOSS_EPISODE_DIRECTOR_PROMPT,
+  BOSS_AUDIO_DIRECTOR_PROMPT,
+  BOSS_SCRIPT_REVIEWER_PROMPT,
+  BOSS_PACING_ANALYZER_PROMPT,
+  BOSS_CONTINUITY_GUARD_PROMPT,
+  BOSS_HOOK_CRAFTER_PROMPT,
+  BOSS_SCRIPTWRITER_PROMPT,
+  BOSS_DIALOGUE_COACH_PROMPT,
+  BOSS_SCRIPT_EDITOR_PROMPT,
+  BOSS_EPISODE_RECORDER_PROMPT,
+} from './genres/boss.prompts';
+import {
+  SWEET_STORYBOARD_PROMPT,
+  SWEET_ARC_DIRECTOR_PROMPT,
+  SWEET_EPISODE_DIRECTOR_PROMPT,
+  SWEET_AUDIO_DIRECTOR_PROMPT,
+  SWEET_SCRIPT_REVIEWER_PROMPT,
+  SWEET_PACING_ANALYZER_PROMPT,
+  SWEET_CONTINUITY_GUARD_PROMPT,
+  SWEET_HOOK_CRAFTER_PROMPT,
+  SWEET_SCRIPTWRITER_PROMPT,
+  SWEET_DIALOGUE_COACH_PROMPT,
+  SWEET_SCRIPT_EDITOR_PROMPT,
+  SWEET_EPISODE_RECORDER_PROMPT,
+} from './genres/sweet.prompts';
+import {
+  WARRIOR_STORYBOARD_PROMPT,
+  WARRIOR_ARC_DIRECTOR_PROMPT,
+  WARRIOR_EPISODE_DIRECTOR_PROMPT,
+  WARRIOR_AUDIO_DIRECTOR_PROMPT,
+  WARRIOR_SCRIPT_REVIEWER_PROMPT,
+  WARRIOR_PACING_ANALYZER_PROMPT,
+  WARRIOR_CONTINUITY_GUARD_PROMPT,
+  WARRIOR_HOOK_CRAFTER_PROMPT,
+  WARRIOR_SCRIPTWRITER_PROMPT,
+  WARRIOR_DIALOGUE_COACH_PROMPT,
+  WARRIOR_SCRIPT_EDITOR_PROMPT,
+  WARRIOR_EPISODE_RECORDER_PROMPT,
+} from './genres/warrior.prompts';
+import {
+  TIMETRAVEL_STORYBOARD_PROMPT,
+  TIMETRAVEL_ARC_DIRECTOR_PROMPT,
+  TIMETRAVEL_EPISODE_DIRECTOR_PROMPT,
+  TIMETRAVEL_AUDIO_DIRECTOR_PROMPT,
+  TIMETRAVEL_SCRIPT_REVIEWER_PROMPT,
+  TIMETRAVEL_PACING_ANALYZER_PROMPT,
+  TIMETRAVEL_CONTINUITY_GUARD_PROMPT,
+  TIMETRAVEL_HOOK_CRAFTER_PROMPT,
+  TIMETRAVEL_SCRIPTWRITER_PROMPT,
+  TIMETRAVEL_DIALOGUE_COACH_PROMPT,
+  TIMETRAVEL_SCRIPT_EDITOR_PROMPT,
+  TIMETRAVEL_EPISODE_RECORDER_PROMPT,
+} from './genres/timetravel.prompts';
+import {
+  PALACE_STORYBOARD_PROMPT,
+  PALACE_ARC_DIRECTOR_PROMPT,
+  PALACE_EPISODE_DIRECTOR_PROMPT,
+  PALACE_AUDIO_DIRECTOR_PROMPT,
+  PALACE_SCRIPT_REVIEWER_PROMPT,
+  PALACE_PACING_ANALYZER_PROMPT,
+  PALACE_CONTINUITY_GUARD_PROMPT,
+  PALACE_HOOK_CRAFTER_PROMPT,
+  PALACE_SCRIPTWRITER_PROMPT,
+  PALACE_DIALOGUE_COACH_PROMPT,
+  PALACE_SCRIPT_EDITOR_PROMPT,
+  PALACE_EPISODE_RECORDER_PROMPT,
+} from './genres/palace.prompts';
+import {
+  REVENGE_STORYBOARD_PROMPT,
+  REVENGE_ARC_DIRECTOR_PROMPT,
+  REVENGE_EPISODE_DIRECTOR_PROMPT,
+  REVENGE_AUDIO_DIRECTOR_PROMPT,
+  REVENGE_SCRIPT_REVIEWER_PROMPT,
+  REVENGE_PACING_ANALYZER_PROMPT,
+  REVENGE_CONTINUITY_GUARD_PROMPT,
+  REVENGE_HOOK_CRAFTER_PROMPT,
+  REVENGE_SCRIPTWRITER_PROMPT,
+  REVENGE_DIALOGUE_COACH_PROMPT,
+  REVENGE_SCRIPT_EDITOR_PROMPT,
+  REVENGE_EPISODE_RECORDER_PROMPT,
+} from './genres/revenge.prompts';
+import {
+  REBIRTH_STORYBOARD_PROMPT,
+  REBIRTH_ARC_DIRECTOR_PROMPT,
+  REBIRTH_EPISODE_DIRECTOR_PROMPT,
+  REBIRTH_AUDIO_DIRECTOR_PROMPT,
+  REBIRTH_SCRIPT_REVIEWER_PROMPT,
+  REBIRTH_PACING_ANALYZER_PROMPT,
+  REBIRTH_CONTINUITY_GUARD_PROMPT,
+  REBIRTH_HOOK_CRAFTER_PROMPT,
+  REBIRTH_SCRIPTWRITER_PROMPT,
+  REBIRTH_DIALOGUE_COACH_PROMPT,
+  REBIRTH_SCRIPT_EDITOR_PROMPT,
+  REBIRTH_EPISODE_RECORDER_PROMPT,
+} from './genres/rebirth.prompts';
+import {
+  SUSPENSE_STORYBOARD_PROMPT,
+  SUSPENSE_ARC_DIRECTOR_PROMPT,
+  SUSPENSE_EPISODE_DIRECTOR_PROMPT,
+  SUSPENSE_AUDIO_DIRECTOR_PROMPT,
+  SUSPENSE_SCRIPT_REVIEWER_PROMPT,
+  SUSPENSE_PACING_ANALYZER_PROMPT,
+  SUSPENSE_CONTINUITY_GUARD_PROMPT,
+  SUSPENSE_HOOK_CRAFTER_PROMPT,
+  SUSPENSE_SCRIPTWRITER_PROMPT,
+  SUSPENSE_DIALOGUE_COACH_PROMPT,
+  SUSPENSE_SCRIPT_EDITOR_PROMPT,
+  SUSPENSE_EPISODE_RECORDER_PROMPT,
+} from './genres/suspense.prompts';
+import {
+  URBAN_STORYBOARD_PROMPT,
+  URBAN_ARC_DIRECTOR_PROMPT,
+  URBAN_EPISODE_DIRECTOR_PROMPT,
+  URBAN_AUDIO_DIRECTOR_PROMPT,
+  URBAN_SCRIPT_REVIEWER_PROMPT,
+  URBAN_PACING_ANALYZER_PROMPT,
+  URBAN_CONTINUITY_GUARD_PROMPT,
+  URBAN_HOOK_CRAFTER_PROMPT,
+  URBAN_SCRIPTWRITER_PROMPT,
+  URBAN_DIALOGUE_COACH_PROMPT,
+  URBAN_SCRIPT_EDITOR_PROMPT,
+  URBAN_EPISODE_RECORDER_PROMPT,
+} from './genres/urban.prompts';
+import {
+  ANCIENT_STORYBOARD_PROMPT,
+  ANCIENT_ARC_DIRECTOR_PROMPT,
+  ANCIENT_EPISODE_DIRECTOR_PROMPT,
+  ANCIENT_AUDIO_DIRECTOR_PROMPT,
+  ANCIENT_SCRIPT_REVIEWER_PROMPT,
+  ANCIENT_PACING_ANALYZER_PROMPT,
+  ANCIENT_CONTINUITY_GUARD_PROMPT,
+  ANCIENT_HOOK_CRAFTER_PROMPT,
+  ANCIENT_SCRIPTWRITER_PROMPT,
+  ANCIENT_DIALOGUE_COACH_PROMPT,
+  ANCIENT_SCRIPT_EDITOR_PROMPT,
+  ANCIENT_EPISODE_RECORDER_PROMPT,
+} from './genres/ancient.prompts';
+import {
+  HISTORY_STORYBOARD_PROMPT,
+  HISTORY_ARC_DIRECTOR_PROMPT,
+  HISTORY_EPISODE_DIRECTOR_PROMPT,
+  HISTORY_AUDIO_DIRECTOR_PROMPT,
+  HISTORY_SCRIPT_REVIEWER_PROMPT,
+  HISTORY_PACING_ANALYZER_PROMPT,
+  HISTORY_CONTINUITY_GUARD_PROMPT,
+  HISTORY_HOOK_CRAFTER_PROMPT,
+  HISTORY_SCRIPTWRITER_PROMPT,
+  HISTORY_DIALOGUE_COACH_PROMPT,
+  HISTORY_SCRIPT_EDITOR_PROMPT,
+  HISTORY_EPISODE_RECORDER_PROMPT,
+} from './genres/history.prompts';
+import {
+  BIOGRAPHY_STORYBOARD_PROMPT,
+  BIOGRAPHY_ARC_DIRECTOR_PROMPT,
+  BIOGRAPHY_EPISODE_DIRECTOR_PROMPT,
+  BIOGRAPHY_AUDIO_DIRECTOR_PROMPT,
+  BIOGRAPHY_SCRIPT_REVIEWER_PROMPT,
+  BIOGRAPHY_PACING_ANALYZER_PROMPT,
+  BIOGRAPHY_CONTINUITY_GUARD_PROMPT,
+  BIOGRAPHY_HOOK_CRAFTER_PROMPT,
+  BIOGRAPHY_SCRIPTWRITER_PROMPT,
+  BIOGRAPHY_DIALOGUE_COACH_PROMPT,
+  BIOGRAPHY_SCRIPT_EDITOR_PROMPT,
+  BIOGRAPHY_EPISODE_RECORDER_PROMPT,
+} from './genres/biography.prompts';
+import {
+  MYTHOLOGY_STORYBOARD_PROMPT,
+  MYTHOLOGY_ARC_DIRECTOR_PROMPT,
+  MYTHOLOGY_EPISODE_DIRECTOR_PROMPT,
+  MYTHOLOGY_AUDIO_DIRECTOR_PROMPT,
+  MYTHOLOGY_SCRIPT_REVIEWER_PROMPT,
+  MYTHOLOGY_PACING_ANALYZER_PROMPT,
+  MYTHOLOGY_CONTINUITY_GUARD_PROMPT,
+  MYTHOLOGY_HOOK_CRAFTER_PROMPT,
+  MYTHOLOGY_SCRIPTWRITER_PROMPT,
+  MYTHOLOGY_DIALOGUE_COACH_PROMPT,
+  MYTHOLOGY_SCRIPT_EDITOR_PROMPT,
+  MYTHOLOGY_EPISODE_RECORDER_PROMPT,
+} from './genres/mythology.prompts';
+import {
+  SCIFI_STORYBOARD_PROMPT,
+  SCIFI_ARC_DIRECTOR_PROMPT,
+  SCIFI_EPISODE_DIRECTOR_PROMPT,
+  SCIFI_AUDIO_DIRECTOR_PROMPT,
+  SCIFI_SCRIPT_REVIEWER_PROMPT,
+  SCIFI_PACING_ANALYZER_PROMPT,
+  SCIFI_CONTINUITY_GUARD_PROMPT,
+  SCIFI_HOOK_CRAFTER_PROMPT,
+  SCIFI_SCRIPTWRITER_PROMPT,
+  SCIFI_DIALOGUE_COACH_PROMPT,
+  SCIFI_SCRIPT_EDITOR_PROMPT,
+  SCIFI_EPISODE_RECORDER_PROMPT,
+} from './genres/scifi.prompts';
 
 export interface GenreTemplateEntry {
   displayName: string;
@@ -52,7 +248,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
     seedHints: {
       catharsisPresets: ['打脸', '身份揭露', '逆袭归来'],
       conflictPatterns: ['阶级对立', '身份反差', '前任纠葛'],
-      paywallStrategyHints: '第3集男女主误会加深处设卡，第10集身份揭露前设卡',
+      paywallStrategyHints: '第8-10集男女主误会最深处设卡，第15-18集身份揭露前设卡',
     },
     profile: {
       productionGuidance: {
@@ -145,32 +341,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         preferredAngles: ['low_angle', 'three_quarter', 'over_shoulder', 'front'],
         signatureTechniques: ['仰拍建立权威气场', '打脸四镜公式（全场→ECU惊愕→主角淡然→reaction群）', '亲密不对称构图（一facing_camera一facing_away）', '9:16竖屏面部上1/3铁律'],
         transitionStyle: '硬切为主，打脸高潮freeze frame后接reaction群镜',
-        colorPalette: '冷蓝商务基调+暖金反差，暗部压低；打脸时高饱和突显主角',
-        cinematographyDirective:
-          '■ 【T2I首帧定律】每个Shot的firstFramePrompt必须是独立完整构图——仅看静帧即可判断人物身份与权力关系\n' +
-          '■ 【集首Power Shot】每集第1Shot：shotSize=medium_close_up + cameraAngle=low_angle，主角facing_camera，浅景深背景虚化——开画即建立碾压气场\n' +
-          '■ 【三镜登场公式】Shot①wide/extreme_wide展示高端场景（写字楼/豪车/顶层） Shot②medium_wide主角背影入场 Shot③low_angle+front主角转身——15秒内完成\n' +
-          '■ 【权力落差配方】拍蔑视方：cameraAngle=high_angle+front（机位高于对方头顶）；拍主角反应：three_quarter+low_angle——角度差≥20°，视角高低已暗示权力倒置\n' +
-          '■ 【打脸四镜公式】Shot①medium_wide全场目击者 Shot②close_up/extreme_close_up对方惊愕 Shot③medium_close_up+low_angle主角淡然（此镜为T2I主图） Shot④旁观者reaction快切3-5个\n' +
-          '■ 【亲密张力配方】两人距离<0.5m：close_up，一人facing_camera一人facing_away（不对称暧昧）；ECU嘴唇/眼睛时浅景深最大化\n' +
-          '■ 【9:16竖屏铁律】close_up/extreme_close_up时面部必须在画面上1/3；wide_shot中主角用差异化光线/服色标注为视觉重心；背景≤2层景深；禁止竖屏中对称居中构图（显无力）',
-        genreEmotionNotes:
-          '霸总题材情绪-运镜关键差异：\n' +
-          '- "霸总/权力登场"：low_angle+slow_push_in——追加：主角被围攻/被质疑时仍须low_angle（内心永远高于对方），禁止在"积压"阶段对主角用high_angle\n' +
-          '- "打脸反转瞬间"：fast_push有效——追加：打脸后主角必须接static+low_angle（淡然定格），禁止主角大幅度动作\n' +
-          '- "亲密/心动瞬间"：slow_push_in有效——追加：霸总情感场景必须保留"权力不对称构图"（一人facing_camera一人facing_away）',
-        genreIdentity:
-          '你是霸总短剧分镜导演，精通权力美学与积压-爆发节奏。\n' +
-          '你的每个镜头都在回答一个问题：画面里谁更有权力？\n' +
-          '打脸的爽感来自积压的深度，不是爆发的激烈程度；主角越"不费力"越爽。\n' +
-          '将单个剧本场景转化为Shot列表。',
-        genreCoreRules:
-          '1. 每个Shot = 一个连续画面（2-8秒），单一镜头角度+动作/台词\n' +
-          '2. 权力高度差铁律：强势方=low_angle仰拍；弱势方=high_angle俯拍；主角即使被欺负，摄影机仍要偶尔给low_angle\n' +
-          '3. 反转公式（淡然打脸四步）：wide+bird_eye格局 → medium+low_angle主角平静台词 → 对方close_up+fast_push惊愕 → 主角medium+low_angle+static淡然定格\n' +
-          '4. 高潮爽点：主角"不费力"是最大爽感——specialTechnique=slow_motion用在对方惊愕脸，而非主角出手动作\n' +
-          '5. 积压期铁律：high_angle俯拍蔑视方；禁止积压段BGM热血',
-        genrePurposeDirectives: {
+        cameraRuntime: {
           climax:
             '■ 【霸总高潮=淡然打脸四步】Shot①wide+bird_eye（全场环境，对方得意）→Shot②medium+low_angle主角（眼神淡然，嘴角微勾）→Shot③close_up+front反应镜（对方变色/惊愕，high_angle+fast_push）→Shot④medium+low_angle主角static定格\n' +
             '■ 核心差异：霸总高潮的爽点是"不费力"——specialTechnique=slow_motion用在对方惊愕脸而非主角出手动作；禁止主角在高潮镜头中有激动情绪或大动作',
@@ -252,7 +423,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 积压段BGM≥0.5 = 节奏控制失误（观众提前情绪泄压）
 - 全集无任何intensity=0的Shot = 缺少情绪锚点，打脸爆发效果大减`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': BOSS_STORYBOARD_PROMPT,
+        'arc-director': BOSS_ARC_DIRECTOR_PROMPT,
+        'episode-director': BOSS_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': BOSS_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': BOSS_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': BOSS_PACING_ANALYZER_PROMPT,
+        'continuity-guard': BOSS_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': BOSS_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': BOSS_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': BOSS_DIALOGUE_COACH_PROMPT,
+        'script-editor': BOSS_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': BOSS_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -279,7 +463,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         conflictBlock: '=== 冲突设计原则（甜宠）===\n- 阻碍必须合理且可解决：外部阻力（竞争者/家庭）优于内部怀疑\n- 误会消解要快：误会≤2集必须有推进\n- 每次阻碍后的甜蜜要比之前更甜——阻碍是为了强化甜蜜\n- 核心爽点：甜蜜暴击/心动瞬间/宠溺升级/守护表白',
         arcStructureHint: '段落1（第1-25%集）：初识+误会+第一次心动\n段落2：接近+暧昧+甜蜜升温+竞争者介入\n段落3：情感考验+第一次危机+守护时刻\n段落4（最后15%）：感情确认+最甜表白+结局',
         paywallStrategyHint: '每次甜蜜高潮前一刻设卡（第一次告白前、关键甜蜜暴击前）\n第6-12集设第一个付费卡点；之后每4-6集设一个',
-        contractHint: '（示例："只要你追下去，每4集就有一次甜蜜暴击，而且会越来越甜"）',
+        contractHint: '（示例："只要你追下去，每3集就有一个你会反复截图的甜蜜瞬间——而且越到后面越让你喘不过气"）',
         hookTypesHint: 'preferredTypes 参考：["甜蜜暴击","心动瞬间","竞争者危机","误会加深","守护表白","意外亲密"]',
         toneHint: 'toneGuardrails 参考：阻碍不超过2集；禁止男主无故冷暴力；虐恋段必须有甜蜜作为补偿；结局必须甜蜜',
         narrativeModeTip: '台词 > 动作 > 旁白，情感靠眼神和肢体语言传递，禁止大段独白',
@@ -346,23 +530,6 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         preferredAngles: ['three_quarter', 'front', 'pov', 'close_up'],
         signatureTechniques: ['甜蜜暴击Shot（close_up+浅景深+双人面部同时清晰）', 'POV代入心动瞬间', '距离语言四阶段（陌生→暧昧→心动→甜蜜）', '误会段medium+side_profile+negative_space'],
         transitionStyle: '情感高潮用慢动作定格，误会段硬切凸显落差',
-        colorPalette: '暖橙粉高亮度；误会段色温偏冷；和好时饱和度骤升',
-        cinematographyDirective:
-          '■ 【T2I首帧定律】每个Shot仅看静帧即可判断两人当前情感距离和阶段\n' +
-          '■ 【甜蜜暴击Shot（最高优先）】每集至少1个：close_up + three_quarter，两人面部同时入frame，眼神交汇/嘴角微扬，浅景深背景虚化\n' +
-          '■ 【距离语言四阶段】陌生期：medium_wide+≥1身位；暧昧期：medium，0.5-1身位；心动期：close_up，0.3身位内；甜蜜期：extreme_close_up\n' +
-          '■ 【POV心动配方】心动瞬间必加POV Shot：pov，medium_close_up对焦对方面部，背景极浅景深\n' +
-          '■ 【误会场景禁忌】medium+side_profile，两人侧面或背对，negative_space留白；禁用close_up',
-        genreIdentity:
-          '你是甜宠短剧分镜导演，精通情感距离语言与甜蜜暴击节奏。\n' +
-          '你的镜头在追踪一件事：两人之间的"距离"——从陌生的medium_wide到心动的close_up，每次缩进都是观众的心跳加速。\n' +
-          '将单个剧本场景转化为Shot列表。',
-        genreCoreRules:
-          '1. 每个Shot = 一个连续画面（2-8秒）\n' +
-          '2. 距离语言铁律：陌生期=medium_wide+对称构图；暧昧期=medium+rule_of_thirds打破对称；心动期=close_up；甜蜜期=extreme_close_up\n' +
-          '3. 反转公式（甜蜜暴击三镜）：男主保护/宠溺动作 → female_lead close_up/ECU反应 → 男主three_quarter侧望\n' +
-          '4. 甜蜜暴击Shot：close_up+three_quarter，两人面部同时入frame，浅景深背景虚化\n' +
-          '5. 误会期禁忌：medium+side_profile+negative_space；禁止误会段使用close_up',
       },
 
       audioStyleGuide: {
@@ -435,7 +602,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 全集无任何intensity≥0.8的甜蜜shot=本集价值缺失
 - 连续3集无新甜蜜互动=阻碍过长，立即触发甜蜜补偿机制`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': SWEET_STORYBOARD_PROMPT,
+        'arc-director': SWEET_ARC_DIRECTOR_PROMPT,
+        'episode-director': SWEET_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': SWEET_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': SWEET_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': SWEET_PACING_ANALYZER_PROMPT,
+        'continuity-guard': SWEET_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': SWEET_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': SWEET_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': SWEET_DIALOGUE_COACH_PROMPT,
+        'script-editor': SWEET_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': SWEET_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -451,7 +631,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
     seedHints: {
       catharsisPresets: ['实力碾压', '身份揭露', '打脸'],
       conflictPatterns: ['身份隐藏', '被轻视', '势力冲突'],
-      paywallStrategyHints: '第2集主角被羞辱还未反击时设卡',
+      paywallStrategyHints: '第5-8集主角被逼到极限、即将爆发但尚未出手时设卡',
     },
     profile: {
       productionGuidance: {
@@ -529,23 +709,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         preferredAngles: ['low_angle', 'front', 'three_quarter', 'dutch_angle'],
         signatureTechniques: ['委屈积压公式（high_angle俯拍→平静眼神ECU→忍）', '碾压三镜（眼神ECU→出手low_angle→被碾方崩溃ECU）', '身份揭露五镜公式', '对战每2-3镜切换景别'],
         transitionStyle: '强劲硬切为主；碾压关键帧前brief freeze后接打击音效',
-        colorPalette: '冷钢蓝+深暗底色；出手关键帧主角受强侧光/逆光突显',
-        cinematographyDirective:
-          '■ 【T2I首帧定律】每个Shot仅看静帧即可判断主角当前处于"被压制"还是"碾压"状态\n' +
-          '■ 【委屈积压公式】拍被欺辱：cameraAngle=high_angle俯拍主角，主角facing_camera但神情平静；禁止此段用low_angle\n' +
-          '■ 【碾压三镜公式】Shot①medium_close_up+front主角眼神一凛/冷笑 Shot②medium_wide+low_angle+three_quarter主角出手 Shot③被碾方跌退/呆愕ECU\n' +
-          '■ 【身份揭露五镜公式】Shot①low_angle主角被围→Shot②关键人物认出主角（惊愕ECU）→Shot③该人物肃然起敬→Shot④medium_wide全场沉默/慌乱→Shot⑤蔑视者瘫软ECU',
-        genreIdentity:
-          '你是战神归来短剧分镜导演，精通委屈积压与碾压节奏。\n' +
-          '积压期你用high_angle俯拍主角（他"看起来"是弱者）；碾压期你用low_angle+static（他一句话/一个眼神/一个动作让全场哑火）。\n' +
-          '将单个剧本场景转化为Shot列表。',
-        genreCoreRules:
-          '1. 每个Shot = 一个连续画面（2-8秒）\n' +
-          '2. 积压-碾压节奏铁律：积压段全程high_angle主角+禁止热血BGM；low_angle的第一次出现=全场气氛转变的视觉信号\n' +
-          '3. 反转公式（碾压三镜）：close_up主角平静眼神 → low_angle+dutch_angle+fast_push出招 → medium_close_up+low_angle+static胜负定格\n' +
-          '4. 高潮爽点：主角"不费力的碾压"是最大爽感——禁止高潮时主角激动/大喊大叫/庆祝\n' +
-          '5. 对战节奏：每2-3镜切换景别（close_up+ECU交替）；handheld模拟肉搏冲击',
-        genrePurposeDirectives: {
+        cameraRuntime: {
           climax:
             '■ 【战神高潮=碾压三镜公式】Shot①被轻视高峰：主角close_up+front，眼神从平静到凛冽→Shot②出招关键动作：low_angle+dutch_angle+fast_push→Shot③胜负定格：medium_close_up+low_angle+static平静立于废墟\n' +
             '■ 战神高潮禁止：主角在高潮镜头有激动表情/大喊大叫/庆祝动作',
@@ -554,10 +718,6 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
           romantic:
             '■ 【战神情感场景（稀少但精准）】每集最多1-2个，否则破坏"冷硬"人设\n■ qualityTier: "standard"',
         },
-        genreActionDirective:
-          '■ 【对战节奏铁律】首镜medium_wide定空间关系；交战时每2-3镜切换；决定性出招：low_angle+dutch_angle（5-15°）\n' +
-          '■ 【写实格斗风格】movement=handheld模拟肉搏冲击；禁止浮夸特效\n' +
-          '■ 【决胜定格】主角赢下关键战斗：最后一个Shot=medium_close_up+low_angle+static，眼神平静',
       },
 
       audioStyleGuide: {
@@ -630,7 +790,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 动作场景Shot平均时长>4秒=节奏过慢（战神剧动作场景Shot应≤2.5秒）
 - 全集无intensity=0的Shot=缺乏爆发前蓄力感`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': WARRIOR_STORYBOARD_PROMPT,
+        'arc-director': WARRIOR_ARC_DIRECTOR_PROMPT,
+        'episode-director': WARRIOR_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': WARRIOR_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': WARRIOR_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': WARRIOR_PACING_ANALYZER_PROMPT,
+        'continuity-guard': WARRIOR_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': WARRIOR_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': WARRIOR_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': WARRIOR_DIALOGUE_COACH_PROMPT,
+        'script-editor': WARRIOR_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': WARRIOR_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -705,39 +878,27 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
           genreArchetypePreset: {
             narrativeArc: 'conflict_resolution',
             narrationRatio: 0.1,
-            factConstraint: 'inspired_by',
+            factConstraint: 'none',
             hookMechanism: 'revelation',
             conflictType: 'interpersonal',
             characterEvolution: 'status',
             visualTone: 'period',
-            adaptationNotes: `- 旁白叙述占比约10%，用于锚定时间线跳跃节点和穿越背景说明，不超过每集2-3次
+            adaptationNotes: `   - 旁白叙述占比约10%，用于锚定时间线跳跃节点和穿越背景说明，不超过每集2-3次
 - 时间线对比是核心爽感：先知碾压（主角知道"剧情走向"）= 信息差最大化利用
-- 色调/滤镜用于区分时间线：现代暖调vs古代冷调或暖古铜，切换必须清晰可辨
+- 色调/滤镜用于区分时间线：现代冷调（冷蓝简洁）vs古代暖调（暖金/土橙繁复），切换必须清晰可辨
 - 史实元素以"灵感来源"处理：服饰/称谓符合朝代基调，重大事件可艺术化，禁止编造不存在的历史人物
 - 集末钩子偏好"即将改变命运/刚察觉异常"型（revelation）
 - 角色地位变化通过身份适应过程外显：从现代人"格格不入"到"游刃有余"（status evolution）
 - 节奏模式：开场10%穿越触发+时代冲击 → 适应20%学习规则+积累筹码 → 上升30%主动干预历史/关系 → 高潮25%命运改写时刻 → 新线索+回家悬念15%
 - 记录重点：先知信息差使用时机；时间线标记；命运改变里程碑`,
           } satisfies GenreArchetypePreset,
-          profilerArchetypeSection: `0. genreArchetype：【题材基础参数已由模板预置，直接输出以下 JSON（adaptationNotes 可在末尾追加本剧专有台词/视觉特征 0-2 条，勿删减原有内容）】\n   narrativeArc: "conflict_resolution"\n   narrationRatio: 0.1\n   factConstraint: "inspired_by"\n   hookMechanism: "revelation"\n   conflictType: "interpersonal"\n   characterEvolution: "status"\n   visualTone: "period"\n   adaptationNotes 基线：\n   - 旁白叙述占比约10%，用于锚定时间线跳跃节点和穿越背景说明，不超过每集2-3次\n   - 时间线对比是核心爽感：先知碾压（主角知道"剧情走向"）= 信息差最大化利用\n   - 色调/滤镜用于区分时间线：现代暖调vs古代冷调或暖古铜，切换必须清晰可辨\n   - 史实元素以"灵感来源"处理：服饰/称谓符合朝代基调，重大事件可艺术化，禁止编造不存在的历史人物\n   - 集末钩子偏好"即将改变命运/刚察觉异常"型（revelation）\n   - 角色地位变化通过身份适应过程外显：从现代人"格格不入"到"游刃有余"（status evolution）\n   - 节奏模式：开场10%穿越触发+时代冲击 → 适应20%学习规则+积累筹码 → 上升30%主动干预历史/关系 → 高潮25%命运改写时刻 → 新线索+回家悬念15%\n   - 记录重点：先知信息差使用时机；时间线标记；命运改变里程碑`,
+          profilerArchetypeSection: `0. genreArchetype：【题材基础参数已由模板预置，直接输出以下 JSON（adaptationNotes 可在末尾追加本剧专有台词/视觉特征 0-2 条，勿删减原有内容）】\n   narrativeArc: "conflict_resolution"\n   narrationRatio: 0.1\n   factConstraint: "none"\n   hookMechanism: "revelation"\n   conflictType: "interpersonal"\n   characterEvolution: "status"\n   visualTone: "period"\n   adaptationNotes 基线：\n   - 旁白叙述占比约10%，用于锚定时间线跳跃节点和穿越背景说明，不超过每集2-3次\n   - 时间线对比是核心爽感：先知碾压（主角知道"剧情走向"）= 信息差最大化利用\n   - 色调/滤镜用于区分时间线：现代冷调（冷蓝简洁）vs古代暖调（暖金/土橙繁复），切换必须清晰可辨\n   - 史实元素以"灵感来源"处理：服饰/称谓符合朝代基调，重大事件可艺术化，禁止编造不存在的历史人物\n   - 集末钩子偏好"即将改变命运/刚察觉异常"型（revelation）\n   - 角色地位变化通过身份适应过程外显：从现代人"格格不入"到"游刃有余"（status evolution）\n   - 节奏模式：开场10%穿越触发+时代冲击 → 适应20%学习规则+积累筹码 → 上升30%主动干预历史/关系 → 高潮25%命运改写时刻 → 新线索+回家悬念15%\n   - 记录重点：先知信息差使用时机；时间线标记；命运改变里程碑`,
 
       cameraStyleGuide: {
         preferredAngles: ['three_quarter', 'front', 'bird_eye', 'pov'],
         signatureTechniques: ['穿越三镜（现代末帧→特效帧→古代首帧色调对比）', '先知碾压对比构图（主角从容+周围人茫然）', 'bird_eye建立古代宏观环境', 'POV传递信息差视角'],
         transitionStyle: '穿越时dutch_angle+色调骤变；古代日常硬切；信息差揭示时medium_wide对比切',
-        colorPalette: '现代线：冷蓝简洁；古代线：暖金/土橙繁复——仅凭色调即可区分时间线',
-        cinematographyDirective:
-          '■ 【穿越三镜】Shot①现代最后动作ECU/close_up（冷色调） Shot②穿越特效帧（dutch_angle+光晕+色调混杂） Shot③古代首帧medium_wide（暖金色调，主角facing_camera，迷茫/惊讶）\n' +
-          '■ 【先知碾压对比构图】主角知道答案时：medium_close_up+three_quarter，嘴角微扬；周围人困惑时：medium_wide展示众人茫然；触发时ECU快切3-4个惊愕反应',
-        genreIdentity:
-          '你是穿越短剧分镜导演，精通时间线色调对比与信息差碾压叙事。\n' +
-          '你的第一原则：仅凭画面色调，观众就能区分现代线（冷蓝/简洁）和古代线（暖金/繁复）——不需要字幕提示。\n' +
-          '将单个剧本场景转化为Shot列表。',
-        genreCoreRules:
-          '1. 时间线色调铁律：现代线=冷蓝色调+简洁现代环境；古代线=暖金/土橙+传统建筑；firstFramePrompt必须体现色调\n' +
-          '2. 反转公式（先知碾压四镜）：主角从容close_up → 主角预言的事件发生 → 周围人ECU惊愕（快切3-4人）→ wide建立格局\n' +
-          '3. 穿越三镜公式：现代末帧ECU → 穿越特效帧 → 古代首帧medium_wide',
-        genrePurposeDirectives: {
+        cameraRuntime: {
           revelation: '■ 【穿越揭秘=色调骤变三镜公式】Shot①揭秘前正常视角→Shot②穿越信息揭露：dutch_angle+色调突变→Shot③新时间线wide+crane_up，色调稳定',
           climax: '■ 【穿越高潮=先知碾压落地四镜】Shot①主角谋划终于执行（medium_close_up+front）→Shot②关键证据/先知信息公开（insert_shot）→Shot③对方崩溃反应（ECU快切）→Shot④wide+crane_up拉出',
         },
@@ -812,7 +973,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续3集无身份危机=张力消解（必须保持身份暴露威胁）
 - 历史背景说明段>3Shot=节奏拖沓（融入剧情，不要单独讲解）`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': TIMETRAVEL_STORYBOARD_PROMPT,
+        'arc-director': TIMETRAVEL_ARC_DIRECTOR_PROMPT,
+        'episode-director': TIMETRAVEL_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': TIMETRAVEL_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': TIMETRAVEL_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': TIMETRAVEL_PACING_ANALYZER_PROMPT,
+        'continuity-guard': TIMETRAVEL_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': TIMETRAVEL_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': TIMETRAVEL_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': TIMETRAVEL_DIALOGUE_COACH_PROMPT,
+        'script-editor': TIMETRAVEL_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': TIMETRAVEL_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -843,7 +1017,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         hookTypesHint: 'preferredTypes 参考：["阴谋即将实施","反将一军","幕后黑手暗示","盟友背叛","皇帝心动迹象","权力格局翻转"]',
         toneHint: 'toneGuardrails 参考：宫斗台词是核心，BGM不能盖台词；权力等级通过构图体现；允许心机但主角不能无底线坏',
         narrativeModeTip: '台词 > 旁白 > 动作，阴谋与反制靠对话展现，心理博弈是核心',
-        coreConflictExample: '（如：出身卑微的妃子用智谋一步步在后宫站稳脚跟）',
+        coreConflictExample: '（如：出身寒门的选秀女被皇后打压入冷宫，却发现皇后最大秘密，以此为筹码反将一军，以"温顺"为面具，步步蚕食后宫格局）',
         paywallTip: '阴谋揭露型→卡在"幕后黑手即将现身"或"主角陷入最深危机"之前',
         antagonistTip: '反派：嫉妒的贵妃、野心勃勃的皇后、幕后的朝堂势力，手段要够阴毒',
         episodeTitleExample: '"后宫风云""棋局揭秘"',
@@ -907,21 +1081,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         preferredAngles: ['three_quarter', 'over_shoulder', 'high_angle', 'close_up'],
         signatureTechniques: ['双面表情公式（表面恭顺close_up+细节泄露真实意图）', '权力等级cameraAngle视觉化', '密谋dutch_angle+over_shoulder监视感', '反将一军五镜公式'],
         transitionStyle: '日常宫廷缓慢硬切；阴谋推进时over_shoulder快切；反将一军时先慢推后骤cut',
-        colorPalette: '深红+金+暗绿宫廷调；高对比度暗部；密谋场景大面积阴影遮挡',
-        cinematographyDirective:
-          '■ 【双面表情公式】表面恭顺时：close_up，眼神下垂（顺从表象），需留一处细节露出真实意图；独处/得意时：medium_close_up+front，眼神锐利\n' +
-          '■ 【权力等级视觉化】皇帝/太后：wide_shot居中+high_angle俯视所有人；高位妃嫔对低位：over_shoulder从上俯视；低位对高位：low_angle仰视\n' +
-          '■ 【密谋场景配方】暗调环境+close_up两人，dutch_angle（5-10°）；over_shoulder快切（2秒/镜）；必须插入insert shot：门缝/帷幔后偷听者medium\n' +
-          '■ 【反将一军五镜公式】Shot①反派亮底牌（得意medium_close_up）→Shot②主角淡定close_up（嘴角微扬）→Shot③主角亮真正底牌→Shot④反派惊愕ECU→Shot⑤high_angle俯拍反派跌落/退缩',
-        genreIdentity:
-          '你是宫斗短剧分镜导演，精通双面表情语言与权力等级摄影。\n' +
-          '你的每个close_up必须同时传达两层信息：表面情绪 + 隐藏意图——嘴角笑但眼神无笑，是宫斗核心视觉语言。\n' +
-          '将单个剧本场景转化为Shot列表。',
-        genreCoreRules:
-          '1. 权力等级视觉铁律：皇帝/最高权力者=居中+high_angle俯视所有人；高位妃嫔=over_shoulder从上俯视低位者；视角高低直接等于权力高低\n' +
-          '2. 双面表情铁律：每个close_up必须有表面情绪+细节泄露真实意图；单层情绪的close_up在宫斗里是失格\n' +
-          '3. 监视感铁律：密谋/对话场景必须有insert_shot（门缝/帷幔后偷听者）',
-        genrePurposeDirectives: {
+        cameraRuntime: {
           confrontation: '■ 【宫斗对峙=反将一军五镜公式】Shot①反派亮底牌→Shot②主角淡定close_up（嘴角微扬）→Shot③主角亮真正底牌→Shot④反派惊愕ECU→Shot⑤high_angle俯拍反派跌落/退缩',
           revelation: '■ 【宫斗揭秘=底牌揭露三阶段】① 表面恭顺阶段 ② 底牌揭出瞬间：medium_close_up+front+极short的slow_motion ③ 权力翻转后：high_angle俯拍反派，主角medium+front+static',
           climax: '■ 【宫斗高潮=当众揭穿四镜】Shot①当众局面wide→Shot②主角亮最后底牌（medium_close_up+front+crane_up）→Shot③全场反应wide→Shot④高位者重新认定close_up',
@@ -996,7 +1156,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 反转场景少于3Shot=爆发力不足
 - 生死危机场景平均Shot>5秒=缺乏紧迫感（危机场用2-3秒快切）`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': PALACE_STORYBOARD_PROMPT,
+        'arc-director': PALACE_ARC_DIRECTOR_PROMPT,
+        'episode-director': PALACE_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': PALACE_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': PALACE_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': PALACE_PACING_ANALYZER_PROMPT,
+        'continuity-guard': PALACE_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': PALACE_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': PALACE_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': PALACE_DIALOGUE_COACH_PROMPT,
+        'script-editor': PALACE_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': PALACE_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -1091,20 +1264,6 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         preferredAngles: ['front', 'low_angle', 'three_quarter', 'high_angle'],
         signatureTechniques: ['受害期high_angle+蜕变期low_angle（同一角色机位蜕变讲述成长）', '当众打脸五镜公式', '闪回用色调+浅景深与现实线区分', '蜕变宣告Shot（背光逆光强调）'],
         transitionStyle: '现实线硬切；闪回色调突变区分；蜕变关键帧前brief pause后接力量音效',
-        colorPalette: '受害期：冷灰蓝+低饱和度；蜕变后：冷蓝高对比度；打脸高潮：饱和度骤升；闪回：暖褪色',
-        cinematographyDirective:
-          '■ 【受害积累三镜】Shot①high_angle俯拍主角被欺压 Shot②close_up主角眼神（隐忍/咬牙） Shot③ECU加害方得意表情\n' +
-          '■ 【当众打脸五镜公式】Shot①wide_shot所有目击者 Shot②加害方嚣张medium Shot③主角淡定亮底牌medium_close_up+low_angle Shot④加害方惊愕崩溃ECU Shot⑤目击者反应快切群镜\n' +
-          '■ 【蜕变宣告Shot（高优先T2I）】medium_close_up+front，眼神直视前方，侧光或逆光差异化突出主角\n' +
-          '■ 【成长弧cameraAngle铁律】同一主角：受害期=high_angle→蜕变后=low_angle或平视——机位高度讲述成长弧',
-        genreIdentity:
-          '你是复仇短剧分镜导演，精通"受害→蜕变→反杀"成长弧的摄影语言。\n' +
-          '你的整剧视觉日记：同一主角，受害期=high_angle俯拍，蜕变后=low_angle仰拍——每次主角出现的cameraAngle都在告诉观众她现在在哪个阶段。\n' +
-          '将单个剧本场景转化为Shot列表。',
-        genreCoreRules:
-          '1. 成长弧cameraAngle铁律（最重要）：受害期主角=high_angle俯拍；蜕变过程=平视；蜕变完成=low_angle\n' +
-          '2. 反转公式（当众打脸五镜）：当众局面wide → 主角拿出关键证据ECU → 全场反应wide快切 → 仇人崩溃close_up+high_angle → 主角low_angle胜利定格\n' +
-          '3. 证据/真相揭露：insert_shot是复仇叙事的核心节拍，每个关键指控前必须有insert_shot',
       },
 
       audioStyleGuide: {
@@ -1175,7 +1334,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 清算场景低于3个镜头切换=力度不足（清算场必须是全集最快切段）
 - 复仇台词超过10字/句=失去冷峻感（简短冷然才是复仇风格）`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': REVENGE_STORYBOARD_PROMPT,
+        'arc-director': REVENGE_ARC_DIRECTOR_PROMPT,
+        'episode-director': REVENGE_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': REVENGE_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': REVENGE_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': REVENGE_PACING_ANALYZER_PROMPT,
+        'continuity-guard': REVENGE_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': REVENGE_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': REVENGE_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': REVENGE_DIALOGUE_COACH_PROMPT,
+        'script-editor': REVENGE_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': REVENGE_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -1206,7 +1378,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         hookTypesHint: 'preferredTypes 参考：["命运岔路口","前世记忆触发","仇人登场","蝴蝶效应","先知出手","新危机与前世不同"]',
         toneHint: 'toneGuardrails 参考：重生期望感必须大于悲伤感；前世闪回≤5秒；重生后主角必须有明确的行动推进',
         narrativeModeTip: '台词 > 动作 > 旁白，前世记忆是爽点但不能每集都靠金手指',
-        coreConflictExample: '（如：重生后的她牢记前世恩怨，步步为营改变命运）',
+        coreConflictExample: '（如：被亲姐和男友联手害死的商界女强人，重生回婚前三年，用前世记忆提前布局——对方以为的必赢之局，她早就换了底牌）',
         paywallTip: '蝴蝶效应型→卡在"主角改变命运引发意外后果"；卡在"前世仇人发现主角异常"',
         antagonistTip: '反派：前世害死主角的人，主角有记忆优势但对方仍很强，禁止轻敌设计',
         episodeTitleExample: '"重来一次""命运改写"',
@@ -1270,20 +1442,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         preferredAngles: ['front', 'three_quarter', 'close_up', 'pov'],
         signatureTechniques: ['重生三镜（前世末帧→特效帧→重生ECU）', '仇人出场权力倒置（重生后主角平视/低角仇人）', '前世闪回色调+浅景深+慢动作区分', '先知掌控低角度+从容表情'],
         transitionStyle: '重生瞬间dutch_angle+色调骤变；前世闪回暖色低通filter进出；日常硬切',
-        colorPalette: '前世：暗沉褪色（低饱和度）；重生后：鲜明高饱和，象征命运掌控',
-        cinematographyDirective:
-          '■ 【重生三镜】Shot①前世死亡/绝境close_up（暗色调，眼神绝望） Shot②重生特效帧（dutch_angle+光晕） Shot③重生首帧extreme_close_up眼睛睁开（色调已变鲜明）\n' +
-          '■ 【双色调铁律】前世=暗沉低饱和+high_angle；重生后=高亮高饱和+平视或low_angle\n' +
-          '■ 【前世闪回插入】暖色褪色+shallow_dof+slow_motion，extreme_close_up创伤细节；闪回≤5秒；结束cut到主角ECU（悲痛→坚定→微笑三段表情）',
-        genreIdentity:
-          '你是重生短剧分镜导演，精通前世-重生双色调叙事与命运改写视觉化。\n' +
-          '核心视觉原则：同一主角，前世=high_angle+暗沉色调，重生后=low_angle+鲜明色调——机位/色调对比就是整剧的成长弧。\n' +
-          '将单个剧本场景转化为Shot列表。',
-        genreCoreRules:
-          '1. 双色调铁律（最重要）：前世=暗沉低饱和+high_angle；重生后=高亮高饱和+平视或low_angle\n' +
-          '2. 前世闪回铁律：暖色低饱和+slow_motion；≤5秒；创伤ECU开头；结束cut到主角ECU（悲痛→坚定→微笑）\n' +
-          '3. "我早就知道了"碾压：主角从容（low_angle）vs仇人不知道（high_angle）',
-        genrePurposeDirectives: {
+        cameraRuntime: {
           revelation: '■ 【重生揭秘=前世记忆触发三镜公式】Shot①重生当下close_up→Shot②前世记忆闪回ECU（暖色低饱和+slow_motion，≤3秒）→Shot③重生主角ECU重回现实（色调骤然鲜明，眼神悲痛→坚定）',
           climax: '■ 【重生高潮=命运改写落地四镜】Shot①前世溃败/死亡（暗色调闪回，≤2秒）→Shot②重生主角在同一时刻做出不同选择（鲜明色调，low_angle）→Shot③对手/仇人ECU惊愕→Shot④wide+crane_up格局重建\n■ qualityTier: "golden"',
         },
@@ -1358,7 +1517,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 重生剧允许"主角独处回忆"稍慢（前世信息整合），但不超过4Shot
 - 先知破局场景快慢必须极端对比：破局前最慢→破局瞬间最快`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': REBIRTH_STORYBOARD_PROMPT,
+        'arc-director': REBIRTH_ARC_DIRECTOR_PROMPT,
+        'episode-director': REBIRTH_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': REBIRTH_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': REBIRTH_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': REBIRTH_PACING_ANALYZER_PROMPT,
+        'continuity-guard': REBIRTH_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': REBIRTH_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': REBIRTH_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': REBIRTH_DIALOGUE_COACH_PROMPT,
+        'script-editor': REBIRTH_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': REBIRTH_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -1403,7 +1575,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - genreRules 必须包含（至少5条）：① 每集至少一条新线索或新嫌疑人 ② 不可靠叙事规范 ③ 时间压力（主角必须在有限时间内解决）④ 真相反转的节奏控制 ⑤ 信息差地图（谁知道什么，观众要比哪个角色先/后知道）
 - dialogueGuide：信息量精准控制，不该说的坚决不说；悬念台词从不明说答案；禁止过早泄露关键信息
 - visualNarrativeGuide：第一帧=谜团建立或关键证物ECU；窥视构图（dutch_angle/over_shoulder）强化不安感；密谋场景必须有监视感
-- forbiddenPatterns：主角太蠢影响推理代入感；逻辑硬伤；过度暴力血腥`,
+- forbiddenPatterns：主角太蠢影响推理代入感；逻辑硬伤；过度暴力血腥；结局前强行引入全新设定解围（"开后门"）；每集都揭示真相让悬念提前耗尽；嫌疑人太少导致观众秒猜凶手`,
 
       profilerExamples: {
         genreName: '悬疑/推理',
@@ -1431,16 +1603,62 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
           '允许慢区：推理铺垫段信息密度高但节奏中等，禁止平铺直叙',
       } satisfies GenreProfilerExamples,
           genreArchetypePreset: {
-            narrativeArc: 'rise_and_fall',
-            narrationRatio: 0.15,
-            factConstraint: 'period_accurate',
-            hookMechanism: 'revelation',
-            conflictType: 'fate_vs_will',
-            characterEvolution: 'age_progression',
-            visualTone: 'epic',
-            adaptationNotes: `- 旁白叙述占比约15%，用于跨年代叙事锚定、历史背景说明；声音庄重厚重\n- 重大事件/年代/人物关系必须符合史实，细节可艺术化处理，禁止编造不存在的历史事实\n- 叙事弧线兴衰型（rise_and_fall）：人物命运与朝代更迭绑定，阶段分明\n- 集末钩子偏好命运揭示/历史节点即将来临型（revelation）\n- 角色须有跨时间段外观变化：服饰/气质随年代和地位演变（age_progression）\n- 台词风格：历史正剧腔调，半文言；称谓规范（陛下/相国/将军/先生）；禁止现代白话腔\n- 节奏模式：开场10%历史背景建立+人物登场 → 铺垫25%朝堂/战场关系积累（偏慢但史诗感） → 上升25%历史转折点加速 → 高潮25%命运时刻 → 史诗收尾+历史评价15%\n- 记录重点：史实合规节点；朝代背景标注；人物命运与历史事件绑定度`,
+            narrativeArc: 'mystery_reveal',
+            narrationRatio: 0.05,
+            factConstraint: 'none',
+            hookMechanism: 'mystery',
+            conflictType: 'good_vs_evil',
+            characterEvolution: 'costume_only',
+            visualTone: 'dark',
+            adaptationNotes: `- 旁白叙述占比约5%，用于时间线锚定和信息差管控，声音质感压抑克制
+- 叙事引擎：观众对真相的期待 = 唯一驱动力；每集必须回收1个疑问、抛出2个新疑问
+- 信息差管控：观众永远比主角少知道一件事（或多知道一件事，两者选一，全剧统一）
+- 台词风格：暗语、双关、省略；反派不主动暴露；证人/目击者说话总有所保留
+- 集末钩子：谜团刚深化一层时截断（mystery型），禁止用情感炸弹收尾
+- 逻辑必须自洽：每集信息在结局前应能推导出答案；禁止开后门/设置无法提前感知的设定
+- 节奏模式：开场10%事件触发+第一个疑问 → 调查30%线索积累（中等节奏但信息密度高） → 上升25%假答案被推翻+更大真相浮现 → 高潮20%真相揭露 → 余波+新谜团10%
+- 记录重点：信息差地图（谁知道什么）；线索链完整性；逻辑自洽检验`,
           } satisfies GenreArchetypePreset,
           profilerArchetypeSection: `0. genreArchetype：【题材基础参数已由模板预置，直接输出以下 JSON（adaptationNotes 可在末尾追加本剧专有台词/视觉特征 0-2 条，勿删减原有内容）】\n   narrativeArc: "mystery_reveal"\n   narrationRatio: 0.05\n   factConstraint: "none"\n   hookMechanism: "mystery"\n   conflictType: "good_vs_evil"\n   characterEvolution: "costume_only"\n   visualTone: "dark"\n   adaptationNotes 基线：\n   - 旁白叙述占比约5%，用于时间线锚定和信息差管控，声音质感压抑克制\n   - 叙事引擎：观众对真相的期待 = 唯一驱动力；每集必须回收1个疑问、抛出2个新疑问\n   - 信息差管控：观众永远比主角少知道一件事（或多知道一件事，两者选一，全剧统一）\n   - 台词风格：暗语、双关、省略；反派不主动暴露；证人/目击者说话总有所保留\n   - 集末钩子：谜团刚深化一层时截断（mystery型），禁止用情感炸弹收尾\n   - 逻辑必须自洽：每集信息在结局前应能推导出答案；禁止开后门/设置无法提前感知的设定\n   - 节奏模式：开场10%事件触发+第一个疑问 → 调查30%线索积累（中等节奏但信息密度高） → 上升25%假答案被推翻+更大真相浮现 → 高潮20%真相揭露 → 余波+新谜团10%\n   - 记录重点：信息差地图（谁知道什么）；线索链完整性；逻辑自洽检验`,
+
+      cameraStyleGuide: {
+        preferredAngles: ['dutch_angle', 'over_shoulder', 'pov', 'close_up', 'high_angle'],
+        signatureTechniques: ['窥视监视感构图（dutch_angle+over_shoulder偷听场景）', '证物线索ECU insert_shot（真相揭露前必有）', '不可靠叙事POV+失焦处理（主观视角可能有偏差时）', '真相反转dolly_zoom（认知颠覆瞬间）'],
+        transitionStyle: '线索揭露前brief_pause后硬切；认知颠覆时dolly_zoom+dutch_angle；推理回溯段快速montage',
+        cameraRuntime: {
+          revelation:
+            '■ 【悬疑揭秘=真相反转四镜公式】Shot①"确信"状态medium+static（主角以为掌握全部） → Shot②异常细节insert_shot ECU（线索植入） → Shot③dolly_zoom+dutch_angle（认知崩塌） → Shot④主角ECU重组认知+新的追查方向',
+          confrontation:
+            '■ 【悬疑审讯=信息博弈三阶段】① 建立位置：medium_wide两人，审讯者背光占优 ② 交锋：over_shoulder快切，ECU捕捉微表情破绽 ③ 破防/信息获取：close_up嫌疑人面部+slow_push_in',
+          climax:
+            '■ 【悬疑高潮=真相全貌揭露四镜】Shot①推理回溯montage（insert_shot线索串联快切） → Shot②幕后黑手ECU（第一次正面展示） → Shot③wide格局重建（各方关系清晰化） → Shot④主角medium+front定格（案件解决/新谜团开启）',
+        },
+      },
+
+      audioStyleGuide: {
+        bgmMoodPreferences: ['极简弦乐持续音（tension层）', '钢琴单音断奏', '低频环境drone', '电子ambient（信息处理感）', '稀疏打击乐节拍'],
+        sfxDensity: 'moderate',
+        silenceUsage: '关键真相揭露前drop_to_silence 1-2s（比其他题材更长）；偷听密谋场景用环境音代替BGM；真相落定后brief_silence让观众消化',
+        voiceActingStyle: '主角（侦探/调查者）：克制冷静，关键推理时语速略慢；证人/嫌疑人：说话有所保留，句末常被打断；反派：正常腔调，不暴露自己',
+        genreBrandingDirective:
+          '■ 【推理铺垫段BGM】极简弦乐持续音+低频drone，intensity=0.2-0.35；禁止旋律性强的BGM（影响观众推理思考）\n' +
+          '■ 【证物发现三阶音频】①日常：轻ambient ②发现异常：BGM骤停（drop_to_silence 0.5s）③认知建立：短促弦乐stinger，intensity=0.6\n' +
+          '■ 【真相反转音频公式】①假设阶段：低密度ambient ②颠覆瞬间：dissonant弦乐stinger+BGM骤停 ③重组：新主题旋律缓慢建立\n' +
+          '■ 【追逐/危机段BGM】电子节拍+弦乐快速律动，intensity=0.7-0.85；SFX环境音同步\n' +
+          '■ 【集尾hook】BGM在新谜团揭示前fade_to_near_silence→关键台词/画面清晰落地→BGM骤停，定格疑问',
+      },
+
+      reviewerCalibration: {
+        dimensionWeights: { visualImpact: 1.0, dialogueNaturalness: 1.3, pacing: 1.2, hookStrength: 1.5, consistency: 1.5, emotionalImpact: 0.9 },
+        genreSpecificChecks: [
+          '每集是否有至少1条新线索或新嫌疑人信息（悬疑节奏核心指标）',
+          '全集信息差地图是否一致：观众知道的和主角知道的边界是否清晰',
+          '真相反转场景是否使用了dolly_zoom或dutch_angle（而非普通cut）',
+          '密谋/偷听场景是否有窥视感构图（over_shoulder/门缝/遮挡物）',
+          '集末钩子是否是谜团深化型而非情感炸弹型',
+          '全剧逻辑链是否自洽——前集信息是否能在结局前推导出答案，无"开后门"设定',
+        ],
+      },
       arcDirectorGuide: {
         genreSegmentPrinciples: `① 段落核心是谜团层级升高——从表象案件→幕后黑手→更大组织阴谋
 ② 每段落必须有一次"关键证人/证物"反转，颠覆前一段的结论
@@ -1489,7 +1707,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续5Shot都是4-5秒且无台词=拖沓（推理段要有信息密度，不是视觉留白）
 - 全集高强度（intensity≥0.7）超过50%=节奏过满，失去悬疑的克制感`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': SUSPENSE_STORYBOARD_PROMPT,
+        'arc-director': SUSPENSE_ARC_DIRECTOR_PROMPT,
+        'episode-director': SUSPENSE_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': SUSPENSE_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': SUSPENSE_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': SUSPENSE_PACING_ANALYZER_PROMPT,
+        'continuity-guard': SUSPENSE_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': SUSPENSE_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': SUSPENSE_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': SUSPENSE_DIALOGUE_COACH_PROMPT,
+        'script-editor': SUSPENSE_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': SUSPENSE_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -1562,15 +1793,59 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
       } satisfies GenreProfilerExamples,
           genreArchetypePreset: {
             narrativeArc: 'life_journey',
-            narrationRatio: 0.2,
-            factConstraint: 'period_accurate',
-            hookMechanism: 'revelation',
-            conflictType: 'fate_vs_will',
-            characterEvolution: 'age_progression',
-            visualTone: 'epic',
-            adaptationNotes: `- 旁白叙述占比约20%，旁白与角色表演交替推进，叙事跨度大时用旁白锚定时间线\n- 重大事件/年代/人物关系必须符合史实，细节可艺术化处理，禁止编造不存在的历史事实\n- 叙事弧线以人生阶段推进（成长→巅峰→转折→传承），每个阶段需有独立情感高点（life_journey）\n- 集末钩子偏好命运揭示/认知颠覆型，而非纯剧情悬念（revelation）\n- 角色须有跨时间段外观变化：少年→青年→壮年→老年，服饰和气质随年龄演变（age_progression）\n- 台词风格：半文半白（绝才狂傲型：简练有力，诗意意象代替直白情感）；称谓规范（陛下/相国/在下）\n- 潜台词：傲骨不用嘴说，用拒绝下跪代替我不服；威胁不明说，用听说某人失踪了\n- 节奏模式：开场10%人物基调建立 → 铺垫25%生活积累（偏慢但情感密度渐增） → 上升25%转折加速 → 高潮25%命运时刻密集 → 余韵+传承钩子15%\n- 记录重点：emotionalShift 反映内在成长；flashbackCandidates 标记人生转折；plotAdvances 按人生阶段记录`,
+            narrationRatio: 0,
+            factConstraint: 'none',
+            hookMechanism: 'emotional_peak',
+            conflictType: 'society',
+            characterEvolution: 'relationship',
+            visualTone: 'glamorous',
+            adaptationNotes: `- 冲突贴近现实：职场PUA/家庭矛盾/感情选择，避免夸张权力斗争
+- 台词风格：现代白话，自然口语；禁止过度戏剧化腔调；情感宣泄用行动代替大段独白
+- 集末钩子偏好"情感炸弹"型：人物关系刚拉近时遭遇误解，或重大选择前截断
+- 节奏可适当放缓：允许2-3集铺垫人物关系；但每5集内必须有一个情感高点
+- 人生旅程型叙事（life_journey）：以人物阶段性成长推进，而非单一冲突解决
+- 节奏模式：开场10%人物处境建立 → 生活铺垫20%（关系积累，节奏稍慢但情感密度渐增） → 上升30%核心矛盾爆发 → 高潮25%关系/人生抉择 → 成长收尾+钩子15%
+- 记录重点：人物内在成长里程碑；关系变化节点；社会矛盾代入感`,
           } satisfies GenreArchetypePreset,
-          profilerArchetypeSection: `0. genreArchetype：【题材基础参数已由模板预置，直接输出以下 JSON（adaptationNotes 可在末尾追加本剧专有台词/视觉特征 0-2 条，勿删减原有内容）】\n   narrativeArc: "life_journey"\n   narrationRatio: 0\n   factConstraint: "none"\n   hookMechanism: "emotional_peak"\n   conflictType: "society"\n   characterEvolution: "costume_only"\n   visualTone: "glamorous"\n   adaptationNotes 基线：\n   - 冲突贴近现实：职场PUA/家庭矛盾/感情选择，避免夸张权力斗争\n   - 台词风格：现代白话，自然口语；禁止过度戏剧化腔调；情感宣泄用行动代替大段独白\n   - 集末钩子偏好"情感炸弹"型：人物关系刚拉近时遭遇误解，或重大选择前截断\n   - 节奏可适当放缓：允许2-3集铺垫人物关系；但每5集内必须有一个情感高点\n   - 人生旅程型叙事（life_journey）：以人物阶段性成长推进，而非单一冲突解决\n   - 节奏模式：开场10%人物处境建立 → 生活铺垫20%（关系积累，节奏稍慢但情感密度渐增） → 上升30%核心矛盾爆发 → 高潮25%关系/人生抉择 → 成长收尾+钩子15%\n   - 记录重点：人物内在成长里程碑；关系变化节点；社会矛盾代入感`,
+          profilerArchetypeSection: `0. genreArchetype：【题材基础参数已由模板预置，直接输出以下 JSON（adaptationNotes 可在末尾追加本剧专有台词/视觉特征 0-2 条，勿删减原有内容）】\n   narrativeArc: "life_journey"\n   narrationRatio: 0\n   factConstraint: "none"\n   hookMechanism: "emotional_peak"\n   conflictType: "society"\n   characterEvolution: "relationship"\n   visualTone: "glamorous"\n   adaptationNotes 基线：\n   - 冲突贴近现实：职场PUA/家庭矛盾/感情选择，避免夸张权力斗争\n   - 台词风格：现代白话，自然口语；禁止过度戏剧化腔调；情感宣泄用行动代替大段独白\n   - 集末钩子偏好"情感炸弹"型：人物关系刚拉近时遭遇误解，或重大选择前截断\n   - 节奏可适当放缓：允许2-3集铺垫人物关系；但每5集内必须有一个情感高点\n   - 人生旅程型叙事（life_journey）：以人物阶段性成长推进，而非单一冲突解决\n   - 节奏模式：开场10%人物处境建立 → 生活铺垫20%（关系积累，节奏稍慢但情感密度渐增） → 上升30%核心矛盾爆发 → 高潮25%关系/人生抉择 → 成长收尾+钩子15%\n   - 记录重点：人物内在成长里程碑；关系变化节点；社会矛盾代入感`,
+
+      cameraStyleGuide: {
+        preferredAngles: ['three_quarter', 'front', 'pov', 'close_up', 'over_shoulder'],
+        signatureTechniques: ['情感共鸣close_up（自然光+轻微柔焦，面部表情是核心）', '职场压力构图（high_angle+冷白日光灯）', 'POV生活代入（主观视角体验日常困境）', '两人情感距离四阶段（陌生medium_wide→熟悉medium→亲近close_up→依赖同帧）'],
+        transitionStyle: '日常生活硬切；情感高峰slow_push_in；时间流逝dissolve+环境光线变化',
+        cameraRuntime: {
+          climax:
+            '■ 【都市高潮=情感决裂或关系突破】Shot①wide建立场景（两人在某个有意义的地点）→Shot②close_up面部情绪（不解释，让观众感受）→Shot③over_shoulder或two_shot（说出关键的话或做出关键行动）→Shot④close_up对方反应',
+          confrontation:
+            '■ 【都市对峙=生活化冲突三阶段】① 积压：over_shoulder+medium，两人保持距离 ② 爆发：handheld轻晃+close_up快切（情绪失控的真实感） ③ 落定：fixed_shot一人背影/另一人面部',
+          romantic:
+            '■ 【都市情感场景=真实距离语言】心动：medium→close_up的缓慢推进，自然光，眼神游移；表白：two_shot同帧+near_silence+slow_push_in\n■ qualityTier: "standard"',
+        },
+      },
+
+      audioStyleGuide: {
+        bgmMoodPreferences: ['现代流行轻钢琴+吉他', '都市indie风格', '轻电子ambient', '生活感弦乐', '纯器乐流行曲'],
+        sfxDensity: 'sparse',
+        silenceUsage: '情感沉淀时near_silence+生活环境音（交通/咖啡机/雨声）；争吵/冲突时BGM cut_out只剩环境音；告白/关键时刻前brief_silence',
+        voiceActingStyle: '自然口语化，禁止戏剧化腔调；职场对话简洁利落；情感场景语速放缓、停顿增多；争吵时语速加快但保持生活感',
+        genreBrandingDirective:
+          '■ 【生活场景BGM】轻钢琴+吉他fingerpicking，intensity=0.15-0.3；必须有生活环境底音（咖啡馆/办公室ambient）\n' +
+          '■ 【职场冲突BGM】轻微紧张弦乐，intensity=0.3-0.45；或BGM cut_out只剩环境音（更真实）\n' +
+          '■ 【情感高峰三阶音频】①铺垫：轻柔吉他/钢琴 intensity=0.2 ②酝酿：BGM降至near_silence ③爆发：弦乐+钢琴swell，intensity=0.6-0.75，tempo慢\n' +
+          '■ 【集尾hook前3秒】BGM fade_to_near_silence→关键台词/情感动作清晰落地→定格→BGM完全停止',
+      },
+
+      reviewerCalibration: {
+        dimensionWeights: { visualImpact: 0.9, dialogueNaturalness: 1.5, pacing: 1.1, hookStrength: 1.2, consistency: 1.0, emotionalImpact: 1.5 },
+        genreSpecificChecks: [
+          '台词是否自然口语化，没有霸总式/宫廷式腔调',
+          '每集是否有至少1个"观众有感同身受"的生活细节场景',
+          '情感共鸣Shot是否使用自然光+close_up，而非强戏剧化打光',
+          '职场冲突场景是否保持真实感（over_shoulder+高压构图），而非霸总式权力碾压',
+          '每5集内是否有一个情感高点（避免节奏过于平淡）',
+          '人物关系推进是否在服装/场景/肢体距离上有可见变化',
+        ],
+      },
       arcDirectorGuide: {
         genreSegmentPrinciples: `① 段落核心是生活维度的递进——从职场→家庭→情感→人生抉择
 ② 每段落以一个主角成长或关系转变为里程碑
@@ -1619,7 +1894,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 全集intensity≥0.8超过25%=节奏过强，失去生活感
 - 情感共鸣场少于2个Shot停留>4秒=情感不够到位（需要留给观众感受的空间）`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': URBAN_STORYBOARD_PROMPT,
+        'arc-director': URBAN_ARC_DIRECTOR_PROMPT,
+        'episode-director': URBAN_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': URBAN_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': URBAN_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': URBAN_PACING_ANALYZER_PROMPT,
+        'continuity-guard': URBAN_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': URBAN_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': URBAN_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': URBAN_DIALOGUE_COACH_PROMPT,
+        'script-editor': URBAN_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': URBAN_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -1648,7 +1936,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         paywallStrategyHint: '男女主情感考验最高潮处设卡（被迫分离前、生死情感表白前）\n第10-20集设第一个付费卡点；之后每8-12集设一个（古装节奏较慢）',
         contractHint: '（示例："只要你追下去，他们的爱情虐得越深、守护得越动人"）',
         hookTypesHint: 'preferredTypes 参考：["情感考验","身世秘密","被迫分离","朝堂变故","守护时刻","虐心误解"]',
-        toneHint: 'toneGuardrails 参考：历史背景基本合理；虐感必须有情感支撑；允许悲壮但需有情感救赎；古装美感是底线',
+        toneHint: 'toneGuardrails 参考：历史背景基本合理；虐感必须有情感支撑，连续虐恋不超过3集必须给甜蜜作为补偿；允许悲壮但须有情感救赎节点；古装美感是底线（服饰/场景低于审美标准等于失败）；禁止现代白话/网络用语出现在对白中',
         narrativeModeTip: '台词 > 旁白 > 动作，古风对话要有韵味，情感流露含蓄但强烈',
         coreConflictExample: '（如：赐婚将她嫁给冷漠王爷，却不知他正是幼时救她的恩人）',
         paywallTip: '误解破解型→卡在"两人最亲近又误解最深"的节点；虐恋→卡在"分离"一刻',
@@ -1692,22 +1980,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
       } satisfies GenreProfilerExamples,
 
           genreArchetypePreset: {
-            narrativeArc: 'mystery_reveal',
-            narrationRatio: 0.05,
+            narrativeArc: 'conflict_resolution',
+            narrationRatio: 0,
             factConstraint: 'none',
-            hookMechanism: 'mystery',
-            conflictType: 'good_vs_evil',
-            characterEvolution: 'costume_only',
-            visualTone: 'dark',
-            adaptationNotes: `- 旁白叙述占比约5%，用于时间线锚定和信息差管控，声音质感压抑克制
-- 叙事引擎：观众对真相的期待 = 唯一驱动力；每集必须回收1个疑问、抛出2个新疑问
-- 信息差管控：观众永远比主角少知道一件事（或多知道一件事，两者选一，全剧统一）
-- 台词风格：暗语、双关、省略；反派不主动暴露；证人/目击者说话总有所保留
-- 集末钩子：谜团刚深化一层时截断（mystery型），禁止用情感炸弹收尾
-- 逻辑必须自洽：每集信息在结局前应能推导出答案；禁止开后门/设置无法提前感知的设定
-- 视觉调性偏暗（dark）：低光/阴影/冷色调；揭露时刻可用高对比光效
-- 节奏模式：开场10%事件触发+第一个疑问 → 调查30%线索积累（中等节奏但信息密度高） → 上升25%假答案被推翻+更大真相浮现 → 高潮20%真相揭露 → 余波+新谜团10%
-- 记录重点：信息差地图（谁知道什么）；线索链完整性；逻辑自洽检验`,
+            hookMechanism: 'plot_cliffhanger',
+            conflictType: 'interpersonal',
+            characterEvolution: 'status',
+            visualTone: 'period',
+            adaptationNotes: `- 古典美学是第一生产力：服饰质感与场景氛围是角色形象的一部分，禁止现代感道具
+- 台词风格：半文半白（核心句子有古风骨架，现代人听得懂）；称谓规范（公子/姑娘/将军/大人）；禁止现代网络用语
+- 武打设计：有起势-行招-收势仪式感；情感通过环境意象表达，而非直白语言
+- 集末钩子：战局翻转前截断，或身份暴露前截断（plot_cliffhanger）
+- 地位随武力/谋略/身份认可而变化（status evolution）：服饰等级与他人礼遇外显
+- 节奏模式：开场10%世界观建立+核心冲突种下 → 积累25%武艺/谋略成长 → 上升30%江湖/朝堂交锋加速 → 高潮25%终极对决 → 新天下格局+钩子10%
+- 记录重点：武力/地位成长里程碑；江湖/朝堂势力关系图；道具/服饰连续性`,
           } satisfies GenreArchetypePreset,
           profilerArchetypeSection: `0. genreArchetype：【题材基础参数已由模板预置，直接输出以下 JSON（adaptationNotes 可在末尾追加本剧专有台词/视觉特征 0-2 条，勿删减原有内容）】\n   narrativeArc: "conflict_resolution"\n   narrationRatio: 0\n   factConstraint: "none"\n   hookMechanism: "plot_cliffhanger"\n   conflictType: "interpersonal"\n   characterEvolution: "status"\n   visualTone: "period"\n   adaptationNotes 基线：\n   - 古典美学是第一生产力：服饰质感与场景氛围是角色形象的一部分，禁止现代感道具\n   - 台词风格：半文半白（核心句子有古风骨架，现代人听得懂）；称谓规范（公子/姑娘/将军/大人）；禁止现代网络用语\n   - 武打设计：有起势-行招-收势仪式感；情感通过环境意象表达，而非直白语言\n   - 集末钩子：战局翻转前截断，或身份暴露前截断（plot_cliffhanger）\n   - 地位随武力/谋略/身份认可而变化（status evolution）：服饰等级与他人礼遇外显\n   - 节奏模式：开场10%世界观建立+核心冲突种下 → 积累25%武艺/谋略成长 → 上升30%江湖/朝堂交锋加速 → 高潮25%终极对决 → 新天下格局+钩子10%\n   - 记录重点：武力/地位成长里程碑；江湖/朝堂势力关系图；道具/服饰连续性`,
 
@@ -1715,29 +2001,38 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         preferredAngles: ['three_quarter', 'low_angle', 'over_shoulder', 'wide'],
         signatureTechniques: ['朝堂权力构图（皇帝居中+high_angle俯视群臣）', '刀剑对决三镜（眼神交换→出招ECU→距离确认wide）', '古装情感慢推', '汉服竖屏全身展示'],
         transitionStyle: '古装唯美dissolve；武打切换硬cut；朝堂转场pan_left/pan_right',
-        cinematographyDirective:
-          '■ 【朝堂权力构图】皇帝/最高权力者：画面居中+high_angle俯视（群臣从皇帝视角被看）；主角在朝堂受审/出头：high_angle→反转时切low_angle\n' +
-          '■ 【古装情感表达】男女主心动：slow_push_in+浅景深，背景须有古典元素（梅花/灯笼/雨幕）；离别：orbit绕拍+slow_pull_back，宫墙/山川作背景渐显\n' +
-          '■ 【汉服竖屏铁律】古装wide_shot必须展示全身华服（竖屏高度优势）；服饰细节是视觉差异化关键',
-        genreActionDirective:
-          '■ 【刀剑对决公式（古典武打）】Shot①双方对峙wide+three_quarter→Shot②眼神交换close_up（无声宣战，静止0.5-1秒）→Shot③出招medium_wide+movement=tracking→Shot④兵器相交ECU（specialTechnique=slow_motion）→Shot⑤分开后wide+low_angle\n' +
-          '■ 【武打节奏】古装武打有"仪式感"：每一招有起势→行招→收势；禁止连续超过5镜不给呼吸\n' +
-          '■ 【战斗结束/胜负定格】古装胜利：剑尖抵喉或剑挑衣领（ECU）；胜者medium+low_angle（淡然）',
-        genreIdentity:
-          '你是古装短剧分镜导演，精通古典武打仪式感与宫廷/江湖权力构图。\n' +
-          '你的节奏比现代都市慢1.5倍——古装的美感在"从容不迫"中。刀剑对决有起势-行招-收势三阶段；情感靠环境（梅花/灯笼/月光）不靠直白。\n' +
-          '将单个剧本场景转化为Shot列表。',
-        genreCoreRules:
-          '1. 古装比现代都市多1-2秒；武打有仪式感（招式清晰，禁止现代都市的fast_handheld乱拍）\n' +
-          '2. 反转公式（刀剑决胜四镜）：wide+three_quarter对峙静默 → ECU眼神交换 → medium_wide+tracking刀剑轨迹+slow_motion → wide胜负定格\n' +
-          '3. 朝堂权力构图铁律：皇帝居中+high_angle俯视群臣；主角从弱到强的弧线用cameraAngle高度变化体现\n' +
-          '4. 古装情感表达：情感高峰用古典环境渲染（梅花/灯笼/雨幕/烛光）作firstFramePrompt关键词',
-        genrePurposeDirectives: {
+        cameraRuntime: {
           climax: '■ 【古装高潮=刀剑决胜/权力落幕四镜】Shot①wide双方最后对峙（static 1秒，无台词）→Shot②ECU眼神交换+出招 → Shot③决定性一击ECU+slow_motion → Shot④胜负定格（胜者medium+low_angle淡然）',
           confrontation: '■ 【古装对峙=礼中藏刀三阶段】① 表面礼节：medium+three_quarter ② 底牌出现：medium_close_up+slow_push_in+dutch_angle（5-10°） ③ 摊牌落定：wide确认新的关系格局',
           romantic: '■ 【古装情感场景】心动：slow_push_in+浅景深，背景必须有古典元素\n■ 古装离别：orbit绕拍+slow_pull_back，以宫墙/山川/城门作背景渐渐显露\n■ qualityTier: "standard"',
         },
       },
+
+      audioStyleGuide: {
+        bgmMoodPreferences: ['古筝主题旋律', '琵琶弹奏（激烈场景）', '古琴清幽（情感场景）', '编钟+弦乐史诗感（朝堂/战场）', '箫声悠扬（离别/思念）'],
+        sfxDensity: 'moderate',
+        silenceUsage: '武打对峙前drop_to_silence 0.5-1s；情感离别场轻柔古筝单音替代BGM；生死抉择前long_silence强调厚重感',
+        voiceActingStyle: '半文半白腔调，有古典韵味；男主台词克制低沉，情感靠停顿和声调传递；武打场景台词极简；情感场景语速放缓带喘息感',
+        genreBrandingDirective:
+          '■ 【古装场景BGM分区】宫廷日常：编钟+弦乐，intensity=0.25-0.4；江湖情感：古筝/箫，intensity=0.2-0.35；战场：打击乐+铜管，intensity=0.6-0.8\n' +
+          '■ 【武打对决三阶音频】①剑拔弩张：BGM降至near_silence，弓弦拉紧音效 ②交锋：兵器相击SFX精准卡帧+快速弦乐律动 ③胜负落定：BGM渐停，环境音收场\n' +
+          '■ 【情感高峰（古典意境）】古筝/箫双层渐强，intensity=0.5-0.65；禁止现代流行编曲出现在古装情感场\n' +
+          '■ 【离别/悲壮场景】箫声主旋律+弦乐低鸣，intensity=0.3-0.5；结尾fade_to_silence+单声环境音（风声/雨声）\n' +
+          '■ 【集尾hook】BGM在危机前夕渐强至0.6→定格画面→BGM骤停',
+      },
+
+      reviewerCalibration: {
+        dimensionWeights: { visualImpact: 1.4, dialogueNaturalness: 1.3, pacing: 1.0, hookStrength: 1.2, consistency: 1.4, emotionalImpact: 1.2 },
+        genreSpecificChecks: [
+          '服饰/场景是否达到古典美感标准，禁止现代道具或网红妆容出现',
+          '台词是否有半文半白腔调，称谓规范（公子/姑娘/将军/大人），禁止现代白话',
+          '武打场景是否有起势-行招-收势仪式感，禁止现代打斗风格',
+          '情感场景是否靠环境意象（梅花/灯笼/雨幕/烛光）传达，而非直白告白',
+          '古装wide_shot是否充分展示全身华服（竖屏高度优势），服饰质感是否清晰',
+          '每集是否有感情线或命运线的可感知推进',
+        ],
+      },
+
       arcDirectorGuide: {
         genreSegmentPrinciples: `① 段落核心是古代身份/命运的博弈——每段围绕一个具体的家国或情感危机
 ② 每段落以一个"生死关头+情义抉择"为高潮
@@ -1786,7 +2081,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续2集无感情线推进或命运变化=节奏停滞
 - 武打场景Shot平均>3秒=节奏过慢（武打段需1.5-2.5秒/Shot）`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': ANCIENT_STORYBOARD_PROMPT,
+        'arc-director': ANCIENT_ARC_DIRECTOR_PROMPT,
+        'episode-director': ANCIENT_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': ANCIENT_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': ANCIENT_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': ANCIENT_PACING_ANALYZER_PROMPT,
+        'continuity-guard': ANCIENT_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': ANCIENT_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': ANCIENT_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': ANCIENT_DIALOGUE_COACH_PROMPT,
+        'script-editor': ANCIENT_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': ANCIENT_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -1862,16 +2170,63 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
           '允许慢区：史实交代可放缓，旁白占15%以内',
       } satisfies GenreProfilerExamples,
           genreArchetypePreset: {
-            narrativeArc: 'quest',
-            narrationRatio: 0.05,
-            factConstraint: 'none',
+            narrativeArc: 'rise_and_fall',
+            narrationRatio: 0.15,
+            factConstraint: 'period_accurate',
             hookMechanism: 'revelation',
-            conflictType: 'good_vs_evil',
-            characterEvolution: 'power_level',
-            visualTone: 'ethereal',
-            adaptationNotes: `- 旁白叙述占比约5%，用于世界观建构说明（仙界规制/功法等级/门派体系），声音空灵\n- 每集必须有一个神力震撼moment：法术施展规模感 > 人际情感细节\n- 台词风格：仙侠腔调（文言成分较高）；禁止现代网络用语；法术/境界称谓须全剧统一（金丹/元婴/渡劫）\n- 集末钩子偏好境界突破前/天机揭示前型（revelation）\n- 实力提升须有视觉外显：光效/服饰/法宝变化；对手的震惊反应比主角表情更重要（power_level evolution）\n- 叙事以使命/修炼/天道对抗为主线推进（quest）：每段落应有修炼目标和天道阻碍\n- 节奏模式：开场10%机缘觉醒+使命建立 → 修炼30%境界推进+门派/天道挑战 → 上升25%关键战役加速 → 高潮25%终极对决+天道抉择 → 新使命+更大危机钩子10%\n- 记录重点：修炼境界里程碑；法术/法宝连续性；善恶阵营势力消长`,
+            conflictType: 'fate_vs_will',
+            characterEvolution: 'age_progression',
+            visualTone: 'epic',
+            adaptationNotes: `- 旁白叙述占比约15%，用于跨年代叙事锚定、历史背景说明；声音庄重厚重
+- 重大事件/年代/人物关系必须符合史实，细节可艺术化处理，禁止编造不存在的历史事实
+- 叙事弧线兴衰型（rise_and_fall）：人物命运与朝代更迭绑定，阶段分明
+- 集末钩子偏好命运揭示/历史节点即将来临型（revelation）
+- 角色须有跨时间段外观变化：服饰/气质随年代和地位演变（age_progression）
+- 台词风格：历史正剧腔调，半文言；称谓规范（陛下/相国/将军/先生）；禁止现代白话腔
+- 节奏模式：开场10%历史背景建立+人物登场 → 铺垫25%朝堂/战场关系积累（偏慢但史诗感） → 上升25%历史转折点加速 → 高潮25%命运时刻 → 史诗收尾+历史评价15%
+- 记录重点：史实合规节点；朝代背景标注；人物命运与历史事件绑定度`,
           } satisfies GenreArchetypePreset,
           profilerArchetypeSection: `0. genreArchetype：【题材基础参数已由模板预置，直接输出以下 JSON（adaptationNotes 可在末尾追加本剧专有台词/视觉特征 0-2 条，勿删减原有内容）】\n   narrativeArc: "rise_and_fall"\n   narrationRatio: 0.15\n   factConstraint: "period_accurate"\n   hookMechanism: "revelation"\n   conflictType: "fate_vs_will"\n   characterEvolution: "age_progression"\n   visualTone: "epic"\n   adaptationNotes 基线：\n   - 旁白叙述占比约15%，用于跨年代叙事锚定、历史背景说明；声音庄重厚重\n   - 重大事件/年代/人物关系必须符合史实，细节可艺术化处理，禁止编造不存在的历史事实\n   - 叙事弧线兴衰型（rise_and_fall）：人物命运与朝代更迭绑定，阶段分明\n   - 集末钩子偏好命运揭示/历史节点即将来临型（revelation）\n   - 角色须有跨时间段外观变化：服饰/气质随年代和地位演变（age_progression）\n   - 台词风格：历史正剧腔调，半文言；称谓规范（陛下/相国/将军/先生）；禁止现代白话腔\n   - 节奏模式：开场10%历史背景建立+人物登场 → 铺垫25%朝堂/战场关系积累（偏慢但史诗感） → 上升25%历史转折点加速 → 高潮25%命运时刻 → 史诗收尾+历史评价15%\n   - 记录重点：史实合规节点；朝代背景标注；人物命运与历史事件绑定度`,
+
+      cameraStyleGuide: {
+        preferredAngles: ['wide', 'bird_eye', 'high_angle', 'three_quarter', 'low_angle'],
+        signatureTechniques: ['史诗battle蒙太奇（bird_eye全局→ground_level士兵视角快切）', '朝堂权力构图（皇帝居中俯视群臣）', '历史时刻仰拍+crane_up（赋予事件历史分量）', '旁白配合wide_shot+slow_pan（时间流逝感）'],
+        transitionStyle: '旁白段慢dissolve+环境wide；战役硬切快速蒙太奇；时间跨度大时fade_to_black+时间字幕',
+        cameraRuntime: {
+          climax:
+            '■ 【历史剧高潮=历史时刻四镜公式】Shot①wide全局态势（战役/朝政格局）→Shot②medium主角在历史关键节点的选择/行动→Shot③crane_up仰拍（将人物与历史框架同时呈现）→Shot④wide aftermath（历史格局改变）',
+          confrontation:
+            '■ 【历史剧对峙=朝堂博弈三阶段】① 权力格局wide建立（谁站哪，谁先开口）② 台词机锋：over_shoulder交替+ECU面部微表情 ③ 落定：high_angle俯拍败方，主角medium+front定格',
+          romantic:
+            '■ 【历史剧情感场景】以历史大背景衬托情感：wide国破山河背景中的两人close_up；情感靠行动和眼神，不靠直白台词\n■ qualityTier: "standard"',
+        },
+      },
+
+      audioStyleGuide: {
+        bgmMoodPreferences: ['史诗铜管+弦乐（战役/历史时刻）', '古典弦乐+编钟（朝堂权谋）', '宏大合唱（命运时刻）', '古筝/琵琶+管弦融合（文戏情感）', '战鼓节奏（军事部署）'],
+        sfxDensity: 'rich',
+        silenceUsage: '历史重大决定前long_silence（1-2s）强调分量；战役结束后silence+悲壮余音；旁白叙述段BGM降至intensity=0.2不抢旁白',
+        voiceActingStyle: '旁白：庄重厚重，男声低沉有力；角色台词有历史腔调（半文言）；皇帝/高位者语速慢而有权威感；战场指令简洁有力',
+        genreBrandingDirective:
+          '■ 【史诗格局BGM】铜管+弦乐+合唱，intensity=0.6-0.85；wide史诗场景时BGM必须达到这个强度\n' +
+          '■ 【朝堂权谋BGM】古典弦乐+编钟，intensity=0.25-0.5；对话场BGM降至0.1-0.2（不盖台词）\n' +
+          '■ 【战役蒙太奇音频】战鼓节奏为主+弦乐紧张律动，intensity=0.75-0.9；SFX：兵器碰撞/战马嘶鸣/号角声精准卡帧\n' +
+          '■ 【历史时刻（命运落定）音频三阶】① 蓄势：BGM渐强至0.75 ② 关键动作：drop_to_near_silence 0.5s ③ 历史落定：宏大合唱+铜管swell，intensity=0.9\n' +
+          '■ 【旁白段音频】BGM必须降至intensity=0.15-0.25，以旁白声音为主体；禁止旁白时BGM强过人声',
+      },
+
+      reviewerCalibration: {
+        dimensionWeights: { visualImpact: 1.4, dialogueNaturalness: 1.2, pacing: 1.1, hookStrength: 1.3, consistency: 1.5, emotionalImpact: 1.0 },
+        genreSpecificChecks: [
+          '历史事件/人物关系是否符合史实，有无明显历史错误',
+          '旁白是否≤15%，且用于时代背景说明而非推进剧情（禁止纪录片式说明）',
+          '重大历史时刻是否使用wide/crane_up的史诗构图，有无历史分量感',
+          '战役场景是否有bird_eye→ground_level的层次变化，BGM intensity是否达到0.75+',
+          '台词是否有历史腔调（半文言），称谓规范（陛下/相国/将军），禁止现代白话',
+          '每段是否有历史格局的可见变化（权力结构/人物命运），而非原地踏步',
+        ],
+      },
+
       arcDirectorGuide: {
         genreSegmentPrinciples: `① 段落核心是历史风云中的权谋演变——每段围绕一个具体的政治危机或军事冲突
 ② 历史事件是框架，人物情感是内核，两者必须同步推进
@@ -1920,7 +2275,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续3集无历史格局变化=叙事停滞
 - 战役场景平均Shot>4秒=缺乏史诗感（战争场景需快切蒙太奇）`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': HISTORY_STORYBOARD_PROMPT,
+        'arc-director': HISTORY_ARC_DIRECTOR_PROMPT,
+        'episode-director': HISTORY_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': HISTORY_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': HISTORY_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': HISTORY_PACING_ANALYZER_PROMPT,
+        'continuity-guard': HISTORY_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': HISTORY_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': HISTORY_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': HISTORY_DIALOGUE_COACH_PROMPT,
+        'script-editor': HISTORY_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': HISTORY_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -1996,16 +2364,63 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
           '允许慢区：人生积累段可放缓，旁白15-25%',
       } satisfies GenreProfilerExamples,
           genreArchetypePreset: {
-            narrativeArc: 'conflict_resolution',
-            narrationRatio: 0,
-            factConstraint: 'none',
+            narrativeArc: 'life_journey',
+            narrationRatio: 0.2,
+            factConstraint: 'period_accurate',
             hookMechanism: 'revelation',
             conflictType: 'fate_vs_will',
-            characterEvolution: 'power_level',
-            visualTone: 'dark',
-            adaptationNotes: `- 核心词汇：holographic/AI系统/赛博增强/终极武器；科技差距比人际权力更有力量\n- 台词风格：冷静精准，技术术语自然植入（不解释，直接用，观众会适应）；禁止古典腔调\n- 科技碾压时刻设计：对手的不可能反应 > 主角的施展过程；技术优势要直观可见\n- 集末钩子偏好系统即将崩溃/真实身份即将揭露型（revelation）\n- 能力提升通过赛博增强/AI辅助/武器升级外显（power_level evolution），须有具体名称\n- 视觉调性：暗色调主导（dark）；全息光效作为爽感时刻点缀；赛博感强过华丽感\n- 节奏模式：开场10%世界观冲击+核心威胁建立 → 积累25%能力习得+系统探索 → 上升30%科技对抗升级 → 高潮25%终极系统对决 → 新威胁体系+钩子10%\n- 记录重点：科技系统逻辑自洽性；能力升级里程碑；阵营科技差距量化`,
+            characterEvolution: 'age_progression',
+            visualTone: 'epic',
+            adaptationNotes: `- 旁白叙述占比约20%，旁白与角色表演交替推进，叙事跨度大时用旁白锚定时间线
+- 重大事件/年代/人物关系必须符合史实，细节可艺术化处理，禁止编造不存在的历史事实
+- 叙事弧线以人生阶段推进（成长→巅峰→转折→传承），每个阶段需有独立情感高点（life_journey）
+- 集末钩子偏好命运揭示/认知颠覆型，而非纯剧情悬念（revelation）
+- 角色须有跨时间段外观变化：少年→青年→壮年→老年，服饰和气质随年龄演变（age_progression）
+- 台词风格：半文半白（绝才狂傲型：简练有力，诗意意象代替直白情感）；称谓规范（陛下/相国/在下）
+- 潜台词：傲骨不用嘴说，用拒绝下跪代替我不服；威胁不明说，用听说某人失踪了
+- 节奏模式：开场10%人物基调建立 → 铺垫25%生活积累（偏慢但情感密度渐增） → 上升25%转折加速 → 高潮25%命运时刻密集 → 余韵+传承钩子15%
+- 记录重点：emotionalShift 反映内在成长；flashbackCandidates 标记人生转折；plotAdvances 按人生阶段记录`,
           } satisfies GenreArchetypePreset,
           profilerArchetypeSection: `0. genreArchetype：【题材基础参数已由模板预置，直接输出以下 JSON（adaptationNotes 可在末尾追加本剧专有台词/视觉特征 0-2 条，勿删减原有内容）】\n   narrativeArc: "life_journey"\n   narrationRatio: 0.2\n   factConstraint: "period_accurate"\n   hookMechanism: "revelation"\n   conflictType: "fate_vs_will"\n   characterEvolution: "age_progression"\n   visualTone: "epic"\n   adaptationNotes 基线：\n   - 旁白叙述占比约20%，旁白与角色表演交替推进，叙事跨度大时用旁白锚定时间线\n   - 重大事件/年代/人物关系必须符合史实，细节可艺术化处理，禁止编造不存在的历史事实\n   - 叙事弧线以人生阶段推进（成长→巅峰→转折→传承），每个阶段需有独立情感高点（life_journey）\n   - 集末钩子偏好命运揭示/认知颠覆型，而非纯剧情悬念（revelation）\n   - 角色须有跨时间段外观变化：少年→青年→壮年→老年，服饰和气质随年龄演变（age_progression）\n   - 台词风格：半文半白（绝才狂傲型：简练有力，诗意意象代替直白情感）；称谓规范（陛下/相国/在下）\n   - 潜台词：傲骨不用嘴说，用拒绝下跪代替我不服；威胁不明说，用听说某人失踪了\n   - 节奏模式：开场10%人物基调建立 → 铺垫25%生活积累（偏慢但情感密度渐增） → 上升25%转折加速 → 高潮25%命运时刻密集 → 余韵+传承钩子15%\n   - 记录重点：emotionalShift 反映内在成长；flashbackCandidates 标记人生转折；plotAdvances 按人生阶段记录`,
+
+      cameraStyleGuide: {
+        preferredAngles: ['close_up', 'three_quarter', 'wide', 'pov', 'bird_eye'],
+        signatureTechniques: ['人物观察close_up（捕捉内心转折瞬间，自然光）', '时间流逝蒙太奇（同一地点不同年龄的对比构图）', '旁白配合wide+slow_pull_back（人物渐渐远去/历史感）', '才华展示insert_shot（诗词/书画/技艺的close_up）'],
+        transitionStyle: '跨年龄段dissolve+色调渐变；现实场景硬切；旁白段慢推；人生里程碑时刻brief_pause后接swell',
+        cameraRuntime: {
+          climax:
+            '■ 【传记高潮=人生里程碑四镜】Shot①wide建立历史时刻背景→Shot②close_up主角面部（情感深度，不是爽感）→Shot③才华/行动的ECU（意志的具体体现）→Shot④crane_up人物与历史同框（传记剧最强视觉语言）',
+          confrontation:
+            '■ 【传记对峙=以才华/意志抗争权力压迫】Shot①wide权贵阵营（high_angle俯压）→Shot②主角medium+front（不卑不亢，头颅不低）→Shot③才华展示insert_shot→Shot④对方reaction ECU（震惊或恼怒）',
+          romantic:
+            '■ 【传记情感场景】情感依托于具体历史情境；相聚：自然光wide+两人同帧（历史背景衬底）；离别：slow_pull_back至wide，两人渐渐成为历史风景的一部分\n■ qualityTier: "standard"',
+        },
+      },
+
+      audioStyleGuide: {
+        bgmMoodPreferences: ['钢琴主题两套（少年希望版+沧桑版）', '情感弦乐（人生感悟段）', '史诗管弦（命运时刻）', '时代感背景音乐（场景氛围）', '空灵人声合唱（传承/不朽段）'],
+        sfxDensity: 'sparse',
+        silenceUsage: '人生重大抉择前long_silence（1-2s）；顿悟时刻near_silence+单一环境音（风声/水声）；传承/不朽时刻完全静默后接主题旋律完整版',
+        voiceActingStyle: '旁白：深沉有历史感，男/女声均可，语速不急；主角台词随年龄演变（少年跳脱→壮年坚定→晚年深沉）；关键人生台词语速放慢，留白给情感',
+        genreBrandingDirective:
+          '■ 【人生阶段BGM对应】少年/起步期：钢琴fingerpicking，明亮，intensity=0.3；巅峰期：弦乐+管弦，intensity=0.6；挫折/低谷期：钢琴低沉版+弦乐，intensity=0.2-0.3；传承段：主题完整版+合唱，intensity=0.75\n' +
+          '■ 【才华展示音频】场景BGM降至intensity=0.15，突出才华行动的声音细节（笔墨/弦音/言辞本身）；观众反应后BGM swell\n' +
+          '■ 【命运时刻三阶音频】① 蓄势（人生危机顶点）：BGM渐弱至near_silence ② 抉择落定：drop_to_silence 1s ③ 历史评价/传承：主题swell+人声合唱，intensity=0.8\n' +
+          '■ 【旁白段音频】BGM降至intensity=0.1-0.2，旁白声音为绝对主体；旁白结束后BGM缓慢升回',
+      },
+
+      reviewerCalibration: {
+        dimensionWeights: { visualImpact: 1.1, dialogueNaturalness: 1.3, pacing: 1.0, hookStrength: 1.1, consistency: 1.5, emotionalImpact: 1.5 },
+        genreSpecificChecks: [
+          '角色跨年龄段的视觉变化是否清晰可感知（色调/服饰/摄影距离），3秒内能识别时间线',
+          '旁白是否≤20%，且服务于时间线锚定而非代替剧情推进',
+          '才华展示是否有insert_shot（技艺ECU），而非只靠台词描述',
+          '命运时刻是否使用crane_up+wide让人物与历史背景同框',
+          '是否避免了"打脸逆袭"套路，情感靠行为和眼神传达而非激动大喊',
+          '每个人生阶段是否有独立的情感高点（获得与失去并存，非纯胜利）',
+        ],
+      },
+
       arcDirectorGuide: {
         genreSegmentPrinciples: `① 段落按人生阶段划分——成长期→上升期→巅峰期→转折期→传承期
 ② 每段落以一个人生里程碑为核心（重大成就/重大挫折/人生抉择）
@@ -2054,7 +2469,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续3集无人生里程碑或重大事件=节奏停滞
 - 人生领悟场景少于3Shot停留>5秒=情感不够深沉（传记剧需要情感沉淀时间）`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': BIOGRAPHY_STORYBOARD_PROMPT,
+        'arc-director': BIOGRAPHY_ARC_DIRECTOR_PROMPT,
+        'episode-director': BIOGRAPHY_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': BIOGRAPHY_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': BIOGRAPHY_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': BIOGRAPHY_PACING_ANALYZER_PROMPT,
+        'continuity-guard': BIOGRAPHY_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': BIOGRAPHY_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': BIOGRAPHY_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': BIOGRAPHY_DIALOGUE_COACH_PROMPT,
+        'script-editor': BIOGRAPHY_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': BIOGRAPHY_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -2086,7 +2514,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         hookTypesHint: 'preferredTypes 参考（神话/仙侠）：["天赋觉醒","法宝解封","强敌登场","仙界秘密","命运使命揭示","守护牺牲"]',
         toneHint: 'toneGuardrails 参考：战斗场面要有震撼感；善恶要清晰（观众需要明确支持主角）；世界观一旦建立不能随意破坏',
         narrativeModeTip: '台词 > 动作 > 旁白，神话世界观必须在前5集内让观众理解规则',
-        coreConflictExample: '（如：人间凡子意外获得上古神器，被卷入三界争霸的洪流）',
+        coreConflictExample: '（如：被诸神遗弃的废灵根少年，体内封印着远古凶神意志——他每一次突破都在放出那头猛兽，力量越强，失去自我越近）',
         paywallTip: '突破型→卡在"主角即将觉醒/突破/获得神器"之前；卡在"天劫"或"大Boss降临"',
         antagonistTip: '反派：神魔大Boss、嫉妒的仙人、反派势力的代理人，实力必须有压迫感',
         historicalConstraint: '=== 神话题材特殊规则 ===\n- 涉及封神榜、西游记等经典神话体系时，人物关系/神位需基本符合原著框架\n- 可以创造原创神明，但需与世界观兼容，不能与经典神话矛盾\n- catharsisType：实力碾压/法宝觉醒/天劫突破/神位加身',
@@ -2129,20 +2557,21 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
       } satisfies GenreProfilerExamples,
 
           genreArchetypePreset: {
-            narrativeArc: 'life_journey',
-            narrationRatio: 0,
+            narrativeArc: 'quest',
+            narrationRatio: 0.05,
             factConstraint: 'none',
-            hookMechanism: 'emotional_peak',
-            conflictType: 'society',
-            characterEvolution: 'costume_only',
-            visualTone: 'glamorous',
-            adaptationNotes: `- 冲突贴近现实：职场PUA/家庭矛盾/感情选择，避免夸张权力斗争
-- 台词风格：现代白话，自然口语；禁止过度戏剧化腔调；情感宣泄用行动代替大段独白
-- 集末钩子偏好"情感炸弹"型：人物关系刚拉近时遭遇误解，或重大选择前截断
-- 节奏可适当放缓：允许2-3集铺垫人物关系；但每5集内必须有一个情感高点
-- 人生旅程型叙事（life_journey）：以人物阶段性成长推进，而非单一冲突解决
-- 节奏模式：开场10%人物处境建立 → 生活铺垫20%（关系积累，节奏稍慢但情感密度渐增） → 上升30%核心矛盾爆发 → 高潮25%关系/人生抉择 → 成长收尾+钩子15%
-- 记录重点：人物内在成长里程碑；关系变化节点；社会矛盾代入感`,
+            hookMechanism: 'revelation',
+            conflictType: 'good_vs_evil',
+            characterEvolution: 'power_level',
+            visualTone: 'ethereal',
+            adaptationNotes: `- 旁白叙述占比约5%，用于世界观建构说明（仙界规制/功法等级/门派体系），声音空灵
+- 每集必须有一个神力震撼moment：法术施展规模感 > 人际情感细节
+- 台词风格：仙侠腔调（文言成分较高）；禁止现代网络用语；法术/境界称谓须全剧统一（金丹/元婴/渡劫）
+- 集末钩子偏好境界突破前/天机揭示前型（revelation）
+- 实力提升须有视觉外显：光效/服饰/法宝变化；对手的震惊反应比主角表情更重要（power_level evolution）
+- 叙事以使命/修炼/天道对抗为主线推进（quest）：每段落应有修炼目标和天道阻碍
+- 节奏模式：开场10%机缘觉醒+使命建立 → 修炼30%境界推进+门派/天道挑战 → 上升25%关键战役加速 → 高潮25%终极对决+天道抉择 → 新使命+更大危机钩子10%
+- 记录重点：修炼境界里程碑；法术/法宝连续性；善恶阵营势力消长`,
           } satisfies GenreArchetypePreset,
           profilerArchetypeSection: `0. genreArchetype：【题材基础参数已由模板预置，直接输出以下 JSON（adaptationNotes 可在末尾追加本剧专有台词/视觉特征 0-2 条，勿删减原有内容）】\n   narrativeArc: "quest"\n   narrationRatio: 0.05\n   factConstraint: "none"\n   hookMechanism: "revelation"\n   conflictType: "good_vs_evil"\n   characterEvolution: "power_level"\n   visualTone: "ethereal"\n   adaptationNotes 基线：\n   - 旁白叙述占比约5%，用于世界观建构说明（仙界规制/功法等级/门派体系），声音空灵\n   - 每集必须有一个神力震撼moment：法术施展规模感 > 人际情感细节\n   - 台词风格：仙侠腔调（文言成分较高）；禁止现代网络用语；法术/境界称谓须全剧统一（金丹/元婴/渡劫）\n   - 集末钩子偏好境界突破前/天机揭示前型（revelation）\n   - 实力提升须有视觉外显：光效/服饰/法宝变化；对手的震惊反应比主角表情更重要（power_level evolution）\n   - 叙事以使命/修炼/天道对抗为主线推进（quest）：每段落应有修炼目标和天道阻碍\n   - 节奏模式：开场10%机缘觉醒+使命建立 → 修炼30%境界推进+门派/天道挑战 → 上升25%关键战役加速 → 高潮25%终极对决+天道抉择 → 新使命+更大危机钩子10%\n   - 记录重点：修炼境界里程碑；法术/法宝连续性；善恶阵营势力消长`,
 
@@ -2150,30 +2579,39 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         preferredAngles: ['low_angle', 'bird_eye', 'worm_eye', 'wide', 'extreme_wide'],
         signatureTechniques: ['神明降临三镜（极广角鸟瞰→仰拍正面→ECU眼神）', '法术蓄力配方（集中close_up→爆发extreme_wide）', '飞天追逐（crane_up+orbit交替）', '神力碾压仰拍'],
         transitionStyle: '法术爆发后flash cut；神明传送用色彩骤变dissolve；普通场景硬切',
-        cinematographyDirective:
-          '■ 【神明/强者登场铁律】降临时：Shot①extreme_wide+bird_eye（天空云裂）Shot②crane_down+low_angle（强者从云中俯视众生）Shot③medium+front（正面直视，眼含神威）——visualPrompt必须写"mystical energy aura, glowing spiritual particles, divine presence"\n' +
-          '■ 【神力权力对比】神级强者：extreme_wide+worm_eye（显其高大无边）；弱者/凡人：high_angle+wide（显其渺小）\n' +
-          '■ 【身份揭露（仙侠版）】Shot①凡人身份close_up平静 Shot②感应到天机insert_shot（发光道具/天象异变ECU）Shot③神识觉醒ECU（眼睛发光）Shot④extreme_wide展示全场反应',
-        genreActionDirective:
-          '■ 【法术蓄力-释放公式（核心节奏）】Shot①蓄力：close_up手部/眼睛（specialTechnique=macro），visualPrompt="energy gathering in palm, glowing veins, crackling spiritual power" Shot②蓄力中期：medium_close_up+movement=slow_push_in Shot③释放：extreme_wide+movement=fast_pull，visualPrompt="massive energy eruption, shockwave expanding outward"\n' +
-          '■ 【飞天追逐铁律】飞行跟拍：crane_up+movement=tracking；空中格斗：orbit（镜头在双人周围环绕）；禁止使用handheld（仙侠战斗是流畅飞翔）\n' +
-          '■ 【大招/终极技五镜公式】Shot①medium主角决意表情→Shot②ECU手印/手势凝聚灵力→Shot③wide+crane_up能量柱冲天→Shot④敌方extreme_wide惊愕→Shot⑤extreme_wide+bird_eye大招落地',
-        genreIdentity:
-          '你是仙侠/神话短剧分镜导演，精通神力视觉语言与奇幻规模感。\n' +
-          '你的镜头词汇是：灵气粒子/云海仙境/神兵在手/法术爆炸/crane_up天地——看首帧即知"非人间"是你的第一原则。\n' +
-          '将单个剧本场景转化为Shot列表。',
-        genreCoreRules:
-          '1. 反转公式（大招/决定性一击）= 大招五镜：ECU蓄力 → 灵力汇聚wide → extreme_wide爆发 → 对方惊愕ECU → wide+crane_up定格\n' +
-          '2. 高潮爽感来自"神力规模差距"而非人际颠覆——大招落地的extreme_wide比打人close_up更有力\n' +
-          '3. 飞行/法术追逐：crane_up+tracking，禁止handheld\n' +
-          '4. 神力等级差距通过画面大小体现：神级强者=extreme_wide+worm_eye；凡人/弱者=wide+high_angle',
-        genrePurposeDirectives: {
+        cameraRuntime: {
           climax: '■ 【仙侠高潮=法术大招/终极对决五镜公式】Shot①medium主角决意（眼神凛冽，灵力在手聚集）→Shot②ECU手印/法印凝聚（specialTechnique=macro）→Shot③wide+crane_up能量柱冲天→Shot④敌方extreme_wide惊愕+fast_pull被推退→Shot⑤extreme_wide+bird_eye大招落地定格',
           confrontation: '■ 【神魔/强者对峙三阶段】① 气场压制（战前）：extreme_wide展示双方，两者之间留huge_negative_space ② 交击瞬间：两镜快切，visualPrompt="energy beams colliding, massive explosion of light and force" ③ 落定：fast_pull+crane_up（被击方飞出画面），胜方medium+low_angle+static',
           revelation: '■ 【仙侠揭秘=神识觉醒/身份揭露四镜公式】Shot①凡人身份close_up→Shot②感应异变insert_shot（发光道具/天象异变ECU）→Shot③神识觉醒ECU（眼睛发光，specialTechnique=slow_motion）→Shot④extreme_wide展示全场/天地反应',
           romantic: '■ 【仙侠情感场景】心动：slow_push_in+浅景深，visualPrompt必须加"soft spiritual glow, flower petals or light particles floating around"\n■ 心碎/离别：orbit绕拍两人边slow_pull_back，直到两人成为云海中的两个点',
         },
       },
+
+      audioStyleGuide: {
+        bgmMoodPreferences: ['史诗管弦+空灵人声合唱（神界/天道场景）', '古风弦乐+箫（修炼/凡间情感）', '神话主题上行旋律（神力觉醒）', '低频轰鸣+打击乐（妖魔降临）', '清澈钟声+竖琴（仙界纯净感）'],
+        sfxDensity: 'rich',
+        silenceUsage: '顿悟/突破前absolute_silence（无BGM无SFX，0.5-1s）；神明显现时all_sfx_cut→静默→神圣钟声单音渐入；法术爆发后brief_silence强调规模感',
+        voiceActingStyle: '神仙：空灵克制，声音有轻微混响处理（非人间感）；凡人/弟子：正常腔调；魔头：低沉宏大，有压迫感；强者台词简短有力，语气平静如天道',
+        genreBrandingDirective:
+          '■ 【神界场景BGM】空灵人声合唱+竖琴+长笛，intensity=0.4-0.6；visualPrompt="mystical atmosphere, spiritual realm"\n' +
+          '■ 【法术蓄力-爆发三阶音频】①蓄力：低频drone渐强+灵气聚集SFX ②爆发瞬间：drop_to_silence 0.3s ③大招落地：巨响SFX+史诗管弦swell，intensity=0.9-1.0\n' +
+          '■ 【修炼/顿悟场BGM】古风弦乐+竖琴，intensity=0.2-0.35；空灵感为主，禁止节奏性强的打击乐\n' +
+          '■ 【妖魔降临BGM】低频轰鸣+军鼓+铜管dissonance，intensity=0.7-0.85；SFX：异象天音（天裂/雷鸣）精准卡帧\n' +
+          '■ 【神力觉醒音频】主题旋律上行+SFX灵气爆发声→人声合唱进入，intensity=0.75-0.9',
+      },
+
+      reviewerCalibration: {
+        dimensionWeights: { visualImpact: 1.6, dialogueNaturalness: 1.0, pacing: 1.3, hookStrength: 1.2, consistency: 1.2, emotionalImpact: 1.1 },
+        genreSpecificChecks: [
+          '每集是否有至少1个神力震撼moment：extreme_wide法术爆发（修炼慢段和神力快段的节奏对比是否强烈）',
+          '神级强者登场是否使用extreme_wide+worm_eye（规模感）；凡人面对神级是否有high_angle（渺小感）',
+          '法术大招是否完整经历：蓄力ECU→灵力wide→extreme_wide爆发→aftermath的五镜公式',
+          '台词是否有仙侠腔调（文言成分较高），法术/境界称谓是否全剧统一',
+          '顿悟/突破前是否有absolute_silence（无BGM无SFX）作为情绪锚点',
+          '神力提升是否有视觉外显（光效/服饰/法宝变化），对手的震惊反应是否明显',
+        ],
+      },
+
       arcDirectorGuide: {
         genreSegmentPrinciples: `① 段落核心是神力层级的突破——每段主角获得更强神力同时面临更大的天地/命运考验
 ② 每段落有一场"史诗级神力展示"作为高潮
@@ -2222,7 +2660,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续2集无神力展示或神话任务推进=节奏停滞
 - 全集高强度（intensity≥0.8）超过45%=神话感稀释（超强段必须是稀缺的）`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': MYTHOLOGY_STORYBOARD_PROMPT,
+        'arc-director': MYTHOLOGY_ARC_DIRECTOR_PROMPT,
+        'episode-director': MYTHOLOGY_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': MYTHOLOGY_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': MYTHOLOGY_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': MYTHOLOGY_PACING_ANALYZER_PROMPT,
+        'continuity-guard': MYTHOLOGY_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': MYTHOLOGY_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': MYTHOLOGY_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': MYTHOLOGY_DIALOGUE_COACH_PROMPT,
+        'script-editor': MYTHOLOGY_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': MYTHOLOGY_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -2267,7 +2718,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - genreRules 必须包含（至少5条）：① 科技差距叙事（用系统/数据/AI预判表达绝对优势）② 赛博世界视觉语言建构规范 ③ 信息差：主角先知道系统漏洞/AI预判结果 ④ 科技揭露的节奏（不一次性放出底牌）⑤ 人机关系的处理方式（AI不只是工具）
 - dialogueGuide：冷静克制的现代科技术语；AI/系统台词精准无情绪；操控界面时台词极简；禁止古风台词/传统都市权力话语
 - visualNarrativeGuide：第一帧=未来世界地标建立（赛博城市/太空站/holographic界面，必须有科幻环境词）；系统启动序列必须视觉化；科技揭露用数据insert_shot先于台词
-- forbiddenPatterns：科幻高潮写成都市打脸方式（应为系统压制/终极武器）；古风台词/称谓；firstFramePrompt不含科幻环境关键词`,
+- forbiddenPatterns：科幻高潮写成都市打脸方式（应为系统压制/终极武器）；古风台词/称谓；firstFramePrompt不含科幻环境关键词；科技设定前后自相矛盾（如AI第3集已知某信息，第8集却假装不知）；人性困境被完全略去导致剧情沦为纯视觉秀`,
 
       profilerExamples: {
         genreName: '科幻/赛博',
@@ -2299,17 +2750,18 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
             narrativeArc: 'conflict_resolution',
             narrationRatio: 0,
             factConstraint: 'none',
-            hookMechanism: 'plot_cliffhanger',
-            conflictType: 'interpersonal',
-            characterEvolution: 'status',
-            visualTone: 'period',
-            adaptationNotes: `- 古典美学是第一生产力：服饰质感与场景氛围是角色形象的一部分，禁止现代感道具
-- 台词风格：半文半白（核心句子有古风骨架，现代人听得懂）；称谓规范（公子/姑娘/将军/大人）；禁止现代网络用语
-- 武打设计：有起势-行招-收势仪式感；情感通过环境意象表达，而非直白语言
-- 集末钩子：战局翻转前截断，或身份暴露前截断（plot_cliffhanger）
-- 地位随武力/谋略/身份认可而变化（status evolution）：服饰等级与他人礼遇外显
-- 节奏模式：开场10%世界观建立+核心冲突种下 → 积累25%武艺/谋略成长 → 上升30%江湖/朝堂交锋加速 → 高潮25%终极对决 → 新天下格局+钩子10%
-- 记录重点：武力/地位成长里程碑；江湖/朝堂势力关系图；道具/服饰连续性`,
+            hookMechanism: 'revelation',
+            conflictType: 'fate_vs_will',
+            characterEvolution: 'power_level',
+            visualTone: 'dark',
+            adaptationNotes: `- 核心词汇：holographic/AI系统/赛博增强/终极武器；科技差距比人际权力更有力量
+- 台词风格：冷静精准，技术术语自然植入（不解释，直接用，观众会适应）；禁止古典腔调
+- 科技碾压时刻设计：对手的不可能反应 > 主角的施展过程；技术优势要直观可见
+- 集末钩子偏好系统即将崩溃/真实身份即将揭露型（revelation）
+- 能力提升通过赛博增强/AI辅助/武器升级外显（power_level evolution），须有具体名称
+- 视觉调性：暗色调主导（dark）；全息光效作为爽感时刻点缀；赛博感强过华丽感
+- 节奏模式：开场10%世界观冲击+核心威胁建立 → 积累25%能力习得+系统探索 → 上升30%科技对抗升级 → 高潮25%终极系统对决 → 新威胁体系+钩子10%
+- 记录重点：科技系统逻辑自洽性；能力升级里程碑；阵营科技差距量化`,
           } satisfies GenreArchetypePreset,
           profilerArchetypeSection: `0. genreArchetype：【题材基础参数已由模板预置，直接输出以下 JSON（adaptationNotes 可在末尾追加本剧专有台词/视觉特征 0-2 条，勿删减原有内容）】\n   narrativeArc: "conflict_resolution"\n   narrationRatio: 0\n   factConstraint: "none"\n   hookMechanism: "revelation"\n   conflictType: "fate_vs_will"\n   characterEvolution: "power_level"\n   visualTone: "dark"\n   adaptationNotes 基线：\n   - 核心词汇：holographic/AI系统/赛博增强/终极武器；科技差距比人际权力更有力量\n   - 台词风格：冷静精准，技术术语自然植入（不解释，直接用，观众会适应）；禁止古典腔调\n   - 科技碾压时刻设计：对手的不可能反应 > 主角的施展过程；技术优势要直观可见\n   - 集末钩子偏好系统即将崩溃/真实身份即将揭露型（revelation）\n   - 能力提升通过赛博增强/AI辅助/武器升级外显（power_level evolution），须有具体名称\n   - 视觉调性：暗色调主导（dark）；全息光效作为爽感时刻点缀；赛博感强过华丽感\n   - 节奏模式：开场10%世界观冲击+核心威胁建立 → 积累25%能力习得+系统探索 → 上升30%科技对抗升级 → 高潮25%终极系统对决 → 新威胁体系+钩子10%\n   - 记录重点：科技系统逻辑自洽性；能力升级里程碑；阵营科技差距量化`,
 
@@ -2317,29 +2769,39 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         preferredAngles: ['dutch_angle', 'bird_eye', 'low_angle', 'pov', 'wide'],
         signatureTechniques: ['科技揭示三镜（insert设备→数据流ECU→人物反应）', 'HUD/界面叠加（visualPrompt写入）', '太空零重力orbit', '赛博增强slow_motion'],
         transitionStyle: '技术性硬切为主；真相反转用dolly_zoom+flash；系统启动用数字故障dissolve',
-        cinematographyDirective:
-          '■ 【科技揭示三镜】Shot①insert shot：设备/屏幕特写（ECU），visualPrompt写"data streams, glowing interface" Shot②medium_close_up：操控者表情 Shot③wide：展示科技全景或行动结果\n' +
-          '■ 【AI/机器对抗】机器/AI一侧：cold_blue光源，movement=static（精确无情）；人类一侧：handheld（生命感）；AI做决定时：specialTechnique=dolly_zoom（认知颠覆感）\n' +
-          '■ 【认知反转公式】Shot①建立"现实"：medium+static Shot②植入怀疑：insert_shot（数据异常ECU）Shot③反转揭露：dolly_zoom+dutch_angle Shot④确认：ECU主角瞳孔（震惊）',
-        genreActionDirective:
-          '■ 【赛博增强战斗公式】增强部位激活（insert_shot:发光电路/机械关节ECU）→出击：movement=fast_push+specialTechnique=slow_motion（展示增强速度的碾压感）\n' +
-          '■ 【太空/零重力战斗】全用orbit：镜头不断围绕战斗者旋转，visualPrompt写"zero-gravity combat, floating debris, weightless movement"\n' +
-          '■ 【机器人/AI战斗】machine一侧：movement=static+slow_push_in（冷酷精准）；human一侧：handheld（混乱生存本能）',
-        genreIdentity:
-          '你是科幻短剧分镜导演，精通赛博美学与科技视觉语言。\n' +
-          '你的镜头词汇是：holographic displays/neon glow/cold blue-white light/data streams——看首帧即知"这是未来世界"是你的第一原则。\n' +
-          '将单个剧本场景转化为Shot列表。',
-        genreCoreRules:
-          '1. 反转公式（科技碾压版）= 终极科技对决四镜：主角启动终极系统（medium，holographic interface操控）→ 能量蓄积wide+crane_up → 对方extreme_wide惊愕 → extreme_wide+bird_eye落幕定格\n' +
-          '2. 高潮爽感来自"科技降维打击"——系统规模/数据压制/AI预判比个人勇武更有力\n' +
-          '3. 认知颠覆时specialTechnique=dolly_zoom（比都市版的fast_push更有"现实扭曲感"）',
-        genrePurposeDirectives: {
+        cameraRuntime: {
           climax: '■ 【科幻高潮=终极科技对决四镜公式】Shot①medium主角启动终极武器/系统（眼神坚定，手势操控holographic interface）→Shot②wide+crane_up能量蓄积→Shot③对方extreme_wide惊愕/被压制→Shot④extreme_wide+bird_eye落幕定格',
           confrontation: '■ 【科幻对峙=信息战/技术博弈三阶段】① 数据层对峙：two_shot双方各自控制holographic display，cold blue light笼罩 ② 攻势：close_up操控动作，cut接对方系统崩溃屏幕 ③ 落定：强势方medium+front，弱势方high_angle+slow_pull_back',
           revelation: '■ 【科幻揭秘=认知颠覆三镜公式】Shot①medium正常认知状态→Shot②specialTechnique=dolly_zoom+dutch_angle（认知开始崩塌）→Shot③ECU眼睛反射关键信息+specialTechnique=slow_motion',
           romantic: '■ 【科幻情感场景】人机情感/赛博配对：slow_push_in+浅景深，但visualPrompt加"soft blue data glow, digital connection visible between them, warm contrast against cold tech"',
         },
       },
+
+      audioStyleGuide: {
+        bgmMoodPreferences: ['电子合成器ambient（世界观建立）', '机械律动+低频bass（科技对抗）', '极简drone（悬念/计算感）', '科幻主题旋律（人性时刻反差）', '工业金属节拍（赛博增强/战斗）'],
+        sfxDensity: 'rich',
+        silenceUsage: '系统崩溃/关键决策前drop_to_silence（0.5-1s）；AI计算等待时极简机械音+心跳；真相反转时all_audio_cut→dolly_zoom视觉+延迟1s后音效爆发',
+        voiceActingStyle: 'AI/系统：合成感语音，精准无情绪波动，冷静陈述结果；主角：克制精准，技术术语自然植入；反派：理性逻辑，不情绪化（坏得很有逻辑）',
+        genreBrandingDirective:
+          '■ 【赛博世界观BGM】电子合成器ambient+低频drone，intensity=0.3-0.5；visualPrompt要配合"neon city/holographic interface"场景\n' +
+          '■ 【科技对抗三阶音频】①积累：机械节拍渐强，intensity=0.45-0.6 ②系统对决：drop_to_silence 0.5s ③科技爆发：金属冲击SFX+电子swell，intensity=0.85-0.95\n' +
+          '■ 【AI/系统音效设计】系统启动：数字化开机音序；AI决策：短促电子提示音；系统崩溃：数字撕裂音+BGM骤断\n' +
+          '■ 【人性困境场BGM（最重要的反差）】极简钢琴+弦乐，intensity=0.2-0.35；温暖音调与冷科技世界形成最强对比——这是科幻剧的人文价值所在\n' +
+          '■ 【集尾hook】BGM在真相即将揭露时渐强至0.7→dolly_zoom+BGM骤停→定格疑问',
+      },
+
+      reviewerCalibration: {
+        dimensionWeights: { visualImpact: 1.3, dialogueNaturalness: 1.2, pacing: 1.2, hookStrength: 1.4, consistency: 1.5, emotionalImpact: 1.1 },
+        genreSpecificChecks: [
+          '科技设定是否前后自洽——第N集确立的系统规则是否在后集保持一致，无"开后门"行为',
+          '每集是否有至少1个科幻世界规则的具体展示（通过剧情演示而非角色解释）',
+          '科技对决高潮是否使用终极科技对决四镜公式（启动→蓄积→惊愕→落幕），而非都市打脸方式',
+          'AI/系统一侧的镜头是否使用cold_blue+static（精确无情），人类一侧是否有handheld（生命感）',
+          '人性困境场景是否有温暖音调BGM（与冷科技世界形成反差），人文深度是否体现',
+          '认知颠覆时刻是否使用dolly_zoom而非普通cut或push',
+        ],
+      },
+
       arcDirectorGuide: {
         genreSegmentPrinciples: `① 段落核心是科技威胁等级递进——从局部事件→区域危机→文明存亡
 ② 每段落有一个"科技揭秘或科幻世界规则突破"作为高潮
@@ -2388,7 +2850,20 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续3集无科幻世界规则新揭示=世界观停滞
 - 人类道德困境场少于2Shot停留>5秒=科幻剧流于纯爽，失去深度`,
       },
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
+      agentSystemPrompts: {
+        'storyboard-director': SCIFI_STORYBOARD_PROMPT,
+        'arc-director': SCIFI_ARC_DIRECTOR_PROMPT,
+        'episode-director': SCIFI_EPISODE_DIRECTOR_PROMPT,
+        'audio-director': SCIFI_AUDIO_DIRECTOR_PROMPT,
+        'script-reviewer': SCIFI_SCRIPT_REVIEWER_PROMPT,
+        'pacing-analyzer': SCIFI_PACING_ANALYZER_PROMPT,
+        'continuity-guard': SCIFI_CONTINUITY_GUARD_PROMPT,
+        'hook-crafter': SCIFI_HOOK_CRAFTER_PROMPT,
+        'scriptwriter': SCIFI_SCRIPTWRITER_PROMPT,
+        'dialogue-coach': SCIFI_DIALOGUE_COACH_PROMPT,
+        'script-editor': SCIFI_SCRIPT_EDITOR_PROMPT,
+        'episode-recorder': SCIFI_EPISODE_RECORDER_PROMPT,
+      },
     },
   },
 
@@ -2431,11 +2906,17 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 
 };
 
-// ─── 预烘焙：将各题材 profile 的 per-genre 数据解析进模板 ────────────────────
-// 预配置题材（boss/sweet/...）的模板变成只剩 per-drama {{variable}} 的完整 prompt。
-// _custom 保持 BASE 原样（所有变量由 Profiler/Strategy 在运行时填充）。
-for (const [key, entry] of Object.entries(GENRE_TEMPLATES)) {
-  if (key !== '_custom') {
-    entry.profile.agentSystemPrompts = buildGenreAgentPrompts(entry.profile);
+/**
+ * 从中文题材名推断 GENRE_TEMPLATES key（如 '霸总' → 'boss'）。
+ * 匹配规则：displayName 完全匹配 或 genreKeywords 子串匹配。
+ * 未命中返回 undefined（调用方应降级到 _custom）。
+ */
+export function resolveGenreKey(genre: string): string | undefined {
+  if (!genre) return undefined;
+  for (const [key, tpl] of Object.entries(GENRE_TEMPLATES)) {
+    if (key === '_custom') continue;
+    if (tpl.displayName === genre) return key;
+    if (tpl.genreKeywords.some(k => genre.includes(k))) return key;
   }
+  return undefined;
 }

@@ -9,9 +9,9 @@
  *   - soulViews（Profiler 按 Agent 生成的本剧专属灵魂视图）是 basePromptSnapshot 的变量来源。
  *   - 用户在「创作工坊」看到并编辑的是已解析的 basePromptSnapshot（完整 prompt），不再是碎片。
  *
- * 预配置题材（boss / sweet / ...）的 agentSystemPrompts 已由 buildGenreAgentPrompts 将
- * per-genre 数据（arcDirectorGuide / cameraStyleGuide 等）预烘入模板，
- * 此处 resolveTemplate 对已烘入的占位符是无害的 no-op。
+ * 预配置题材（boss / sweet / ...）的 storyboard-director 提示词已由 genres/*.prompts.ts 提供
+ * WYSIWYG 完整内容，{{visualStyleSection}} 是唯一的运行时占位符。其他 agent 的 BASE 模板
+ * 保留 per-drama 变量，由各 build* 函数从 profile/strategy/soul 解析并填充。
  * _custom 题材保持 BASE 原样，此处仍需完整解析所有变量。
  */
 import { Injectable, Logger } from '@nestjs/common';
@@ -100,8 +100,9 @@ export class DramaPromptBakerService {
       : undefined;
 
     // --- 为各节点烘焙 basePromptSnapshot ---
-    // 预配置题材：per-genre 数据已预烘入 agentSystemPrompts，playbook 的 genre 格式化对已烘入的占位符无害。
-    // _custom 题材：模板保持 BASE 原样，playbook 在此处完整解析所有变量。
+    // 预配置题材：storyboard-director 使用 WYSIWYG 提示词（genres/*.prompts.ts），只需解析 visualStyleSection。
+    //             其他 agent 的 BASE 模板通过 build* 函数解析 per-drama 变量。
+    // _custom 题材：所有 agent 使用 BASE 模板，build* 函数在此处完整解析所有变量。
     const snapshots: Record<string, string> = {
 
       'arc-director': buildArcDirectorSystemPrompt({
@@ -127,7 +128,7 @@ export class DramaPromptBakerService {
 
       'scriptwriter': buildScriptwriterSystemPrompt({
         guide: soul,
-        visualStyle: scriptwriterVisualStyle as any,
+        visualStyle: scriptwriterVisualStyle,
         genreArchetype,
       }, genreKey),
 
@@ -137,16 +138,16 @@ export class DramaPromptBakerService {
       }, genreKey),
 
       'storyboard-director': buildStoryboardDirectorStaticPrompt({
-        camGuide: cameraGuide as any,
-        visualStyle: visualStyle as any,
+        camGuide: cameraGuide,
+        visualStyle,
       }, genreKey),
 
       'audio-director': buildAudioDirectorStaticPrompt({
-        audioGuide: audioGuide as any,
+        audioGuide: audioGuide,
       }, genreKey),
 
       'script-reviewer': buildScriptReviewerSystemPrompt({
-        weights: reviewerCalib?.dimensionWeights as any,
+        weights: reviewerCalib?.dimensionWeights as Record<string, number> | undefined,
         genreChecks: reviewerCalib?.genreSpecificChecks,
         dialogueGuide: soul.dialogueGuide,
       }, genreKey),

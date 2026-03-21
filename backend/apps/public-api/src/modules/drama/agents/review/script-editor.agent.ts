@@ -14,7 +14,7 @@ import { DramaPromptTemplateService } from '../../prompting/drama-prompt-templat
 
 const editorOutputSchema = z.object({
   storyboard: episodeStoryboardSchema,
-  script: episodeScriptSchema.optional(),
+  script: episodeScriptSchema.optional().nullable(),
 });
 
 export interface ScriptEditorResult {

@@ -417,6 +417,9 @@ export class LlmService {
 
   private static readonly LLM_TIMEOUT_MS = 180_000; // 3分钟，防止hung连接
 
+  /** o1/o3/o4 系列及 gpt-5+ 不支持 temperature 参数 */
+  private static readonly NO_TEMPERATURE_RE = /^(o[1-9]|gpt-5)/;
+
   private createChatModel(provider: LlmProvider, cfg: ProviderConfig, model: string, temperature: number) {
     const proxyHeaders = cfg.baseUrl ? { 'User-Agent': 'Mozilla/5.0' } : undefined;
     if (provider === 'claude') {
@@ -427,17 +430,18 @@ export class LlmService {
       });
     }
     if (provider === 'openai') {
+      const tempParam = LlmService.NO_TEMPERATURE_RE.test(model) ? {} : { temperature };
       if (cfg.azure && cfg.azureInstanceName) {
         return new AzureChatOpenAI({
           azureOpenAIApiKey: cfg.apiKey,
           azureOpenAIApiInstanceName: cfg.azureInstanceName,
           azureOpenAIApiDeploymentName: model,
           azureOpenAIApiVersion: cfg.azureApiVersion || '2024-12-01-preview',
-          temperature, maxRetries: 0, maxTokens: 16384,
+          ...tempParam, maxRetries: 0, maxTokens: 16384,
         });
       }
       return new ChatOpenAI({
-        apiKey: cfg.apiKey, model, temperature, maxRetries: 0, timeout: LlmService.LLM_TIMEOUT_MS,
+        apiKey: cfg.apiKey, model, ...tempParam, maxRetries: 0, timeout: LlmService.LLM_TIMEOUT_MS,
         configuration: {
           baseURL: cfg.baseUrl,
           ...(proxyHeaders ? { defaultHeaders: proxyHeaders } : {}),

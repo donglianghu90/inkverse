@@ -2,15 +2,17 @@
  * Drama Playbook — 所有 Agent System Prompt 的构建入口。
  *
  * 架构原则：
- *   - 所有提示词文本集中在 drama-agent-system-prompts.ts 的 BASE 模板中，本文件 **不包含** 任何硬编码提示词。
- *   - 题材专属数据（arcDirectorGuide / cameraStyleGuide 等）已由 buildGenreAgentPrompts
- *     预烘入各题材的 agentSystemPrompts（见 drama-genre-data.ts 末尾循环）。
+ *   - 14 个预配置题材的 8 个 pipeline agent 提示词（storyboard / arc / episode / audio /
+ *     reviewer / pacing / continuity / hook）均为 WYSIWYG：题材专属内容直接内联在
+ *     genres/*.prompts.ts 中，不依赖 BASE 模板拼接。每集仅剩少量 per-drama {{}} 占位符。
+ *   - _custom 题材使用 BASE 模板（drama-agent-system-prompts.ts），所有 {{}} 占位符
+ *     由 Profiler 运行时生成数据后，在 DramaPromptBakerService 调用 build* 函数时填充。
+ *   - scriptwriter / dialogue-coach / script-editor / episode-recorder 所有题材共用
+ *     BASE 模板（这 4 个 agent 的核心逻辑跨题材一致，per-drama 差异通过 soulViews 注入）。
  *   - 本文件每个 buildXxx 函数的职责：
- *     ① getTemplate(agentId, genreKey) 查找题材模板（预烘入后只剩 per-drama 变量）
+ *     ① getTemplate(agentId, genreKey) 查找题材模板（WYSIWYG 或 BASE）
  *     ② 从 ctx 参数构建 per-drama 变量 map
- *     ③ resolveTemplate(template, vars) 填充运行时值
- *   - 对于预配置题材，per-genre 变量已被实际内容替换，resolveTemplate 对其为无害 no-op。
- *   - 对于 _custom 题材，模板保持 BASE 原样，所有变量在此处完整解析。
+ *     ③ resolveTemplate(template, vars) 填充运行时值（多余变量会被忽略）
  */
 
 import type { GenreArchetype } from '../schemas/drama-state.schemas';
@@ -61,6 +63,7 @@ import {
   PROFILER_PACING_GENERATE,
   PROFILER_SOUL_HEADER,
   PROFILER_SOUL_DEFAULT,
+  buildCamTechSection,
 } from './drama-agent-system-prompts';
 import { GENRE_TEMPLATES } from './drama-genre-data';
 
@@ -358,6 +361,7 @@ export function buildStoryboardDirectorStaticPrompt(ctx?: {
     genreIdentity?: string;
     genreCoreRules?: string;
     genreNarrativePrinciples?: string;
+    colorPalette?: string;
   };
   visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string; renderTechnique?: string; textureStyle?: string; referenceStyle?: string };
 }, genreKey?: string): string {
@@ -365,28 +369,13 @@ export function buildStoryboardDirectorStaticPrompt(ctx?: {
   const cam = ctx?.camGuide;
   const vs = ctx?.visualStyle;
 
-  const buildCamTech = (): string => {
-    if (cam?.cinematographyDirective) {
-      let s = `=== 【题材摄影核心手册】===\n${cam.cinematographyDirective}\n`;
-      if (cam.preferredAngles?.length) s += `偏好角度：${cam.preferredAngles.join('、')}\n`;
-      if (cam.signatureTechniques?.length) s += `标志手法：${cam.signatureTechniques.join('、')}\n`;
-      if (cam.transitionStyle) s += `转场偏好：${cam.transitionStyle}\n`;
-      return s;
-    }
-    return [
-      cam?.preferredAngles?.length ? `偏好角度：${cam.preferredAngles.join('、')}` : '',
-      cam?.signatureTechniques?.length ? `标志手法：${cam.signatureTechniques.join('、')}` : '',
-      cam?.transitionStyle ? `转场偏好：${cam.transitionStyle}` : '',
-    ].filter(Boolean).join('\n');
-  };
-
   const visualStyleSection = vs
     ? `美学：${vs.overallAesthetic ?? ''} | 调色：${vs.colorGrading ?? ''} | 光影：${vs.lightingStyle ?? ''}${vs.renderTechnique ? ` | 渲染：${vs.renderTechnique}` : ''}${vs.textureStyle ? ` | 材质：${vs.textureStyle}` : ''}${vs.referenceStyle ? ` | 参考：${vs.referenceStyle}` : ''}`
     : '';
 
   return resolveTemplate(template, {
     genreIdentity: cam?.genreIdentity?.trim() || '',
-    camTechSection: buildCamTech(),
+    camTechSection: buildCamTechSection(cam),
     genreCoreRulesSection: cam?.genreCoreRules?.trim()
       ? `=== 【题材分镜核心原则】===\n${cam.genreCoreRules.trim()}\n`
       : '',
@@ -395,6 +384,9 @@ export function buildStoryboardDirectorStaticPrompt(ctx?: {
       : '',
     genreNarrativePrinciplesSection: cam?.genreNarrativePrinciples?.trim()
       ? `=== 【题材叙事镜头思维】===\n${cam.genreNarrativePrinciples.trim()}\n`
+      : '',
+    colorPaletteSection: cam?.colorPalette?.trim()
+      ? `=== 【题材色彩调性】===\n${cam.colorPalette.trim()}\n请在 firstFramePrompt / lastFramePrompt 的光线与色彩描述中优先使用上述调性。\n`
       : '',
     visualStyleSection,
   });
@@ -544,12 +536,16 @@ export function buildHookCrafterStaticPrompt(ctx?: {
   strategy?: { avoidRecentRepeatWindow?: number; preferredTypes?: string[]; urgencyBias?: string };
   genreRules?: string[];
   genreArchetype?: Pick<GenreArchetype, 'adaptationNotes'>;
+  extraHookTypes?: string;
 }, genreKey?: string): string {
   const template = getTemplate('hook-crafter', genreKey);
   const strategy = ctx?.strategy;
   return resolveTemplate(template, {
-    extraHookTypes: ctx?.genreArchetype?.adaptationNotes
-      ? `\n=== 本剧题材专属悬念扩展 ===\n${ctx.genreArchetype.adaptationNotes}\n`
+    extraHookTypes: ctx?.extraHookTypes?.trim()
+      ? `\n${ctx.extraHookTypes.trim()}`
+      : '',
+    genreHookGuidance: ctx?.genreArchetype?.adaptationNotes?.trim()
+      ? `\n=== 本剧题材适配规则（悬念设计必须遵循）===\n${ctx.genreArchetype.adaptationNotes.trim()}\n`
       : '',
     avoidRepeatWindow: String(strategy?.avoidRecentRepeatWindow ?? 3),
     preferredTypes: strategy?.preferredTypes?.join('、') || '无特殊偏好',

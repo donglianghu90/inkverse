@@ -24,7 +24,8 @@
     "add-scheme-fields": "ts-node -r tsconfig-paths/register scripts/add-scheme-fields.ts",
     "backfill:chapter-memory-character-states": "ts-node -r tsconfig-paths/register scripts/backfill-chapter-memory-character-states.ts",
     "test:market-crawl": "ts-node -r tsconfig-paths/register scripts/test-market-crawl.ts",
-    "diagnose:hongguo-apis": "ts-node -r tsconfig-paths/register scripts/diagnose-hongguo-apis.ts"
+    "diagnose:hongguo-apis": "ts-node -r tsconfig-paths/register scripts/diagnose-hongguo-apis.ts",
+    "test:i2v": "ts-node scripts/test-volcengine-i2v.ts"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^8.17.1",
