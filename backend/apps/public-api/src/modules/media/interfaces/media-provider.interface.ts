@@ -35,7 +35,7 @@ export type VideoCapability = 't2v' | 'i2v' | 'v2v' | 'multi-ref' | 'audio-gen';
 export interface VideoGenerationRequest {
   prompt: string;
   duration?: number; // 秒数，默认 5
-  quality?: '480p' | '720p' | '1080p';
+  quality?: '720p' | '1080p';
   aspectRatio?: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9';
   referenceImages?: Array<{ url: string; role?: 'first_frame' | 'last_frame' | 'character' | 'style' }>;
   referenceVideos?: Array<{ url: string }>;

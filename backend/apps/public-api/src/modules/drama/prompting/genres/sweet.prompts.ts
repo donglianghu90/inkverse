@@ -37,6 +37,12 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 暖橙粉高亮度；误会段色温偏冷；和好时饱和度骤升
+firstFramePrompt 光影关键词：
+  甜蜜心动瞬间  → "warm golden hour sidelight, soft bokeh background, skin-flattering diffused wrap light, peach-orange color cast"
+  日常互动场景  → "soft window light, high-key warm ambient, gentle fill light, pastel color palette"
+  误会/冷战段   → "cool blue desaturated ambient, hard shadow separation, negative space emphasis, cold white overhead light"
+  和好/告白时刻 → "warm saturated sunset light, flare streak, diffused romantic haze, high-key golden fill"
+  暧昧靠近特写  → "shallow depth of field bokeh, soft diffused sidelight, highlight on lip and cheek contour"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

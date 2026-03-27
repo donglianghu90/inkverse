@@ -10,7 +10,7 @@ import axios, { AxiosInstance } from 'axios';
 import { ImageProvider, ImageCapability, ImageGenerationRequest, ImageGenerationResult } from '../../interfaces/media-provider.interface';
 import { KieAiCallbackService, KieAiTaskData } from './kieai-callback.service';
 import { KieAiPollingService } from './kieai-polling.service';
-import { kieAiRateLimitAcquire } from './kieai-rate-limiter';
+import { kieAiRateLimitAcquireSubmit } from './kieai-rate-limiter';
 
 export interface KieAiImageConfig {
   apiKey: string;
@@ -43,11 +43,29 @@ export interface KieAiImageConfig {
    * undefined = 不发送；true/false = 发送对应布尔值（可被 req.extra.google_search 覆盖）。
    */
   defaultGoogleSearch?: boolean;
+  /**
+   * 使用 quality 字段替代 resolution 字段（Seedream 5.0 Lite 系列）。
+   * true 时 input 发送 quality（basic/high），不发送 resolution。
+   */
+  useQualityField?: boolean;
+  /** 默认质量档位，仅 useQualityField=true 时生效，枚举: 'basic' | 'high'，默认 'basic' */
+  defaultQuality?: string;
+  /**
+   * 是否在 input 中包含 nsfw_checker 字段。
+   * undefined = 不发送；true/false = 发送对应布尔值（可被 req.extra.nsfw_checker 覆盖）。
+   */
+  defaultNsfwChecker?: boolean;
+  /**
+   * 使用 image_size 字段替代 aspect_ratio + resolution（google/nano-banana-edit 系列）。
+   * true 时 input 发送 image_size（如 '1:1'），不发送 aspect_ratio / resolution。
+   */
+  useImageSizeField?: boolean;
 }
 
 interface KieAiCreateResponse {
   code: number;
-  message?: string;
+  msg?: string;      // API 文档字段名
+  message?: string;  // 兼容旧字段
   data?: { taskId: string };
 }
 
@@ -84,10 +102,10 @@ export class KieAiImageProvider implements ImageProvider {
     const model = this.config.model;
 
     const aspectRatio = (req.extra?.aspect_ratio as string) || this.config.defaultAspectRatio;
-    const resolution = (req.extra?.resolution as string) || this.config.defaultResolution;
     const outputFormat = (req.extra?.output_format as string) || this.config.defaultOutputFormat;
 
     const maxImages = this.config.maxImageInput ?? 8;
+    // Kie.ai API 要求 image_input 为合法 URL（format: uri），不支持 base64 data URI
     const imageInput: string[] = this.config.supportsImageInput !== false
       ? (req.referenceImages ?? [])
           .map(img => img.url ?? '')
@@ -99,13 +117,29 @@ export class KieAiImageProvider implements ImageProvider {
 
     const input: Record<string, unknown> = {
       prompt: req.prompt,
-      aspect_ratio: aspectRatio,
-      resolution,
     };
+
+    if (this.config.useImageSizeField) {
+      // google/nano-banana-edit: 用 image_size 代替 aspect_ratio + resolution
+      input.image_size = aspectRatio;
+    } else {
+      input.aspect_ratio = aspectRatio;
+      if (this.config.useQualityField) {
+        const quality = (req.extra?.quality as string) || this.config.defaultQuality || 'basic';
+        input.quality = quality;
+      } else {
+        const resolution = (req.extra?.resolution as string) || this.config.defaultResolution;
+        input.resolution = resolution;
+      }
+    }
+
     if (outputFormat) input.output_format = outputFormat;
     if (imageInput.length) input[imageInputField] = imageInput;
     if (this.config.defaultGoogleSearch !== undefined) {
       input.google_search = req.extra?.google_search ?? this.config.defaultGoogleSearch;
+    }
+    if (this.config.defaultNsfwChecker !== undefined) {
+      input.nsfw_checker = req.extra?.nsfw_checker ?? this.config.defaultNsfwChecker;
     }
 
     const body: Record<string, unknown> = { model, input };
@@ -113,18 +147,22 @@ export class KieAiImageProvider implements ImageProvider {
 
     const useCallback = !!(this.callbackService && this.config.callBackUrl);
     const mode = useCallback ? 'callback' : 'polling';
+
+    const qualityOrRes = this.config.useQualityField
+      ? `quality=${input.quality}`
+      : `res=${input.resolution}`;
     this.logger.log(
-      `提交任务 [${mode}]: model=${model} ratio=${aspectRatio} res=${resolution}` +
+      `提交任务 [${mode}]: model=${model} ratio=${aspectRatio} ${qualityOrRes}` +
       (outputFormat ? ` fmt=${outputFormat}` : '') +
       (imageInput.length ? ` refImages=${imageInput.length}张` : '') +
-      (this.config.defaultGoogleSearch !== undefined ? ` googleSearch=${input.google_search}` : ''),
+      (this.config.defaultGoogleSearch !== undefined ? ` googleSearch=${input.google_search}` : '') +
+      (this.config.defaultNsfwChecker !== undefined ? ` nsfwChecker=${input.nsfw_checker}` : ''),
     );
 
-    // createTask 也纳入全局限速（20 req/10s）
-    await kieAiRateLimitAcquire();
+    await kieAiRateLimitAcquireSubmit();
     const createRes = await this.http.post<KieAiCreateResponse>('/api/v1/jobs/createTask', body);
     if (createRes.data.code !== 200 || !createRes.data.data?.taskId) {
-      throw new Error(`Kie.ai createTask 失败: code=${createRes.data.code} msg=${createRes.data.message}`);
+      throw new Error(`Kie.ai createTask 失败: code=${createRes.data.code} msg=${createRes.data.msg ?? createRes.data.message}`);
     }
 
     const taskId = createRes.data.data.taskId;

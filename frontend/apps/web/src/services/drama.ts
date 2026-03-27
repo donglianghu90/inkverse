@@ -79,7 +79,8 @@ export interface RefineVisualAssetResult {
 }
 
 export interface DramaUsageBucket {
-  llmCalls: number;
+  /** 后端聚合总费用（SUM(cost_cny)），作为总费用的权威来源 */
+  costCny: number;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -408,6 +409,11 @@ export async function generateShotImage(dramaId: string, episodeNumber: number, 
   return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/generate-image`, { method: 'POST' });
 }
 
+/** 单镜视频生成（同步 HTTP，适合制作台逐 Shot 手动触发） */
+export async function generateShotVideo(dramaId: string, episodeNumber: number, shotId: string): Promise<{ videoUrl: string; status: string }> {
+  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/generate-video`, { method: 'POST' });
+}
+
 export function getEpisodeProgressSseUrl(dramaId: string): string {
   const token = getToken();
   return `${BASE}/${dramaId}/episode-progress-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
@@ -690,3 +696,4 @@ export async function batchUpdateGlobalPromptSettings(items: Array<{ agentType: 
 export async function resetGlobalPromptSetting(agentType: string): Promise<GlobalPromptSetting> {
   return request(`${BASE}/global-prompt-settings/${agentType}/reset`, { method: 'PUT' });
 }
+

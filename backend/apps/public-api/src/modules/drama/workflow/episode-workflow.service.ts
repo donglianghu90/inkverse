@@ -16,7 +16,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DramaEntity } from '../entities/drama.entity';
 import { EpisodeEntity } from '../entities/episode.entity';
-import { DramaState } from '../schemas/drama-state.schemas';
+import { VisualAssetEntity } from '../entities/visual-asset.entity';
+import { DramaState, CharacterIdentity } from '../schemas/drama-state.schemas';
 import {
   ArcDirectorAgent,
   EpisodeDirectorAgent,
@@ -34,6 +35,16 @@ import { DramaWorkflowExecutionService } from './drama-workflow-execution.servic
 import { DramaCalibrationService } from './drama-calibration.service';
 import type { DramaAgentNodeConfig, DramaWorkflowParams } from '../interfaces';
 import { LlmTraceLoggerService } from '../../llm/llm-trace-logger.service';
+import { MediaService } from '../../media/media.service';
+import { RenderingProfileService } from '../../media/rendering/rendering-profile.service';
+import { PromptOptimizerService } from '../../media/prompt-optimizer.service';
+import { ImageProviderRouterService } from '../media-pipeline/image-provider-router.service';
+import {
+  buildAssetStylePrefix,
+  detectStyleBucket,
+  upsertReferenceByView,
+} from '../utils/asset-prompt.utils';
+import { ageToT2IPhrase, assembleT2iPrompt } from '../../media/rendering/rendering-profile';
 
 const STEP_ORDER = [ // 步骤顺序定义（用于断点续跑）
   'arc_planned', 'intent_ready', 'continuity_checked', 'script_drafted',
@@ -50,9 +61,12 @@ export class EpisodeWorkflowService {
   private readonly logger = new Logger(EpisodeWorkflowService.name);
   private readonly runningEpisodes = new Set<string>(); // 并发互斥锁：dramaId:epNum
 
+  private static readonly CHAR_IMAGE_SIZE = '2:3';
+
   constructor(
     @InjectRepository(DramaEntity) private readonly dramaRepo: Repository<DramaEntity>,
     @InjectRepository(EpisodeEntity) private readonly episodeRepo: Repository<EpisodeEntity>,
+    @InjectRepository(VisualAssetEntity) private readonly visualAssetRepo: Repository<VisualAssetEntity>,
     private readonly executionService: DramaWorkflowExecutionService,
     private readonly arcDirector: ArcDirectorAgent,
     private readonly episodeDirector: EpisodeDirectorAgent,
@@ -72,6 +86,10 @@ export class EpisodeWorkflowService {
     private readonly pipelineService: DramaAgentPipelineService,
     private readonly calibrationService: DramaCalibrationService,
     private readonly traceLogger: LlmTraceLoggerService,
+    private readonly mediaService: MediaService,
+    private readonly renderingProfileService: RenderingProfileService,
+    private readonly promptOptimizer: PromptOptimizerService,
+    private readonly imageRouter: ImageProviderRouterService,
   ) {}
 
   async generateEpisode(dramaId: string, episodeNumber: number): Promise<void> {
@@ -156,7 +174,7 @@ export class EpisodeWorkflowService {
       stepIndex: number,
       message: string,
       done = false,
-      extra?: { nodeId?: string; skipped?: boolean; skipReason?: string; stepKey?: string },
+      extra?: { nodeId?: string; skipped?: boolean; skipReason?: string; stepKey?: string; data?: Record<string, unknown> },
     ) => {
       if (extra?.skipped) {
         const stepKey = extra.stepKey ?? STEP_ORDER[stepIndex] ?? `ep_${stepIndex}`;
@@ -179,6 +197,7 @@ export class EpisodeWorkflowService {
         totalSteps: 13,
         message,
         done,
+        ...(extra?.data ? { data: extra.data } : {}),
       });
     };
     const logDrama = (step: string, status: 'ok' | 'error', message?: string, meta?: Record<string, unknown>) =>
@@ -294,9 +313,61 @@ export class EpisodeWorkflowService {
           }
           if (designed.length > 0) {
             logDrama('new_char_design_done', 'ok', `新角色设计: ${designed.map(c => `${c.characterId}(${c.name})`).join(', ')}`);
+            emitEp(1, `引入新角色 ${designed.map(c => c.name).join('、')}`);
           }
         }
 
+        // ── Step 1.5: 场景资产就绪 —— 自动设计本集引用的新场景 ──
+        const newLocationIds = (intent.locationIds ?? []).filter(
+          (lid: string) => !state.locations.some(l => l.locationId === lid),
+        );
+        if (newLocationIds.length > 0) {
+          emitEp(1, `设计新场景: ${newLocationIds.join('、')}...`);
+          const locationHints = newLocationIds.map((lid: string) => ({
+            locationId: lid,
+            name: lid,
+            narrativeContext: `E${episodeNumber} 集导演规划中引用了此场景`,
+          }));
+          try {
+            const newLocs = await this.visualAssetDesigner.designNewLocations(state, locationHints);
+            for (const loc of newLocs) {
+              state.locations.push(loc);
+              // Persist 到 VisualAssetEntity
+              const existing = await this.visualAssetRepo.findOne({
+                where: { dramaId, assetType: 'location', refId: loc.locationId },
+              });
+              if (!existing) {
+                await this.visualAssetRepo.save(this.visualAssetRepo.create({
+                  dramaId,
+                  assetType: 'location',
+                  refId: loc.locationId,
+                  name: loc.name,
+                  data: loc as unknown as Record<string, unknown>,
+                  referenceImageUrl: '',
+                  referenceImages: [],
+                }));
+              }
+            }
+            logDrama('new_loc_design_done', 'ok', `新场景设计: ${newLocs.map(l => `${l.locationId}(${l.name})`).join(', ')}`);
+            emitEp(1, `新场景设计完成: ${newLocs.map(l => l.name).join('、')}`);
+          } catch (locErr) {
+            this.logger.warn(`[E${episodeNumber}] 新场景设计失败(不影响继续): ${(locErr as Error).message}`);
+          }
+        }
+
+        // ── Step 1.5b: 角色定妆照 —— 跳过自动生成，由用户在集制作页面手动触发 ──
+        // 角色文本元数据（faceReferencePrompt 等）已在 Step A2 / designNewCharacters 中设计完成
+        // 参考图生成延迟到用户在 EpisodeProductionBoard 资产 Tab 中手动一键/逐个生成
+        const charsNeedingFace = (intent.activeCharacters ?? []).filter((ac: any) => {
+          const ch = state.characters.find(c => c.characterId === ac.characterId);
+          return ch?.faceReferencePrompt?.trim();
+        }).map((ac: any) => ac.characterId as string);
+        if (charsNeedingFace.length > 0) {
+          this.logger.log(`[E${episodeNumber}] ${charsNeedingFace.length} 个角色需要定妆照，已跳过自动生成（请在集制作页面手动触发）`);
+        }
+
+        drama.state = state as any;
+        await this.dramaRepo.save(drama);
         await saveStep('intent_ready', { intent }); await checkpoint('intent_ready');
         logDrama('intent_done', 'ok', '集导演完成');
         emitEp(1, '集导演完成', true);
@@ -459,6 +530,30 @@ export class EpisodeWorkflowService {
             logDrama('fallback_char_design_done', 'ok', `补充设计完成: ${designed.map(c => `${c.characterId}(${c.name})`).join(', ')}`);
             detCheck = this.deterministicChecker.check(state, script, storyboard);
           }
+        }
+
+        // 分镜结构性硬规则（shot_too_long / empty_visual_prompt / missing_first_frame_prompt）：
+        // LLM 偶发漏填或写出超出 provider 物理上限的时长时，整体重生成分镜一次，而不是直接阻断
+        // too_few_shots 已降为软规则，不再需要 retry
+        const STORYBOARD_RETRYABLE = new Set(['shot_too_long', 'empty_visual_prompt', 'missing_first_frame_prompt']);
+        const storyboardRetryFails = detCheck.hardFails?.filter(f => STORYBOARD_RETRYABLE.has(f.rule)) ?? [];
+        if (storyboardRetryFails.length > 0 && script?.scenes?.length) {
+          const retryReasons = storyboardRetryFails.map(f => `${f.rule}(${f.detail})`).join('; ');
+          this.logger.warn(`E${episodeNumber} 分镜结构性硬规则触发重生成: ${retryReasons}`);
+          logDrama('storyboard_retry_hard_rule', 'ok', `分镜结构性硬规则，重生成分镜`, { reasons: retryReasons });
+          emitEp(7, `分镜结构校验失败，重新生成分镜...`);
+          storyboard = await this.storyboardDirector.direct(state, script, intent);
+          if (enableAudioDirector) {
+            try { storyboard = await this.audioDirector.enhance(state, storyboard, intent); }
+            catch (audioErr) { this.logger.warn(`E${episodeNumber} 重生成后音频设计降级: ${(audioErr as Error).message}`); }
+          }
+          await saveStep('storyboard_drafted', { storyboard });
+          await saveStep('audio_designed', { storyboard });
+          detCheck = this.deterministicChecker.check(state, script, storyboard);
+          if (detCheck.autoFixedRules?.length) {
+            this.logger.log(`E${episodeNumber} 重生成后自动修复规则: ${detCheck.autoFixedRules.join(', ')}`);
+          }
+          logDrama('storyboard_retry_hard_rule_done', 'ok', `分镜重生成完成`, { newShotCount: storyboard?.shots?.length });
         }
 
         const remainingHardFails = detCheck.hardFails?.filter(f => f.rule !== 'unknown_character') ?? [];
@@ -639,6 +734,22 @@ export class EpisodeWorkflowService {
             this.logger.warn(`[E${episodeNumber}] 剧本重写失败，保留原有结果: ${(rewriteErr as Error).message}`);
           }
         }
+        // Fix 2 (P0): 精修后重跑确定性校验 — 检测精修引入的新硬规则违规
+        if (editRoundsUsed > 0 && storyboard && script) {
+          const postEditCheck = this.deterministicChecker.check(state, script, storyboard);
+          if (postEditCheck.hardFails?.length) {
+            this.logger.warn(`[E${episodeNumber}] 精修后硬规则校验: ${postEditCheck.hardFails.map(f => `${f.rule}(${f.detail})`).join('; ')}`);
+            logDrama('post_edit_hard_check', 'error', `精修后${postEditCheck.hardFails.length}条硬错误`, { fails: postEditCheck.hardFails.map(f => f.rule) });
+          }
+          if (postEditCheck.autoFixedRules?.length) {
+            this.logger.log(`[E${episodeNumber}] 精修后自动修复: ${postEditCheck.autoFixedRules.join(', ')}`);
+          }
+          // 台词一致性检查记录（不阻断）
+          const dialogueMismatch = postEditCheck.failedChecks?.find(f => f.rule === 'dialogue_storyboard_mismatch');
+          if (dialogueMismatch) {
+            this.logger.warn(`[E${episodeNumber}] ${dialogueMismatch.detail}`);
+          }
+        }
         await saveStep('edited', { storyboard, review, round: editRoundsUsed }); await checkpoint('edited');
         logDrama('edit_done', 'ok', '精修完成');
         emitEp(
@@ -649,12 +760,13 @@ export class EpisodeWorkflowService {
         );
       }
 
-      if (resumeFrom < 10) { // Step 10: 节奏分析（最终记录，已在精修循环中提前分析）
+      if (resumeFrom < 10) { // Step 10: 节奏分析（最终记录）
         logDrama('pacing_start', 'ok', '节奏分析');
         emitEp(10, '节奏分析...');
         let pacingSkipped = false;
         if (enablePacingAnalyzer) {
-          if (!pacing && storyboard?.shots?.length) {
+          // Fix 4 (P1): 始终对最终 storyboard 重新分析节奏（精修/回炉后 pacing 可能已过时）
+          if (storyboard?.shots?.length) {
             try { pacing = await this.pacingAnalyzer.analyze(state, storyboard); }
             catch (err) { this.logger.warn(`E${episodeNumber} 节奏分析降级: ${(err as Error).message}`); }
           }
@@ -707,6 +819,10 @@ export class EpisodeWorkflowService {
                   }
                   existingIds.add(ps.shotId);
                 });
+                // Fix 7 (P1): previewShots 角色锁脸处理
+                try { this.storyboardDirector.enforceFaceLock(hookResult.previewShots, state); } catch (flErr) {
+                  this.logger.warn(`E${episodeNumber} previewShots 锁脸降级: ${(flErr as Error).message}`);
+                }
                 sbShots.push(...hookResult.previewShots);
                 storyboard!.shots = sbShots;
                 storyboard!.totalEstimatedDurationSec = Math.round(sbShots.reduce((s: number, sh: any) => s + (sh.estimatedDurationSec ?? 0), 0) * 10) / 10;
@@ -917,11 +1033,20 @@ export class EpisodeWorkflowService {
     if (state.recentHookTypes.length > 10) state.recentHookTypes = state.recentHookTypes.slice(-10);
     state.episodeSummaries.push({ episodeNumber: epNum, summary: loreRecord.summary ?? '' });
 
-    // 标记已解析的秘密
+    // 标记已解析的秘密（Fix 6 P1: 增加确定性辅助校验）
     const resolvedIds = new Set(loreRecord.resolvedSecretIds ?? []);
+    // 收集本集出场角色ID
+    const episodeCharIds = new Set((shots ?? []).flatMap((sh: any) => (sh.characters ?? []).map((c: any) => c.characterId).filter(Boolean)));
     if (resolvedIds.size > 0) {
       for (const entry of state.secretLedger) {
         if (resolvedIds.has(entry.id) && !entry.resolved) {
+          // 确定性校验：秘密的 knownBy/hiddenFrom 中是否有角色出场于本集
+          const relatedChars = [...(entry.knownBy ?? []), ...(entry.hiddenFrom ?? [])];
+          const hasRelatedCharInEp = relatedChars.length === 0 || relatedChars.some(cid => episodeCharIds.has(cid));
+          if (!hasRelatedCharInEp) {
+            this.logger.warn(`[E${epNum}] 秘密解析被拒绝: ${entry.id} "${entry.secret}" — 相关角色(${relatedChars.join(',')})本集均未出场，可能是LLM幻觉`);
+            continue;
+          }
           entry.resolved = true;
           this.logger.log(`[E${epNum}] 秘密已解析: ${entry.id} "${entry.secret}"`);
         }
@@ -959,14 +1084,47 @@ export class EpisodeWorkflowService {
       currentSummary.summary = currentSummary.summary + deltaNote;
     }
 
-    // 滚动更新 storySoFar（最近 30 集摘要压缩为全局概要）
+    // Fix 9 (P2): 三层分层摘要 — 控制 storySoFar token 长度，同时保留关键上下文
+    //   - 最近 5 集：完整摘要
+    //   - 6-15 集前：每集截取前 80 字
+    //   - 16-30 集前：按 arcSegment 分组，每段落一句概括
     const recentN = state.episodeSummaries.slice(-30);
-    state.storySoFar = recentN.length <= 15
-      ? recentN.map(s => `E${s.episodeNumber}:${s.summary}`).join('\n')
-      : [
-          ...recentN.slice(0, -15).map(s => `E${s.episodeNumber}:${s.summary.slice(0, 80)}`),
-          ...recentN.slice(-15).map(s => `E${s.episodeNumber}:${s.summary}`),
-        ].join('\n');
+    if (recentN.length <= 5) {
+      state.storySoFar = recentN.map(s => `E${s.episodeNumber}:${s.summary}`).join('\n');
+    } else if (recentN.length <= 15) {
+      const recent5 = recentN.slice(-5);
+      const older = recentN.slice(0, -5);
+      state.storySoFar = [
+        ...older.map(s => `E${s.episodeNumber}:${s.summary.slice(0, 80)}`),
+        ...recent5.map(s => `E${s.episodeNumber}:${s.summary}`),
+      ].join('\n');
+    } else {
+      const recent5 = recentN.slice(-5);
+      const mid = recentN.slice(-15, -5);
+      const oldest = recentN.slice(0, -15);
+      // 最旧层：按段落分组概括（取每组首尾集摘要的前50字）
+      const oldLines: string[] = [];
+      const arcMap = new Map<string, typeof oldest>();
+      oldest.forEach(s => {
+        const outline = state.seriesOutline?.episodes?.find(e => e.episodeNumber === s.episodeNumber);
+        const segId = outline?.arcSegmentId || 'other';
+        const arr = arcMap.get(segId) ?? [];
+        arr.push(s);
+        arcMap.set(segId, arr);
+      });
+      arcMap.forEach((eps, segId) => {
+        if (eps.length <= 2) {
+          oldLines.push(...eps.map(s => `E${s.episodeNumber}:${s.summary.slice(0, 50)}…`));
+        } else {
+          oldLines.push(`E${eps[0].episodeNumber}-${eps[eps.length - 1].episodeNumber}[${segId}]:${eps[0].summary.slice(0, 40)}…→${eps[eps.length - 1].summary.slice(0, 40)}…`);
+        }
+      });
+      state.storySoFar = [
+        ...oldLines,
+        ...mid.map(s => `E${s.episodeNumber}:${s.summary.slice(0, 80)}`),
+        ...recent5.map(s => `E${s.episodeNumber}:${s.summary}`),
+      ].join('\n');
+    }
 
     // 归档 episode 级临时角色（防止角色列表无限膨胀）
     const episodeChars = state.characters.filter(c => c.scope === 'episode');
@@ -1040,6 +1198,89 @@ export class EpisodeWorkflowService {
     }
 
     state.updatedAt = new Date().toISOString();
+  }
+
+  /**
+   * 确保指定角色有 face_front 定妆照。如没有，自动 persist VisualAssetEntity 并生成。
+   * 复用 DramaService.generateReferenceImages Phase 1 的 prompt 构建逻辑。
+   */
+  private async ensureCharacterFaceRefs(
+    dramaId: string,
+    state: DramaState,
+    characterIds: string[],
+  ): Promise<{ generated: number; names: string[] }> {
+    const profile = this.renderingProfileService.getImageProfile();
+    const charStylePrefix = buildAssetStylePrefix(state.visualStyle, 'character');
+    const assetStyleBucket = detectStyleBucket(state.visualStyle);
+    let generated = 0;
+    const names: string[] = [];
+
+    for (const charId of characterIds) {
+      const ch = state.characters.find(c => c.characterId === charId);
+      if (!ch?.faceReferencePrompt?.trim()) continue;
+
+      // 查找或创建 VisualAssetEntity
+      let asset = await this.visualAssetRepo.findOne({
+        where: { dramaId, assetType: 'character', refId: charId },
+      });
+      if (!asset) {
+        asset = await this.visualAssetRepo.save(this.visualAssetRepo.create({
+          dramaId,
+          assetType: 'character',
+          refId: charId,
+          name: ch.name,
+          data: ch as unknown as Record<string, unknown>,
+          referenceImageUrl: '',
+          referenceImages: [],
+        }));
+      }
+
+      // 已有 face_front 则跳过
+      const hasFace = asset.referenceImages?.find(r => r.viewAngle === 'face_front')?.imageUrl?.trim();
+      if (hasFace) continue;
+
+      try {
+        this.logger.log(`[AutoFace] 生成定妆照: ${ch.name}(${charId})`);
+        const faceRoute = this.imageRouter.routeCharacterFace(EpisodeWorkflowService.CHAR_IMAGE_SIZE);
+        const agePhrase = ageToT2IPhrase((ch as any).age) || (ch as any).agePrompt?.trim() || '';
+        const faceParts = [
+          ch.faceReferencePrompt,
+          agePhrase,
+          ch.hairStylePrompt || ch.hairStyle,
+          ch.defaultCostumePrompt ? `wearing ${ch.defaultCostumePrompt}` : '',
+          (ch as any).bodyTypePrompt || (ch as any).bodyType,
+          'front-facing, looking at camera, neutral plain background, character reference sheet portrait',
+        ].filter(Boolean).join(', ');
+        const optimized = this.promptOptimizer.optimizeForT2I(faceParts, profile.negativePrompt.defaultValue, {
+          shotType: 'character',
+          qualityTier: 'golden',
+          provider: faceRoute.provider,
+          styleBucket: assetStyleBucket,
+        });
+        const prompt = assembleT2iPrompt(optimized.prompt, profile, { stylePrefix: charStylePrefix });
+        const result = await this.mediaService.generateImage({
+          prompt, negativePrompt: optimized.negativePrompt,
+          size: EpisodeWorkflowService.CHAR_IMAGE_SIZE, count: 1,
+          dramaId, assetType: 'character_image', refId: charId,
+          userId: state.userId,
+          ...faceRoute,
+        });
+        if (result.images?.[0]?.url) {
+          const updated = upsertReferenceByView(asset, 'face_front', result.images[0].url);
+          await this.visualAssetRepo.update(asset.id, {
+            referenceImageUrl: updated.referenceImageUrl,
+            referenceImages: updated.referenceImages,
+          });
+          generated++;
+          names.push(ch.name);
+          this.logger.log(`[AutoFace] 定妆照生成成功: ${ch.name}(${charId})`);
+        }
+      } catch (err) {
+        this.logger.warn(`[AutoFace] 定妆照生成失败(不影响继续): ${ch.name}(${charId}) — ${(err as Error).message}`);
+      }
+    }
+
+    return { generated, names };
   }
 
 }

@@ -74,10 +74,22 @@ export const MOVEMENT_SPEED_GUIDE = `=== 运镜速度与情绪强度 ===
 /** visualPrompt 规则 + 运镜词汇对照表（用于 I2V 视频生成） */
 export const VISUAL_PROMPT_RULES = `=== visualPrompt 规则（用于 I2V 视频生成，描述运动过程）===
 - 英文，30-60 words，描述"画面中发生了什么动作/运动"
-- 格式："{镜头运动描述}, {主体动作}, {速度/节奏}, {环境变化}, {情绪氛围}"
+- 格式："{镜头运动描述}, {主体动作}, {速度/节奏}, {环境物理变化}, {视觉氛围线索}"
+- ⚠️ visualPrompt 只能包含画面中客观可视的物理元素！
+  ✅ 允许的视觉氛围线索：光影变化（烛光摇曳/阳光移动）、烟尘粒子飘动、衣袂/发丝随风、水面波纹、雨滴飘落等
+  ❌ 严禁使用以下无法被图像/视频渲染的抽象描述词汇：
+    - 声音类：silence, ambient sound, murmur, echo, fading sound, noise
+    - 心理类：tension, mood, atmosphere, feeling, sense of, psychological
+    - 抽象氛围：heavy stillness, silence stretching, sound falling away, weight of
+  违反此规则会导致 T2V 模型忽略关键的运动指令，严重影响生成质量！
 - 禁止使用 "cinematic film still" 等静态描述前缀——这是视频prompt，不是图片prompt
 - 禁止包含角色face描述（系统会在首尾帧T2I中注入face描述，T2V中会浪费token并干扰运动生成）
 - 每个Shot只描述一个主要动作（I2V模型对复杂多动作场景表现极差）
+- 【运动方向铁律】必须消除画面内方向歧义！
+  - ✅ 明确方向："character walks from left to right across frame" / "approaches camera from background"
+  - ✅ 明确角度："character turns 180 degrees, from facing camera to facing away"
+  - ❌ 模糊方向："character walks away"（方向不明） / "turns around"（左右旋转不明）
+  - characters[].facing 的视觉推演：facing_left 时优先向左方运动，facing_right 向右方运动
 
 运镜速度词汇（必须与 camera.movement 对应，直接写入 visualPrompt）：
 ┌─────────────────────┬─────────────────────────────────────────────────────────────────┐
@@ -111,7 +123,10 @@ specialTechnique 对应 visualPrompt 补充词：
 export const T2I_FRAME_RULES = `=== 首尾帧提示词（用于 T2I 图片生成，描述静态画面）===
 - firstFramePrompt：Shot起始瞬间的静帧描述（英文，30-60 words），按 camera.shotSize 构图
 - lastFramePrompt：Shot结束瞬间的静帧描述（英文，30-60 words），按 camera.shotSizeEnd（若有）构图
-- 格式："{shot framing}, {character face+desc+pose+facing}, {scene/environment detail}, {lighting}, {camera angle keywords}"
+- 格式："{shot framing}, {character face+desc+pose+facing}, {spatial layout}, {scene/environment detail}, {lighting}, {camera angle keywords}"
+- ⚠️ 空间布局（spatial layout）规则：必须精确描述角色的物理位置和空间关系
+  - 单人/环境："stands at right third of frame, ship visible in distance on left"
+  - 双人对话："face to subject, arm's length apart, table between them"
 - ⚠️ 禁止在 firstFramePrompt/lastFramePrompt 中写全剧风格词（如 "cinematic live action photography" / "anime style" 等）
   这些词已由系统将 styleReferencePrompt 自动前置注入，重复写会浪费 token 并产生冲突。
   ✅ 第一个词组只写 shot framing 描述词（如 "wide shot" / "close-up portrait" / "extreme close-up"）
@@ -121,7 +136,7 @@ export const T2I_FRAME_RULES = `=== 首尾帧提示词（用于 T2I 图片生成
 - cameraAngle 关键词示例：
   low_angle → "low angle shot, looking up at subject, dominant perspective"
   high_angle → "high angle shot, looking down at subject, vulnerable perspective"
-  dutch_angle → "dutch angle, tilted frame, psychological tension"
+  dutch_angle → "dutch angle, tilted frame, diagonal distortion"
   bird_eye → "bird's eye view, directly overhead"
   over_shoulder → "over-the-shoulder shot, shallow focus on face"`;
 

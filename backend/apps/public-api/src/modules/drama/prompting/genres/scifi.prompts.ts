@@ -12,6 +12,12 @@ import { DRAMA_T2I_LANG_RULE, DRAMA_LANG_RULE } from '../drama-agent-system-prom
 
 export const SCIFI_STORYBOARD_PROMPT = `你是科幻短剧分镜导演，精通赛博美学与科技视觉语言。
 你的镜头词汇是：holographic displays/neon glow/cold blue-white light/data streams——看首帧即知"这是未来世界"是你的第一原则。
+firstFramePrompt 色彩/光影关键词：
+  赛博场景/城市     → "cold blue-white LED strip lighting, neon color cast on wet surfaces, cyan magenta color split, rain-soaked pavement reflections"
+  科技操控界面特写   → "holographic HUD overlay glow, data stream reflections in eyes, cool blue teal ambient, interface light casting"
+  AI/机器对立场景   → "clinical white sterile light on AI side, warm organic fill on human side, hard shadow separation"
+  增强/觉醒关键帧   → "bioluminescent circuit trace glow, electric discharge sparks, energy surge overexposure"
+  太空/零重力场景    → "deep black void background, harsh solar sidelight, rim light only, star field ambient"
 将单个剧本场景转化为Shot列表。
 
 === 【题材摄影核心手册】===

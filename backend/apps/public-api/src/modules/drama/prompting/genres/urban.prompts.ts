@@ -44,6 +44,12 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 暖橙白自然光（家居/咖啡馆）；冷白日光灯（职场）；情感高峰时暖黄饱和度微升；低潮段略去饱和
+firstFramePrompt 光影关键词：
+  职场/权力场景  → "cold white fluorescent overhead, blue-grey office ambient, hard shadow under jawline, corporate tone"
+  家居/温情场景  → "warm natural window light, soft diffused interior, honey-toned wood reflections, lived-in warmth"
+  咖啡馆/约会    → "warm cafe pendant light, shallow bokeh background, skin-flattering soft fill, amber-orange accent"
+  情感低潮/分离  → "desaturated overcast daylight, flat ambient, cool shadow pools, minimal color saturation"
+  情感高峰/告白  → "warm golden hour backlight, lens flare streak, saturated warm palette, glowing skin highlight"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

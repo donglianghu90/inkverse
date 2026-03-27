@@ -89,7 +89,7 @@ const ANGLE_PERSPECTIVE_HINTS: Record<string, string> = {
   high_angle:    'high angle shot, looking downward, surveying vulnerable perspective',
   low_angle:     'low angle shot, looking upward, imposing powerful perspective',
   worm_eye:      'worm eye view, extreme low angle upward, towering overwhelming perspective',
-  dutch_angle:   'dutch tilt angle, diagonal tension, psychological unease',
+  dutch_angle:   'dutch tilt angle, diagonal frame distortion, skewed horizon',
   back_of_head:  'back of head view, following shot, mysterious trailing perspective',
 };
 
@@ -235,11 +235,11 @@ const CLOSE_UP_SIZES = new Set(['close_up', 'extreme_close_up', 'medium_close_up
 
 const COLOR_HINT_MAP: Record<string, string> = {
   warm: 'warm tones, golden warm lighting',
-  cold: 'cool blue tones, cold atmosphere',
+  cold: 'cool blue tones, cold blue-grey lighting',
   high_contrast: 'high contrast dramatic lighting',
-  desaturated: 'muted desaturated colors, somber mood',
+  desaturated: 'muted desaturated colors, flat low-contrast lighting',
   golden_hour: 'golden hour warm sunlight, amber glow',
-  noir: 'film noir style, deep shadows, moody',
+  noir: 'film noir style, deep shadows, strong chiaroscuro contrast',
   neutral: '',
 };
 
@@ -264,7 +264,7 @@ export class PromptOptimizerService implements OnModuleInit {
   private readonly logger = new Logger('PromptOptimizer');
   private defaultProvider = 'volcengine';
   private maxT2ITokens = 300;
-  private maxT2VTokens = 100;
+  private maxT2VTokens = 150;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -273,7 +273,7 @@ export class PromptOptimizerService implements OnModuleInit {
     this.defaultProvider = String(media.defaultImageProvider || 'volcengine');
     const promptCfg = (media.promptOptimizer ?? {}) as Record<string, unknown>;
     this.maxT2ITokens = Number(promptCfg.maxT2ITokens) || 150;
-    this.maxT2VTokens = Number(promptCfg.maxT2VTokens) || 100;
+    this.maxT2VTokens = Number(promptCfg.maxT2VTokens) || 150;
   }
 
   optimizeForT2I(rawPrompt: string, rawNegative: string, opts: T2IOptimizeOptions = {}): OptimizeResult {
@@ -333,11 +333,45 @@ export class PromptOptimizerService implements OnModuleInit {
       added.push(...toAdd);
     }
 
-    prompt = this.deduplicateKeywords(prompt);
-    prompt = this.smartTruncate(prompt, this.maxT2ITokens);
-
-    // kieai 系列模型不接受 negativePrompt，直接返回空字符串避免无效传参
     const isKieAi = provider.startsWith('kieai.');
+
+    // KIE.AI (FLUX等模型) 本质上不支持 negativePrompt，因此执行【反向词正向化】(Negative Inversion)
+    // 将防漂移、防乱入的反向意图，转化为强烈的正向英语主张，塞入 Prompt 中。
+    if (isKieAi) {
+      const inversionHints: string[] = [];
+      
+      // 1. 防止空境乱入人物
+      if (opts.shotType === 'location' && !prompt.toLowerCase().includes('no humans')) {
+        inversionHints.push('absolutely no humans', 'empty scenery only', 'zero characters');
+      }
+      
+      // 2. 防止视觉风格漂移 (Style Drift)
+      const styleBucket = opts.styleBucket;
+      if (styleBucket === 'two_d') {
+        inversionHints.push('strict 2D flat illustration', 'zero 3D elements', 'definitely not a photograph');
+      } else if (styleBucket === 'three_d') {
+        inversionHints.push('strict 3D CG render', 'not 2D anime', 'not an illustration');
+      } else if (styleBucket === 'live_action') {
+        inversionHints.push('strict live action photography', 'not a painting', 'not an illustration');
+      } else if (styleBucket === 'stop_motion') {
+        inversionHints.push('strict physical stop motion miniature', 'not a digital render', 'not an anime');
+      }
+
+      if (inversionHints.length > 0) {
+        const hintStr = inversionHints.join(', ');
+        prompt = `${prompt}, ${hintStr}`;
+        added.push('kieai_negative_inversion');
+      }
+    }
+
+    prompt = this.deduplicateKeywords(prompt);
+    // 按 provider 区分截断上限：kieai 支持 20000 字符无需截断，volcengine 对齐 2000 char maxLength
+    const effectiveMaxTokens = isKieAi ? Infinity
+      : provider.startsWith('volcengine') ? 500
+      : 300;
+    prompt = this.smartTruncate(prompt, effectiveMaxTokens);
+
+    // KIE.AI 最终返回空 negativePrompt
     if (isKieAi) {
       return { prompt, negativePrompt: '', metadata: { addedKeywords: added, removedKeywords: removed } };
     }
@@ -345,7 +379,8 @@ export class PromptOptimizerService implements OnModuleInit {
     let neg = rawNegative?.trim() || '';
     const negTokens = new Set(neg.toLowerCase().split(/,\s*/).map(s => s.trim()).filter(Boolean));
     const baseNeg = [...BASE_NEGATIVE];
-    if (opts.shotType === 'character' || opts.shotType === 'first_frame') {
+    if (opts.shotType === 'character' || opts.shotType === 'first_frame' || opts.shotType === 'last_frame') {
+      // first_frame / last_frame 均为人物主导镜头，需要同样的人物畸形防护
       baseNeg.push(...CHARACTER_NEGATIVE_EXTRA);
     } else if (opts.shotType === 'location') {
       // 场景图：强制排除人物（volcengine 支持 negativePrompt，kieai 已通过 GOLDEN_EXTRA_LOCATION 正向处理）
@@ -371,10 +406,26 @@ export class PromptOptimizerService implements OnModuleInit {
     const added: string[] = [];
     const removed: string[] = [];
 
+    const targetProvider = opts.provider ?? 'volcengine';
+    /**
+     * Provider 能力分类：
+     *  · keyword-driven：Seedance / Wan Animate — 关键词 token 提升显著
+     *  · natural-language：Kling / Hailuo / Veo / Sora — 自然语言描述即可，
+     *    Seedance 专有 token 可能无效或降质，但运镜/景别/情绪色自然语言描述有效
+     *  · avatar：Kling Avatar — prompt 仅作辅助描述，核心靠人脸图+音频
+     */
+    const isKlingOrHailuo = targetProvider === 'kling' || targetProvider === 'hailuo';
+    const isVeoOrSora = targetProvider === 'veo' || targetProvider === 'sora';
+    const isAvatar = targetProvider === 'kling-avatar';
+    const isWanAnimate = targetProvider === 'wan-animate';
+    const isNaturalLanguage = isKlingOrHailuo || isVeoOrSora;
+    const isKeywordDriven = !isNaturalLanguage && !isAvatar && !isWanAnimate;
+
     let prompt = rawPrompt.trim();
 
     // Strip face-lock fragments injected by LLM: "[Name: face desc, hair, body, wearing ...]"
-    const faceStripped = prompt.replace(/\[[^\]]{5,}\]/g, '').replace(/,\s*,/g, ',').replace(/^\s*,\s*/, '').trim();
+    // 精确匹配 LLM 注入的角色描述块（含冒号分隔符），避免误删有意义的方括号内容
+    const faceStripped = prompt.replace(/\[[^\]]*?:\s*[^\]]{10,}\]/g, '').replace(/,\s*,/g, ',').replace(/^\s*,\s*/, '').trim();
     if (faceStripped !== prompt) {
       this.logger.debug(`T2V face-lock stripped: ${prompt.length} → ${faceStripped.length} chars`);
       removed.push('face_lock_fragments');
@@ -388,84 +439,182 @@ export class PromptOptimizerService implements OnModuleInit {
     prompt = resolved.prompt;
     removed.push(...resolved.removed);
 
-    if (opts.specialTechnique && T2V_MOTION_HINTS[opts.specialTechnique]) {
-      const hint = T2V_MOTION_HINTS[opts.specialTechnique];
-      if (!prompt.toLowerCase().includes(hint.split(' ')[0].toLowerCase())) {
-        prompt = `${hint}, ${prompt}`;
-        added.push(hint);
+    // ── Avatar：构建情绪/表情/语速提示词 ──────────────────────────────────────
+    if (isAvatar) {
+      const avatarParts: string[] = [];
+
+      if (opts.dialogueEmotion) {
+        avatarParts.push(this.mapAvatarEmotion(opts.dialogueEmotion));
+      }
+      if (opts.dialoguePace && opts.dialoguePace !== 'normal') {
+        const paceMap: Record<string, string> = {
+          very_slow: 'speaking very slowly and deliberately',
+          slow: 'speaking slowly',
+          fast: 'speaking quickly',
+          very_fast: 'speaking rapidly with urgency',
+        };
+        avatarParts.push(paceMap[opts.dialoguePace] ?? '');
+      }
+      if (opts.dialogueVolume && opts.dialogueVolume !== 'normal') {
+        const volMap: Record<string, string> = {
+          whisper: 'whispering softly',
+          low: 'speaking in a low quiet voice',
+          loud: 'speaking loudly',
+          scream: 'shouting intensely',
+        };
+        avatarParts.push(volMap[opts.dialogueVolume] ?? '');
+      }
+
+      const avatarPrompt = avatarParts.filter(Boolean).join(', ');
+      if (avatarPrompt) added.push('avatar_emotion_hints');
+      return { prompt: avatarPrompt, negativePrompt: '', metadata: { addedKeywords: added, removedKeywords: removed } };
+    }
+
+    // Wan Animate 是 V2V 模型（无 prompt），直接跳过
+    if (isWanAnimate) return { prompt: prompt.trim(), negativePrompt: '', metadata: { addedKeywords: added, removedKeywords: removed } };
+
+    // ── 以下注入逻辑对 keyword-driven 模型（Seedance 等）有效 ─────
+    if (isKeywordDriven) {
+      if (opts.specialTechnique && T2V_MOTION_HINTS[opts.specialTechnique]) {
+        const hint = T2V_MOTION_HINTS[opts.specialTechnique];
+        if (!prompt.toLowerCase().includes(hint.split(' ')[0].toLowerCase())) {
+          prompt = `${hint}, ${prompt}`;
+          added.push(hint);
+        }
+      }
+
+      if (opts.cameraMovement && opts.cameraMovement !== 'static') {
+        const movHint = T2V_CAMERA_MOVEMENT[opts.cameraMovement];
+        if (movHint && !prompt.toLowerCase().includes(movHint.split(' ')[0].toLowerCase())) {
+          prompt = `${movHint}, ${prompt}`;
+          added.push(movHint);
+        }
+      }
+
+      // 注入景别上下文（T2V 视频理解景别帮助其维持构图范围）
+      if (opts.shotSize) {
+        const sizeCtx = T2V_SHOT_SIZE_CONTEXT[opts.shotSize];
+        if (sizeCtx && !prompt.toLowerCase().includes(sizeCtx.split(' ')[0].toLowerCase())) {
+          prompt = `${sizeCtx}, ${prompt}`;
+          added.push(sizeCtx);
+        }
+      }
+
+      // 注入角度上下文（T2V 视频理解摄影机透视角度）
+      if (opts.cameraAngle) {
+        const angleCtx = T2V_CAMERA_ANGLE_CONTEXT[opts.cameraAngle];
+        if (angleCtx && !prompt.toLowerCase().includes(angleCtx.split(' ')[0].toLowerCase())) {
+          prompt = `${angleCtx}, ${prompt}`;
+          added.push(angleCtx);
+        }
+      }
+
+      if (opts.routeProfile) {
+        const routeHint = T2V_ROUTE_HINTS[opts.routeProfile];
+        if (routeHint && !prompt.toLowerCase().includes(routeHint.split(',')[0].toLowerCase())) {
+          prompt = `${prompt}, ${routeHint}`;
+          added.push(routeHint);
+        }
+      }
+
+      // Face stability hint for close-up shots — reduces face deformation in I2V
+      const isCloseUp = CLOSE_UP_SIZES.has(opts.shotSize ?? '');
+      if (isCloseUp) {
+        const faceHint = 'stable face, subtle expression changes, consistent facial features';
+        if (!prompt.toLowerCase().includes('stable face')) {
+          prompt = `${prompt}, ${faceHint}`;
+          added.push(faceHint);
+        }
+      }
+
+      if (opts.emotionColorHint) {
+        const colorHint = COLOR_HINT_MAP[opts.emotionColorHint];
+        if (colorHint && !prompt.toLowerCase().includes(colorHint.split(',')[0].toLowerCase())) {
+          prompt = `${prompt}, ${colorHint}`;
+          added.push(colorHint);
+        }
+      }
+
+      if (typeof opts.duration === 'number' && opts.duration <= 3) {
+        const shortHint = 'single action, minimal complexity';
+        if (!prompt.toLowerCase().includes('single action')) {
+          prompt = `${prompt}, ${shortHint}`;
+          added.push(shortHint);
+        }
+      }
+
+      if (!opts.hasFirstFrame) {
+        const videoBoost = 'cinematic video, smooth motion';
+        if (!prompt.toLowerCase().includes('cinematic')) {
+          prompt = `${videoBoost}, ${prompt}`;
+          added.push(videoBoost);
+        }
+      }
+    }
+    // ── 自然语言模型增强（Kling / Hailuo / Veo / Sora） ──────────────────────
+    // 这些模型语义理解能力强，直接接受自然语言描述。
+    // 注入运镜、景别、面部稳定、情绪色调等自然语言提示词（非 Seedance 专有 token）。
+    if (isNaturalLanguage) {
+      // 摄影机运动（自然语言描述，两个模型均能理解）
+      if (opts.cameraMovement && opts.cameraMovement !== 'static') {
+        const movHint = T2V_CAMERA_MOVEMENT[opts.cameraMovement];
+        if (movHint && !prompt.toLowerCase().includes(movHint.split(' ')[0].toLowerCase())) {
+          prompt = `${movHint}, ${prompt}`;
+          added.push(movHint);
+        }
+      }
+
+      // 景别上下文：帮助模型维持正确构图范围（自然语言，对 Kling 效果显著）
+      if (opts.shotSize) {
+        const sizeCtx = T2V_SHOT_SIZE_CONTEXT[opts.shotSize];
+        if (sizeCtx && !prompt.toLowerCase().includes(sizeCtx.split(' ')[0].toLowerCase())) {
+          prompt = `${sizeCtx}, ${prompt}`;
+          added.push(sizeCtx);
+        }
+      }
+
+      // 双关键帧模式（Kling I2V + lastFrame）：提示模型在首尾帧之间做平滑动作插值
+      if (opts.hasLastFrame) {
+        const transHint = 'smooth motion transition between start and end keyframe poses';
+        if (!prompt.toLowerCase().includes('smooth motion')) {
+          prompt = `${prompt}, ${transHint}`;
+          added.push(transHint);
+        }
+      }
+
+      // 近景面部稳定：特写/超特写时面部变形是最高频问题，对 Hailuo 情感镜头尤为关键
+      const isCloseUp = CLOSE_UP_SIZES.has(opts.shotSize ?? '');
+      if (isCloseUp) {
+        const faceHint = 'natural facial expression, stable face identity, no face distortion';
+        if (!prompt.toLowerCase().includes('natural facial')) {
+          prompt = `${prompt}, ${faceHint}`;
+          added.push(faceHint);
+        }
+      }
+
+      // 情绪色调：Kling/Hailuo 对颜色描述有明显响应
+      if (opts.emotionColorHint) {
+        const colorHint = COLOR_HINT_MAP[opts.emotionColorHint];
+        if (colorHint && !prompt.toLowerCase().includes(colorHint.split(',')[0].toLowerCase())) {
+          prompt = `${prompt}, ${colorHint}`;
+          added.push(colorHint);
+        }
       }
     }
 
-    if (opts.cameraMovement && opts.cameraMovement !== 'static') {
-      const movHint = T2V_CAMERA_MOVEMENT[opts.cameraMovement];
-      if (movHint && !prompt.toLowerCase().includes(movHint.split(' ')[0].toLowerCase())) {
-        prompt = `${movHint}, ${prompt}`;
-        added.push(movHint);
-      }
-    }
-
-    // 注入景别上下文（T2V 视频理解景别帮助其维持构图范围）
-    if (opts.shotSize) {
-      const sizeCtx = T2V_SHOT_SIZE_CONTEXT[opts.shotSize];
-      if (sizeCtx && !prompt.toLowerCase().includes(sizeCtx.split(' ')[0].toLowerCase())) {
-        prompt = `${sizeCtx}, ${prompt}`;
-        added.push(sizeCtx);
-      }
-    }
-
-    // 注入角度上下文（T2V 视频理解摄影机透视角度）
-    if (opts.cameraAngle) {
-      const angleCtx = T2V_CAMERA_ANGLE_CONTEXT[opts.cameraAngle];
-      if (angleCtx && !prompt.toLowerCase().includes(angleCtx.split(' ')[0].toLowerCase())) {
-        prompt = `${angleCtx}, ${prompt}`;
-        added.push(angleCtx);
-      }
-    }
-
-    if (opts.routeProfile) {
-      const routeHint = T2V_ROUTE_HINTS[opts.routeProfile];
-      if (routeHint && !prompt.toLowerCase().includes(routeHint.split(',')[0].toLowerCase())) {
-        prompt = `${prompt}, ${routeHint}`;
-        added.push(routeHint);
-      }
-    }
-
-    // Face stability hint for close-up shots — reduces face deformation in I2V
-    const isCloseUp = CLOSE_UP_SIZES.has(opts.shotSize ?? '');
-    if (isCloseUp) {
-      const faceHint = 'stable face, subtle expression changes, consistent facial features';
-      if (!prompt.toLowerCase().includes('stable face')) {
-        prompt = `${prompt}, ${faceHint}`;
-        added.push(faceHint);
-      }
-    }
-
-    if (opts.emotionColorHint) {
-      const colorHint = COLOR_HINT_MAP[opts.emotionColorHint];
-      if (colorHint && !prompt.toLowerCase().includes(colorHint.split(',')[0].toLowerCase())) {
-        prompt = `${prompt}, ${colorHint}`;
-        added.push(colorHint);
-      }
-    }
-
-    if (typeof opts.duration === 'number' && opts.duration <= 3) {
-      const shortHint = 'single action, minimal complexity';
-      if (!prompt.toLowerCase().includes('single action')) {
-        prompt = `${prompt}, ${shortHint}`;
-        added.push(shortHint);
-      }
-    }
-
-    if (!opts.hasFirstFrame) {
-      const videoBoost = 'cinematic video, smooth motion';
-      if (!prompt.toLowerCase().includes('cinematic')) {
-        prompt = `${videoBoost}, ${prompt}`;
-        added.push(videoBoost);
+    // 色调一致性：有首帧且有情绪色调时，提示视频模型保持与首帧一致的色彩基调
+    if (opts.hasFirstFrame && opts.emotionColorHint && opts.emotionColorHint !== 'neutral') {
+      const toneHint = 'maintain consistent color tone and lighting from the first frame';
+      if (!prompt.toLowerCase().includes('maintain consistent')) {
+        prompt = `${prompt}, ${toneHint}`;
+        added.push(toneHint);
       }
     }
 
     prompt = this.deduplicateKeywords(prompt);
-    prompt = this.smartTruncate(prompt, this.maxT2VTokens);
+    // 自然语言模型（Kling/Hailuo/Veo/Sora）支持更长 prompt，放宽截断限制
+    const maxTokens = isNaturalLanguage ? Math.max(this.maxT2VTokens * 2, 300) : this.maxT2VTokens;
+    prompt = this.smartTruncate(prompt, maxTokens);
 
     return { prompt, negativePrompt: '', metadata: { addedKeywords: added, removedKeywords: removed } };
   }
@@ -483,6 +632,30 @@ export class PromptOptimizerService implements OnModuleInit {
       }
     }
     return { prompt: result, removed };
+  }
+
+  /** 将对话情绪标签映射为 Avatar 可理解的自然语言表情/情绪描述 */
+  private mapAvatarEmotion(emotion: string): string {
+    const lower = emotion.toLowerCase();
+    const MAP: Record<string, string> = {
+      angry: 'angry expression, furrowed brows, intense eyes',
+      sad: 'sad expression, tearful eyes, downturned mouth',
+      happy: 'happy expression, warm smile, bright eyes',
+      joyful: 'joyful expression, beaming smile, radiant face',
+      surprised: 'surprised expression, wide eyes, raised eyebrows',
+      shocked: 'shocked expression, open mouth, wide eyes',
+      fearful: 'fearful expression, wide frightened eyes, tense face',
+      disgusted: 'disgusted expression, wrinkled nose, narrowed eyes',
+      contempt: 'contemptuous expression, slight sneer, cold eyes',
+      calm: 'calm and composed expression, relaxed face',
+      determined: 'determined expression, set jaw, focused eyes',
+      worried: 'worried expression, furrowed brows, anxious eyes',
+      tender: 'tender expression, soft gentle smile, warm loving gaze',
+      cold: 'cold expression, emotionless face, sharp distant eyes',
+      sarcastic: 'sarcastic expression, slight smirk, raised eyebrow',
+      desperate: 'desperate expression, pleading eyes, strained face',
+    };
+    return MAP[lower] ?? `${emotion} expression`;
   }
 
   private deduplicateKeywords(prompt: string): string {
@@ -516,6 +689,11 @@ export class PromptOptimizerService implements OnModuleInit {
       ...Object.values(FRAMING_SCALE_HINTS),
       ...Object.values(ANGLE_PERSPECTIVE_HINTS),
       ...Object.values(T2I_ROUTE_HINTS),
+      // T2V 专属 hint（运镜/路由/面部稳定/颜色）—— 截断时低优先级，不影响核心内容
+      ...Object.values(T2V_ROUTE_HINTS),
+      ...Object.values(T2V_SHOT_SIZE_CONTEXT),
+      ...Object.values(T2V_CAMERA_ANGLE_CONTEXT),
+      ...Object.values(COLOR_HINT_MAP).filter(Boolean),
     ].map(b => b.toLowerCase()));
 
     const IDENTITY_PATTERNS = /\[.*?:.*?\]|face|hair|body|costume|wearing|dressed/i;

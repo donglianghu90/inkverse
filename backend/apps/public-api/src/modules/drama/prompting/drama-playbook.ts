@@ -154,8 +154,9 @@ export function buildVisualAssetDesignerSystemPrompt(
     : `=== 主角颜值定向 ===\n短剧有极强的类型视觉语言——主角颜值必须精准命中题材审美预期，不可用通用帅气/漂亮模糊处理。根据本剧题材和目标受众，设计符合该类型短剧市场惯例的外形定位。`;
   const femaleFormula = '';
 
+  const faceDedup = `\n⚠️ faceReferencePrompt 禁止包含全局风格词（如 cinematic / 4K / photorealistic / masterpiece / ultra-detailed / award-winning / live-action photography 等），这些词已由系统 styleReferencePrompt 统一注入。在 faceReferencePrompt 中重复写会浪费 token 预算。faceReferencePrompt 只写面部五官+年龄+表情+肤色描述。`;
   const visualStyleDesc = styleGuide?.facePromptRule
-    ? `=== faceReferencePrompt 规则 ===\n${styleGuide.facePromptRule}\n\n${styleGuide.scenePromptGuidance ? `=== 本剧场景 visualPrompt 写法规范 ===\n${styleGuide.scenePromptGuidance}\n\n` : ''}`
+    ? `=== faceReferencePrompt 规则 ===\n${styleGuide.facePromptRule}\n${faceDedup}\n\n${styleGuide.scenePromptGuidance ? `=== 本剧场景 visualPrompt 写法规范 ===\n${styleGuide.scenePromptGuidance}\n\n` : ''}`
     : '';
 
   return resolveTemplate(VISUAL_ASSET_DESIGNER_TEMPLATE, {
@@ -364,14 +365,35 @@ export function buildStoryboardDirectorStaticPrompt(ctx?: {
     colorPalette?: string;
   };
   visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string; renderTechnique?: string; textureStyle?: string; referenceStyle?: string };
+  /** 视频模型能力档案，用于注入时长/Prompt约束 */
+  videoModelProfile?: {
+    displayName: string;
+    minDurationSec: number;
+    maxDurationSec: number;
+    sweetSpotSec: number;
+    promptStyleHint: string;
+    strengthHint: string;
+    constraintHint: string;
+  };
 }, genreKey?: string): string {
   const template = getTemplate('storyboard-director', genreKey);
   const cam = ctx?.camGuide;
   const vs = ctx?.visualStyle;
+  const vmp = ctx?.videoModelProfile;
 
   const visualStyleSection = vs
     ? `美学：${vs.overallAesthetic ?? ''} | 调色：${vs.colorGrading ?? ''} | 光影：${vs.lightingStyle ?? ''}${vs.renderTechnique ? ` | 渲染：${vs.renderTechnique}` : ''}${vs.textureStyle ? ` | 材质：${vs.textureStyle}` : ''}${vs.referenceStyle ? ` | 参考：${vs.referenceStyle}` : ''}`
     : '';
+
+  const videoModelSection = vmp
+    ? [
+        `本剧使用 ${vmp.displayName} 视频生成模型。`,
+        `- 模型能力：${vmp.strengthHint}`,
+        `- ${vmp.constraintHint}`,
+        `- 推荐每个Shot时长 ${vmp.sweetSpotSec} 秒（允许范围 ${vmp.minDurationSec}-${vmp.maxDurationSec} 秒）`,
+        `- Prompt 风格：${vmp.promptStyleHint}`,
+      ].join('\n')
+    : '- 每个Shot时长建议3-8秒';
 
   return resolveTemplate(template, {
     genreIdentity: cam?.genreIdentity?.trim() || '',
@@ -389,6 +411,7 @@ export function buildStoryboardDirectorStaticPrompt(ctx?: {
       ? `=== 【题材色彩调性】===\n${cam.colorPalette.trim()}\n请在 firstFramePrompt / lastFramePrompt 的光线与色彩描述中优先使用上述调性。\n`
       : '',
     visualStyleSection,
+    videoModelSection,
   });
 }
 

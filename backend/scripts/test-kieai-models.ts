@@ -12,6 +12,11 @@
  *   npx ts-node scripts/test-kieai-models.ts
  */
 import axios, { AxiosInstance } from 'axios';
+import {
+  configureKieAiRateLimitsFromConfig,
+  kieAiRateLimitAcquireQuery,
+  kieAiRateLimitAcquireSubmit,
+} from '../apps/public-api/src/modules/media/providers/kieai/kieai-rate-limiter';
 
 const API_KEY  = '6a81ea574f07f9dac8863d9df4ae0f69';
 const BASE_URL = 'https://api.kie.ai';
@@ -44,6 +49,7 @@ interface TaskData {
 // ── 核心工具 ──────────────────────────────────────────────────────────────────
 
 async function createTask(model: string, input: Record<string, unknown>): Promise<string> {
+  await kieAiRateLimitAcquireSubmit();
   const res = await http.post<{ code: number; msg?: string; data?: { taskId: string } }>(
     '/api/v1/jobs/createTask',
     { model, input },
@@ -60,6 +66,7 @@ async function pollForResult(taskId: string): Promise<TaskData> {
     await sleep(POLL_INTERVAL_MS);
     let data: { code: number; msg?: string; data?: TaskData };
     try {
+      await kieAiRateLimitAcquireQuery();
       const resp = await http.get('/api/v1/jobs/recordInfo', { params: { taskId } });
       data = resp.data;
     } catch (err: any) {
@@ -198,11 +205,23 @@ const CASES: TestCase[] = [
       aspect_ratio: 'auto', resolution: '1K',
     },
   },
+  // ⑨ google/nano-banana-edit I2I (图像编辑，image_urls + image_size)
+  {
+    label: 'google/nano-banana-edit · I2I (图像编辑，image_urls)',
+    model: 'google/nano-banana-edit',
+    input: {
+      prompt: '将这张照片转换成人物手办。在手办后方放置一个印有人物形象的包装盒。尽可能将场景设置在室内环境中。',
+      image_urls: [REF_IMAGE_URL],
+      image_size: '1:1',
+      output_format: 'png',
+    },
+  },
 ];
 
 // ── 主入口 ────────────────────────────────────────────────────────────────────
 
 async function main() {
+  configureKieAiRateLimitsFromConfig({});
   console.log('='.repeat(64));
   console.log(' Kie.ai 全模型可用性测试');
   console.log('='.repeat(64));

@@ -38,6 +38,12 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 厚重暖金（朝堂权谋）+冷钢蓝（战场）；去饱和度增加历史厚重感；史诗时刻高对比强光
+firstFramePrompt 光影关键词：
+  朝堂/权谋场景  → "rich amber candlelight, deep gold palace ambient, imperial red accent, aged architectural shadow"
+  战场/行军      → "cold steel-blue sky, harsh directional sunlight, dust haze in light shafts, battle-worn desaturation"
+  史诗高潮时刻   → "god-ray volumetric light, epic high-contrast directional sun, rim light on armor, monumental scale"
+  密谋/夜议      → "single oil lamp key light, deep shadow surround, conspiratorial low-key amber, silk texture lit by flame"
+  历史叙事感     → "aged parchment warm tone, film grain texture, desaturated teal-orange grade, documentary realism"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

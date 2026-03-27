@@ -51,6 +51,16 @@ export interface BakeContext {
     facePromptRule?: string;
     scenePromptGuidance?: string;
   };
+  /** 视频模型能力档案，注入分镜 system prompt 让 LLM 按模型约束设计镜头 */
+  videoModelProfile?: {
+    displayName: string;
+    minDurationSec: number;
+    maxDurationSec: number;
+    sweetSpotSec: number;
+    promptStyleHint: string;
+    strengthHint: string;
+    constraintHint: string;
+  };
 }
 
 /**
@@ -140,6 +150,7 @@ export class DramaPromptBakerService {
       'storyboard-director': buildStoryboardDirectorStaticPrompt({
         camGuide: cameraGuide,
         visualStyle,
+        videoModelProfile: ctx.videoModelProfile,
       }, genreKey),
 
       'audio-director': buildAudioDirectorStaticPrompt({

@@ -18,6 +18,7 @@ import { RenderingProfileService } from '../../media/rendering/rendering-profile
 import {
   RenderingProfile, RefImageCandidate, CharacterImageSet, CharacterViewAngle,
   selectRefImages, selectBestCharacterView, buildCameraHint, assembleT2iPrompt,
+  ageToT2IPhrase, buildLocationViewPrompt,
 } from '../../media/rendering/rendering-profile';
 import { PromptOptimizerService } from '../../media/prompt-optimizer.service';
 import { MediaQualityGateService, QualityAssessment } from './media-quality-gate.service';
@@ -25,8 +26,14 @@ import { ShotCoherenceValidatorService } from './shot-coherence-validator.servic
 import { EmotionMediaMapperService } from './emotion-media-mapper.service';
 import { GenerationPolicyService } from './generation-policy.service';
 import { ImageProviderRouterService } from './image-provider-router.service';
+import { VideoProviderRouterService } from './video-provider-router.service';
 import type { DramaGenerationMode, DramaStyleBucket } from '../interfaces';
 import type { ShotMediaEntry } from '../interfaces';
+import {
+  detectStyleBucket as detectStyleBucketUtil,
+  buildAssetStylePrefix as buildAssetStylePrefixUtil,
+  upsertReferenceByView as upsertReferenceByViewUtil,
+} from '../utils/asset-prompt.utils';
 
 @Injectable()
 export class MediaOrchestratorService implements OnModuleInit {
@@ -41,8 +48,29 @@ export class MediaOrchestratorService implements OnModuleInit {
     'comic panel', 'storyboard panel', 'split screen', 'grid layout',
     'collage', 'diptych', 'triptych',
   ].join(', ');
+
+  /** Provider 时长约束 — 仅用于提交 clamp 和合成裁剪，不影响路由选型 */
+  private static readonly PROVIDER_DURATION: Record<string, { min: number; max: number }> = {
+    kling:          { min: 3, max: 15 },
+    hailuo:         { min: 6, max: 10 },
+    veo:            { min: 4, max: 8 },
+    sora:           { min: 10, max: 15 },
+    'kling-avatar': { min: 1, max: 60 },
+    volcengine:     { min: 5, max: 10 },
+  };
+
+  static clampDuration(estimatedSec: number, provider?: string): number {
+    const range = MediaOrchestratorService.PROVIDER_DURATION[provider ?? ''] ?? { min: 5, max: 10 };
+    return Math.min(Math.max(Math.round(estimatedSec), range.min), range.max);
+  }
+
+  static getProviderMaxDuration(provider?: string): number {
+    return MediaOrchestratorService.PROVIDER_DURATION[provider ?? '']?.max ?? 10;
+  }
   private skipImageGen = false;
   private profile!: RenderingProfile;
+  /** 视频任务等待超时（ms），默认 40 分钟，可通过 media.pipeline.videoAwaitTimeoutMs 配置 */
+  private videoAwaitTimeoutMs = 40 * 60 * 1000;
 
   constructor(
     @InjectRepository(EpisodeEntity) private readonly episodeRepo: Repository<EpisodeEntity>,
@@ -62,6 +90,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     private readonly emotionMapper: EmotionMediaMapperService,
     private readonly generationPolicy: GenerationPolicyService,
     private readonly imageRouter: ImageProviderRouterService,
+    private readonly videoRouter: VideoProviderRouterService,
   ) {}
 
   async onModuleInit() {
@@ -69,6 +98,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     const pipeline = (media.pipeline ?? {}) as Record<string, unknown>;
     this.skipImageGen = String(pipeline.skipImageGeneration) === 'true';
     if (pipeline.t2iMaxConcurrency) this.t2iMaxConcurrency = Number(pipeline.t2iMaxConcurrency);
+    if (pipeline.videoAwaitTimeoutMs) this.videoAwaitTimeoutMs = Number(pipeline.videoAwaitTimeoutMs);
     const t2iIntervalMs = Number(pipeline.t2iIntervalMs) || 3000;
     this.acquireT2iSlot = async () => {
       const waitMs = this.t2iNextSlotAt - Date.now();
@@ -96,11 +126,15 @@ export class MediaOrchestratorService implements OnModuleInit {
   }
 
   /** 按当前模型的 RenderingProfile 组装 T2I prompt */
-  private assemblePrompt(raw: string, camera?: { shotSize?: string; shotSizeEnd?: string | null; cameraAngle?: string; composition?: string; depthOfField?: string }, stylePrefix?: string, useEndSize = false): string {
+  private assemblePrompt(raw: string, camera?: { shotSize?: string; shotSizeEnd?: string | null; cameraAngle?: string; composition?: string; depthOfField?: string }, stylePrefix?: string, useEndSize = false, lightingHint?: string): string {
     const effectiveCamera = useEndSize && camera?.shotSizeEnd
       ? { ...camera, shotSize: camera.shotSizeEnd }
       : camera;
-    return assembleT2iPrompt(raw, this.profile, { cameraHint: buildCameraHint(effectiveCamera), stylePrefix });
+    // 将场景光线描述追加到 raw prompt 末尾，为 T2I 提供光线锚点
+    const withLighting = lightingHint && !raw.toLowerCase().includes(lightingHint.toLowerCase().slice(0, 20))
+      ? `${raw}, ${lightingHint}`
+      : raw;
+    return assembleT2iPrompt(withLighting, this.profile, { cameraHint: buildCameraHint(effectiveCamera), stylePrefix });
   }
 
   /** 构建 T2I 风格前缀：优先 styleReferencePrompt；回退用 overallAesthetic 等拼接（playbook 要求这些字段为英文，直接拼接） */
@@ -156,6 +190,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     const shots: Shot[] = storyboard?.shots ?? [];
     const reviewRiskShotIds = this.extractReviewRiskShotIds(episode.review);
     const orderedShots = this.orderShotsForProduction(shots, reviewRiskShotIds);
+    await this.ensureBaseReferenceImages(dramaId, state, shots, userId);
     const charImageMap = await this.buildCharacterImageMap(dramaId);
     // P5: 用 minorRolePool 中已有的参考图补充 charImageMap（零成本，跨集复用）
     for (const entry of state.minorRolePool ?? []) {
@@ -165,7 +200,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
     const characterAnchorMap = this.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
-    await this.ensureVariationImages(dramaId, state, shots, charImageMap, variationImageMap, userId);
+    await this.ensureVariationImages(dramaId, state, shots, charImageMap, variationImageMap, userId, episodeNumber);
     const locationImageMap = await this.buildLocationImageMap(dramaId); // B1: 跨集常驻场景参考图
     const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
@@ -174,6 +209,12 @@ export class MediaOrchestratorService implements OnModuleInit {
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
     const imgSize = MediaOrchestratorService.resolveImageSize(aspectRatio);
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
+    // 场景光线映射：sceneId → lightingDefault（如 "warm lantern glow, dramatic chiaroscuro"）
+    const locationLightingMap = new Map<string, string>();
+    for (const loc of state.locations ?? []) {
+      if (loc.lightingDefault) locationLightingMap.set(loc.locationId, loc.lightingDefault);
+    }
+    const dramaGenre = state.seed?.genre;
     this.logger.log(
       `[policy] E${episodeNumber} mode=${mediaPolicy.mode} style=${mediaPolicy.styleBucket} ` +
       `t2i=${mediaPolicy.t2iConcurrency} i2v=${mediaPolicy.i2vConcurrency} ` +
@@ -202,6 +243,10 @@ export class MediaOrchestratorService implements OnModuleInit {
       for (const shot of shots) {
         shotMediaParamsCache.set(shot.shotId, this.emotionMapper.mapShotToMediaParams(shot, sceneMap.get(shot.sceneId)));
       }
+
+      // 非注册角色临时 anchor：guard_01 等小角色无 charImageMap 档案，
+      // 首次 T2I 生成图缓存此处，Phase 0.5 连贯性重生成也可复用，保持外貌一致。
+      const tempCharCache = new Map<string, string>();
 
       if (hasT2I) {
         // ═══ Phase 0: T2I 首帧 + 尾帧（并发池） ═══
@@ -241,7 +286,7 @@ export class MediaOrchestratorService implements OnModuleInit {
             try {
               emit(phaseOff + i, `${sid} 首帧生成中...`);
               const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-              const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false);
+              const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, locationLightingMap.get(shot.sceneId));
               const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
                 shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
                 qualityTier: shot.qualityTier ?? 'standard',
@@ -258,6 +303,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                 sceneCache,
                 prevFrameCache,
                 'first',
+                tempCharCache,
               );
 
               const tier = this.normalizeQualityTier(shot.qualityTier);
@@ -321,7 +367,17 @@ export class MediaOrchestratorService implements OnModuleInit {
                   t2iPrompt: optimized.prompt,
                   t2iNegativePrompt: optimized.negativePrompt || undefined,
                 };
-                if (shot.sceneId && !sceneCache.has(shot.sceneId)) {
+                // 非注册角色首次出现缓存：guard_01 等无档案小角色，首帧图作为
+                // 同集后续镜头的 anchor，避免同一场景内多次出现时长相随机漂移
+                for (const c of (shot.characters ?? [])) {
+                  if (!charImageMap.has(c.characterId) && !tempCharCache.has(c.characterId)) {
+                    tempCharCache.set(c.characterId, imgUrl);
+                    this.logger.debug(`[TempCharCache] ${c.characterId} 无档案，以 ${sid} 首帧为临时 anchor`);
+                  }
+                }
+                // 仅非特写 shot 才写入 sceneCache，避免人脸特写图被当作场景参考
+                const isCloseUpShot = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.shotSize ?? '');
+                if (shot.sceneId && !sceneCache.has(shot.sceneId) && !isCloseUpShot) {
                   sceneCache.set(shot.sceneId, imgUrl);
                   // B2: isRecurring 场景第一次生成时，持久化到 VisualAssetEntity 供后续集复用
                   if (!locationImageMap.has(shot.sceneId)) {
@@ -339,11 +395,17 @@ export class MediaOrchestratorService implements OnModuleInit {
               emit(phaseOff + i, `${sid} 首帧完成`, true);
             } catch (err) { this.logger.warn(`${sid} 首帧失败: ${(err as Error).message}`); }
           } else {
-            if (shot.sceneId && !sceneCache.has(shot.sceneId)) sceneCache.set(shot.sceneId, shotMediaMap[sid].imageUrl!);
+            const isCloseUpResumed = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.shotSize ?? '');
+            if (shot.sceneId && !sceneCache.has(shot.sceneId) && !isCloseUpResumed) sceneCache.set(shot.sceneId, shotMediaMap[sid].imageUrl!);
             prevFrameCache.set(shot.shotIndex, shotMediaMap[sid].imageUrl!);
           }
 
-          if (shot.lastFramePrompt && !shotMediaMap[sid]?.lastFrameImageUrl) {
+          // Kling multi-shot 模式：组内 Shot 的尾帧 API 不支持，跳过生成节省 T2I 额度。
+          // 独立 Shot（无 shotGroupId）及 Sora 组合（支持尾帧）正常生成。
+          const skipLastFrame = !!shot.shotGroupId &&
+            (this.videoRouter.route({ overrideProvider: state.videoProvider }).provider ?? 'kling') === 'kling';
+
+          if (shot.lastFramePrompt && !shotMediaMap[sid]?.lastFrameImageUrl && !skipLastFrame) {
             try {
               emit(phaseOff + orderedShots.length + i, `${sid} 尾帧生成中...`);
               const lastRefs = this.buildRefImages(
@@ -355,9 +417,10 @@ export class MediaOrchestratorService implements OnModuleInit {
                 sceneCache,
                 prevFrameCache,
                 'last',
+                tempCharCache,
               );
               const styleLockedLastPrompt = this.applyStyleLockPrompt(shot.lastFramePrompt!, shot, state);
-              const rawLastPrompt = this.assemblePrompt(styleLockedLastPrompt, shot.camera, t2iStylePrefix, true);
+              const rawLastPrompt = this.assemblePrompt(styleLockedLastPrompt, shot.camera, t2iStylePrefix, true, locationLightingMap.get(shot.sceneId));
               const optLast = this.promptOptimizer.optimizeForT2I(rawLastPrompt, episodeNegPrompt ?? '', {
                 shotType: 'last_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
                 qualityTier: shot.qualityTier ?? 'standard', emotionColorHint,
@@ -414,7 +477,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                   isGolden: shot.isPreview || shot.qualityTier === 'golden', size: imgSize,
                 });
                 const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-                const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false);
+                const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, locationLightingMap.get(shot.sceneId));
                 const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
                   shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
                   qualityTier: shot.qualityTier ?? 'standard',
@@ -431,6 +494,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                   sceneCache,
                   prevFrameCache,
                   'first',
+                  tempCharCache,
                 );
                 const res = await withMediaRetry(async () => {
                   await this.acquireT2iSlot();
@@ -454,7 +518,7 @@ export class MediaOrchestratorService implements OnModuleInit {
         } catch (err) { this.logger.warn(`连贯性验证降级: ${(err as Error).message}`); }
       }
 
-      // ═══ Phase 1: I2V / T2V 视频生成（镜头运动 + 情绪色调 + 动态分辨率） ═══
+      // ═══ Phase 1: I2V / T2V 视频生成 ═══
       await this.updateMedia(episode.id, 'generating_videos', shotMediaMap);
       let videoSubmitDirty = 0;
       const flushVideoSubmit = async (force = false) => {
@@ -464,6 +528,215 @@ export class MediaOrchestratorService implements OnModuleInit {
           videoSubmitDirty = 0;
         }
       };
+
+      // ── Phase 1-pre: Shot 组合生成（provider-aware）────────────────────────────
+      // · provider=kling → Kling 3.0 multi_shots=true（各段精确时长，无裁剪浪费，单模型风格一致）
+      // · provider=sora  → Sora 合并单请求（[Segment N] 拼接 prompt，10/15s + trim）
+      // · 其他 provider  → 跳过组合，各 Shot 在主循环独立生成
+      const shotGroupMap = new Map<string, Shot[]>();
+      for (const shot of orderedShots) {
+        if (shot.shotGroupId) {
+          if (!shotGroupMap.has(shot.shotGroupId)) shotGroupMap.set(shot.shotGroupId, []);
+          shotGroupMap.get(shot.shotGroupId)!.push(shot);
+        }
+      }
+
+      // 确定组合生成使用的 provider（由剧级 videoProvider 决定）
+      const groupProvider = this.videoRouter.route({ overrideProvider: state.videoProvider }).provider ?? 'kling';
+      const groupSupported = groupProvider === 'kling' || groupProvider === 'sora';
+
+      if (shotGroupMap.size > 0 && groupSupported) {
+        this.logger.log(`E${episodeNumber} 检测到 ${shotGroupMap.size} 个 Shot 组，使用 ${groupProvider === 'kling' ? 'Kling multi-shot' : 'Sora 合并'} 生成`);
+
+        for (const [groupId, groupShots] of shotGroupMap) {
+          groupShots.sort((a, b) => a.shotIndex - b.shotIndex);
+          const leader    = groupShots[0];
+          const leaderSid = leader.shotId;
+
+          // 断点续传：leader 已有视频，直接传播给 follower
+          if (shotMediaMap[leaderSid]?.videoUrl) {
+            for (const follower of groupShots.slice(1)) {
+              shotMediaMap[follower.shotId] = {
+                ...shotMediaMap[follower.shotId],
+                videoUrl: shotMediaMap[leaderSid].videoUrl,
+                videoProvider: groupProvider,
+                status: 'completed',
+              };
+            }
+            this.logger.log(`组 ${groupId}: leader 已有视频，传播给 ${groupShots.length - 1} 个 follower`);
+            continue;
+          }
+
+          try {
+            const gFirstFrame = shotMediaMap[leaderSid]?.imageUrl;
+            const groupRefImages: Array<{ url: string; role: 'first_frame' | 'last_frame' | 'character' | 'style' }> = [];
+            if (gFirstFrame) groupRefImages.push({ url: gFirstFrame, role: 'first_frame' });
+
+            let groupSub: { jobId: string };
+
+            if (groupProvider === 'kling') {
+              // ── Kling multi-shot：per-character kling_elements + 各段精确时长 ────
+              // Step 1: 按角色 ID 收集参考图（variation → anchor → primary），保证每个角色有自己的 element
+              const charUrlsById = new Map<string, string[]>(); // charId → urls (最多4张)
+              for (const gs of groupShots) {
+                for (const cid of this.resolveLockedCharacterIds(gs)) {
+                  if (!charUrlsById.has(cid)) charUrlsById.set(cid, []);
+                  const bucket = charUrlsById.get(cid)!;
+                  const varId = gs.characterVariationIds?.[cid];
+                  const candidates = [
+                    varId ? variationImageMap.get(`${cid}_${varId}`) : undefined,
+                    ...(characterAnchorMap.get(cid) ?? []),
+                    charImageMap.get(cid)?.primary,
+                  ].filter((u): u is string => !!u);
+                  for (const url of candidates) {
+                    if (!bucket.includes(url) && bucket.length < 4) bucket.push(url);
+                  }
+                }
+              }
+
+              // Step 2: 构建 kling_elements（每个角色一个 element，最多 3 个；再加 style_ref）
+              type KlingElement = { name: string; description: string; element_input_urls: string[] };
+              const klingElements: KlingElement[] = [];
+              const charIdToElem = new Map<string, string>(); // charId → element name
+              let elemIdx = 0;
+              for (const [cid, urls] of charUrlsById) {
+                if (elemIdx >= 3) break;
+                if (!urls.length) { elemIdx++; continue; }
+                // Kling 要求每个 element 至少 2 张图；只有 1 张时复用
+                const elementUrls = urls.length >= 2 ? urls.slice(0, 4) : [urls[0], urls[0]];
+                const elemName = `char_${elemIdx}`;
+                klingElements.push({ name: elemName, description: `character ${elemIdx}`, element_input_urls: elementUrls });
+                charIdToElem.set(cid, elemName);
+                elemIdx++;
+              }
+              // style_ref：至少 2 张才构成有效 element
+              const hasStyleElem = styleRefImages.length >= 2 && klingElements.length < 3;
+              if (hasStyleElem) {
+                klingElements.push({ name: 'style_ref', description: 'visual style', element_input_urls: styleRefImages.slice(0, 4) });
+              }
+
+              // Step 3: 每段 prompt 末尾追加该镜头出现的角色 element 引用及 @style_ref
+              const multiPromptSegments = groupShots.map(gs => {
+                let p = this.promptOptimizer.optimizeForT2V(
+                  this.applyStyleLockPrompt(gs.visualPrompt, gs, state),
+                  { provider: 'kling', duration: gs.estimatedDurationSec, hasFirstFrame: !!gFirstFrame },
+                ).prompt;
+                for (const cid of this.resolveLockedCharacterIds(gs)) {
+                  const elemName = charIdToElem.get(cid);
+                  if (elemName && !p.includes(`@${elemName}`)) p = `${p} @${elemName}`;
+                }
+                if (hasStyleElem && !p.includes('@style_ref')) p = `${p} @style_ref`;
+                return { prompt: p, duration: gs.estimatedDurationSec };
+              });
+
+              const totalGroupDur = multiPromptSegments.reduce((sum, s) => sum + s.duration, 0);
+
+              groupSub = await withMediaRetry(() => this.mediaService.submitVideo({
+                prompt: multiPromptSegments.map(s => s.prompt).join('. '),
+                duration: totalGroupDur,
+                quality: '1080p',
+                aspectRatio: aspectRatio as any,
+                referenceImages: groupRefImages, // 仅含 first_frame，字符参考已通过 kling_elements 传递
+                dramaId, assetType: 'shot_video', refId: `${leaderSid}_group`,
+                userId, episodeNumber,
+                provider: 'kling',
+                extra: {
+                  multi_shots: true,
+                  multi_prompt: multiPromptSegments,
+                  ...(klingElements.length ? { kling_elements: klingElements } : {}),
+                },
+              }), `组 ${groupId} Kling multi-shot`);
+
+              this.logger.log(
+                `组 ${groupId}: ${groupShots.length} shots → Kling multi-shot ${totalGroupDur.toFixed(1)}s` +
+                ` elements=${klingElements.length}(chars=${charUrlsById.size} style=${hasStyleElem}) jobId=${groupSub.jobId}`,
+              );
+
+            } else {
+              // ── Sora 合并：[Segment N] prompt 拼接，固定 10/15s ─────────────
+              const lastShot = groupShots[groupShots.length - 1];
+              const gLastFrame = shotMediaMap[lastShot.shotId]?.lastFrameImageUrl;
+              if (gLastFrame) groupRefImages.push({ url: gLastFrame, role: 'last_frame' });
+
+              const totalGroupDur = groupShots.reduce((sum, s) => sum + s.estimatedDurationSec, 0);
+              const submitDuration = MediaOrchestratorService.clampDuration(totalGroupDur, 'sora');
+              const mergedPrompt = groupShots
+                .map((s, idx) => `[Segment ${idx + 1}]: ${s.visualPrompt}`)
+                .join('. ');
+              const optGroupVideo = this.promptOptimizer.optimizeForT2V(mergedPrompt, {
+                provider: 'sora', duration: submitDuration,
+                hasFirstFrame: !!gFirstFrame, hasLastFrame: !!gLastFrame,
+              });
+
+              groupSub = await withMediaRetry(() => this.mediaService.submitVideo({
+                prompt: optGroupVideo.prompt,
+                duration: submitDuration,
+                quality: '1080p',
+                aspectRatio: aspectRatio as any,
+                referenceImages: groupRefImages,
+                dramaId, assetType: 'shot_video', refId: `${leaderSid}_group`,
+                userId, episodeNumber,
+                provider: 'sora',
+              }), `组 ${groupId} Sora 合并视频`);
+
+              this.logger.log(`组 ${groupId}: ${groupShots.length} shots → Sora ${submitDuration}s (合计 ${totalGroupDur.toFixed(1)}s), jobId=${groupSub.jobId}`);
+            }
+
+            shotMediaMap[leaderSid] = {
+              ...shotMediaMap[leaderSid],
+              videoJobId: groupSub.jobId,
+              videoProvider: groupProvider,
+              status: 'submitted',
+            };
+            for (const follower of groupShots.slice(1)) {
+              shotMediaMap[follower.shotId] = {
+                ...shotMediaMap[follower.shotId],
+                videoProvider: groupProvider,
+                status: 'group_pending',
+              };
+            }
+          } catch (err) {
+            this.logger.error(`组 ${groupId} 提交失败: ${(err as Error).message}，退回独立生成`);
+            for (const shot of groupShots) {
+              shotMediaMap[shot.shotId] = { ...shotMediaMap[shot.shotId], status: undefined as any };
+            }
+          }
+        }
+
+        // 等待所有组 leader 的视频完成
+        const hasGroupSubmits = Object.values(shotMediaMap).some(v => v.status === 'submitted');
+        if (hasGroupSubmits) {
+          await this.awaitVideoJobs(shotMediaMap, orderedShots, dramaId, episode.id, phaseOff, emit);
+        }
+
+        // 将 leader 的 videoUrl 传播给 follower（group_pending → completed）
+        for (const [groupId, groupShots] of shotGroupMap) {
+          groupShots.sort((a, b) => a.shotIndex - b.shotIndex);
+          const leaderEntry = shotMediaMap[groupShots[0].shotId];
+          if (leaderEntry?.videoUrl) {
+            for (const follower of groupShots.slice(1)) {
+              if (shotMediaMap[follower.shotId]?.status === 'group_pending') {
+                shotMediaMap[follower.shotId] = {
+                  ...shotMediaMap[follower.shotId],
+                  videoUrl: leaderEntry.videoUrl,
+                  videoProvider: groupProvider,
+                  status: 'completed',
+                };
+              }
+            }
+          } else {
+            this.logger.warn(`组 ${groupId} leader 无视频，退回独立生成`);
+            for (const shot of groupShots) {
+              if (shotMediaMap[shot.shotId]?.status === 'group_pending' || shotMediaMap[shot.shotId]?.status === 'failed') {
+                shotMediaMap[shot.shotId] = { ...shotMediaMap[shot.shotId], status: undefined as any };
+              }
+            }
+          }
+        }
+
+        await this.updateMedia(episode.id, 'generating_videos', shotMediaMap);
+      }
+
       await this.runConcurrent(orderedShots, mediaPolicy.i2vConcurrency, async (shot, i) => {
         const sid = shot.shotId;
         if (shotMediaMap[sid]?.status === 'completed' && shotMediaMap[sid]?.videoUrl) {
@@ -485,10 +758,33 @@ export class MediaOrchestratorService implements OnModuleInit {
           this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap).forEach(url => refImages.push({ url, role: 'character' }));
           styleRefImages.slice(0, 1).forEach((url) => refImages.push({ url, role: 'style' }));
 
+          // P1-1: 前帧锚定（同场景过渡色调与构图控制）
+          if (shot.shotIndex > 0) {
+            const prevSid = shots.find(s => s.shotIndex === shot.shotIndex - 1)?.shotId;
+            if (prevSid) {
+              const prevLastFrame = shotMediaMap[prevSid]?.lastFrameImageUrl || shotMediaMap[prevSid]?.imageUrl;
+              if (prevLastFrame) refImages.push({ url: prevLastFrame, role: 'style' });
+            }
+          }
+
           const mediaParams = shotMediaParamsCache.get(sid);
           const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+
           const styleLockedVideoPrompt = this.applyStyleLockPrompt(shot.visualPrompt, shot, state);
+          const videoRoute = this.videoRouter.route({
+            overrideProvider: state.videoProvider,
+          });
+
+          const actualProvider = videoRoute.provider;
+          const actualFallback = videoRoute.fallbackProvider;
+
+          // ── Provider 时长约束（clamp 到 Provider 支持范围，时长不影响选型） ──
+          const submitDuration = MediaOrchestratorService.clampDuration(shot.estimatedDurationSec, actualProvider);
+
+          // ── Prompt 优化 ──
+          const videoQuality = shotPolicy.videoQuality;
           const optVideo = this.promptOptimizer.optimizeForT2V(styleLockedVideoPrompt, {
+            provider: actualProvider,
             duration: shot.estimatedDurationSec,
             hasFirstFrame: !!firstFrame,
             hasLastFrame: !!lastFrame,
@@ -498,16 +794,20 @@ export class MediaOrchestratorService implements OnModuleInit {
             cameraAngle: shot.camera?.cameraAngle,
             emotionColorHint: mediaParams?.colorGrade,
             routeProfile: shotPolicy.routeProfile,
+            dialogueEmotion: shot.dialogue?.emotion,
+            dialoguePace: shot.dialogue?.pace,
+            dialogueVolume: shot.dialogue?.volume,
           });
 
-          const videoQuality = shotPolicy.videoQuality;
           const sub = await withMediaRetry(() => this.mediaService.submitVideo({
             prompt: optVideo.prompt,
-            duration: Math.min(Math.max(Math.round(shot.estimatedDurationSec), 2), 10),
+            duration: submitDuration,
             quality: videoQuality, aspectRatio: aspectRatio as any,
             referenceImages: refImages, dramaId, assetType: 'shot_video', refId: sid, userId, episodeNumber,
+            provider: actualProvider,
+            fallbackProvider: actualFallback,
           }), `${sid} 视频`);
-          shotMediaMap[sid] = { ...shotMediaMap[sid], videoJobId: sub.jobId, status: 'submitted' };
+          shotMediaMap[sid] = { ...shotMediaMap[sid], videoJobId: sub.jobId, videoProvider: actualProvider, status: 'submitted' };
           await flushVideoSubmit();
         } catch (err) {
           this.logger.error(`${sid} 视频提交失败: ${(err as Error).message}`);
@@ -525,7 +825,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       await this.awaitVideoJobs(shotMediaMap, orderedShots, dramaId, episode.id, phaseOff, emit);
       phaseOff += shots.length;
 
-      // ═══ Phase 2: TTS 语音合成（EmotionMediaMapper 驱动速度/音量 + 时长同步） ═══
+      // ═══ Phase 2: TTS 语音合成 ═══
       const ttsDurations = new Map<string, number>();
       let ttsOk = false;
       try { this.registry.getTtsProvider(); ttsOk = true; } catch {}
@@ -581,25 +881,66 @@ export class MediaOrchestratorService implements OnModuleInit {
         try {
           emit(totalPhases - 1, '合成完整单集视频...');
           await this.updateMedia(episode.id, 'compositing', shotMediaMap);
+          // ── 预计算 Shot 组内偏移量（server-side，作为 LLM groupOffsetSec 的可靠兜底）──
+          // 对每个 shotGroupId 内的 Shot，按 shotIndex 排序后累加 estimatedDurationSec。
+          // LLM 提供的 groupOffsetSec 若合理则优先使用，否则退回此计算值。
+          const computedGroupOffsets = new Map<string, number>(); // shotId → 组内起始偏移(秒)
+          const composeGroupMap = new Map<string, Shot[]>();
+          for (const s of shots) {
+            if (s.shotGroupId) {
+              if (!composeGroupMap.has(s.shotGroupId)) composeGroupMap.set(s.shotGroupId, []);
+              composeGroupMap.get(s.shotGroupId)!.push(s);
+            }
+          }
+          for (const [, gs] of composeGroupMap) {
+            gs.sort((a, b) => a.shotIndex - b.shotIndex);
+            let cumOff = 0;
+            for (const gs_ of gs) {
+              const llmOff = gs_.groupOffsetSec;
+              const usedOff = (llmOff != null && llmOff >= 0 && llmOff < 15) ? llmOff : cumOff;
+              computedGroupOffsets.set(gs_.shotId, usedOff);
+              cumOff += gs_.estimatedDurationSec;
+            }
+          }
+
           const composeShots: ComposeShotInput[] = shots.filter(s => shotMediaMap[s.shotId]?.videoUrl).map(s => {
             const mp = shotMediaParamsCache.get(s.shotId);
             const ttsDur = ttsDurations.get(s.shotId);
-            let effectiveDuration = s.estimatedDurationSec;
+
+            // ── 有效时长上限：不能超过该 shot 实际 Provider 的最大视频时长 ──────────
+            // 根据 Phase 1 记录的 videoProvider 精确计算，而非按 shotType 猜测。
+            // 若分镜意图 > 实际生成上限，compose 时长必须截断，
+            // 否则 FFmpeg trimOutSec 超出视频实际长度 → 时间轴缺失 → 音频错位。
+            // 注意：Shot 组成员 provider=sora，max=15s；effectiveDuration 仍取 estimatedDurationSec（组内分段时长）。
+            const generatedMaxSec = s.shotGroupId
+              ? 15  // 组内 Shot 来自 15s Sora 视频，不按单 provider 上限截断
+              : MediaOrchestratorService.getProviderMaxDuration(shotMediaMap[s.shotId]?.videoProvider);
+            let effectiveDuration = Math.min(s.estimatedDurationSec, generatedMaxSec);
+            if (effectiveDuration < s.estimatedDurationSec) {
+              this.logger.debug(`${s.shotId} 分镜意图${s.estimatedDurationSec}s > 生成上限${generatedMaxSec}s，compose 截为 ${effectiveDuration}s`);
+            }
+
             let speedFactor = mp?.speedFactor ?? 1.0;
             if (ttsDur && ttsDur > effectiveDuration * 1.1) {
               const ratio = ttsDur / effectiveDuration;
-              if (ratio <= 1.5) {
-                speedFactor = speedFactor / ratio;
-                effectiveDuration = ttsDur;
-                this.logger.debug(`${s.shotId} 视频减速 ${ratio.toFixed(2)}x 以匹配 TTS (${ttsDur.toFixed(1)}s > ${s.estimatedDurationSec}s)`);
-              } else {
-                effectiveDuration = ttsDur;
-                this.logger.debug(`${s.shotId} TTS过长(${ttsDur.toFixed(1)}s)，保持原速但扩展时长`);
-              }
+              // 核心修复：如果 TTS 极长而生成的视频物理时长不足，若不降低播放速度（speedFactor）去凑齐物理帧，
+              // FFmpeg concat 滤镜会在视频流提前 EOF 时截断该分段时长，导致所有后续视频与音频发生灾难性毁灭错位 (A/V Desync)！
+              // 故在此执行强制拉长。为防幻灯片效应，软顶（Soft cap）设为最多强制拉到 3 倍慢放。
+              const safeRatio = Math.min(ratio, 3.0);
+              speedFactor = speedFactor / safeRatio;
+              effectiveDuration = ttsDur;
+              this.logger.debug(`${s.shotId} 强行减速 ${safeRatio.toFixed(2)}x 匹配TTS (${ttsDur.toFixed(1)}s)，防止音画脱轨`);
             }
+
+            // ── Shot 组成员：按 groupOffsetSec 从组视频中精确裁出本段 ──
+            const groupOffset = s.shotGroupId ? (computedGroupOffsets.get(s.shotId) ?? 0) : null;
+
             return {
               shotId: s.shotId, videoPath: shotMediaMap[s.shotId].videoUrl!,
               ttsAudioPath: shotMediaMap[s.shotId]?.ttsUrl, durationSec: effectiveDuration,
+              // 组成员：trimIn/Out 精确定位组内分段；独立 Shot：沿用原有人工标注或 effectiveDuration。
+              trimInSec: groupOffset !== null ? groupOffset : (s.trimInSec ?? undefined),
+              trimOutSec: groupOffset !== null ? groupOffset + effectiveDuration : (s.trimOutSec ?? effectiveDuration),
               transition: s.transitionToNext ?? 'cut',
               transitionDurationSec: mp?.transitionDurationSec,
               subtitle: s.subtitle ? { text: s.subtitle.text, style: s.subtitle.style ?? 'normal' } : undefined,
@@ -673,7 +1014,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
     const characterAnchorMap = this.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
-    await this.ensureVariationImages(dramaId, state, [shot], charImageMap, variationImageMap, userId);
+    await this.ensureVariationImages(dramaId, state, [shot], charImageMap, variationImageMap, userId, episodeNumber);
     const locationImageMap = await this.buildLocationImageMap(dramaId); // B1
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
 
@@ -695,6 +1036,8 @@ export class MediaOrchestratorService implements OnModuleInit {
     const scriptScenes = ((episode.script as any)?.scenes ?? []) as import('../schemas/drama-state.schemas').ScriptScene[];
     const sceneForShot = scriptScenes.find(s => s.sceneId === shot.sceneId);
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
+    // 场景光线提示（单 shot 模式）
+    const singleShotLighting = state.locations?.find(l => l.locationId === shot.sceneId)?.lightingDefault;
     const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, sceneForShot);
     const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
     const singleShotRoute = this.imageRouter.routeShot({
@@ -705,7 +1048,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       size: imgSize,
     });
     const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-    const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false);
+    const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, singleShotLighting);
     const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
       shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
       qualityTier: shot.qualityTier ?? 'standard',
@@ -778,13 +1121,15 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
 
     if (imgUrl) {
+      // 重新生成图片时，丢弃旧的 video 数据，避免"新图+旧视频"错位
+      const { videoUrl: _v, videoJobId: _vjid, videoProvider: _vprov, ...existingEntry } = raw[shotId] ?? {};
       const newMap = {
         ...raw,
         [shotId]: {
-          ...raw[shotId],
+          ...existingEntry,
           imageUrl: imgUrl,
           status: 'image_done',
-          qc: gateQc ?? raw[shotId]?.qc,
+          qc: gateQc ?? existingEntry?.qc,
           t2iPrompt: optimized.prompt,
           t2iNegativePrompt: optimized.negativePrompt || undefined,
         },
@@ -794,6 +1139,131 @@ export class MediaOrchestratorService implements OnModuleInit {
       this.logger.log(`[ShotImage] ${shotId} → ${imgUrl}`);
     }
     return { imageUrl: imgUrl };
+  }
+
+  /** 单镜视频生成（同步 HTTP，适合制作台逐 Shot 手动触发）*/
+  async generateShotVideo(dramaId: string, episodeNumber: number, shotId: string): Promise<{ videoUrl: string; status: string }> {
+    const episode = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber } });
+    if (!episode?.storyboard) throw new Error(`E${episodeNumber} 无分镜数据`);
+
+    const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
+    const shot = storyboard.shots?.find((s: Shot) => s.shotId === shotId);
+    if (!shot) throw new Error(`Shot ${shotId} 不存在`);
+
+    const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
+    const state = drama.state as unknown as DramaState;
+    const userId = drama.userId;
+    const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
+    const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
+    const dramaGenre = state.seed?.genre;
+
+    const raw: Record<string, ShotMediaEntry> = (episode.shotMediaMap ?? {}) as Record<string, ShotMediaEntry>;
+    const charImageMap = await this.buildCharacterImageMap(dramaId);
+    for (const entry of state.minorRolePool ?? []) {
+      if (entry.referenceImageUrl && !charImageMap.has(entry.characterId)) {
+        charImageMap.set(entry.characterId, { primary: entry.referenceImageUrl, views: { face_front: entry.referenceImageUrl } });
+      }
+    }
+    const characterAnchorMap = this.buildCharacterAnchorMap(state);
+    const variationImageMap = await this.buildVariationImageMap(dramaId, state);
+    const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
+
+    const refImages: Array<{ url: string; role: 'first_frame' | 'last_frame' | 'character' | 'style' }> = [];
+    const firstFrame = raw[shotId]?.imageUrl;
+    if (!firstFrame) throw new Error(`Shot ${shotId} 尚未生成首帧图片，请先生成图片再生成视频`);
+    refImages.push({ url: firstFrame, role: 'first_frame' });
+    const lastFrame = raw[shotId]?.lastFrameImageUrl;
+    if (lastFrame) refImages.push({ url: lastFrame, role: 'last_frame' });
+    this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap).forEach(url => refImages.push({ url, role: 'character' }));
+    styleRefImages.slice(0, 1).forEach(url => refImages.push({ url, role: 'style' }));
+
+    const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+    const styleLockedVideoPrompt = this.applyStyleLockPrompt(shot.visualPrompt, shot, state);
+    const videoRoute = this.videoRouter.route({
+      overrideProvider: state.videoProvider,
+    });
+
+    const submitDuration = MediaOrchestratorService.clampDuration(shot.estimatedDurationSec, videoRoute.provider);
+
+    const scriptScenes = ((episode.script as any)?.scenes ?? []) as import('../schemas/drama-state.schemas').ScriptScene[];
+    const sceneForShot = scriptScenes.find(s => s.sceneId === shot.sceneId);
+    const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, sceneForShot);
+
+    const optVideo = this.promptOptimizer.optimizeForT2V(styleLockedVideoPrompt, {
+      provider: videoRoute.provider,
+      duration: shot.estimatedDurationSec,
+      hasFirstFrame: !!firstFrame,
+      hasLastFrame: !!lastFrame,
+      specialTechnique: shot.specialTechnique ?? undefined,
+      cameraMovement: shot.camera?.movement,
+      shotSize: shot.camera?.shotSize,
+      cameraAngle: shot.camera?.cameraAngle,
+      emotionColorHint: mediaParams?.colorGrade,
+      routeProfile: shotPolicy.routeProfile,
+    });
+
+    const sub = await this.withRetry(() => this.mediaService.submitVideo({
+      prompt: optVideo.prompt,
+      duration: submitDuration,
+      quality: shotPolicy.videoQuality,
+      aspectRatio: aspectRatio as any,
+      referenceImages: refImages,
+      dramaId, assetType: 'shot_video', refId: shotId, userId, episodeNumber,
+      provider: videoRoute.provider,
+      fallbackProvider: videoRoute.fallbackProvider,
+    }), `${shotId} 单镜视频`, mediaPolicy.maxMediaRetries, mediaPolicy.retryBaseDelayMs);
+
+    const newMap: Record<string, ShotMediaEntry> = { ...raw, [shotId]: { ...raw[shotId], videoJobId: sub.jobId, videoProvider: videoRoute.provider, status: 'submitted' } };
+    await this.episodeRepo.update(episode.id, { shotMediaMap: newMap });
+
+    // 等待单个 job 完成
+    const videoUrl = await new Promise<string>((resolve, reject) => {
+      const timeoutMs = this.videoAwaitTimeoutMs;
+      const timer = setTimeout(() => {
+        this.mediaService.offJobCompleted(handler);
+        reject(new Error(`Shot ${shotId} 视频生成超时`));
+      }, timeoutMs);
+
+      const handler = async (evt: { jobId: string; status: string; result?: Record<string, unknown> }) => {
+        if (evt.jobId !== sub.jobId) return;
+        clearTimeout(timer);
+        this.mediaService.offJobCompleted(handler);
+        if (evt.status === 'completed') {
+          resolve((evt.result as any)?.videoUrl ?? '');
+        } else {
+          const fb = raw[shotId]?.imageUrl ?? '';
+          resolve(fb); // 降级：用首帧代替
+        }
+      };
+
+      // 先补查一次，避免 job 已完成但事件来不及收到
+      this.mediaService.findJob(sub.jobId).then(job => {
+        if (!job) return;
+        if (job.status === 'completed') {
+          clearTimeout(timer);
+          this.mediaService.offJobCompleted(handler);
+          resolve((job.result as any)?.videoUrl ?? '');
+        } else if (job.status === 'failed') {
+          clearTimeout(timer);
+          this.mediaService.offJobCompleted(handler);
+          resolve(raw[shotId]?.imageUrl ?? '');
+        }
+      }).catch(() => {});
+
+      this.mediaService.onJobCompleted(handler);
+    });
+
+    const isFallback = !videoUrl || videoUrl === firstFrame;
+    const finalMap: Record<string, ShotMediaEntry> = {
+      ...newMap,
+      [shotId]: { ...newMap[shotId], videoUrl: videoUrl || firstFrame, status: 'completed', ...(isFallback && !videoUrl ? { kenBurnsFallback: true } : {}) },
+    };
+    await this.episodeRepo.update(episode.id, { shotMediaMap: finalMap });
+    if (videoUrl) {
+      try { await this.storage.downloadToLocal(videoUrl, this.storage.resolve(`videos/${dramaId}/${shotId}.mp4`)); } catch {}
+    }
+    this.logger.log(`[ShotVideo] ${shotId} → ${videoUrl || '(降级首帧)'}`);
+    return { videoUrl: videoUrl || firstFrame || '', status: 'completed' };
   }
 
   /**
@@ -821,7 +1291,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
     const characterAnchorMap = this.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
-    await this.ensureVariationImages(dramaId, state, shots, charImageMap, variationImageMap, userId);
+    await this.ensureVariationImages(dramaId, state, shots, charImageMap, variationImageMap, userId, episodeNumber);
     const locationImageMap = await this.buildLocationImageMap(dramaId); // B1
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
@@ -888,7 +1358,8 @@ export class MediaOrchestratorService implements OnModuleInit {
         });
         const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, imgSceneMap.get(shot.sceneId));
         const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-        const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false);
+        const batchLighting = state.locations?.find(l => l.locationId === shot.sceneId)?.lightingDefault;
+        const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, batchLighting);
         const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
           shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
           qualityTier: shot.qualityTier ?? 'standard',
@@ -1181,6 +1652,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     styleRefs: string[],
     sceneCache: Map<string, string>, prevFrameCache: Map<number, string>,
     frameType: 'first' | 'last',
+    tempCharCache?: Map<string, string>,  // 非注册角色临时 anchor（guard_01 等）
   ): Array<{ url: string; weight: number }> {
     const isCloseUp = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.shotSize ?? '');
     const charWeight = isCloseUp ? 0.6 : 0.4;
@@ -1227,9 +1699,12 @@ export class MediaOrchestratorService implements OnModuleInit {
         const imageSet = charMap.get(c.characterId);
         if (imageSet) {
           const availableViews = Object.keys(imageSet.views) as CharacterViewAngle[];
-          const bestView = selectBestCharacterView(availableViews, shot.camera?.shotSize, c.position, shot.camera?.cameraAngle);
+          const bestView = selectBestCharacterView(availableViews, shot.camera?.shotSize, c.position, shot.camera?.cameraAngle, c.emotion);
           const url = imageSet.views[bestView] || imageSet.primary;
           pushCandidate(url, charWeight, 'character_face');
+        } else if (tempCharCache?.has(c.characterId)) {
+          // 无档案角色（guard_01 等）：使用同集首次出现时缓存的 anchor 图保持外貌一致
+          pushCandidate(tempCharCache.get(c.characterId), charWeight * 0.9, 'character_face');
         }
       }
     });
@@ -1302,7 +1777,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     await this.updateMedia(epId, 'generating_videos', map);
 
     return new Promise<void>(resolve => {
-      const timer = setTimeout(() => { cleanup(); resolve(); }, 30 * 60 * 1000);
+      const timer = setTimeout(() => { cleanup(); resolve(); }, this.videoAwaitTimeoutMs);
       const handler = async (evt: { jobId: string; status: string; result?: Record<string, unknown> }) => {
         const sid = jobToShot.get(evt.jobId);
         if (!sid || map[sid].status === 'completed' || map[sid].status === 'failed') return;
@@ -1455,6 +1930,158 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
   }
 
+  // ══════════════════════════════════════════════════════════════════════════════
+  // Section: 参考图懒加载 — 集生成前自动补齐缺失的角色/场景参考图
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * 在集媒体生成前，按需生成本集涉及的角色和场景的基础参考图。
+   * 仅生成缺失的（referenceImageUrl 为空），已有参考图的直接跳过，跨集复用。
+   * 遵循 ensureVariationImages 的懒加载模式。
+   */
+  private async ensureBaseReferenceImages(
+    dramaId: string,
+    state: DramaState,
+    shots: Shot[],
+    userId?: string,
+  ): Promise<void> {
+    // 收集本集实际引用的角色 ID 和场景 ID
+    const neededCharIds = new Set<string>();
+    const neededSceneIds = new Set<string>();
+    for (const shot of shots) {
+      for (const c of shot.characters ?? []) neededCharIds.add(c.characterId);
+      if (shot.sceneId) neededSceneIds.add(shot.sceneId);
+    }
+    if (!neededCharIds.size && !neededSceneIds.size) return;
+
+    // 读取现有资产
+    const assets = await this.assetRepo.find({ where: { dramaId } });
+    const charAssets = assets.filter(a => a.assetType === ('character' as any) && neededCharIds.has(a.refId));
+    const locAssets  = assets.filter(a => a.assetType === ('location'  as any) && neededSceneIds.has(a.refId));
+
+    const missingChars = charAssets.filter(a => !a.referenceImageUrl?.trim());
+    const missingLocs  = locAssets.filter( a => !a.referenceImageUrl?.trim());
+
+    if (!missingChars.length && !missingLocs.length) return;
+    this.logger.log(
+      `[ensureBaseRefs] 本集缺失参考图 — 角色: [${missingChars.map(a => a.refId).join(', ')}]` +
+      ` 场景: [${missingLocs.map(a => a.refId).join(', ')}]`,
+    );
+
+    const vs = state.visualStyle;
+    const styleBucket = this.detectStyleBucketFromVs(vs);
+    const charStylePrefix = this.buildAssetStylePrefixLocal(vs, 'character');
+    const sceneStylePrefix = this.buildAssetStylePrefixLocal(vs, 'location');
+    const CHAR_SIZE  = '2:3';
+    const SCENE_SIZE = '3:2';
+
+    // ── 生成缺失的角色 face_front ─────────────────────────────────────────────
+    for (const asset of missingChars) {
+      const ch = state.characters?.find(c => c.characterId === asset.refId);
+      if (!ch?.faceReferencePrompt?.trim()) {
+        this.logger.warn(`[ensureBaseRefs] 跳过 ${asset.refId}：faceReferencePrompt 为空`);
+        continue;
+      }
+      try {
+        const faceRoute = this.imageRouter.routeCharacterFace(CHAR_SIZE);
+        const agePhrase = ageToT2IPhrase((ch as any).age) || (ch as any).agePrompt?.trim() || '';
+        const faceParts = [
+          ch.faceReferencePrompt,
+          agePhrase,
+          (ch as any).hairStylePrompt || (ch as any).hairStyle,
+          (ch as any).defaultCostumePrompt ? `wearing ${(ch as any).defaultCostumePrompt}` : '',
+          (ch as any).bodyTypePrompt || (ch as any).bodyType,
+          'front-facing, looking at camera, neutral plain background, character reference sheet portrait',
+        ].filter(Boolean).join(', ');
+        const { prompt, negativePrompt } = this.optimizeAssetPromptLocal(faceParts, 'character', charStylePrefix, faceRoute.provider, styleBucket);
+        const result = await this.mediaService.generateImage({
+          prompt, negativePrompt, size: CHAR_SIZE, count: 1,
+          dramaId, assetType: 'character_image', refId: asset.refId, userId,
+          ...faceRoute,
+        });
+        const url = result.images?.[0]?.url;
+        if (url) {
+          const updated = this.upsertRefByViewLocal(asset, 'face_front', url);
+          asset.referenceImageUrl = updated.referenceImageUrl;
+          asset.referenceImages   = updated.referenceImages;
+          await this.assetRepo.update(asset.id, {
+            referenceImageUrl: asset.referenceImageUrl,
+            referenceImages:   asset.referenceImages,
+          });
+          this.logger.log(`[ensureBaseRefs] 角色参考图生成完成: ${ch.name}(${asset.refId})`);
+        }
+      } catch (err) {
+        this.logger.warn(`[ensureBaseRefs] 角色参考图生成失败: ${asset.refId} — ${(err as Error).message}`);
+      }
+    }
+
+    // ── 生成缺失的场景 establishing ──────────────────────────────────────────
+    for (const asset of missingLocs) {
+      const loc = state.locations?.find(l => l.locationId === asset.refId);
+      if (!loc?.visualPrompt) {
+        this.logger.warn(`[ensureBaseRefs] 跳过场景 ${asset.refId}：visualPrompt 为空`);
+        continue;
+      }
+      try {
+        const locRoute = this.imageRouter.routeLocation(SCENE_SIZE);
+        const rawPrompt = buildLocationViewPrompt(loc as any, 'establishing') || loc.visualPrompt;
+        const { prompt, negativePrompt } = this.optimizeAssetPromptLocal(rawPrompt, 'location', sceneStylePrefix, locRoute.provider, styleBucket);
+        const result = await this.mediaService.generateImage({
+          prompt, negativePrompt, size: SCENE_SIZE, count: 1,
+          dramaId, assetType: 'location_image', refId: asset.refId, userId,
+          ...locRoute,
+        });
+        const url = result.images?.[0]?.url;
+        if (url) {
+          const updated = this.upsertRefByViewLocal(asset, 'establishing', url);
+          asset.referenceImageUrl = updated.referenceImageUrl;
+          asset.referenceImages   = updated.referenceImages;
+          await this.assetRepo.update(asset.id, {
+            referenceImageUrl: asset.referenceImageUrl,
+            referenceImages:   asset.referenceImages,
+          });
+          this.logger.log(`[ensureBaseRefs] 场景参考图生成完成: ${loc.name}(${asset.refId})`);
+        }
+      } catch (err) {
+        this.logger.warn(`[ensureBaseRefs] 场景参考图生成失败: ${asset.refId} — ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /** 与 DramaService.detectStyleBucket 逻辑保持一致（共享 utility） */
+  private detectStyleBucketFromVs(vs?: DramaState['visualStyle']): string {
+    return detectStyleBucketUtil(vs);
+  }
+
+  /** 与 DramaService.buildAssetStylePrefix 逻辑保持一致（共享 utility） */
+  private buildAssetStylePrefixLocal(vs?: DramaState['visualStyle'], type: 'character' | 'location' = 'location'): string | undefined {
+    return buildAssetStylePrefixUtil(vs, type);
+  }
+
+  /** 与 DramaService.optimizeAssetPrompt 逻辑保持一致 */
+  private optimizeAssetPromptLocal(
+    rawPrompt: string,
+    shotType: 'character' | 'location',
+    stylePrefix?: string,
+    provider?: string,
+    styleBucket?: string,
+  ): { prompt: string; negativePrompt: string } {
+    const negDefault = this.profile.negativePrompt.defaultValue;
+    const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, negDefault, {
+      shotType, qualityTier: 'golden', provider, styleBucket,
+    });
+    return { prompt: assembleT2iPrompt(optimized.prompt, this.profile, { stylePrefix }), negativePrompt: optimized.negativePrompt };
+  }
+
+  /** 与 DramaService.upsertReferenceByView 逻辑保持一致（共享 utility） */
+  private upsertRefByViewLocal(
+    asset: Pick<VisualAssetEntity, 'referenceImageUrl' | 'referenceImages'>,
+    viewAngle: string,
+    imageUrl: string,
+  ): { referenceImageUrl: string; referenceImages: Array<{ viewAngle: string; imageUrl: string }> } {
+    return upsertReferenceByViewUtil(asset, viewAngle, imageUrl);
+  }
+
   private async buildCharacterImageMap(dramaId: string): Promise<Map<string, CharacterImageSet>> {
     const assets = await this.assetRepo.find({ where: { dramaId, assetType: 'character' as any } });
     const map = new Map<string, CharacterImageSet>();
@@ -1529,6 +2156,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     charImageMap: Map<string, CharacterImageSet>,
     variationImageMap: Map<string, string>,
     userId?: string,
+    episodeNumber?: number,
   ): Promise<void> {
     // 收集所有 shots 需要但尚未生成的 variation
     const needed = new Map<string, Set<string>>(); // characterId → Set<variationId>
@@ -1619,6 +2247,7 @@ export class MediaOrchestratorService implements OnModuleInit {
             assetType: 'character_variation',
             refId: `${charId}_${varId}`,
             userId,
+            episodeNumber,
           });
 
           const imageUrl = result.images?.[0]?.url ?? '';

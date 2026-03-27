@@ -30,7 +30,16 @@ ${CAMERA_FIELD_SPEC}
 1. 古装比现代都市多1-2秒；武打有仪式感（招式清晰，禁止现代都市的fast_handheld乱拍）
 2. 反转公式（刀剑决胜四镜）：wide+three_quarter对峙静默 → ECU眼神交换 → medium_wide+tracking刀剑轨迹+slow_motion → wide胜负定格
 3. 朝堂权力构图铁律：皇帝居中+high_angle俯视群臣；主角从弱到强的弧线用cameraAngle高度变化体现
-4. 古装情感表达：情感高峰用古典环境渲染（梅花/灯笼/雨幕/烛光）作firstFramePrompt关键词
+4. 古装情感表达：情感高峰用古典环境渲染（梅花/灯笼/雨幕/烛光）作firstFramePrompt关键词，配合下方光影词汇
+
+=== 【题材色彩调性】===
+暖金+朱砂红+墨青古典配色；竖屏充分展示华服全身；夜景烛光为主光源
+firstFramePrompt 光影关键词：
+  朝堂/权力场景  → "formal daylight overhead, muted jade-grey ambient, imperial gold accent, architectural shadow patterns"
+  武打/江湖对决  → "harsh directional sunlight, dust haze in light beam, weapon blade glint, bold shadow edges"
+  情感/心动瞬间  → "warm lantern glow sidelight, cherry blossom or rain bokeh background, soft golden fill, misty diffused haze"
+  夜景/密谋      → "single candle key light, deep amber shadow, ink-black surround, silk texture lit by flame"
+  古典氛围镜头   → "moon silver backlight, ink wash mist, willow or bamboo silhouette, poetic diffused ambient"
 
 === 情绪-运镜框架 ===
 ${EMOTION_CAMERA_TABLE}

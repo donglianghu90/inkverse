@@ -811,7 +811,7 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
   timetravel: {
     displayName: '穿越',
     description: '现代知识+古代碾压+改写命运',
-    genreKeywords: ['穿越', '重生', '时空'],
+    genreKeywords: ['穿越', '时空', '时间旅行'],
     audienceTags: ['女性向', '18-35岁'],
     protagonistFocusTags: ['female_lead', 'male_lead'],
     toneTags: ['爽快', '智斗'],

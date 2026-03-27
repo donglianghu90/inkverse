@@ -22,9 +22,8 @@ import { buildVisualAssetDesignerSystemPrompt } from '../../prompting/drama-play
 import type { GenreProductionGuidance } from '../../entities/drama-genre-template.entity';
 import type { VisualStyleGuide } from '../../entities/drama-visual-style-template.entity';
 
-const designerOutputSchema = z.object({
-  characters: z.array(characterIdentitySchema),
-  locations: z.array(sceneLocationSchema),
+/** 建剧阶段只输出视觉风格 + 签名道具，角色/场景延迟到逐集生产 */
+const visualStyleOnlySchema = z.object({
   visualStyle: visualStyleGuideSchema,
   signatureProps: z.preprocess(
     v => v ?? [],
@@ -32,11 +31,17 @@ const designerOutputSchema = z.object({
   ).default([]),
 });
 
+/** 逐集新场景设计输出 */
+const newLocationsOutputSchema = z.object({
+  locations: z.array(sceneLocationSchema),
+});
+
+/** 逐集新角色设计输出 */
 const newCharactersOutputSchema = z.object({
   characters: z.array(characterIdentitySchema),
 });
 
-export type VisualAssetDesignOutput = z.infer<typeof designerOutputSchema>;
+export type VisualAssetDesignOutput = z.infer<typeof visualStyleOnlySchema>;
 
 export interface ProposedCharacter {
   characterId: string;
@@ -175,19 +180,13 @@ export class VisualAssetDesignerAgent {
     genreGuidance?: Pick<GenreProductionGuidance, 'maleLeadFormula' | 'femaleLeadFormula'>,
     additionalSystemPrompt?: string,
   ): Promise<VisualAssetDesignOutput> {
-    const allCharNames = new Set<string>();
-    outline.episodes.forEach(ep => ep.keyCharacterIds.forEach(c => allCharNames.add(c)));
-    allCharNames.add(seed.protagonistConcept.name);
-    if (seed.antagonistConcept?.name) allCharNames.add(seed.antagonistConcept.name);
-
+    // 建剧阶段只设计视觉风格 + 签名道具，角色/场景全部延迟到逐集生产
     const audienceLine = [
       audienceContext?.platformTarget ? `目标平台：${audienceContext.platformTarget}` : '',
       audienceContext?.protagonistFocus ? `叙事主角焦点：${audienceContext.protagonistFocus}` : '',
       audienceContext?.audienceTags?.length ? `受众标签：${audienceContext.audienceTags.join('、')}` : (seed.targetAudience ? `受众：${seed.targetAudience}` : ''),
     ].filter(Boolean).join('\n');
 
-    // 用户 hint 优先：从 hint 文本提取有效风格枚举，确保 system prompt 与用户意图一致
-    // AI 推荐的 suggestedVisualStyle 仅在用户未提供 hint 或 hint 无法识别时作为 fallback
     const effectiveVisualStyle = resolveEffectiveVisualStyle(visualStyleHint, suggestedVisualStyle);
     const styleOverrideNote = visualStyleHint && effectiveVisualStyle !== suggestedVisualStyle
       ? `（用户已明确选择 ${effectiveVisualStyle}，覆盖了系统推荐的 ${suggestedVisualStyle}）`
@@ -201,10 +200,10 @@ export class VisualAssetDesignerAgent {
 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-visual-asset-designer',
-      schema: designerOutputSchema,
+      schema: visualStyleOnlySchema,
       systemPrompt: sysPrompt,
       metadata: { dramaId, userId },
-      userPrompt: `请为以下短剧设计全套视觉资产：
+      userPrompt: `请为以下短剧设计全剧视觉风格：
 
 剧名：${seed.title}
 题材：${seed.genre}
@@ -212,40 +211,29 @@ export class VisualAssetDesignerAgent {
 ${audienceLine}
 主角：${seed.protagonistConcept.name}（${seed.protagonistConcept.personality}）— ${seed.protagonistConcept.situation}
 ${seed.antagonistConcept ? `对手：${seed.antagonistConcept.name} — ${seed.antagonistConcept.motivation}` : ''}
-涉及角色名单：${[...allCharNames].join('、')}
 总集数：${outline.totalPlannedEpisodes}
 ${visualStyleHint ? `\n【用户指定视觉风格】：${visualStyleHint}
-请确保 visualStyle 完全体现此风格——overallAesthetic/colorGrading/lightingStyle/renderTechnique/textureStyle/referenceStyle 均需贴合，角色 faceReferencePrompt 也须用符合该风格的英文描述。` : ''}
+请将用户的美学意图翻译成适合本媒介类型的技术 T2I 词汇，写入 visualStyle。
+⚠️ 翻译规则（真人/实拍路径，含古装真人）：
+- 「水墨、晕染、国画感、笔触」→ soft cinematic color grading, muted palette, natural film grain
+- 「柔和美感」→ soft low-saturation color grading, smooth tonal transitions
+- 「古典质感」→ period-accurate costume detail, realistic texture, film grain
+- 「真实感」→ photorealistic, realistic skin with natural pores, no airbrushing` : ''}
+
+=== 重要：建剧阶段只设计视觉风格 ===
+角色和场景将在各集生产时按需设计，无需在此阶段预设。
 
 要求：
-1. characters 数组包含所有主要角色（按主角→对手→配角排序）
-2. 每个角色必须有完整的 faceDescription + faceReferencePrompt + soulProfile + voiceProfile + variations
-3. 每个角色必须提供英文的 T2I 字段：defaultCostumePrompt（服饰英文描述）、bodyTypePrompt（体型英文描述）、hairStylePrompt（发型英文描述）
-4. 主角至少2个variations（根据题材选择合适的变体，如日常/正式、少年/壮年），配角至少1个
-5. locations 至少包含5个核心场景，高频场景标记 isRecurring=true
-6. visualStyle 定义全剧美学基调
-7. characterId 使用角色名的全拼小写（如"李白"→"libai"，"杜甫"→"dufu"，"杨玉环"→"yangyuhuan"）。若全拼冲突（如两个角色同音），在后者末尾加数字（如"libai""libai2"）。禁止使用声母缩写（"lb"），因为中文姓名声母碰撞率极高
-8. locationId 使用场景的简写（如"tavern""palace""study_room"）
-9. soulProfile 灵魂层人设（主角和对手必填，配角尽量填）：从种子中的personality/coreDesire/fatalFlaw出发，展开为完整的心理画像——压力下怎么反应、害怕什么、习惯性小动作、内在矛盾是什么
-10. 全剧级签名道具（signatureProps）：只设计 3-8 个，满足以下任一条件才列入：
-    a) 角色标志性随身物（narrativeRole="signature"）：与主角/反派强绑定，多集反复出现，是该角色的视觉符号
-       → characterOwner 填对应 characterId，appearsInScenes 列出出现的 locationId（≥2个）
-    b) 剧情核心驱动物（narrativeRole="macguffin"）：整个故事围绕它流转，如密令/传位诏书/解药/宝物
-       → appearsInScenes 可为空或填关键场景
-    c) 跨场景反复出现道具（narrativeRole="recurring"）：在 3 个以上不同场景/集数出现，观众会记住
-       → appearsInScenes 必须 ≥3 个 locationId
-    ⚠️ 不要列入：普通场景陈设（桌椅、灯具、窗帘）、一次性出现的道具、通用餐具
-    每个道具字段：
-    - propId：英文/拼音简写，全局唯一（如"jade_seal"、"jiu_zun"、"poison_vial"）
-    - name：中文名称
-    - description：中文详细描述（材质、年代风格、外观特征，30-60字）
-    - visualPrompt：英文 T2I 提示词（产品图风格，白底，单独展示，无人物）
-      格式示例："Song dynasty imperial jade seal, green nephrite, carved dragon relief, product shot, centered, white background, studio lighting, highly detailed"
-    scenes 的 keyProps 字段：用中文文字列出该场景的普通陈设道具即可（如"红木书桌、茶盏、折叠屏风"），无需详细设计，不生图`,
+1. visualStyle 定义全剧美学基调（这是最重要的输出）
+2. 全剧级签名道具（signatureProps）：只设计 2-5 个核心道具，满足以下任一条件才列入：
+   a) 角色标志性随身物（narrativeRole="signature"）
+   b) 剧情核心驱动物（narrativeRole="macguffin"）
+   每个道具含 propId / name / description / visualPrompt
+3. 不要输出 characters 或 locations`,
       temperature: 0.5,
     });
 
-    return designerOutputSchema.parse(raw);
+    return visualStyleOnlySchema.parse(raw);
   }
 
   /**
@@ -353,9 +341,40 @@ ${charRequests}
       this.logger.log(`[AssetLibrary] 池复用 ${reused.length} 个角色: ${reused.map(c => `${c.characterId}(${c.name})`).join(', ')}`);
     }
 
-    // Step B: proposedNewCharacters 中排除已复用/已知的，剩余提交 LLM 设计
+    // Step A2: activeCharacters 中既不在 state.characters 也不在池中的角色 → 自动提升为 proposedNewCharacters
+    // 典型场景：第1集，state.characters=[]，主角/反派在 activeCharacters 中但无人设计
     const reuseIds = new Set(reused.map(c => c.characterId));
-    const genuinelyNew = (intent.proposedNewCharacters ?? []).filter(
+    const orphanActive = (intent.activeCharacters ?? []).filter(
+      ac => ac.characterId && !currentIds.has(ac.characterId) && !reuseIds.has(ac.characterId),
+    );
+    const autoProposed: ProposedCharacter[] = orphanActive.map(ac => {
+      // 从 seed 中推断角色类型和外观提示
+      const protagonistName = state.seed?.protagonistConcept?.name ?? '';
+      const antagonistName = state.seed?.antagonistConcept?.name ?? '';
+      const cid = ac.characterId;
+      const isProtag = protagonistName && (cid === protagonistName || cid === protagonistName.toLowerCase?.());
+      const isAntag = antagonistName && (cid === antagonistName || cid === antagonistName.toLowerCase?.());
+      const concept = isProtag ? state.seed?.protagonistConcept
+        : isAntag ? state.seed?.antagonistConcept : undefined;
+      const name = concept?.name ?? cid;
+      const personality = (concept as any)?.personality ?? '';
+      const situation = (concept as any)?.situation ?? (concept as any)?.motivation ?? '';
+      return {
+        characterId: cid,
+        name,
+        role: (isProtag ? 'protagonist' : isAntag ? 'antagonist' : ac.role ?? 'supporting') as 'supporting' | 'minor',
+        scope: 'arc' as const,
+        narrativePurpose: personality ? `${personality}; ${situation}` : '本集核心角色',
+        appearanceHint: concept ? `来自种子：${JSON.stringify(concept).slice(0, 200)}` : '',
+        hasDialogue: true,
+      };
+    });
+    if (autoProposed.length > 0) {
+      this.logger.log(`[AssetLibrary] 自动提升 ${autoProposed.length} 个 activeCharacters 为新角色设计: ${autoProposed.map(p => `${p.characterId}(${p.name})`).join(', ')}`);
+    }
+
+    // Step B: proposedNewCharacters + autoProposed，排除已复用/已知的，剩余提交 LLM 设计
+    const genuinelyNew = [...autoProposed, ...(intent.proposedNewCharacters ?? [])].filter(
       (p): p is ProposedCharacter =>
         !!p.characterId && !!p.name && !currentIds.has(p.characterId) && !reuseIds.has(p.characterId),
     );
@@ -370,5 +389,63 @@ ${charRequests}
 
     const all = [...reused, ...designed];
     return { reused, designed, all, poolUsageUpdates };
+  }
+
+  /**
+   * 为逐集生产中出现的新场景生成完整视觉描述。
+   * 复用全剧视觉风格（visualStyle）+ 已有场景作为参考锚点，确保新场景与全剧美学一致。
+   */
+  async designNewLocations(
+    state: DramaState,
+    locationHints: Array<{ locationId: string; name?: string; narrativeContext?: string }>,
+  ): Promise<z.infer<typeof newLocationsOutputSchema>['locations']> {
+    if (!locationHints.length) return [];
+    const existing = state.locations.slice(0, 5).map(l =>
+      `${l.locationId}(${l.name}): visualPrompt="${l.visualPrompt?.slice(0, 80)}"`,
+    ).join('\n');
+    const vs = state.visualStyle;
+    const styleCtx = vs
+      ? `美学=${vs.overallAesthetic}, 调色=${vs.colorGrading}, 光影=${vs.lightingStyle}, 渲染=${vs.renderTechnique ?? ''}, 材质=${vs.textureStyle ?? ''}`
+      : '';
+
+    const locRequests = locationHints.map((h, i) =>
+      `${i + 1}. locationId="${h.locationId}", name="${h.name ?? h.locationId}"\n` +
+      `   叙事语境：${h.narrativeContext ?? '本集剧情需要此场景'}`,
+    ).join('\n');
+
+    const raw = await this.llm.generateStructured({
+      taskName: 'drama-new-location-designer',
+      schema: newLocationsOutputSchema,
+      metadata: { dramaId: state.dramaId, userId: state.userId },
+      systemPrompt: `你是一位短剧视觉总监，现在需要为已开拍的短剧设计新场景的视觉描述。
+新场景必须与已有场景在同一美学体系下——T2I提示词规范、光影风格、色调都要对齐。
+
+=== 设计要求 ===
+每个场景必须包含以下字段：
+1. locationId / name / description（中文）
+2. visualPrompt（英文，20-30词）：场景视觉特征，禁止写人物，禁止写全局风格词
+3. lightingDefault（英文）：该场景默认光线条件
+4. colorTone（英文短语）：如 "warm_amber_and_brown"
+5. ambientSoundDefault：默认环境音
+6. keyProps：场景内普通道具中文文字列表
+7. isRecurring：是否高频复用场景
+8. 所有英文 T2I 字段的画面风格关键词必须与全剧 visualStyle 一致`,
+      userPrompt: `剧名：${state.seed.title}
+题材：${state.seed.genre}
+全剧视觉风格：${styleCtx}
+
+已有场景参考（注意保持美学一致性）：
+${existing}
+
+需要设计的新场景：
+${locRequests}
+
+请输出 locations 数组，每个场景包含完整的 SceneLocation 数据。locationId 使用上面指定的值。`,
+      temperature: 0.4,
+    });
+
+    const result = newLocationsOutputSchema.parse(raw);
+    this.logger.log(`新场景设计完成：${result.locations.map(l => `${l.locationId}(${l.name})`).join(', ')}`);
+    return result.locations;
   }
 }

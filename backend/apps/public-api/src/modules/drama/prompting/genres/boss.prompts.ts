@@ -46,6 +46,11 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 冷蓝商务基调+暖金反差，暗部压低；打脸时高饱和突显主角
+firstFramePrompt 光影关键词：
+  积压/被蔑视场景 → "cold blue ambient, desaturated palette, deep shadows, corporate fluorescent top light"
+  主角权力场景   → "single-side Rembrandt sidelight, warm gold rim backlight, cool blue fill, shallow dof background blur"
+  打脸爆发瞬间   → "high contrast hard light, saturated highlight on protagonist, dramatic chiaroscuro shadow"
+  亲密/暧昧场景  → "warm soft wrap light, candlelit glow, shallow bokeh, skin-flattering diffused source"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

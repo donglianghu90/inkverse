@@ -8,6 +8,7 @@ import {
 } from '../../schemas/drama-state.schemas';
 import { buildStoryboardDirectorStaticPrompt, buildStoryboardSceneContext } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
+import { VideoProviderRouterService } from '../../media-pipeline/video-provider-router.service';
 
 const sceneShotsOutputSchema = z.object({ shots: z.array(shotSchema) });
 
@@ -19,7 +20,11 @@ const FILLER_PURPOSES = new Set(['transition']);
 @Injectable()
 export class StoryboardDirectorAgent {
   private readonly logger = new Logger(StoryboardDirectorAgent.name);
-  constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
+  constructor(
+    private readonly llm: LlmService,
+    private readonly promptService: DramaPromptTemplateService,
+    private readonly videoRouter: VideoProviderRouterService,
+  ) {}
 
   async direct(state: DramaState, script: EpisodeScript, intent?: EpisodeIntent): Promise<EpisodeStoryboard> {
     const scenes = script?.scenes ?? [];
@@ -27,6 +32,7 @@ export class StoryboardDirectorAgent {
     const allShots: z.infer<typeof shotSchema>[] = [];
     let globalIdx = 0;
     let prevSceneLastShots: z.infer<typeof shotSchema>[] = [];
+
     for (let si = 0; si < scenes.length; si++) {
       const scene = scenes[si];
       const isLastScene = si === scenes.length - 1;
@@ -75,7 +81,9 @@ export class StoryboardDirectorAgent {
       : '';
 
     const loc = state.locations.find(l => l.locationId === scene.locationId);
-    const locDesc = loc ? `${loc.locationId}(${loc.name}): "${loc.visualPrompt}" lighting=${loc.lightingDefault}` : scene.sceneHeading;
+    const locDesc = loc
+      ? `${loc.locationId}(${loc.name}): visualPrompt="${loc.visualPrompt}" lighting="${loc.lightingDefault ?? ''}"${loc.colorTone ? ` colorTone="${loc.colorTone}"` : ''}`
+      : scene.sceneHeading;
 
     const effectiveGolden = GOLDEN_PURPOSES;
     const targetDur = scene.estimatedDurationSec;
@@ -83,10 +91,10 @@ export class StoryboardDirectorAgent {
     const isFiller = FILLER_PURPOSES.has(scenePurpose);
     const shotDensitySec = isGolden ? 2.5 : isFiller ? 5 : 3.5;
     const maxShots = isGolden
-      ? Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 4), 10)
+      ? Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 4), 15)
       : isFiller
-        ? Math.min(Math.ceil(targetDur / shotDensitySec), 3)
-        : Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 3), 7);
+        ? Math.min(Math.ceil(targetDur / shotDensitySec), 5)
+        : Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 3), 12);
 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-storyboard-director',
@@ -95,7 +103,11 @@ export class StoryboardDirectorAgent {
       systemPrompt: await this.promptService.buildPrompt(
         state.dramaId,
         'storyboard-director',
-        buildStoryboardDirectorStaticPrompt({ camGuide, visualStyle: state.visualStyle }),
+        buildStoryboardDirectorStaticPrompt({
+          camGuide,
+          visualStyle: state.visualStyle,
+          videoModelProfile: this.videoRouter.getModelProfile(state.videoProvider ?? 'sora'),
+        }),
         buildStoryboardSceneContext({
           camGuide,
           maxShots, targetDur,
@@ -118,6 +130,11 @@ ${prevSceneLastShots.length > 0 ? `
 🎬 上一场景结尾（视觉衔接参考，确保本场景第一个Shot在角色位置/情绪/构图上与此自然衔接）：
 ${prevSceneLastShots.map(s => `- shot${s.shotIndex} [${s.camera?.shotSize ?? ''}+${s.camera?.cameraAngle ?? ''}/${s.camera?.movement ?? ''}] chars=[${s.characters.map(c => c.characterId).join(',')}] emotion=${s.characters[0]?.emotion ?? ''} | lastFrame: "${(s.lastFramePrompt ?? '').slice(0, 80)}"`).join('\n')}
 ` : ''}
+⚠️ 姿态与空间继承铁律（场景内连贯性保障）：
+- 同场景内，每个Shot的 firstFramePrompt 中，角色的姿态、位置、朝向必须与前一个Shot的 lastFramePrompt 自然衔接！
+- 若前一Shot结尾"角色转身走向门口（背对）"，则下一Shot起始不能是"正面直视镜头"。
+- 组装场景时，请脑补角色的物理空间移动，严格保持动作连贯。
+
 ⚠️ 合法角色ID白名单（characters数组只能使用这些ID，其他一律视为违规）：
 [${state.characters.map(c => `${c.characterId}(${c.name})`).join(', ')}]
 路人/守军/群演等非注册角色只能在 visualPrompt 文字描述中出现，禁止写入 characters 数组。
@@ -279,7 +296,8 @@ ${flashbackCtx}`,
   }
 
   /** 后处理：确保首尾帧T2I prompt包含角色face描述（visualPrompt用于T2V，不注入face以节省token） */
-  private enforceFaceLock(shots: z.infer<typeof shotSchema>[], state: DramaState): void {
+  /** 锁脸后处理 — 将角色 face 描述注入首尾帧 T2I prompt。对外开放供 EpisodeWorkflowService 对 previewShots 等调用。 */
+  enforceFaceLock(shots: z.infer<typeof shotSchema>[], state: DramaState): void {
     const charMap = new Map(state.characters.map(c => [c.characterId, c]));
     // 仅截取 styleReferencePrompt 首段（逗号前）作为轻量风格锚定前缀。
     // 完整 styleReferencePrompt 由 MediaOrchestrator 在 T2I 组装阶段全量注入，
@@ -287,7 +305,9 @@ ${flashbackCtx}`,
     const styleRef = state.visualStyle?.styleReferencePrompt ?? '';
     const stylePrefix = styleRef.split(',')[0]?.trim() ?? '';
     shots.forEach(shot => {
-      const faceFragments = this.buildFaceFragments(shot.characters.map(c => c.characterId), charMap, shot.characterVariationIds);
+      const shotSize = shot.camera?.shotSize;
+      const cameraAngle = shot.camera?.cameraAngle;
+      const faceFragments = this.buildFaceFragments(shot.characters.map(c => c.characterId), charMap, shot.characterVariationIds, shotSize, cameraAngle);
       if (!faceFragments) return;
       if (shot.firstFramePrompt) shot.firstFramePrompt = this.injectFaceLock(shot.firstFramePrompt, faceFragments, stylePrefix);
       if (shot.lastFramePrompt) shot.lastFramePrompt = this.injectFaceLock(shot.lastFramePrompt, faceFragments, stylePrefix);
@@ -295,7 +315,21 @@ ${flashbackCtx}`,
     this.logger.log(`锁脸后处理完成：${shots.length} shots（首尾帧T2I prompt，风格前缀="${stylePrefix || '无'}"）`);
   }
 
-  private buildFaceFragments(charIds: string[], charMap: Map<string, CharacterIdentity>, variationIds?: Record<string, string>): string {
+  /**
+   * 按景别分级注入 face 描述：
+   * - close_up / extreme_close_up → face + hair + costume（面部主导画面）
+   * - medium / medium_close_up → face + hair（上半身可见）
+   * - wide / extreme_wide / medium_wide → 仅 face（角色小，全身描述无意义，为场景腾出 token 空间）
+   */
+  private buildFaceFragments(charIds: string[], charMap: Map<string, CharacterIdentity>, variationIds?: Record<string, string>, shotSize?: string, cameraAngle?: string): string {
+    const isCloseUp = ['close_up', 'extreme_close_up'].includes(shotSize ?? '');
+    const isMedium = ['medium', 'medium_close_up'].includes(shotSize ?? '');
+    
+    // 镜头方位冲突处理：如果是背影或侧颜机位，动态擦除 faceReferencePrompt 中的锁正面词汇
+    const needsProfileScrub = ['side_profile'].includes(cameraAngle ?? '');
+    const needsBackScrub = ['back_of_head', 'over_shoulder'].includes(cameraAngle ?? '');
+
+    // wide / extreme_wide / medium_wide / 未指定均走精简模式
     return charIds.map(cid => {
       const c = charMap.get(cid);
       if (!c) return '';
@@ -303,10 +337,31 @@ ${flashbackCtx}`,
       const variation = vid ? c.variations?.find(v => v.variationId === vid) : null;
       const costume = variation?.visualPromptOverride || c.defaultCostumePrompt || c.defaultCostume;
       const hair = c.hairStylePrompt || c.hairStyle;
-      const body = c.bodyTypePrompt || c.bodyType;
-      const parts = [c.faceReferencePrompt, hair, body, costume].filter(Boolean);
+      
+      let facePrompt = c.faceReferencePrompt || '';
+      
+      if (needsProfileScrub || needsBackScrub) {
+        facePrompt = facePrompt
+          .replace(/front-facing,\s*looking at camera,?\s*/gi, '')
+          .replace(/looking at camera,?\s*/gi, '')
+          .replace(/front-facing,?\s*/gi, '')
+          .trim();
+      }
+      if (needsBackScrub) {
+        facePrompt = facePrompt
+          .replace(/eyes sharply in focus,\s*clear iris detail,?\s*/gi, '')
+          .replace(/clear iris detail,?\s*/gi, '')
+          .trim();
+      }
+
+      const parts: (string | undefined)[] = isCloseUp
+        ? [facePrompt, hair, costume]        // 特写：face + hair + costume
+        : isMedium
+          ? [facePrompt, hair]                 // 中景：face + hair
+          : [facePrompt];                      // 远景：仅 face
+      const filtered = parts.filter(Boolean);
       // 用 characterId（英文全拼，如 libai/yangyuhuan）作为 bracket 标识，避免中文名无法匹配英文 prompt
-      return `[${c.characterId}: ${parts.join(', ')}]`;
+      return `[${c.characterId}: ${filtered.join(', ')}]`;
     }).filter(Boolean).join(', ');
   }
 

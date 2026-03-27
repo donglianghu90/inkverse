@@ -15,6 +15,11 @@ export interface VolcengineVideoConfig {
   defaultDuration: number;
   defaultQuality: string;
   watermark?: boolean;
+  /**
+   * 是否默认生成同步音频（仅 Seedance 1.5 pro 支持）。
+   * 默认 false：短剧有独立配音流程，不需要 AI 自动生成音频。
+   */
+  defaultGenerateAudio?: boolean;
 }
 
 interface ArkTaskSubmitResponse { id: string; model?: string; status?: string }
@@ -73,33 +78,45 @@ export class VolcengineVideoProvider implements VideoProvider {
     const duration = req.duration ?? this.config.defaultDuration;
     const quality = req.quality ?? this.config.defaultQuality;
 
-    // 参数以 flag 形式拼接在 prompt 末尾（新版 API 规范）
-    const flags = [
-      `--resolution ${quality}`,
-      `--duration ${duration}`,
-      '--camerafixed false',
-      `--watermark ${this.config.watermark ? 'true' : 'false'}`,
-    ].join(' ');
-
+    // 新版 API：content 只包含纯文本 prompt，所有视频参数以顶层字段传入（强校验）
     const content: Record<string, unknown>[] = [
-      { type: 'text', text: `${req.prompt} ${flags}` },
+      { type: 'text', text: req.prompt },
     ];
 
     // I2V：参考图按 role 排序后逐一添加（first_frame → last_frame → character → style）
+    // role 必须随 content item 一起传给 API，否则所有图像被视为 "unspecified role"，
+    // 而 API 限制 unspecified role 最多 1 张。
     if (req.referenceImages?.length) {
       const sorted = [...req.referenceImages].sort(
         (a, b) => (ROLE_ORDER[a.role ?? ''] ?? 9) - (ROLE_ORDER[b.role ?? ''] ?? 9),
       );
       for (const img of sorted) {
-        content.push({ type: 'image_url', image_url: { url: img.url } });
+        const item: Record<string, unknown> = { type: 'image_url', image_url: { url: img.url } };
+        if (img.role) item.role = img.role;
+        content.push(item);
       }
     }
 
-    const payload: Record<string, unknown> = { model, content };
+    // Seedance 1.5 pro 支持的 generate_audio 参数（默认关闭，短剧有独立配音流程）
+    const generateAudio = req.generateAudio ?? this.config.defaultGenerateAudio ?? false;
+
+    const payload: Record<string, unknown> = {
+      model,
+      content,
+      // 视频参数以顶层字段传入（新方式，强校验；Seedance 1.0-1.5 同时兼容旧方式）
+      resolution: quality,
+      duration,
+      camera_fixed: false,
+      watermark: this.config.watermark ?? false,
+      generate_audio: generateAudio,
+    };
+
+    // ratio：有显式请求时才传，否则让模型使用 adaptive（Seedance 1.5 pro 默认）
+    if (req.aspectRatio) payload.ratio = req.aspectRatio;
     if (req.seed !== undefined) payload.seed = req.seed;
     if (req.extra) Object.assign(payload, req.extra);
 
-    this.logger.log(`提交视频任务: model=${model} duration=${duration}s quality=${quality}`);
+    this.logger.log(`提交视频任务: model=${model} duration=${duration}s quality=${quality} audio=${generateAudio}`);
     const res = await this.client.post<ArkTaskSubmitResponse>('/contents/generations/tasks', payload);
     this.logger.log(`视频任务已提交: taskId=${res.id} model=${model}`);
     return { providerTaskId: res.id, provider: this.name, model };

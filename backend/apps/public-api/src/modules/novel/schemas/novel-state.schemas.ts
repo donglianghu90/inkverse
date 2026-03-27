@@ -183,15 +183,15 @@ export const bookPromptProfileSchema = z.object({
     genreRules: z.array(z.string()).min(3),
     pacingGuide: z.string(),
     dialogueGuide: z.string(),
-    craftExamples: z.array(craftExampleSchema).min(3).max(8),
+    craftExamples: z.array(craftExampleSchema).min(1).max(8),
     toneGuide: z.string(),
   }),
 
   satisfactionTypes: z.array(satisfactionTypeDefSchema).min(3),
 
-  hookTypes: z.array(hookTypeDefSchema).min(4),
+  hookTypes: z.array(hookTypeDefSchema).min(1),
 
-  clichePatterns: z.array(clichePatternDefSchema).min(5),
+  clichePatterns: z.array(clichePatternDefSchema).min(1),
 
   reviewerCalibration: z.object({
     dimensionWeights: z.object({

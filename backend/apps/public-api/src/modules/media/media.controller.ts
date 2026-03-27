@@ -26,7 +26,7 @@ class GenerateImageDto {
 class SubmitVideoDto {
   prompt: string;
   duration?: number;
-  quality?: '480p' | '720p' | '1080p';
+  quality?: '720p' | '1080p';
   aspectRatio?: '16:9' | '9:16' | '1:1';
   referenceImages?: Array<{ url: string; role?: string }>;
   generateAudio?: boolean;

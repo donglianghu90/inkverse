@@ -45,6 +45,12 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 暗蓝灰基调+高对比度；密室大面积阴影压低暗部；关键证物/真相时局部高亮点缀
+firstFramePrompt 光影关键词：
+  密谋/窥视场景  → "cold blue-grey ambient, deep shadow pools, single narrow light source, low-key chiaroscuro"
+  证物揭露特写   → "clinical spotlight on evidence, macro texture detail, dark surround, isolated illumination"
+  真相反转瞬间   → "harsh frontal exposure, bleach-bypass desaturation, overexposed highlights on shocked face"
+  审讯对峙       → "single hard top light, deep eye socket shadows, interrogation room green-grey ambient"
+  跟踪/追逐      → "dark urban night, wet pavement neon reflections, motion-blur streetlight streaks"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

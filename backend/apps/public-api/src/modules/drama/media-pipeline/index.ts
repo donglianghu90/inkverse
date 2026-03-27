@@ -18,3 +18,4 @@ export {
 } from './emotion-media-mapper.service';
 export { GenerationPolicyService } from './generation-policy.service';
 export { ImageProviderRouterService } from './image-provider-router.service';
+export { VideoProviderRouterService } from './video-provider-router.service';

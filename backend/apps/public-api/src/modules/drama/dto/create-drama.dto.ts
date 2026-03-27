@@ -57,5 +57,8 @@ export class CreateDramaDto {
   suggestedVisualStyle?: string; // 视觉风格枚举值（如 period_live / live_action / 2d_anime），由前端推荐流程确定后透传
 
   @IsOptional() @IsEnum(['fast', 'balanced', 'quality'])
-  generationMode?: 'fast' | 'balanced' | 'quality'; // 生成模式：速度优先 / 均衡 / 质量优先
+  generationMode?: 'fast' | 'balanced' | 'quality';
+
+  @IsOptional() @IsEnum(['auto', 'volcengine', 'kling', 'hailuo', 'veo', 'sora', 'kling-avatar'])
+  videoProvider?: 'auto' | 'volcengine' | 'kling' | 'hailuo' | 'veo' | 'sora' | 'kling-avatar';
 }

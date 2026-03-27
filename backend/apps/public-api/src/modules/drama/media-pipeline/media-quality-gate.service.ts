@@ -42,7 +42,7 @@ export type QualityFixType = 'identity' | 'style' | 'camera' | 'motion';
 
 const TIER_CONFIG: Record<string, { maxAttempts: number; minScore: number; candidateCount: number }> = {
   golden: { maxAttempts: 3, minScore: 7.5, candidateCount: 2 },
-  standard: { maxAttempts: 2, minScore: 4, candidateCount: 1 },
+  standard: { maxAttempts: 2, minScore: 6, candidateCount: 1 },
   filler: { maxAttempts: 1, minScore: 0, candidateCount: 1 },
 };
 

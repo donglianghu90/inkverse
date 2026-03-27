@@ -40,6 +40,8 @@ export interface GenerateImageOptions extends ImageGenerationRequest {
 
 export interface SubmitVideoOptions extends VideoGenerationRequest {
   provider?: string;
+  /** 跨 Provider 降级：主 provider 提交失败时自动切换此备用 provider 重试 */
+  fallbackProvider?: string;
   dramaId?: string;
   bookId?: string;
   module?: string;
@@ -94,6 +96,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
         provider: job.provider, model: quality ?? 'default',
         quantity: 1, costCny: vidCost,
         ok: evt.status === 'completed', durationMs,
+        idempotencyKey: `video:${evt.jobId}:completed`,
       }).catch(() => {});
     };
     this.jobService.events.on('completed', this.videoCompletionHandler);
@@ -146,6 +149,15 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
           this.logger.error(
             `备用 Provider ${fbProvider.name} 亦失败: ${(fbErr as Error).message?.slice(0, 120)}`,
           );
+          // 录入备用 Provider 的失败 usage，避免统计遗漏
+          this.usageLedger.record({
+            userId: opts.userId ?? '', module: this.resolveModule(opts),
+            resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
+            action: opts.assetType ?? 'image', kind: 'image',
+            provider: fbProvider.name, model: 'unknown',
+            quantity: opts.count ?? 1, costCny: 0,
+            ok: false, durationMs: Date.now() - t0,
+          }).catch(() => {});
         }
       }
 
@@ -248,9 +260,42 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
         request: { prompt: opts.prompt, duration: opts.duration, quality: opts.quality, aspectRatio: opts.aspectRatio },
         userId: opts.userId,
       });
-      this.logger.log(`视频任务已提交: jobId=${job.id} providerTaskId=${submitResult.providerTaskId}`);
+      this.logger.log(`视频任务已提交: jobId=${job.id} provider=${provider.name} providerTaskId=${submitResult.providerTaskId}`);
       return { jobId: job.id, providerTaskId: submitResult.providerTaskId };
-    } catch (err) {
+    } catch (primaryErr) {
+      // 跨 Provider 降级：主 provider 提交失败时切换备用 provider 重试
+      if (opts.fallbackProvider) {
+        const fbProvider = this.registry.getVideoProvider(opts.fallbackProvider);
+        this.logger.warn(
+          `视频 Provider ${provider.name} 提交失败，降级至 ${fbProvider.name}: ${(primaryErr as Error).message?.slice(0, 120)}`,
+        );
+        try {
+          // submit() 只接受 VideoGenerationRequest，将 SubmitVideoOptions 的扩展字段剥离后传入
+          const { provider: _p, fallbackProvider: _fb, dramaId: _d, bookId: _b, module: _m,
+            assetType: _at, refId: _rid, userId: _u, episodeNumber: _ep, chapterNumber: _ch,
+            ...videoReq } = opts;
+          const fbResult = await fbProvider.submit(videoReq);
+          const job = await this.jobService.createJob({
+            jobType: 'video', provider: fbProvider.name, providerTaskId: fbResult.providerTaskId,
+            dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId, episodeNumber: opts.episodeNumber,
+            request: { prompt: opts.prompt, duration: opts.duration, quality: opts.quality, aspectRatio: opts.aspectRatio },
+            userId: opts.userId,
+          });
+          this.logger.log(`视频任务已提交(降级): jobId=${job.id} provider=${fbProvider.name} providerTaskId=${fbResult.providerTaskId}`);
+          return { jobId: job.id, providerTaskId: fbResult.providerTaskId };
+        } catch (fbErr) {
+          this.logger.error(`备用视频 Provider ${fbProvider.name} 亦失败: ${(fbErr as Error).message?.slice(0, 120)}`);
+          // 录入备用 Provider 的失败 usage，避免统计遗漏
+          this.usageLedger.record({
+            userId: opts.userId ?? '', module: this.resolveModule(opts),
+            resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
+            action: opts.assetType ?? 'video', kind: 'video',
+            provider: fbProvider.name, model: opts.quality ?? 'default',
+            quantity: 1, costCny: 0,
+            ok: false, durationMs: 0,
+          }).catch(() => {});
+        }
+      }
       this.usageLedger.record({
         userId: opts.userId ?? '', module: this.resolveModule(opts),
         resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
@@ -259,7 +304,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
         quantity: 1, costCny: 0,
         ok: false, durationMs: 0,
       }).catch(() => {});
-      throw err;
+      throw primaryErr;
     }
   }
 

@@ -325,7 +325,14 @@ camera 字段包含三个正交维度，必须分别填写：
 {{colorPaletteSection}}
 === visualPrompt 规则（用于 I2V 视频生成，描述运动过程）===
 - 英文，30-60 words，描述"画面中发生了什么动作/运动"
-- 格式："{镜头运动描述}, {主体动作}, {速度/节奏}, {环境变化}, {情绪氛围}"
+- 格式："{镜头运动描述}, {主体动作}, {速度/节奏}, {环境物理变化}, {视觉氛围线索}"
+- ⚠️ visualPrompt 只能包含画面中客观可视的物理元素！
+  ✅ 允许的视觉氛围线索：光影变化（烛光摇曳/阳光移动）、烟尘粒子飘动、衣袂/发丝随风、水面波纹、雨滴飘落等
+  ❌ 严禁使用以下无法被图像/视频渲染的抽象描述词汇：
+    - 声音类：silence, ambient sound, murmur, echo, fading sound, noise
+    - 心理类：tension, mood, atmosphere, feeling, sense of, psychological
+    - 抽象氛围：heavy stillness, silence stretching, sound falling away, weight of
+  违反此规则会导致 T2V 模型忽略关键的运动指令，严重影响生成质量！
 - 禁止使用 "cinematic film still" 等静态描述前缀——这是视频prompt，不是图片prompt
 - 禁止包含角色face描述（系统会在首尾帧T2I中注入face描述，T2V中会浪费token并干扰运动生成）
 - 每个Shot只描述一个主要动作（I2V模型对复杂多动作场景表现极差）
@@ -361,7 +368,7 @@ specialTechnique 对应 visualPrompt 补充词：
 === 首尾帧提示词（用于 T2I 图片生成，描述静态画面）===
 - firstFramePrompt：Shot起始瞬间的静帧描述（英文，30-60 words），按 camera.shotSize 构图
 - lastFramePrompt：Shot结束瞬间的静帧描述（英文，30-60 words），按 camera.shotSizeEnd（若有）构图
-- 格式："{shot framing}, {character face+desc+pose+facing}, {scene/environment detail}, {lighting}, {camera angle keywords}"
+- 格式："{shot framing}, {character face+desc+pose+facing}, {spatial layout}, {scene/environment detail}, {lighting}, {camera angle keywords}"
 - ⚠️ 禁止在 firstFramePrompt/lastFramePrompt 中写全剧风格词（如 "cinematic live action photography" / "anime style" 等）
   这些词已由系统将 styleReferencePrompt 自动前置注入，重复写会浪费 token 并产生冲突。
   ✅ 第一个词组只写 shot framing 描述词（如 "wide shot" / "close-up portrait" / "extreme close-up"）
@@ -371,17 +378,17 @@ specialTechnique 对应 visualPrompt 补充词：
 - cameraAngle 关键词示例：
   low_angle → "low angle shot, looking up at subject, dominant perspective"
   high_angle → "high angle shot, looking down at subject, vulnerable perspective"
-  dutch_angle → "dutch angle, tilted frame, psychological tension"
+  dutch_angle → "dutch angle, tilted frame, diagonal distortion"
   bird_eye → "bird's eye view, directly overhead"
   over_shoulder → "over-the-shoulder shot, shallow focus on face"
 
-=== I2V 视频生成限制（分镜设计必须遵守）===
+=== 视频生成模型与限制（分镜设计必须遵守）===
+{{videoModelSection}}
 - 每个Shot只描述一个主要动作：如果一个复杂场景有"站起来→走到门口→打开门→回头看"，必须拆成2-3个Shot
-- 避免单个Shot中多角色同时做不同的复杂动作（I2V模型会混乱），优先用切镜分别展示
+- 避免单个Shot中多角色同时做不同的复杂动作（视频模型会混乱），优先用切镜分别展示
 - shotSize=close_up/extreme_close_up 的Shot中人物动作要微妙：表情变化、眼神移动、微微点头，而非大幅度肢体运动
 - shotSize=wide/extreme_wide 适合展示大幅度动作（走路、跑步、打斗），但面部细节会丢失
 - 静态对话场景：用镜头movement(slow_push_in/orbit)代替角色大动作，保持画面动感
-- 每个Shot时长2-6秒最佳，超过8秒的Shot几乎一定质量下降
 
 === 角色变体（衣橱）===
 - 角色的 variations 列表定义了该角色的非默认造型（如官服、便服、伪装、受伤等）
@@ -404,7 +411,7 @@ specialTechnique 对应 visualPrompt 补充词：
 - actionUnitId：单动作单元ID（建议格式：{sceneId}_act_{N}）
 
 === 约束 ===
-- 每个Shot时长建议2-6秒（具体每场景最大Shot数和目标时长由运行时注入）
+- 每个Shot时长遵守上方"视频生成模型"标注的时长范围（具体每场景最大Shot数和目标时长由运行时注入）
 - 字幕只在有对话/旁白时添加
 - 暂不填 audio 字段（交给AudioDirector）
 - 所有 firstFramePrompt 和 lastFramePrompt 必须填写
@@ -786,33 +793,10 @@ export const SERIES_DIRECTOR_CREATION_TEMPLATE = `你是一位短剧总导演，
 {{historicalConstraint}}
 ${DRAMA_LANG_RULE}`;
 
-export const VISUAL_ASSET_DESIGNER_TEMPLATE = `你是短剧视觉资产设计师。你的任务是为整部剧的人物、场景、视觉风格建立完整档案，确保后续所有分镜的T2I/T2V生成一致、高效、高质量。
+export const VISUAL_ASSET_DESIGNER_TEMPLATE = `你是短剧视觉风格设计师。你的任务是为短剧建立全剧视觉风格档案（visualStyle）和签名道具（signatureProps）。
+角色和场景将在各集生产时按需设计，无需在此阶段预设。
 
-{{visualStyleDesc}}=== 主要角色设计原则 ===
-{{maleFormula}}
-{{femaleFormula}}
-
-每个角色必须输出以下字段：
-- characterId（全拼英文ID，如 libai、yangyuhuan）
-- name（中文名）
-- role（protagonist/antagonist/supporting）
-- faceReferencePrompt（英文，25-35词：肤色/轮廓/眼型/鼻/唇/整体气质，禁止写情绪/道具/服饰）
-- defaultCostumePrompt（英文，20-30词：日常服饰，禁止写人物描述）
-- bodyTypePrompt（英文，10-15词：体型/身高/体态）
-- hairStylePrompt（英文，10-15词：发型/发色/发质）
-- voiceProfile（台词风格：语速/语气/口癖/禁用表达）
-- characterStylePrompt（英文，10-25词：角色定妆图风格前缀，仅写时代背景+渲染技术+材质，禁止光影/调色/场景词）
-- variations（可选：非默认造型列表，如官服、便服、伪装、受伤，每个含 variationId+costumePrompt）
-
-=== 场景档案设计原则 ===
-每个场景必须输出：
-- locationId（英文ID，如 office_tower_lobby）
-- name（中文名）
-- type（interior/exterior）
-- visualPrompt（英文，20-30词：场景视觉特征，禁止写人物）
-- lightingCondition（英文：光线条件）
-- atmosphereTags（氛围标签）
-- defaultAmbience（默认环境音）
+{{visualStyleDesc}}
 
 === T2I/T2V 全局风格规范（styleReferencePrompt）===
 styleReferencePrompt 是全剧所有 Shot 的 T2I 风格前缀，**必须填写**，15–30 词纯英文。
@@ -822,11 +806,16 @@ styleReferencePrompt 是全剧所有 Shot 的 T2I 风格前缀，**必须填写*
    - 禁止场景特有细节（如具体地点名称、场景词）——场景细节由各场景 visualPrompt 单独提供
    - 禁止角色特有描述——角色描述在 faceReferencePrompt 中
    示例（现代都市真人）："cinematic live action photography, RAW photo, professional film color grading, shallow depth of field bokeh, Korean drama premium cinematic lighting, commercial broadcast production quality, photorealistic, 4K ultra-detailed, film grain texture"
+   示例（真人古装/历史实拍，注意勿写水墨）："cinematic Chinese period drama live-action photography, photorealistic, soft natural cinematic color grading, shallow depth of field, 35mm film grain, 4K ultra-detailed, premium broadcast period drama lighting, masterpiece"
    示例（2D动漫）："anime style illustration, 2D hand-drawn cel shading, clean line art, vibrant saturated colors, soft natural lighting, Japanese animation aesthetic, highly detailed, best quality"
 
+⚠️ 真人实拍类（live_action、period_live、hk_film、retro_wuxia、western_film 等）与中文「柔和/晕染美感」的映射：
+   - styleReferencePrompt、各场景 visualPrompt、renderTechnique、textureStyle 的英文中**禁止**出现：ink wash、sumi-e、painterly、brush stroke、watercolor painting、illustration（除非用户明确选水墨/插画模板）。
+   - 用户若用「水墨晕染、国画感」形容**但仍要真人剧**，应译为电影语言：soft low-saturation cinematic color grading、smooth tonal transitions、muted palette、natural film grain，**不得**写 ink-wash color grading。
+
 characterStylePrompt = 角色定妆参考图专用 T2I 风格前缀，**必须填写**，10–25 词纯英文。
-⚠️ 设计原则：角色定妆图使用中性背景，该字段**只描述时代背景 + 渲染技术 + 材质**，**严禁**包含光影/调色/场景词。
-   正确示例（真人古装）："Chinese historical drama, ancient costume, cinematic hanfu, photorealistic portrait, film grain, silk fabric texture"
+⚠️ 设计原则：角色定妆图使用中性背景，该字段**只描述时代背景 + 渲染技术 + 材质**，**严禁**包含光影/调色/场景词（如 candlelight、palace lighting、window light）。
+   正确示例（真人古装）："Chinese historical drama, ancient costume, cinematic hanfu, photorealistic portrait, film grain, silk and linen fabric texture"
    正确示例（现代都市）："cinematic live action, contemporary urban, photorealistic portrait, realistic skin texture"
 
 === T2I 内容审核兼容性（重要）===
@@ -875,7 +864,7 @@ export const PROFILER_CORE_IDENTITY_WITH_GUIDE = '- coreIdentity：根据上方�
 export const PROFILER_CORE_IDENTITY_DEFAULT = '- coreIdentity：一句话概括本剧编剧的核心定位（格式："你是一位精通…的编剧，每场戏必须…"）';
 export const PROFILER_CAMERA_PRECONFIGURED = '2. cameraStyleGuide：【已由题材模板预配置，输出空对象 {} 即可】';
 export const PROFILER_CAMERA_GENERATE = '2. cameraStyleGuide：生成题材专属镜头语言手册。必填字段：preferredAngles / signatureTechniques / transitionStyle / colorPalette / cinematographyDirective / genrePurposeDirectives / genreIdentity / genreCoreRules / genreNarrativePrinciples。全部内容须与本剧题材、视觉风格严格匹配，禁止复制其他题材的规则。';
-export const PROFILER_AUDIO_PRECONFIGURED = '3. audioStyleGuide：【已由题材模板预配置，输出空对象 {} 即可】';
+export const PROFILER_AUDIO_PRECONFIGURED = '3. audioStyleGuide：bgmMoodPreferences / sfxDensity / silenceUsage / voiceActingStyle 已由题材模板预配置，这四个字段输出 null 即可。\n   仅需生成 genreBrandingDirective（本剧专属音频品牌指令）：结合本剧的具体人物、时代背景、核心情感弧线，生成区别于题材通用基线的本剧专属音效规则（50-120字）。禁止照抄题材通用规则，必须体现本剧独特性。';
 export const PROFILER_AUDIO_GENERATE = '3. audioStyleGuide：生成题材专属音频品牌手册。必填字段：bgmMoodPreferences / sfxDensity / silenceUsage / voiceActingStyle / genreBrandingDirective。';
 export const PROFILER_REVIEWER_PRECONFIGURED = '4. reviewerCalibration：【已由题材模板预配置，输出 { dimensionWeights: {}, genreSpecificChecks: [], calibrationHistory: [] } 即可】';
 export const PROFILER_REVIEWER_GENERATE = '4. reviewerCalibration：生成题材专属审核权重。必填字段：dimensionWeights / genreSpecificChecks / calibrationHistory。';

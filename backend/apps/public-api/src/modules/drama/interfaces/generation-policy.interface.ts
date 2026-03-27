@@ -16,7 +16,7 @@ export interface DramaShotRunPolicy {
   candidateCount: number;
   gateMaxAttempts: number;
   gateMinScore: number;
-  videoQuality: '480p' | '720p' | '1080p';
+  videoQuality: '720p' | '1080p';
 }
 
 export interface DramaMediaRunPolicy {

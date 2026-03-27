@@ -3,6 +3,8 @@
 export interface ShotMediaEntry {
   videoUrl?: string;
   videoJobId?: string;
+  /** 实际使用的视频 Provider（用于合成阶段计算时长约束） */
+  videoProvider?: string;
   ttsUrl?: string;
   imageUrl?: string;
   lastFrameImageUrl?: string;

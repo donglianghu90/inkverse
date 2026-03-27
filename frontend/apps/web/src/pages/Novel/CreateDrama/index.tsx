@@ -275,8 +275,8 @@ const STEPS = [
 const GEN_STEPS = [
   { label: '种子分析', step: 'create_0' },
   { label: '总导演规划大纲', step: 'create_1' },
-  { label: '视觉资产设计', step: 'create_2' },
-  { label: '保存角色与场景资产', step: 'create_3' },
+  { label: '视觉风格设计', step: 'create_2' },
+  { label: '保存风格资产', step: 'create_3' },
   { label: '编剧手册+策略', step: 'create_4' },
   { label: '完成', step: 'create_5' },
 ];

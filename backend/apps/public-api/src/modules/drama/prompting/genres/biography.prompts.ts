@@ -38,6 +38,12 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 少年/青年期暖明色调；历经挫折后去饱和低沉；人生巅峰时色彩鲜明高饱和；晚年/传承段温暖褪色
+firstFramePrompt 光影关键词：
+  少年/青年期   → "bright warm natural daylight, high-key cheerful ambient, clean soft fill, youthful skin glow"
+  挫折/低谷期   → "flat overcast desaturated ambient, cold grey fill, under-eye shadow, worn texture detail"
+  奋斗/积累期   → "warm directional practical light, slight film grain, authentic texture, determination sidelight"
+  人生巅峰时刻  → "rich saturated warm golden ambient, strong fill, triumphant wide framing, high-key highlights"
+  晚年/传承段   → "soft warm nostalgic haze, desaturated edges, aged skin texture detail, golden-hour fading light"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

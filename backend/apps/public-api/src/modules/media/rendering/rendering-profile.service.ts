@@ -36,14 +36,6 @@ const SEEDREAM_PROFILE: RenderingProfile = {
     qualitySuffix: '',
   },
   characterViews: {
-    viewsByRole: {
-      // 主角：加入情绪变体（开心/愤怒），用于情感特写场景的参考图，防止面部漂移
-      protagonist: ['face_front', 'face_three_quarter', 'upper_body_front', 'full_body_front', 'side_profile', 'face_happy', 'face_angry'],
-      // 对手：同样需要情绪变体（愤怒/强势是反派高频情绪），加入 face_angry
-      antagonist: ['face_front', 'face_three_quarter', 'upper_body_front', 'full_body_front', 'face_angry'],
-      supporting: ['face_front', 'face_three_quarter', 'upper_body_front'],
-      minor: ['face_front'],
-    },
     chainReferenceWeight: 0.65,
   },
   locationViews: {
@@ -69,14 +61,8 @@ const GENERIC_PROFILE: RenderingProfile = {
     faceConsistencyMethod: 'text_only',
   },
   negativePrompt: { supported: false, defaultValue: '' },
-  prompt: { maxLength: 1000, styleInjection: 'prefix' },
+  prompt: { maxLength: 5000, styleInjection: 'prefix' },
   characterViews: {
-    viewsByRole: {
-      protagonist: ['face_front'],
-      antagonist: ['face_front'],
-      supporting: ['face_front'],
-      minor: ['face_front'],
-    },
     chainReferenceWeight: 0.5,
   },
   locationViews: {

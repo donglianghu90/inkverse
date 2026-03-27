@@ -8,7 +8,6 @@ import { VideoTaskStatus } from './interfaces/media-provider.interface';
 import { EventEmitter } from 'events';
 
 const POLL_INTERVAL_MS = 8_000; // 8秒轮询一次
-const MAX_POLL_ATTEMPTS = 150; // 最多轮询 ~20分钟
 
 export interface JobCompletedEvent { jobId: string; status: VideoTaskStatus; result?: Record<string, unknown>; error?: string }
 
@@ -84,9 +83,15 @@ export class MediaJobService implements OnModuleInit, OnModuleDestroy {
           const result = await provider.query(job.providerTaskId);
           if (result.status === 'completed') {
             const res = { videoUrl: result.videoUrl, coverUrl: result.coverUrl, durationSeconds: result.durationSeconds };
-            const dur = Date.now() - job.createdAt.getTime();
-            await this.markCompleted(job.id, res as Record<string, unknown>, dur);
-            this.logger.log(`视频任务完成: ${job.id} (${dur}ms) → ${result.videoUrl?.slice(0, 80)}`);
+            const wallMs = Date.now() - job.createdAt.getTime();
+            await this.markCompleted(job.id, res as Record<string, unknown>, wallMs);
+            const clip =
+              result.durationSeconds != null && Number.isFinite(result.durationSeconds)
+                ? `成片时长 ${result.durationSeconds}s，`
+                : '';
+            this.logger.log(
+              `视频任务完成: ${job.id} (${clip}自任务创建至完成 ${wallMs}ms) → ${result.videoUrl?.slice(0, 80)}`,
+            );
           } else if (result.status === 'failed') {
             await this.markFailed(job.id, result.error ?? '未知错误');
             this.logger.warn(`视频任务失败: ${job.id} → ${result.error}`);

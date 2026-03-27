@@ -67,7 +67,10 @@ function deriveSoulViews(profile: DramaPromptProfile): NonNullable<DramaPromptPr
     episodeDirector: epParts.join('\n\n'),
     pacingAnalyzer: pacingParts.length ? pacingParts.join('\n\n') : undefined,
     hookCrafter: adaptationNotes || undefined,
-    continuityGuardChecks: [],
+    // 优先保留 LLM 针对本剧生成的专属连续性检查（来自 PROFILER_SOUL_DEFAULT 中的生成要求）。
+    // 题材级通用检查由 reviewerCalibration.genreSpecificChecks 承载，两者在 drama-prompt-baker
+    // 中合并注入 continuity-guard，各司其职。
+    continuityGuardChecks: profile.soulViews?.continuityGuardChecks ?? [],
   };
 }
 
@@ -174,8 +177,12 @@ ${arcSummary ? `\n全剧结构参考：${arcSummary}` : ''}
           ...(resolvedCamera ?? {}),
         },
         audioStyleGuide: {
-          ...llmResult.audioStyleGuide,
+          // 题材模板提供枚举/参数类基线（sfxDensity / silenceUsage / voiceActingStyle / bgmMoodPreferences）
           ...(resolvedAudio ?? {}),
+          // LLM 针对本剧生成的 genreBrandingDirective 优先于模板通用版本（剧目专属，不可被题材基线覆盖）
+          ...(llmResult.audioStyleGuide?.genreBrandingDirective
+            ? { genreBrandingDirective: llmResult.audioStyleGuide.genreBrandingDirective }
+            : {}),
         },
         reviewerCalibration: {
           ...llmResult.reviewerCalibration,

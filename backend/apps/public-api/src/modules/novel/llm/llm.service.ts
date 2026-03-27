@@ -33,7 +33,7 @@ interface TokenUsageExtraction {
   source: 'usage_metadata' | 'response_metadata' | 'missing';
 }
 
-interface CostRates { inputRateUsdPer1M: number; outputRateUsdPer1M: number; }
+interface CostRates { inputRatePer1M: number; outputRatePer1M: number; }
 
 interface ProviderConfig {
   apiKey: string;
@@ -182,7 +182,7 @@ export class LlmService {
             standard: String(geminiTiers.standard || defaultGeminiModel),
             lightweight: String(geminiTiers.lightweight || defaultGeminiModel),
           },
-          costRates: LlmService.parseTierCostRates(costGemini, { inputRateUsdPer1M: 0, outputRateUsdPer1M: 0 }),
+          costRates: LlmService.parseTierCostRates(costGemini, { inputRatePer1M: 0, outputRatePer1M: 0 }),
           enabled: Boolean(geminiCfg.apiKey),
         },
         claude: {
@@ -193,7 +193,7 @@ export class LlmService {
             standard: String(claudeTiers.standard || 'claude-sonnet-4-6'),
             lightweight: String(claudeTiers.lightweight || 'claude-sonnet-4-6'),
           },
-          costRates: LlmService.parseTierCostRates(costClaude, { inputRateUsdPer1M: 36, outputRateUsdPer1M: 180 }),
+          costRates: LlmService.parseTierCostRates(costClaude, { inputRatePer1M: 36, outputRatePer1M: 180 }),
           enabled: Boolean(claudeCfg.apiKey),
         },
         openai: {
@@ -204,7 +204,7 @@ export class LlmService {
             standard: String(openaiTiers.standard || defaultOpenaiModel),
             lightweight: String(openaiTiers.lightweight || defaultOpenaiModel),
           },
-          costRates: LlmService.parseTierCostRates(costOpenai, { inputRateUsdPer1M: 14.4, outputRateUsdPer1M: 72 }),
+          costRates: LlmService.parseTierCostRates(costOpenai, { inputRatePer1M: 14.4, outputRatePer1M: 72 }),
           enabled: Boolean(openaiCfg.apiKey),
           azure: String(openaiCfg.azure ?? '').toLowerCase() === 'true',
           azureInstanceName: openaiCfg.azureInstanceName ? String(openaiCfg.azureInstanceName) : undefined,
@@ -233,14 +233,14 @@ export class LlmService {
 
   private static parseTierCostRates(costObj: Record<string, unknown>, fallback: CostRates): Record<ModelTier, CostRates> {
     const tiers: ModelTier[] = ['creative', 'standard', 'lightweight'];
-    const globalIn = LlmService.num(costObj.inputPer1M ?? costObj.inputUsdPer1M, fallback.inputRateUsdPer1M);
-    const globalOut = LlmService.num(costObj.outputPer1M ?? costObj.outputUsdPer1M, fallback.outputRateUsdPer1M);
+    const globalIn = LlmService.num(costObj.inputPer1M ?? costObj.inputUsdPer1M, fallback.inputRatePer1M);
+    const globalOut = LlmService.num(costObj.outputPer1M ?? costObj.outputUsdPer1M, fallback.outputRatePer1M);
     const result = {} as Record<ModelTier, CostRates>;
     for (const tier of tiers) {
       const tierObj = (costObj[tier] ?? {}) as Record<string, unknown>;
       result[tier] = {
-        inputRateUsdPer1M: LlmService.num(tierObj.inputPer1M ?? tierObj.inputUsdPer1M, globalIn),
-        outputRateUsdPer1M: LlmService.num(tierObj.outputPer1M ?? tierObj.outputUsdPer1M, globalOut),
+        inputRatePer1M: LlmService.num(tierObj.inputPer1M ?? tierObj.inputUsdPer1M, globalIn),
+        outputRatePer1M: LlmService.num(tierObj.outputPer1M ?? tierObj.outputUsdPer1M, globalOut),
       };
     }
     return result;
@@ -349,7 +349,7 @@ export class LlmService {
           const errUsage = this.extractUsageFromError(error);
           const errTokens = errUsage ?? { prompt: 0, completion: 0, total: 0, source: 'missing' as const };
           const errCost = LlmService.estimateCost(errTokens.prompt, errTokens.completion, rates);
-          this.traceLogger.logTrace({ ...traceBase, durationMs: Date.now() - t0, tokens: { prompt: errTokens.prompt, completion: errTokens.completion, total: errTokens.total, source: errTokens.source }, cost: { cny: errCost, inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: null, status: 'error', error: (error as Error).message, retries: retry });
+          this.traceLogger.logTrace({ ...traceBase, durationMs: Date.now() - t0, tokens: { prompt: errTokens.prompt, completion: errTokens.completion, total: errTokens.total, source: errTokens.source }, cost: { cny: errCost, inputRatePer1M: rates.inputRatePer1M, outputRatePer1M: rates.outputRatePer1M }, output: null, status: 'error', error: (error as Error).message, retries: retry });
           const errMeta = input.metadata ?? {};
           const errIsDrama = tags.some(t => t.includes('drama'));
           this.usageLedger.record({
@@ -378,11 +378,11 @@ export class LlmService {
     this.logger.log(
       `[${input.taskName}] ====== LLM 调用完成 (${provider}/${modelName}) ====== ${durationMs}ms\n` +
       `  tokens: in=${usage.promptTokens} out=${usage.completionTokens}${usage.thinkingTokens > 0 ? ` think=${usage.thinkingTokens}` : ''} total=${usage.totalTokens}\n` +
-      `  费率: $${rates.inputRateUsdPer1M}/$${rates.outputRateUsdPer1M} per 1M | 费用: $${cost} (source: ${usage.source})`,
+      `  费率: ¥${rates.inputRatePer1M}/¥${rates.outputRatePer1M} per 1M | 费用: ¥${cost} (source: ${usage.source})`,
     );
     this.logger.debug(`[${input.taskName}] AI 输出:\n${this.truncate(JSON.stringify(wrapped.parsed, null, 2), 2000)}`);
 
-    this.traceLogger.logTrace({ ...traceBase, durationMs, tokens: { prompt: usage.promptTokens, completion: usage.completionTokens, ...(usage.thinkingTokens > 0 && { thinking: usage.thinkingTokens }), total: usage.totalTokens, source: usage.source }, cost: { cny: cost, inputRatePer1M: rates.inputRateUsdPer1M, outputRatePer1M: rates.outputRateUsdPer1M }, output: wrapped.parsed, status: wrapped.parsed == null ? 'error' : 'success', error: wrapped.parsed == null ? '结构化输出解析为 null' : undefined, retries: retryCount });
+    this.traceLogger.logTrace({ ...traceBase, durationMs, tokens: { prompt: usage.promptTokens, completion: usage.completionTokens, ...(usage.thinkingTokens > 0 && { thinking: usage.thinkingTokens }), total: usage.totalTokens, source: usage.source }, cost: { cny: cost, inputRatePer1M: rates.inputRatePer1M, outputRatePer1M: rates.outputRatePer1M }, output: wrapped.parsed, status: wrapped.parsed == null ? 'error' : 'success', error: wrapped.parsed == null ? '结构化输出解析为 null' : undefined, retries: retryCount });
 
     const isDrama = tags.some(t => t.includes('drama'));
     const mod = isDrama ? 'drama' : 'novel';
@@ -522,7 +522,7 @@ export class LlmService {
 
   static estimateCost(promptTokens: number, completionTokens: number, rates: CostRates, thinkingTokens = 0): number {
     // thinking tokens 按 output 价格计费（Gemini 定价策略）
-    return Number(((promptTokens / 1e6) * rates.inputRateUsdPer1M + ((completionTokens + thinkingTokens) / 1e6) * rates.outputRateUsdPer1M).toFixed(8));
+    return Number(((promptTokens / 1e6) * rates.inputRatePer1M + ((completionTokens + thinkingTokens) / 1e6) * rates.outputRatePer1M).toFixed(8));
   }
 
   private unwrapResponse<T>(response: unknown): { parsed: T; raw: Record<string, unknown> | null } {

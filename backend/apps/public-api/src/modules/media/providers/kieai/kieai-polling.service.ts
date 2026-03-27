@@ -17,7 +17,12 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import axios, { AxiosInstance } from 'axios';
 import { ConfigService } from '@packages/modules';
 import { KieAiTaskData } from './kieai-callback.service';
-import { kieAiRateLimitAcquire } from './kieai-rate-limiter';
+import { configureKieAiRateLimitsFromConfig, kieAiRateLimitAcquireQuery } from './kieai-rate-limiter';
+import {
+  KIE_AI_RECORD_INFO_FAIL_CODES,
+  KIE_AI_RECORD_INFO_RETRY_CODES,
+  KieAiRecordInfoResponse,
+} from './kieai-record-info';
 
 interface PendingEntry {
   resolve: (data: KieAiTaskData) => void;
@@ -34,12 +39,6 @@ const DEFAULT_POLL_INTERVAL_MS = 10_000;
 /** 默认超时（ms） */
 const DEFAULT_TIMEOUT_MS = 300_000;
 
-interface KieAiQueryResponse {
-  code: number;
-  msg?: string;
-  data?: KieAiTaskData;
-}
-
 @Injectable()
 export class KieAiPollingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('KieAiPolling');
@@ -54,6 +53,7 @@ export class KieAiPollingService implements OnModuleInit, OnModuleDestroy {
   onModuleInit() {
     const media = (this.configService.get('media') ?? {}) as Record<string, unknown>;
     const kieai = (media.kieai ?? {}) as Record<string, unknown>;
+    configureKieAiRateLimitsFromConfig(kieai);
     const apiKey = String(kieai.apiKey || '');
     const baseUrl = String(kieai.baseUrl || 'https://api.kie.ai');
 
@@ -124,11 +124,11 @@ export class KieAiPollingService implements OnModuleInit, OnModuleDestroy {
 
     for (const [taskId, entry] of entries) {
       // 每次 poll 也纳入全局速率限制
-      await kieAiRateLimitAcquire();
+      await kieAiRateLimitAcquireQuery();
 
-      let queryRes: KieAiQueryResponse | undefined;
+      let queryRes: KieAiRecordInfoResponse | undefined;
       try {
-        const resp = await this.http.get<KieAiQueryResponse>('/api/v1/jobs/recordInfo', {
+        const resp = await this.http.get<KieAiRecordInfoResponse>('/api/v1/jobs/recordInfo', {
           params: { taskId },
         });
         queryRes = resp.data;
@@ -137,8 +137,26 @@ export class KieAiPollingService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      if (queryRes.code !== 200 || !queryRes.data) {
-        this.logger.warn(`轮询响应异常: taskId=${taskId} code=${queryRes.code} msg=${queryRes.msg}`);
+      if (!queryRes.data) {
+        if (queryRes.success === false) {
+          this.pending.delete(taskId);
+          const errMsg = queryRes.msg?.trim() || 'recordInfo success=false';
+          this.logger.warn(`任务查询失败终止: taskId=${taskId} success=false msg=${errMsg}`);
+          entry.reject(new Error(`Kie.ai ${errMsg}`));
+          continue;
+        }
+        if (KIE_AI_RECORD_INFO_FAIL_CODES.has(queryRes.code)) {
+          this.pending.delete(taskId);
+          const errMsg = queryRes.msg?.trim() || `recordInfo code=${queryRes.code}`;
+          this.logger.warn(`任务查询失败终止: taskId=${taskId} code=${queryRes.code} msg=${errMsg}`);
+          entry.reject(new Error(`Kie.ai ${errMsg}`));
+          continue;
+        }
+        if (KIE_AI_RECORD_INFO_RETRY_CODES.has(queryRes.code)) {
+          this.logger.debug(`轮询暂可重试: taskId=${taskId} code=${queryRes.code} msg=${queryRes.msg}`);
+          continue;
+        }
+        this.logger.warn(`轮询响应无 data: taskId=${taskId} code=${queryRes.code} msg=${queryRes.msg}`);
         continue;
       }
 
@@ -154,8 +172,9 @@ export class KieAiPollingService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`任务失败: taskId=${taskId} model=${entry.model} failCode=${task.failCode} failMsg=${task.failMsg}`);
         entry.reject(new Error(`Kie.ai 任务失败: taskId=${taskId} failCode=${task.failCode} failMsg=${task.failMsg}`));
       } else {
-        // waiting / queuing / generating — 继续等待
-        this.logger.debug(`任务进行中: taskId=${taskId} state=${task.state} age=${age}s`);
+        // waiting / queuing / generating — 继续等待（Sora 等模型可能带 progress）
+        const prog = task.progress != null ? ` progress=${task.progress}%` : '';
+        this.logger.debug(`任务进行中: taskId=${taskId} state=${task.state} age=${age}s${prog}`);
       }
     }
   }

@@ -80,7 +80,8 @@ ${off > 0 ? `上一批最后Shot的BGM: mood=${shots[off - 1]?.audio?.bgm?.mood 
 
       const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};
       const parsed = Array.isArray(root.shots) ? root.shots : [];
-      parsed.forEach((s: any, i: number) => { if (off + i < shots.length) shots[off + i] = shotSchema.parse({ ...shots[off + i], audio: s.audio ?? shots[off + i].audio, dialogue: s.dialogue ?? shots[off + i].dialogue }); });
+      // 只 merge audio 字段，完全忽略 LLM 返回的 dialogue（AudioDirector 不应修改台词）
+      parsed.forEach((s: any, i: number) => { if (off + i < shots.length) shots[off + i] = shotSchema.parse({ ...shots[off + i], audio: s.audio ?? shots[off + i].audio }); });
       if (Array.isArray(root.bgmSegments)) allBgm.push(...root.bgmSegments);
       if (Array.isArray(root.silencePoints)) allSilence.push(...root.silencePoints);
     }

@@ -33,6 +33,12 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 前世：暗沉褪色（低饱和度）；重生后：鲜明高饱和，象征命运掌控
+firstFramePrompt 光影关键词：
+  前世/死亡记忆  → "low saturation grey-brown ambient, cold overcast, bleach-bypass film look, faded color palette"
+  重生觉醒瞬间   → "blinding white overexposure, color saturation surge, warm golden fill flooding in, lens flare burst"
+  重生后强势场景  → "confident warm-cool contrast lighting, strong Rembrandt sidelight, rich saturated palette, sharp shadow"
+  对比闪回镜头   → "desaturated past vs vivid present, same location different color temperature, memory overlay"
+  掌控命运高潮   → "dramatic hard sidelight, saturated warm-gold rim, triumphant high contrast, resolved color palette"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

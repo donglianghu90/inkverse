@@ -9,6 +9,13 @@ import { VolcengineTtsProvider } from './volcengine/volcengine-tts.provider';
 import { KieAiImageProvider } from './kieai/kieai-image.provider';
 import { KieAiCallbackService } from './kieai/kieai-callback.service';
 import { KieAiPollingService } from './kieai/kieai-polling.service';
+import { KlingVideoProvider } from './kieai/kling-video.provider';
+import { HailuoVideoProvider } from './kieai/hailuo-video.provider';
+import { KlingAvatarProvider } from './kieai/kling-avatar.provider';
+import { VeoVideoProvider } from './google/veo-video.provider';
+import { SoraVideoProvider } from './openai/sora-video.provider';
+import { WanAnimateVideoProvider } from './dashscope/wan-animate-video.provider';
+import { configureKieAiRateLimitsFromConfig } from './kieai/kieai-rate-limiter';
 
 @Injectable()
 export class ProviderRegistryService implements OnModuleInit {
@@ -122,10 +129,11 @@ export class ProviderRegistryService implements OnModuleInit {
     }
   }
 
-  // ═══ Kie.ai 初始化（多模型：nano-banana-pro / flux-2 等，共享同一 apiKey） ═══
+  // ═══ Kie.ai 初始化（多模型：nano-banana-pro / flux-2 / kling-3.0 等，共享同一 apiKey） ═══
 
   private initKieAi(media: Record<string, unknown>) {
     const kieai = (media.kieai ?? {}) as Record<string, unknown>;
+    configureKieAiRateLimitsFromConfig(kieai);
     const apiKey = String(kieai.apiKey || '');
     if (!apiKey) { this.logger.debug('media.kieai.apiKey 未配置，跳过 Kie.ai'); return; }
 
@@ -143,6 +151,10 @@ export class ProviderRegistryService implements OnModuleInit {
       providerNameSuffix?: string;
       maxImageInput?: number;
       defaultGoogleSearch?: boolean;
+      useQualityField?: boolean;
+      defaultQuality?: string;
+      defaultNsfwChecker?: boolean;
+      useImageSizeField?: boolean;
     }> = [
       {
         cfgKey: 'nanoBanana',
@@ -179,6 +191,29 @@ export class ProviderRegistryService implements OnModuleInit {
         imageInputField: 'input_urls',
         providerNameSuffix: 'flux-2-i2i',
       },
+      {
+        cfgKey: 'seedream5Lite',
+        defaultModel: 'seedream/5-lite-text-to-image',
+        defaultAspectRatio: '1:1',
+        defaultResolution: '1K',
+        supportsImageInput: false,
+        providerNameSuffix: 'seedream-5-lite',
+        useQualityField: true,
+        defaultQuality: 'basic',
+        defaultNsfwChecker: false,
+      },
+      {
+        cfgKey: 'nanoBananaEdit',
+        defaultModel: 'google/nano-banana-edit',
+        defaultAspectRatio: '1:1',
+        defaultResolution: '1K',
+        defaultOutputFormat: 'png',
+        supportsImageInput: true,
+        imageInputField: 'image_urls',
+        maxImageInput: 10,
+        providerNameSuffix: 'nano-banana-edit',
+        useImageSizeField: true,
+      },
     ];
 
     for (const def of modelDefs) {
@@ -200,9 +235,103 @@ export class ProviderRegistryService implements OnModuleInit {
         providerNameSuffix: def.providerNameSuffix,
         maxImageInput: def.maxImageInput,
         defaultGoogleSearch: def.defaultGoogleSearch,
+        useQualityField: def.useQualityField,
+        defaultQuality: def.defaultQuality
+          ? String(cfg.defaultQuality || def.defaultQuality)
+          : undefined,
+        defaultNsfwChecker: def.defaultNsfwChecker,
+        useImageSizeField: def.useImageSizeField,
       }, this.kieAiCallbackService, this.kieAiPollingService);
       this.registerImageProvider(provider);
       this.logger.log(`Kie.ai 图片 Provider 已注册: name=${provider.name} model=${model}`);
+    }
+
+    // ── Kling 3.0 视频 Provider（与图片共享同一 apiKey + baseUrl） ──────────────
+    const klingCfg = (kieai.kling ?? {}) as Record<string, unknown>;
+    if (String(klingCfg.enabled ?? 'true') !== 'false') {
+      const klingProvider = new KlingVideoProvider({
+        apiKey,
+        baseUrl,
+        callBackUrl: callBackUrl || undefined,
+        defaultMode:     (klingCfg.defaultMode as 'std' | 'pro' | undefined) ?? 'pro',
+        defaultDuration: Number(klingCfg.defaultDuration) || 5,
+        defaultSound:    String(klingCfg.defaultSound) === 'true',
+      });
+      this.registerVideoProvider(klingProvider);
+      this.logger.log(`Kling 视频 Provider 已注册: name=${klingProvider.name} mode=${klingCfg.defaultMode ?? 'pro'}`);
+    }
+
+    // ── Hailuo 2.3 Standard 视频 Provider（I2V，面部情感最优） ────────────────
+    const hailuoCfg = (kieai.hailuo ?? {}) as Record<string, unknown>;
+    if (String(hailuoCfg.enabled ?? 'true') !== 'false') {
+      const hailuoProvider = new HailuoVideoProvider({
+        apiKey,
+        baseUrl,
+        callBackUrl: callBackUrl || undefined,
+        defaultResolution: (hailuoCfg.defaultResolution as '768P' | '1080P' | undefined) ?? '768P',
+        defaultDuration:   Number(hailuoCfg.defaultDuration) || 6,
+      });
+      this.registerVideoProvider(hailuoProvider);
+      this.logger.log(`Hailuo 视频 Provider 已注册: name=${hailuoProvider.name} resolution=${hailuoCfg.defaultResolution ?? '768P'}`);
+    }
+
+    // ── Kling AI Avatar Provider（对话口型同步，共享 kieai apiKey） ─────────
+    const avatarCfg = (kieai.avatar ?? {}) as Record<string, unknown>;
+    if (String(avatarCfg.enabled ?? 'true') !== 'false') {
+      const avatarProvider = new KlingAvatarProvider({
+        apiKey,
+        baseUrl,
+        callBackUrl: callBackUrl || undefined,
+        defaultModel: String(avatarCfg.model || 'kling/ai-avatar-pro'),
+      });
+      this.registerVideoProvider(avatarProvider);
+      this.logger.log(`Kling Avatar Provider 已注册: name=${avatarProvider.name} model=${avatarCfg.model ?? 'kling/ai-avatar-pro'}`);
+    }
+
+    // ── Veo 3.1 视频 Provider（画质天花板，共享 kieai apiKey + baseUrl） ────────
+    const veoCfg = (kieai.veo ?? {}) as Record<string, unknown>;
+    if (String(veoCfg.enabled ?? 'true') !== 'false') {
+      const veoProvider = new VeoVideoProvider({
+        apiKey,
+        baseUrl,
+        callBackUrl: callBackUrl || undefined,
+        defaultModel: (veoCfg.defaultModel as 'veo3' | 'veo3_fast' | undefined) ?? 'veo3',
+        defaultAspectRatio: (veoCfg.defaultAspectRatio as '16:9' | '9:16' | undefined) ?? '16:9',
+        enableTranslation: String(veoCfg.enableTranslation ?? 'true') === 'true',
+      });
+      this.registerVideoProvider(veoProvider);
+      this.logger.log(`Veo 视频 Provider 已注册: name=${veoProvider.name} model=${veoCfg.defaultModel ?? 'veo3'}`);
+    }
+
+    // ── Sora 2 视频 Provider（长镜头连贯叙事，共享 kieai apiKey + baseUrl） ────
+    const soraCfg = (kieai.sora ?? {}) as Record<string, unknown>;
+    if (String(soraCfg.enabled ?? 'true') !== 'false') {
+      const soraModel = (soraCfg.defaultModel as 'sora-2-image-to-video' | undefined) ?? 'sora-2-image-to-video';
+      const soraProvider = new SoraVideoProvider({
+        apiKey,
+        baseUrl,
+        callBackUrl: callBackUrl || undefined,
+        defaultModel: soraModel,
+        defaultNFrames: (soraCfg.defaultNFrames as '10' | '15' | undefined) ?? '10',
+        uploadMethod: (soraCfg.uploadMethod as 's3' | 'oss' | undefined) ?? 'oss',
+        removeWatermark: String(soraCfg.removeWatermark ?? 'true') === 'true',
+      });
+      this.registerVideoProvider(soraProvider);
+      this.logger.log(`Sora 视频 Provider 已注册: name=${soraProvider.name} model=${soraModel}`);
+    }
+
+    // ── Wan 2.2 Animate Replace（V2V 角色替换，共享 kieai apiKey + baseUrl） ──
+    const wanCfg = (kieai.wanAnimate ?? {}) as Record<string, unknown>;
+    if (String(wanCfg.enabled ?? 'true') !== 'false') {
+      const wanProvider = new WanAnimateVideoProvider({
+        apiKey,
+        baseUrl,
+        callBackUrl: callBackUrl || undefined,
+        defaultResolution: (wanCfg.defaultResolution as '580p' | '720p' | undefined) ?? '720p',
+        nsfwChecker: String(wanCfg.nsfwChecker ?? 'false') === 'true',
+      });
+      this.registerVideoProvider(wanProvider);
+      this.logger.log(`Wan Animate Replace Provider 已注册: name=${wanProvider.name} resolution=${wanCfg.defaultResolution ?? '720p'}`);
     }
   }
 

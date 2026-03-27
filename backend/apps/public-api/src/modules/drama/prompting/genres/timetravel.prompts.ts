@@ -32,6 +32,12 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 现代线：冷蓝简洁；古代线：暖金/土橙繁复——仅凭色调即可区分时间线
+firstFramePrompt 光影关键词：
+  现代线场景   → "cool blue-white LED ambient, clean minimalist light, desaturated modern palette, hard shadow lines"
+  古代线场景   → "warm amber lantern glow, rich earth-tone palette, soft candle wrap light, aged texture detail"
+  穿越瞬间     → "blinding white overexposure flash, color temperature shift mid-frame, motion blur vortex, lens aberration"
+  时间线切换   → "cold-to-warm color transition, fog or haze boundary, dissolve lighting overlap"
+  情感共鸣场景  → "matching warm sidelight across timelines, nostalgic golden haze, paralleled composition"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

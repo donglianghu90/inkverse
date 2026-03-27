@@ -46,7 +46,7 @@ export class MediaJobEntity {
   error: string;
 
   @Column({ type: 'int', default: 0 })
-  durationMs: number; // 总耗时
+  durationMs: number; // 自任务创建至轮询标记完成（墙钟 ms），非成片时长
 
   @Column({ type: 'uuid', nullable: true })
   userId: string | null;

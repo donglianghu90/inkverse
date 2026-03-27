@@ -41,6 +41,11 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 冷钢蓝+深暗底色；出手关键帧主角受强侧光/逆光突显
+firstFramePrompt 光影关键词：
+  积压/受辱场景  → "cold steel blue ambient, deep shadow pools, high angle harsh top light, muted desaturated tone"
+  碾压出手瞬间   → "hard rim backlight on protagonist, fire-orange side fill, dynamic contrast, sweat-reflecting highlight"
+  决胜定格帧     → "dramatic single sidelight, cool blue shadow, warm edge rim, smoke or dust haze background"
+  战场环境       → "harsh directional spotlight, battlefield smoke haze, gritty texture, strong shadow direction"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

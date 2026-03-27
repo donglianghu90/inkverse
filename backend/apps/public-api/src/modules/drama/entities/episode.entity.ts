@@ -50,6 +50,7 @@ export class EpisodeEntity {
   shotMediaMap: Record<string, {
     videoUrl?: string;
     videoJobId?: string;
+    videoProvider?: string;
     ttsUrl?: string;
     imageUrl?: string;
     lastFrameImageUrl?: string;
@@ -67,8 +68,8 @@ export class EpisodeEntity {
     };
   }> | null;
 
-  @Column({ type: 'decimal', precision: 8, scale: 4, default: 0 })
-  mediaCostUsd: number;
+  @Column({ name: 'media_cost_cny', type: 'decimal', precision: 8, scale: 4, default: 0 })
+  mediaCostCny: number;
 
   @Column({ type: 'text', default: '' })
   mediaError: string;

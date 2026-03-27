@@ -34,6 +34,12 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 受害期：冷灰蓝+低饱和度；蜕变后：冷蓝高对比度；打脸高潮：饱和度骤升；闪回：暖褪色
+firstFramePrompt 光影关键词：
+  受害/积压期   → "cold grey-blue desaturated ambient, flat overcast light, washed-out skin tone, deep eye shadows"
+  蜕变/准备期   → "cold directional sidelight, sharp shadow edge, high contrast blue-black palette, steely resolve"
+  打脸反杀高潮  → "saturated color burst, hard rim backlight on protagonist, warm golden accent, dramatic spotlight"
+  闪回/过去     → "warm sepia-tinted haze, overexposed soft edges, film grain texture, memory diffusion glow"
+  独处沉思      → "single window sidelight, Rembrandt shadow on half face, cold ambient, quiet tension"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

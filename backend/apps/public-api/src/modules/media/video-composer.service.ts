@@ -98,6 +98,11 @@ export class VideoComposerService implements OnModuleInit {
   }
 
   // ═══ Step 1.5a: In-shot Trim（精确切点裁剪） ═══
+  //
+  // trimOutSec 由 orchestrator 在每个 shot 上必须设置（= effectiveDuration），
+  // 确保生成时长 > 分镜时长（如 Hailuo 6s clip 用于 2s shot）时被强制裁剪到位。
+  // 条件：只要 trimInSec 或 trimOutSec 任一不为 null 就执行裁剪，不再与 durationSec 比较
+  // （因为 durationSec 是编辑意图时长，不是实际文件时长，两者相等时比较恒为 false）。
 
   private async applyInShotTrim(shots: ComposeShotInput[], workDir: string): Promise<ComposeShotInput[]> {
     const result: ComposeShotInput[] = [];
@@ -105,20 +110,18 @@ export class VideoComposerService implements OnModuleInit {
       if (shot.trimInSec != null || shot.trimOutSec != null) {
         const inPt = shot.trimInSec ?? 0;
         const outPt = shot.trimOutSec ?? shot.durationSec;
-        if (inPt > 0 || outPt < shot.durationSec) {
-          try {
-            const outPath = path.join(workDir, `trim_${shot.shotId}.mp4`);
-            const trimDur = Math.max(0.5, outPt - inPt);
-            await this.ffmpeg([
-              '-i', shot.videoPath, '-ss', inPt.toFixed(3), '-t', trimDur.toFixed(3),
-              ...ENCODE_ARGS, '-y', outPath,
-            ]);
-            result.push({ ...shot, videoPath: outPath, durationSec: trimDur });
-            this.logger.debug(`Shot ${shot.shotId} trimmed: ${inPt.toFixed(2)}s-${outPt.toFixed(2)}s (${trimDur.toFixed(2)}s)`);
-            continue;
-          } catch (err) {
-            this.logger.warn(`Shot ${shot.shotId} trim failed, using original: ${(err as Error).message}`);
-          }
+        try {
+          const outPath = path.join(workDir, `trim_${shot.shotId}.mp4`);
+          const trimDur = Math.max(0.5, outPt - inPt);
+          await this.ffmpeg([
+            '-i', shot.videoPath, '-ss', inPt.toFixed(3), '-t', trimDur.toFixed(3),
+            ...ENCODE_ARGS, '-y', outPath,
+          ]);
+          result.push({ ...shot, videoPath: outPath, durationSec: trimDur });
+          this.logger.debug(`Shot ${shot.shotId} trimmed: ${inPt.toFixed(2)}s→${outPt.toFixed(2)}s (${trimDur.toFixed(2)}s)`);
+          continue;
+        } catch (err) {
+          this.logger.warn(`Shot ${shot.shotId} trim failed, using original: ${(err as Error).message}`);
         }
       }
       result.push(shot);

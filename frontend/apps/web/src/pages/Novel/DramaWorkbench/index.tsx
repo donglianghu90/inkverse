@@ -62,12 +62,13 @@ const SOUL_PROFILE_FIELDS: Array<{ key: keyof SoulProfile; label: string; icon: 
 const VIEW_ANGLE_LABELS: Record<string, string> = {
   face_front: '正面', face_three_quarter: '3/4侧面', upper_body_front: '半身',
   full_body_front: '全身', side_profile: '侧面', back_view: '背面',
+  face_happy: '开心表情', face_angry: '愤怒表情',
 };
 const LOCATION_VIEW_LABELS: Record<string, string> = {
   establishing: '全景', interior_medium: '中景', detail_close: '细节特写',
 };
 const LOCATION_VIEW_ORDER = ['establishing', 'interior_medium', 'detail_close'];
-const VIEW_ANGLE_ORDER = ['face_front', 'face_three_quarter', 'side_profile', 'back_view', 'upper_body_front', 'full_body_front'];
+const VIEW_ANGLE_ORDER = ['face_front', 'face_three_quarter', 'side_profile', 'back_view', 'upper_body_front', 'full_body_front', 'face_happy', 'face_angry'];
 const VIEW_ANGLE_GROUP: Record<string, 'core' | 'face' | 'framing'> = {
   face_front: 'core',
   face_three_quarter: 'face',
@@ -104,6 +105,52 @@ const sortViewImages = (items: Array<{ viewAngle: string; imageUrl: string }>): 
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
   })
 );
+
+/** 逐集按需生成，所有角色只保证 face_front 定妆照 */
+const CHAR_VIEWS_BY_ROLE: Record<string, string[]> = {
+  protagonist: ['face_front'],
+  antagonist:  ['face_front'],
+  supporting:  ['face_front'],
+  minor:       ['face_front'],
+};
+
+function normalizeCharRole(role: unknown): string {
+  const r = String(role ?? '').trim().toLowerCase();
+  if (r === 'protagonist' || /主角|主人公|女主|男主/.test(r)) return 'protagonist';
+  if (r === 'antagonist' || /反派|反角|对手|villain/.test(r)) return 'antagonist';
+  if (r === 'supporting' || /配角/.test(r)) return 'supporting';
+  return 'minor';
+}
+
+/**
+ * 将「已生成视角」与「期望视角（按角色/场景类型）」合并：
+ * 有图片的显示图片，期望但未生成的显示「待生成」占位。
+ */
+function mergeExpectedViews(
+  actual: Array<{ viewAngle: string; imageUrl: string }> | undefined,
+  expected: string[],
+  primaryUrl?: string,
+): Array<{ viewAngle: string; imageUrl: string }> {
+  const map = new Map<string, string>();
+  for (const v of actual ?? []) {
+    if (v?.viewAngle) map.set(v.viewAngle, v.imageUrl ?? '');
+  }
+  if (primaryUrl && !map.has(expected[0])) map.set(expected[0], primaryUrl);
+  for (const view of expected) {
+    if (!map.has(view)) map.set(view, '');
+  }
+  // 保留 expected 中不存在但已实际生成的视角（防止遗漏）
+  for (const v of actual ?? []) {
+    if (v?.viewAngle && !map.has(v.viewAngle)) map.set(v.viewAngle, v.imageUrl ?? '');
+  }
+  return expected
+    .map((view) => ({ viewAngle: view, imageUrl: map.get(view) ?? '' }))
+    .concat(
+      (actual ?? [])
+        .filter((v) => v?.viewAngle && !expected.includes(v.viewAngle))
+        .map((v) => ({ viewAngle: v.viewAngle, imageUrl: v.imageUrl ?? '' })),
+    );
+}
 
 const resolveAffectedViews = (
   targetView: string,
@@ -323,8 +370,11 @@ const FIX_TARGET_LABELS: Record<ResetFixTarget, string> = {
 const FIX_TARGET_ORDER: QcFixTarget[] = ['identity', 'style', 'camera', 'motion'];
 
 const fmtCny = (n?: number) => `¥${Number(n ?? 0).toFixed(4)}`;
-const bucketCost = (b: { llmCostCny: number; imageCostCny: number; videoCostCny: number; ttsCostCny?: number; embeddingCostCny?: number }) =>
-  (b.llmCostCny ?? 0) + (b.imageCostCny ?? 0) + (b.videoCostCny ?? 0) + (b.ttsCostCny ?? 0) + (b.embeddingCostCny ?? 0);
+/** 总费用：优先使用后端聚合的 costCny（不会因新增 kind 遗漏），未返回时 fallback 累加各项 */
+const bucketCost = (b: { costCny?: number; llmCostCny: number; imageCostCny: number; videoCostCny: number; ttsCostCny?: number; embeddingCostCny?: number }) =>
+  (b.costCny != null && b.costCny > 0)
+    ? b.costCny
+    : (b.llmCostCny ?? 0) + (b.imageCostCny ?? 0) + (b.videoCostCny ?? 0) + (b.ttsCostCny ?? 0) + (b.embeddingCostCny ?? 0);
 
 const resolveSkippedStepLabel = (input: { nodeId?: string; stepKey?: string; step?: string; message?: string }): string => {
   if (input.nodeId && PIPELINE_NODE_LABELS[input.nodeId]) return PIPELINE_NODE_LABELS[input.nodeId];
@@ -1422,9 +1472,10 @@ const CharacterCard: React.FC<{
   }, [busy]);
   const roleStyle = ROLE_STYLES[char.role] ?? ROLE_STYLES.minor;
   const resolvedViews = useMemo(() => {
-    if (viewImages?.length) return sortViewImages(viewImages);
-    return imageUrl ? [{ viewAngle: 'face_front', imageUrl }] : [];
-  }, [imageUrl, viewImages]);
+    const role = normalizeCharRole(char.role);
+    const expected = CHAR_VIEWS_BY_ROLE[role] ?? ['face_front'];
+    return sortViewImages(mergeExpectedViews(viewImages, expected, imageUrl));
+  }, [imageUrl, viewImages, char.role]);
   const viewImageMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const item of resolvedViews) {
@@ -1939,9 +1990,11 @@ const LocationCard: React.FC<{
   const [refineViewAngle, setRefineViewAngle] = useState('');
 
   const resolvedViews = useMemo(() => {
-    if (viewImages?.length) return sortLocationViewImages(viewImages);
-    return imageUrl ? [{ viewAngle: 'establishing', imageUrl }] : [];
-  }, [imageUrl, viewImages]);
+    const expected = loc.isRecurring
+      ? ['establishing', 'interior_medium', 'detail_close']
+      : ['establishing'];
+    return sortLocationViewImages(mergeExpectedViews(viewImages, expected, imageUrl));
+  }, [imageUrl, viewImages, loc.isRecurring]);
   const availableViews = useMemo(() => resolvedViews.map((vi) => vi.viewAngle), [resolvedViews]);
   const selectedView = activeViewAngle || resolvedViews[0]?.viewAngle || '';
 
@@ -3656,6 +3709,12 @@ const DramaWorkbench: React.FC = () => {
                   <p className="font-semibold">{usage.total.ttsCalls}</p>
                 </div>
               )}
+              {(usage.total.embeddingCalls ?? 0) > 0 && (
+                <div className="rounded-md border px-2 py-1.5">
+                  <p className="text-muted-foreground">Embedding</p>
+                  <p className="font-semibold">{(usage.total.embeddingTokens ?? 0).toLocaleString()} tokens</p>
+                </div>
+              )}
             </div>
 
             {usageExpanded && (
@@ -3677,7 +3736,7 @@ const DramaWorkbench: React.FC = () => {
                   <div className="pt-1">
                     <p className="text-xs font-medium mb-1.5">创建步骤明细</p>
                     <div className="space-y-1">
-                      {usage.creation.steps.slice(0, 6).map((s) => (
+                      {usage.creation.steps.map((s) => (
                         <div key={s.step} className="text-xs flex items-center justify-between text-muted-foreground">
                           <span>{STEP_LABELS[s.step] ?? s.step}</span>
                           <span>{fmtCny(bucketCost(s))} · {s.totalTokens.toLocaleString()} tokens</span>
@@ -3707,7 +3766,7 @@ const DramaWorkbench: React.FC = () => {
                             </button>
                             {open && epUsage.steps.length > 0 && (
                               <div className="px-2.5 pb-2 space-y-1 text-[11px] text-muted-foreground bg-muted/20">
-                                {epUsage.steps.slice(0, 6).map((step) => (
+                                {epUsage.steps.map((step) => (
                                   <div key={step.step} className="flex items-center justify-between">
                                     <span>{STEP_LABELS[step.step] ?? step.step}</span>
                                     <span>{fmtCny(bucketCost(step))} · {step.totalTokens.toLocaleString()} tokens</span>
@@ -3959,7 +4018,7 @@ const DramaWorkbench: React.FC = () => {
         {/* ── 角色 & 场景 ── */}
         <TabsContent value="assets">
           {characters.length === 0 && locations.length === 0 ? (
-            <Card><CardContent className="py-12 text-center text-muted-foreground">角色和场景数据将在短剧创建后自动生成</CardContent></Card>
+            <Card><CardContent className="py-12 text-center text-muted-foreground">核心角色在建剧时设计，其余角色和场景在各集生产时按需自动新增</CardContent></Card>
           ) : (
             <div className="space-y-6">
               <Card className="border-border/70 bg-muted/20">

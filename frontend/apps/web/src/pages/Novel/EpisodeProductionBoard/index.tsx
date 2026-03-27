@@ -10,7 +10,7 @@ import { message } from 'antd';
 import {
   ArrowLeft, ImageIcon, Video, Film, Loader2, RefreshCw,
   CheckCircle2, Clock, AlertCircle, Sparkles, Play, ChevronDown, ChevronUp,
-  ZapIcon,
+  Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,8 +20,9 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import {
   getDrama, getEpisode, listEpisodes,
-  generateShotImage, getGenerateImagesSseUrl, getGenerateMediaSseUrl, resetProblemShots,
-  type EpisodeListItem, type DramaSseEvent, type ResetFixTarget,
+  generateShotImage, generateShotVideo, getGenerateImagesSseUrl, getGenerateMediaSseUrl, resetProblemShots,
+  getVisualAssets, regenerateVisualAssetImage,
+  type VisualAssetItem, type EpisodeListItem, type DramaSseEvent, type ResetFixTarget,
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
 
@@ -42,6 +43,10 @@ interface Shot {
   specialTechnique?: string | null;
   isHumanEdited?: boolean;
   qualityTier?: 'golden' | 'standard' | 'filler';
+  /** Shot 所属的多镜头合并组标识（null = 独立 Shot） */
+  shotGroupId?: string | null;
+  /** 该 Shot 在组内视频的起始偏移（秒） */
+  groupOffsetSec?: number | null;
 }
 type QcFixTarget = Exclude<ResetFixTarget, 'all'>;
 interface ShotMediaEntry {
@@ -108,12 +113,15 @@ const SHOT_TYPE_LABELS: Record<string, string> = {
 function ShotImageStatus({ entry, generating }: { entry?: ShotMediaEntry; generating?: boolean }) {
   if (generating) return <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />生成中…</span>;
   if (entry?.imageUrl) return <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />已生成</span>;
+  if (entry?.status === 'failed') return <span className="text-xs text-red-600 flex items-center gap-1"><AlertCircle className="w-3 h-3" />图片生成失败</span>;
   return <span className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" />待生成</span>;
 }
 
 function ShotVideoStatus({ entry }: { entry?: ShotMediaEntry }) {
   if (entry?.videoUrl) return <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />已生成</span>;
+  if (entry?.status === 'group_pending') return <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />随组生成中…</span>;
   if (entry?.videoJobId && entry?.status === 'submitted') return <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />生成中…</span>;
+  if (entry?.status === 'failed') return <span className="text-xs text-red-600 flex items-center gap-1"><AlertCircle className="w-3 h-3" />视频生成失败</span>;
   if (entry?.imageUrl) return <span className="text-xs text-blue-600 flex items-center gap-1"><Play className="w-3 h-3" />可生成视频</span>;
   return <span className="text-xs text-muted-foreground flex items-center gap-1"><AlertCircle className="w-3 h-3" />需先生成图片</span>;
 }
@@ -203,55 +211,50 @@ const ShotImageCard: React.FC<ShotImageCardProps> = ({
   const [expanded, setExpanded] = useState(false);
   const hasImage = !!media?.imageUrl;
 
-  const imgContainerClass = aspectRatio === '9:16'
-    ? 'aspect-[9/16] w-full max-w-[140px] mx-auto'
-    : 'aspect-[16/9] w-full';
+  // 使用固定纵横比容器
+  const imgPadding = aspectRatio === '9:16' ? '120%' : '56.25%';
 
   return (
     <div className={cn(
       'rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden flex flex-col',
-      shot.qualityTier === 'golden' ? 'border-amber-300 dark:border-amber-700 ring-1 ring-amber-200 dark:ring-amber-800' : '',
-      hasImage && shot.qualityTier !== 'golden' ? 'border-emerald-200 dark:border-emerald-800' : '',
-      generating ? 'border-amber-200 dark:border-amber-800 animate-pulse' : '',
+      generating ? 'border-amber-300 dark:border-amber-700 ring-1 ring-amber-200/50' :
+      shot.qualityTier === 'golden' ? 'border-amber-300 dark:border-amber-700 ring-1 ring-amber-200 dark:ring-amber-800' :
+      hasImage ? 'border-emerald-200/60 dark:border-emerald-800/60' : '',
     )}>
-      {/* Shot header */}
-      <div className="px-3 pt-3 pb-1 flex items-center justify-between gap-1">
-        <div className="flex items-center gap-1.5">
-          <span className="font-mono text-xs font-semibold text-muted-foreground">
-            #{String(shot.shotIndex + 1).padStart(3, '0')}
-          </span>
-          <MasterShotBadge isMaster={shot.isMasterShot} />
-          <QualityTierBadge tier={shot.qualityTier} />
-          <RegenPriorityBadge priority={shot.regenPriority} />
-          <ShotTypeBadge shotType={shot.shotType} />
-          <RiskBadge consistencyRisk={consistencyRisk} cameraRisk={cameraRisk} />
-          {media?.qc?.recommendedFix && (
-            <Badge className="text-[10px] px-1 py-0 bg-amber-100 text-amber-700 border-amber-300">
-              建议修{FIX_TARGET_LABELS[media.qc.recommendedFix]}
-            </Badge>
-          )}
-        </div>
-        <div className="flex gap-1 flex-wrap justify-end">
-          {shot.camera?.angle && (
-            <Badge variant="outline" className="text-[10px] px-1 py-0">
-              {ANGLE_LABELS[shot.camera.angle] ?? shot.camera.angle}
-            </Badge>
-          )}
-          {shot.camera?.movement && shot.camera.movement !== 'static' && (
-            <Badge variant="outline" className="text-[10px] px-1 py-0">
-              {MOVEMENT_LABELS[shot.camera.movement] ?? shot.camera.movement}
-            </Badge>
-          )}
-        </div>
+      {/* ─ Header: number + badges ─ */}
+      <div className="px-2.5 pt-2 pb-1 flex items-center gap-1 overflow-x-auto scrollbar-none">
+        <span className="font-mono text-[11px] font-bold text-muted-foreground shrink-0">
+          #{String(shot.shotIndex + 1).padStart(3, '0')}
+        </span>
+        <MasterShotBadge isMaster={shot.isMasterShot} />
+        <QualityTierBadge tier={shot.qualityTier} />
+        <RegenPriorityBadge priority={shot.regenPriority} />
+        <ShotTypeBadge shotType={shot.shotType} />
+        <RiskBadge consistencyRisk={consistencyRisk} cameraRisk={cameraRisk} />
+        {shot.camera?.angle && (
+          <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">
+            {ANGLE_LABELS[shot.camera.angle] ?? shot.camera.angle}
+          </Badge>
+        )}
+        {shot.camera?.movement && shot.camera.movement !== 'static' && (
+          <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">
+            {MOVEMENT_LABELS[shot.camera.movement] ?? shot.camera.movement}
+          </Badge>
+        )}
+        {media?.qc?.recommendedFix && (
+          <Badge className="text-[9px] px-1 py-0 bg-amber-100 text-amber-700 border-amber-300 shrink-0">
+            修{FIX_TARGET_LABELS[media.qc.recommendedFix]}
+          </Badge>
+        )}
       </div>
 
-      {/* Image area */}
-      <div className="px-3 py-1">
-        <div className={cn(imgContainerClass, 'relative bg-muted rounded-lg overflow-hidden')}>
+      {/* ─ Image area (fixed aspect ratio) ─ */}
+      <div className="px-2 pb-1">
+        <div className="relative w-full rounded-lg overflow-hidden bg-muted" style={{ paddingTop: imgPadding }}>
           {generating ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-amber-50 dark:bg-amber-950/40">
-              <Loader2 className="w-8 h-8 text-amber-500 animate-spin" />
-              <span className="text-xs text-amber-700 dark:text-amber-400">AI 生成中…</span>
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-amber-50/80 dark:bg-amber-950/40">
+              <Loader2 className="w-6 h-6 text-amber-500 animate-spin" />
+              <span className="text-[10px] text-amber-700 dark:text-amber-400">AI 生成中…</span>
             </div>
           ) : hasImage ? (
             <img
@@ -260,39 +263,45 @@ const ShotImageCard: React.FC<ShotImageCardProps> = ({
               className="absolute inset-0 w-full h-full object-cover"
             />
           ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted/50">
-              <ImageIcon className="w-8 h-8 text-muted-foreground/40" />
-              <span className="text-xs text-muted-foreground/60">待生成</span>
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1">
+              <ImageIcon className="w-6 h-6 text-muted-foreground/30" />
+              <span className="text-[10px] text-muted-foreground/50">待生成</span>
             </div>
           )}
         </div>
       </div>
 
-      {/* Status + actions */}
-      <div className="px-3 pb-2 pt-1 flex flex-1 flex-col gap-2">
+      {/* ─ Info area (fixed structure) ─ */}
+      <div className="px-2.5 pb-2 pt-0.5 flex flex-col gap-1 flex-1">
+        {/* Status + duration */}
         <div className="flex items-center justify-between">
           <ShotImageStatus entry={media} generating={generating} />
-          <span className="text-xs text-muted-foreground">{shot.estimatedDurationSec}s</span>
+          <span className="text-[10px] text-muted-foreground tabular-nums">{shot.estimatedDurationSec}s</span>
         </div>
 
-        {/* Prompt preview */}
-        <div className="min-h-[60px]">
-          <p className={cn('text-xs text-muted-foreground leading-relaxed', expanded ? '' : 'line-clamp-2')}>
+        {/* Prompt (clamped) */}
+        <div className="flex-1 min-h-0">
+          <p
+            className={cn(
+              'text-[10px] text-muted-foreground leading-relaxed break-words',
+              expanded ? '' : 'line-clamp-3',
+            )}
+          >
             {shot.visualPrompt}
           </p>
           {shot.dialogue?.text && (
-            <p className="text-xs text-foreground/70 italic line-clamp-1 mt-1">
+            <p className="text-[10px] text-foreground/60 italic line-clamp-1 mt-0.5">
               「{shot.dialogue.text}」
             </p>
           )}
           {expanded && media?.qc && (
-            <div className="mt-1.5 space-y-0.5">
-              <p className="text-[10px] text-muted-foreground">
+            <div className="mt-1 space-y-0.5">
+              <p className="text-[9px] text-muted-foreground">
                 QC: {typeof media.qc.score === 'number' ? media.qc.score.toFixed(1) : '-'}
                 {typeof media.qc.readabilityScore === 'number' ? ` · 可读性 ${media.qc.readabilityScore.toFixed(1)}` : ''}
               </p>
               {media.qc.failReasons?.length ? (
-                <p className="text-[10px] text-amber-700 dark:text-amber-300">
+                <p className="text-[9px] text-amber-700 dark:text-amber-300">
                   归因：{media.qc.failReasons.map((x) => FIX_TARGET_LABELS[x]).join('、')}
                 </p>
               ) : null}
@@ -300,26 +309,25 @@ const ShotImageCard: React.FC<ShotImageCardProps> = ({
           )}
         </div>
 
-        {/* Expand / collapse */}
-        <div className="h-4">
-          {shot.visualPrompt && shot.visualPrompt.length > 80 && (
-            <button
-              type="button"
-              className="text-xs text-muted-foreground/60 hover:text-muted-foreground flex items-center gap-0.5 self-start"
-              onClick={() => setExpanded(v => !v)}
-            >
-              {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              {expanded ? '收起' : '展开'}
-            </button>
-          )}
-        </div>
+        {/* Expand toggle */}
+        {shot.visualPrompt && shot.visualPrompt.length > 60 && (
+          <button
+            type="button"
+            className="text-[10px] text-primary/60 hover:text-primary flex items-center gap-0.5 self-start -mt-0.5"
+            onClick={() => setExpanded(v => !v)}
+          >
+            {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            {expanded ? '收起' : '…展开'}
+          </button>
+        )}
 
         {(shot.isFlashback || shot.isPreview) && (
-          <p className="text-[10px] text-muted-foreground text-center">
+          <p className="text-[9px] text-muted-foreground text-center py-0.5">
             {shot.isFlashback ? '闪回镜头' : '预览镜头'}（自动复用）
           </p>
         )}
 
+        {/* Generate button */}
         <Button
           size="sm"
           variant={hasImage ? 'outline' : 'default'}
@@ -348,6 +356,9 @@ interface ShotVideoCardProps {
   aspectRatio: '9:16' | '16:9';
   consistencyRisk?: boolean;
   cameraRisk?: boolean;
+  generating?: boolean;
+  busy?: boolean;
+  onGenerate?: () => void;
 }
 
 const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
@@ -356,10 +367,13 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
   aspectRatio,
   consistencyRisk,
   cameraRisk,
+  generating = false,
+  busy = false,
+  onGenerate,
 }) => {
   const hasVideo = !!media?.videoUrl;
   const hasImage = !!media?.imageUrl;
-  const isSubmitted = media?.status === 'submitted';
+  const isSubmitted = media?.status === 'submitted' || media?.status === 'group_pending';
 
   const containerClass = aspectRatio === '9:16'
     ? 'aspect-[9/16] w-full max-w-[140px] mx-auto'
@@ -426,17 +440,34 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
       </div>
 
       {/* Info */}
-      <div className="px-3 pb-3 pt-1">
+      <div className="px-3 pb-3 pt-1 flex flex-col gap-1">
         <p className="text-xs text-muted-foreground line-clamp-2">{shot.visualPrompt}</p>
         {shot.dialogue?.text && (
-          <p className="text-xs text-foreground/70 italic line-clamp-1 mt-1">「{shot.dialogue.text}」</p>
+          <p className="text-xs text-foreground/70 italic line-clamp-1">「{shot.dialogue.text}」</p>
         )}
         {media?.qc?.failReasons?.length ? (
-          <p className="text-[10px] text-amber-700 dark:text-amber-300 mt-1">
+          <p className="text-[10px] text-amber-700 dark:text-amber-300">
             归因：{media.qc.failReasons.map((x) => FIX_TARGET_LABELS[x]).join('、')}
           </p>
         ) : null}
-        <p className="text-xs text-muted-foreground mt-1">{shot.estimatedDurationSec}s</p>
+        <p className="text-xs text-muted-foreground">{shot.estimatedDurationSec}s</p>
+        {onGenerate && !shot.isFlashback && !shot.isPreview && (
+          <Button
+            size="sm"
+            variant={hasVideo ? 'outline' : 'default'}
+            className="w-full h-7 text-xs gap-1 mt-1"
+            disabled={busy || generating || !hasImage || isSubmitted}
+            onClick={onGenerate}
+          >
+            {generating || isSubmitted ? (
+              <><Loader2 className="w-3 h-3 animate-spin" />生成中…</>
+            ) : hasVideo ? (
+              <><RefreshCw className="w-3 h-3" />重新生成</>
+            ) : (
+              <><Video className="w-3 h-3" />生成视频</>
+            )}
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -536,26 +567,6 @@ function resolveShotFixTags(
   return tags;
 }
 
-// ─── Pipeline step indicator ────────────────────────────────────────────────────
-
-function PipelineStep({ icon, label, status }: { icon: React.ReactNode; label: string; status: 'done' | 'partial' | 'idle' }) {
-  return (
-    <div className={cn(
-      'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium whitespace-nowrap shrink-0',
-      status === 'done' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400' :
-      status === 'partial' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400' :
-      'bg-muted text-muted-foreground',
-    )}>
-      {icon}{label}
-      {status === 'done' && <CheckCircle2 className="w-3 h-3 ml-0.5" />}
-    </div>
-  );
-}
-
-function PipelineArrow() {
-  return <span className="text-muted-foreground/40 shrink-0">→</span>;
-}
-
 // ─── Script shot row (read-only) ────────────────────────────────────────────────
 
 const ANGLE_LABELS_S: Record<string, string> = {
@@ -648,6 +659,7 @@ const EpisodeProductionBoard: React.FC = () => {
 
   // Per-shot generation state
   const [generatingImageShots, setGeneratingImageShots] = useState<Set<string>>(new Set());
+  const [generatingVideoShots, setGeneratingVideoShots] = useState<Set<string>>(new Set());
 
   // Batch image generation state (SSE)
   const [isGeneratingImages, setIsGeneratingImages] = useState(false);
@@ -658,9 +670,16 @@ const EpisodeProductionBoard: React.FC = () => {
   const [videoBatchProgress, setVideoBatchProgress] = useState({ current: 0, total: 0, message: '' });
   const [problemResetMode, setProblemResetMode] = useState<'all' | 'high' | QcFixTarget | null>(null);
   const [sortMode, setSortMode] = useState<'story' | 'priority'>('story');
+  const [visualAssets, setVisualAssets] = useState<VisualAssetItem[]>([]);
+
+  // Batch asset generation state (SSE)
+  const [isGeneratingAssets, setIsGeneratingAssets] = useState(false);
+  const [assetsBatchProgress, setAssetsBatchProgress] = useState({ current: 0, total: 0, message: '' });
+  const [regeneratingAssetIds, setRegeneratingAssetIds] = useState<Set<string>>(new Set());
 
   const imagesSseRef = useRef<AbortController | null>(null);
   const videosSseRef = useRef<AbortController | null>(null);
+  const assetsBatchAbortRef = useRef(false);
 
   // ── Data loading ─────────────────────────────────────────────────────────────
 
@@ -681,6 +700,7 @@ const EpisodeProductionBoard: React.FC = () => {
       getDrama(dramaId).then(setDrama),
       getEpisode(dramaId, episodeNumber).then(d => setEpisode(d as unknown as EpisodeData)),
       listEpisodes(dramaId).then(r => setEpisodes(r.episodes)),
+      getVisualAssets(dramaId).then(r => setVisualAssets(r.assets)).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, [dramaId, episodeNumber]);
 
@@ -688,6 +708,7 @@ const EpisodeProductionBoard: React.FC = () => {
   useEffect(() => () => {
     imagesSseRef.current?.abort();
     videosSseRef.current?.abort();
+    assetsBatchAbortRef.current = true;
   }, []);
 
   // ── Derived data ──────────────────────────────────────────────────────────────
@@ -700,6 +721,7 @@ const EpisodeProductionBoard: React.FC = () => {
   const reviewRiskShotSet = new Set<string>([...consistencyRiskSet, ...cameraRiskSet]);
   const readinessScore = episode?.review?.generationReadinessScore;
   const aspectRatio: '9:16' | '16:9' = ((drama as any)?.state?.audienceDirective?.aspectRatio ?? '9:16') as '9:16' | '16:9';
+  const videoProvider: string = ((drama as any)?.state?.videoProvider ?? '') as string;
 
   const imageCount = storyOrderedShots.filter(s => shotMediaMap[s.shotId]?.imageUrl).length;
   const videoCount = storyOrderedShots.filter(s => shotMediaMap[s.shotId]?.videoUrl).length;
@@ -734,7 +756,12 @@ const EpisodeProductionBoard: React.FC = () => {
           ...prev,
           shotMediaMap: {
             ...prev.shotMediaMap,
-            [shotId]: { ...(prev.shotMediaMap?.[shotId] ?? {}), imageUrl: result.imageUrl, status: 'image_done' },
+            [shotId]: {
+              // 重新生成图片：保留 qc 字段，清除旧视频数据，避免"新图+旧视频"错位
+              qc: prev.shotMediaMap?.[shotId]?.qc,
+              imageUrl: result.imageUrl,
+              status: 'image_done',
+            },
           },
         } : prev);
         message.success('图片生成成功');
@@ -745,6 +772,32 @@ const EpisodeProductionBoard: React.FC = () => {
       message.error(`生成失败: ${err?.message ?? '未知错误'}`);
     } finally {
       setGeneratingImageShots(prev => { const s = new Set(prev); s.delete(shotId); return s; });
+    }
+  }, [dramaId, episodeNumber]);
+
+  // ── Per-shot video generation ─────────────────────────────────────────────────
+
+  const handleGenerateShotVideo = useCallback(async (shotId: string) => {
+    if (!dramaId) return;
+    setGeneratingVideoShots(prev => new Set(prev).add(shotId));
+    try {
+      const result = await generateShotVideo(dramaId, episodeNumber, shotId);
+      if (result.videoUrl) {
+        setEpisode(prev => prev ? {
+          ...prev,
+          shotMediaMap: {
+            ...prev.shotMediaMap,
+            [shotId]: { ...(prev.shotMediaMap?.[shotId] ?? {}), videoUrl: result.videoUrl, status: 'completed' },
+          },
+        } : prev);
+        message.success('视频生成成功');
+      } else {
+        message.warning('视频未生成，请检查配置');
+      }
+    } catch (err: any) {
+      message.error(`视频生成失败: ${err?.message ?? '未知错误'}`);
+    } finally {
+      setGeneratingVideoShots(prev => { const s = new Set(prev); s.delete(shotId); return s; });
     }
   }, [dramaId, episodeNumber]);
 
@@ -911,6 +964,67 @@ const EpisodeProductionBoard: React.FC = () => {
     }
   }, [dramaId, episodeNumber, isGeneratingVideos, imageCount, totalShots, loadEpisode]);
 
+  // ── Per-asset image regeneration ────────────────────────────────────────────
+
+  const handleRegenerateAsset = useCallback(async (assetId: string) => {
+    if (!dramaId) return;
+    setRegeneratingAssetIds(prev => new Set(prev).add(assetId));
+    try {
+      const updated = await regenerateVisualAssetImage(dramaId, assetId);
+      setVisualAssets(prev => prev.map(a => a.id === assetId ? updated : a));
+      message.success('参考图已重新生成');
+    } catch (err: any) {
+      message.error(`生成失败: ${err?.message ?? '未知错误'}`);
+    } finally {
+      setRegeneratingAssetIds(prev => { const s = new Set(prev); s.delete(assetId); return s; });
+    }
+  }, [dramaId]);
+
+  // ── Batch asset generation (per-episode, sequential) ───────────────────────────
+
+  const handleBatchGenerateAssets = useCallback(async (missingAssetIds: string[]) => {
+    if (!dramaId || isGeneratingAssets || !missingAssetIds.length) return;
+
+    assetsBatchAbortRef.current = false;
+    setIsGeneratingAssets(true);
+    setAssetsBatchProgress({ current: 0, total: missingAssetIds.length, message: '正在生成参考图…' });
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < missingAssetIds.length; i++) {
+      if (assetsBatchAbortRef.current) break;
+      const assetId = missingAssetIds[i];
+      const assetName = visualAssets.find(a => a.id === assetId)?.name ?? assetId;
+
+      setAssetsBatchProgress({
+        current: i,
+        total: missingAssetIds.length,
+        message: `正在生成: ${assetName} (${i + 1}/${missingAssetIds.length})`,
+      });
+
+      try {
+        const updated = await regenerateVisualAssetImage(dramaId, assetId);
+        setVisualAssets(prev => prev.map(a => a.id === assetId ? updated : a));
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+
+    setAssetsBatchProgress({ current: missingAssetIds.length, total: missingAssetIds.length, message: '完成' });
+
+    if (failCount === 0) {
+      message.success(`本集参考图全部生成完成 (${successCount}张)`);
+    } else {
+      message.warning(`生成完成: ${successCount}张成功, ${failCount}张失败`);
+    }
+
+    setIsGeneratingAssets(false);
+    // 刷新最新资产列表
+    if (dramaId) getVisualAssets(dramaId).then(r => setVisualAssets(r.assets)).catch(() => {});
+  }, [dramaId, isGeneratingAssets, visualAssets]);
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -931,40 +1045,82 @@ const EpisodeProductionBoard: React.FC = () => {
     );
   }
 
+  // ── 视频 Tab 分组布局：按 shotGroupId 聚合，仅在剧情顺序模式下分组渲染 ─────
+  type VideoRenderItem =
+    | { type: 'shot'; shot: Shot }
+    | { type: 'group'; groupId: string; shots: Shot[] };
+
+  const buildVideoRenderItems = (shots: Shot[]): VideoRenderItem[] => {
+    if (sortMode !== 'story') return shots.map(s => ({ type: 'shot' as const, shot: s }));
+    const items: VideoRenderItem[] = [];
+    const addedGroups = new Set<string>();
+    const groupMap = new Map<string, Shot[]>();
+    for (const s of shots) {
+      if (s.shotGroupId) {
+        if (!groupMap.has(s.shotGroupId)) groupMap.set(s.shotGroupId, []);
+        groupMap.get(s.shotGroupId)!.push(s);
+      }
+    }
+    for (const s of shots) {
+      if (s.shotGroupId) {
+        if (!addedGroups.has(s.shotGroupId)) {
+          addedGroups.add(s.shotGroupId);
+          items.push({ type: 'group', groupId: s.shotGroupId, shots: (groupMap.get(s.shotGroupId) ?? [s]).sort((a, b) => a.shotIndex - b.shotIndex) });
+        }
+      } else {
+        items.push({ type: 'shot', shot: s });
+      }
+    }
+    return items;
+  };
+
+  const videoRenderItems = buildVideoRenderItems(displayShots);
+  const shotGridClass = aspectRatio === '9:16'
+    ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'
+    : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4';
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* ─── Header ─────────────────────────────────────────────────────────── */}
-      <header className="sticky top-[57px] z-30 border-b bg-background/95 backdrop-blur-sm px-4 h-12 flex items-center gap-3">
+      <header className="sticky top-[57px] z-30 border-b bg-background/95 backdrop-blur-sm px-4 h-12 flex items-center gap-3 overflow-x-auto">
         <Button
+          size="sm"
           variant="ghost"
-          size="icon"
-          className="shrink-0"
-          onClick={() => history.push(`/novel/drama/${dramaId}`)}
+          className="h-8 gap-1 shrink-0"
+          onClick={() => history.back()}
         >
-          <ArrowLeft className="w-4 h-4" />
+          <ArrowLeft className="w-4 h-4" />返回
         </Button>
+        <span className="font-semibold text-sm shrink-0 truncate max-w-[200px]">
+          {dramaTitleRaw ? `${dramaTitleRaw} · ` : ''}{episodeTitle}
+        </span>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm text-muted-foreground truncate">{dramaTitleRaw}</span>
-            <span className="text-muted-foreground/40">/</span>
-            <span className="font-semibold truncate">{episodeTitle}</span>
-          </div>
-        </div>
+        {videoProvider && (
+          <span className="shrink-0 inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 font-mono">
+            <Video className="w-3 h-3" />
+            {videoProvider}
+          </span>
+        )}
+        {episode?.videoUrl && (
+          <a href={episode.videoUrl} target="_blank" rel="noreferrer" className="shrink-0">
+            <Button size="sm" variant="outline" className="h-7 text-xs gap-1">
+              <Play className="w-3 h-3" />预览成片
+            </Button>
+          </a>
+        )}
 
-        {/* Episode navigator */}
-        <div className="flex items-center gap-1 shrink-0 max-w-[40%] overflow-x-auto scrollbar-none">
+        <div className="flex items-center gap-1 ml-auto shrink-0">
           {episodes.map(ep => (
             <button
               key={ep.episodeNumber}
               type="button"
-              onClick={() => history.push(`/novel/drama/${dramaId}/episodes/${ep.episodeNumber}`)}
               className={cn(
-                'w-6 h-6 rounded text-[10px] font-mono transition-colors shrink-0',
+                'h-7 min-w-[28px] px-2 rounded text-xs font-medium transition-colors',
                 ep.episodeNumber === episodeNumber
                   ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted hover:bg-muted/80 text-muted-foreground',
+                  : 'bg-muted/80 text-muted-foreground hover:bg-muted',
               )}
+              onClick={() => history.push(`/novel/${dramaId}/episode/${ep.episodeNumber}/production`)}
             >
               {ep.episodeNumber}
             </button>
@@ -972,52 +1128,19 @@ const EpisodeProductionBoard: React.FC = () => {
         </div>
       </header>
 
-      {/* ─── Pipeline progress ───────────────────────────────────────────────── */}
-      <div className="sticky top-[105px] z-20 border-b px-4 py-2 bg-muted/30 backdrop-blur-sm flex items-center gap-4 text-sm overflow-x-auto">
-        <PipelineStep icon={<Film className="w-3.5 h-3.5" />} label="脚本" status="done" />
-        <PipelineArrow />
-        <PipelineStep
-          icon={<ImageIcon className="w-3.5 h-3.5" />}
-          label={`分镜图 ${imageCount}/${totalShots}`}
-          status={imageCount === totalShots ? 'done' : imageCount > 0 ? 'partial' : 'idle'}
-        />
-        <PipelineArrow />
-        <PipelineStep
-          icon={<Video className="w-3.5 h-3.5" />}
-          label={`视频 ${videoCount}/${totalShots}`}
-          status={videoCount === totalShots ? 'done' : videoCount > 0 ? 'partial' : 'idle'}
-        />
-        <PipelineArrow />
-        <PipelineStep
-          icon={<ZapIcon className="w-3.5 h-3.5" />}
-          label="合成"
-          status={episode.videoUrl ? 'done' : 'idle'}
-        />
-
-        {episode.videoUrl && (
-          <a
-            href={episode.videoUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="ml-auto shrink-0"
-          >
-            <Button size="sm" variant="outline" className="h-7 text-xs gap-1">
-              <Play className="w-3 h-3" />预览成片
-            </Button>
-          </a>
-        )}
-      </div>
-
       {/* ─── Main content ────────────────────────────────────────────────────── */}
-      <Tabs defaultValue="images" className="flex-1 flex flex-col">
+      <Tabs defaultValue="assets" className="flex-1 flex flex-col">
         <div className="mx-4 mt-3 flex items-center justify-between gap-2">
           <TabsList className="w-auto self-start">
+            <TabsTrigger value="assets" className="gap-1.5 text-xs">
+              <Users className="w-3.5 h-3.5" />本集资产
+            </TabsTrigger>
             <TabsTrigger value="script" className="gap-1.5 text-xs">
               <Film className="w-3.5 h-3.5" />分镜脚本
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{totalShots}</Badge>
             </TabsTrigger>
             <TabsTrigger value="images" className="gap-1.5 text-xs">
-              <ImageIcon className="w-3.5 h-3.5" />图片制作
+              <ImageIcon className="w-3.5 h-3.5" />分镜图制作
               <Badge
                 variant={imageCount === totalShots ? 'default' : 'secondary'}
                 className="text-[10px] px-1.5 py-0"
@@ -1055,7 +1178,7 @@ const EpisodeProductionBoard: React.FC = () => {
           </div>
         </div>
 
-        {problemShotCount > 0 && (
+        {problemShotCount > 0 && imageCount > 0 && (
           <div className="mx-4 mt-2 mb-1 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/20 p-2.5 space-y-2">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <Badge variant="outline" className="border-red-300 text-red-700 bg-red-50">
@@ -1133,6 +1256,28 @@ const EpisodeProductionBoard: React.FC = () => {
 
         {/* ── 图片制作 tab ──────────────────────────────────────────────────── */}
         <TabsContent value="images" className="flex-1 mt-0 flex flex-col">
+          {/* 当参考图缺失时提示 */}
+          {(() => {
+            const usedCharIds = new Set<string>();
+            const usedSceneIds = new Set<string>();
+            for (const shot of storyOrderedShots) {
+              for (const c of shot.characters ?? []) usedCharIds.add(c.characterId);
+              if (shot.sceneId) usedSceneIds.add(shot.sceneId);
+            }
+            const needed = visualAssets.filter(
+              a => (a.assetType === 'character' && usedCharIds.has(a.refId))
+                || (a.assetType === 'location' && usedSceneIds.has(a.refId))
+            );
+            const missing = needed.filter(a => !a.referenceImageUrl).length;
+            if (missing === 0) return null;
+            return (
+              <div className="mx-4 mt-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/20 px-3 py-2 flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>本集有 <strong>{missing}</strong> 个角色/场景参考图尚未生成。点击「批量生成」时系统会自动先完成参考图生成。
+                  可切换到「<strong>参考图</strong>」 Tab 查看详情。</span>
+              </div>
+            );
+          })()}
           {/* Batch controls */}
           <div className="px-4 pt-3 pb-2 border-b flex items-center gap-3">
             <div className="flex-1 min-w-0">
@@ -1179,25 +1324,73 @@ const EpisodeProductionBoard: React.FC = () => {
           </div>
 
           <ScrollArea className="flex-1">
-            <div className={cn(
-              'p-4 grid gap-3',
-              aspectRatio === '9:16'
-                ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'
-                : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4',
-            )}>
-              {displayShots.map(shot => (
-                <ShotImageCard
-                  key={shot.shotId}
-                  shot={shot}
-                  media={shotMediaMap[shot.shotId]}
-                  aspectRatio={aspectRatio}
-                  generating={generatingImageShots.has(shot.shotId)}
-                  busy={isGeneratingImages || isGeneratingVideos || problemResetMode !== null}
-                  consistencyRisk={consistencyRiskSet.has(shot.shotId)}
-                  cameraRisk={cameraRiskSet.has(shot.shotId)}
-                  onGenerate={() => handleGenerateShotImage(shot.shotId)}
-                />
-              ))}
+            <div className={cn('p-4 grid gap-3', shotGridClass)}>
+              {(() => {
+                // 图片 Tab 也支持 Shot Group 分组（与视频 Tab 一致）
+                const imageRenderItems = buildVideoRenderItems(displayShots);
+                return imageRenderItems.map(item => {
+                  if (item.type === 'shot') {
+                    const shot = item.shot;
+                    // 依赖资产就绪检查：该 Shot 涉及的角色/场景参考图是否已生成
+                    const shotCharIds = (shot.characters ?? []).map(c => c.characterId);
+                    const shotDeps = visualAssets.filter(
+                      a => (a.assetType === 'character' && shotCharIds.includes(a.refId))
+                        || (a.assetType === 'location' && a.refId === shot.sceneId)
+                    );
+                    const missingDeps = shotDeps.filter(a => !a.referenceImageUrl && !(a.referenceImages?.[0]?.imageUrl));
+                    return (
+                      <div key={shot.shotId} className="relative">
+                        <ShotImageCard
+                          shot={shot}
+                          media={shotMediaMap[shot.shotId]}
+                          aspectRatio={aspectRatio}
+                          generating={generatingImageShots.has(shot.shotId)}
+                          busy={isGeneratingImages || isGeneratingVideos || problemResetMode !== null}
+                          consistencyRisk={consistencyRiskSet.has(shot.shotId)}
+                          cameraRisk={cameraRiskSet.has(shot.shotId)}
+                          onGenerate={() => handleGenerateShotImage(shot.shotId)}
+                        />
+                        {missingDeps.length > 0 && (
+                          <div className="absolute top-1 left-1 z-10 inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded bg-amber-100/90 text-amber-700 border border-amber-300 backdrop-blur-sm">
+                            <AlertCircle className="w-2.5 h-2.5" />
+                            缺{missingDeps.length}个参考图
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+                  // Shot Group
+                  const groupTotalSec = item.shots.reduce((s, sh) => s + (sh.estimatedDurationSec ?? 0), 0);
+                  return (
+                    <div
+                      key={item.groupId}
+                      className="col-span-full rounded-xl border-2 border-indigo-200 dark:border-indigo-800 bg-indigo-50/30 dark:bg-indigo-950/20 p-3 space-y-2"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700">
+                          <ImageIcon className="w-3 h-3" />
+                          镜头组 · {item.shots.length} Shot · {groupTotalSec.toFixed(1)}s
+                        </span>
+                      </div>
+                      <div className={cn('grid gap-2', shotGridClass)}>
+                        {item.shots.map(shot => (
+                          <ShotImageCard
+                            key={shot.shotId}
+                            shot={shot}
+                            media={shotMediaMap[shot.shotId]}
+                            aspectRatio={aspectRatio}
+                            generating={generatingImageShots.has(shot.shotId)}
+                            busy={isGeneratingImages || isGeneratingVideos || problemResetMode !== null}
+                            consistencyRisk={consistencyRiskSet.has(shot.shotId)}
+                            cameraRisk={cameraRiskSet.has(shot.shotId)}
+                            onGenerate={() => handleGenerateShotImage(shot.shotId)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </ScrollArea>
         </TabsContent>
@@ -1256,24 +1449,297 @@ const EpisodeProductionBoard: React.FC = () => {
           </div>
 
           <ScrollArea className="flex-1">
-            <div className={cn(
-              'p-4 grid gap-3',
-              aspectRatio === '9:16'
-                ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'
-                : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4',
-            )}>
-              {displayShots.map(shot => (
-                <ShotVideoCard
-                  key={shot.shotId}
-                  shot={shot}
-                  media={shotMediaMap[shot.shotId]}
-                  aspectRatio={aspectRatio}
-                  consistencyRisk={consistencyRiskSet.has(shot.shotId)}
-                  cameraRisk={cameraRiskSet.has(shot.shotId)}
-                />
-              ))}
+            <div className={cn('p-4 grid gap-3', shotGridClass)}>
+              {videoRenderItems.map(item => {
+                if (item.type === 'shot') {
+                  return (
+                    <ShotVideoCard
+                      key={item.shot.shotId}
+                      shot={item.shot}
+                      media={shotMediaMap[item.shot.shotId]}
+                      aspectRatio={aspectRatio}
+                      consistencyRisk={consistencyRiskSet.has(item.shot.shotId)}
+                      cameraRisk={cameraRiskSet.has(item.shot.shotId)}
+                      generating={generatingVideoShots.has(item.shot.shotId)}
+                      busy={isGeneratingVideos || isGeneratingImages}
+                      onGenerate={() => handleGenerateShotVideo(item.shot.shotId)}
+                    />
+                  );
+                }
+                // Shot 组：col-span-full 包裹，内部使用同款 grid
+                const groupTotalSec = item.shots.reduce((s, sh) => s + (sh.estimatedDurationSec ?? 0), 0);
+                return (
+                  <div
+                    key={item.groupId}
+                    className="col-span-full rounded-xl border-2 border-blue-200 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-950/20 p-3 space-y-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+                        <Video className="w-3 h-3" />
+                        Kling 多镜头组 · {item.shots.length} Shot · {groupTotalSec.toFixed(1)}s
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">一次请求生成，视觉风格统一</span>
+                    </div>
+                    <div className={cn('grid gap-2', shotGridClass)}>
+                      {item.shots.map(shot => (
+                        <ShotVideoCard
+                          key={shot.shotId}
+                          shot={shot}
+                          media={shotMediaMap[shot.shotId]}
+                          aspectRatio={aspectRatio}
+                          consistencyRisk={consistencyRiskSet.has(shot.shotId)}
+                          cameraRisk={cameraRiskSet.has(shot.shotId)}
+                          generating={generatingVideoShots.has(shot.shotId)}
+                          busy={isGeneratingVideos || isGeneratingImages}
+                          onGenerate={() => handleGenerateShotVideo(shot.shotId)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </ScrollArea>
+        </TabsContent>
+
+        {/* ─── Assets Tab ────────────────────────────────────────────────────────── */}
+        <TabsContent value="assets" className="flex-1 flex flex-col mt-0">
+          {(() => {
+            // 本集涉及的角色 ID 和场景 ID（从分镜提取）
+            const usedCharIds = new Set<string>();
+            const usedSceneIds = new Set<string>();
+            for (const shot of storyOrderedShots) {
+              for (const c of shot.characters ?? []) usedCharIds.add(c.characterId);
+              if (shot.sceneId) usedSceneIds.add(shot.sceneId);
+            }
+
+            const charAssets = visualAssets.filter(a => a.assetType === 'character' && usedCharIds.has(a.refId));
+            const locAssets  = visualAssets.filter(a => a.assetType === 'location'  && usedSceneIds.has(a.refId));
+            const allEpisodeAssets = [...charAssets, ...locAssets];
+            const missingAssets = allEpisodeAssets.filter(a => !a.referenceImageUrl && !(a.referenceImages?.[0]?.imageUrl));
+            const missingCount = missingAssets.length;
+            const missingAssetIds = missingAssets.map(a => a.id);
+            const totalCount   = allEpisodeAssets.length;
+
+            // ── 资产卡片 ──────────────────────────────────────────────────────────
+            const AssetCard = ({ asset }: { asset: VisualAssetItem }) => {
+              const [showPrompts, setShowPrompts] = useState(false);
+              const img = asset.referenceImageUrl || asset.referenceImages?.[0]?.imageUrl;
+              const isRegen = regeneratingAssetIds.has(asset.id);
+              const d = asset.data ?? {};
+
+              // 构建详细字段列表
+              const detailFields: Array<{ label: string; value: string }> = [];
+              if (asset.assetType === 'character') {
+                if (d.role) detailFields.push({ label: '角色', value: String(d.role) });
+                if (d.faceReferencePrompt) detailFields.push({ label: '面部提示词', value: String(d.faceReferencePrompt) });
+                if (d.faceDescription) detailFields.push({ label: '面部描述', value: String(d.faceDescription) });
+                if (d.bodyTypePrompt) detailFields.push({ label: '体型', value: String(d.bodyTypePrompt) });
+                if (d.hairStylePrompt) detailFields.push({ label: '发型', value: String(d.hairStylePrompt) });
+                if (d.defaultCostumePrompt) detailFields.push({ label: '服装', value: String(d.defaultCostumePrompt) });
+                if (d.defaultCostume) detailFields.push({ label: '服装描述', value: String(d.defaultCostume) });
+                if (d.voiceProfile) detailFields.push({ label: '配音', value: String(d.voiceProfile) });
+                if (d.appearanceHint) detailFields.push({ label: '外观提示', value: String(d.appearanceHint) });
+              } else {
+                if (d.description) detailFields.push({ label: '描述', value: String(d.description) });
+                if (d.visualPrompt) detailFields.push({ label: '视觉提示词', value: String(d.visualPrompt) });
+                if (d.lightingDefault) detailFields.push({ label: '光照', value: String(d.lightingDefault) });
+                if (d.colorTone) detailFields.push({ label: '色调', value: String(d.colorTone) });
+                if (d.ambientSoundDefault) detailFields.push({ label: '环境音', value: String(d.ambientSoundDefault) });
+                if (d.keyProps && Array.isArray(d.keyProps)) detailFields.push({ label: '道具', value: (d.keyProps as string[]).join('、') });
+              }
+
+              return (
+                <div className={cn(
+                  'rounded-xl border bg-card overflow-hidden flex flex-col',
+                  !img ? 'border-amber-200 dark:border-amber-800' : 'border-emerald-200/60 dark:border-emerald-800/60',
+                )}>
+                  {/* 图片区域 */}
+                  <div className="relative bg-muted" style={{ paddingTop: asset.assetType === 'character' ? '133%' : '56%' }}>
+                    {isRegen ? (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-amber-50 dark:bg-amber-950/40">
+                        <Loader2 className="w-6 h-6 text-amber-500 animate-spin" />
+                        <span className="text-xs text-amber-700 dark:text-amber-400">生成中…</span>
+                      </div>
+                    ) : img ? (
+                      <img
+                        src={img}
+                        alt={asset.name}
+                        className="absolute inset-0 w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
+                        <ImageIcon className="w-7 h-7 text-muted-foreground/30" />
+                        <span className="text-[11px] text-muted-foreground/50">参考图待生成</span>
+                      </div>
+                    )}
+                    {/* 状态角标 */}
+                    {!img && !isRegen && (
+                      <span className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200">
+                        <Clock className="w-2.5 h-2.5" />待生成
+                      </span>
+                    )}
+                    {img && !isRegen && (
+                      <span className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
+                        <CheckCircle2 className="w-2.5 h-2.5" />已生成
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 信息区域 */}
+                  <div className="p-2.5 flex flex-col gap-1.5 flex-1">
+                    <div className="flex items-center justify-between gap-1">
+                      <p className="text-xs font-semibold truncate">{asset.name || asset.refId}</p>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!!d.role && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-950/40 dark:text-blue-400 dark:border-blue-800">
+                            {String(d.role) === 'protagonist' ? '主角' : String(d.role) === 'antagonist' ? '反派' : String(d.role) === 'supporting' ? '配角' : String(d.role)}
+                          </span>
+                        )}
+                        {!!d.isRecurring && (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-purple-50 text-purple-600 border border-purple-200 dark:bg-purple-950/40 dark:text-purple-400">
+                            常驻
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 详细提示词 — 可折叠 */}
+                    {detailFields.length > 0 && (
+                      <div className="rounded-md border border-slate-200 dark:border-slate-700 overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setShowPrompts(v => !v)}
+                          className="w-full flex items-center justify-between px-2 py-1 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                        >
+                          <span className="text-[10px] font-medium text-slate-600 dark:text-slate-400">
+                            提示词详情 ({detailFields.length})
+                          </span>
+                          {showPrompts
+                            ? <ChevronUp className="h-3 w-3 text-slate-400" />
+                            : <ChevronDown className="h-3 w-3 text-slate-400" />}
+                        </button>
+                        {showPrompts && (
+                          <div className="px-2 py-1.5 space-y-1.5 bg-slate-50/50 dark:bg-slate-900/30">
+                            {detailFields.map(({ label, value }) => (
+                              <div key={label}>
+                                <p className="text-[9px] font-medium text-slate-500 dark:text-slate-400 mb-0.5">{label}</p>
+                                <p className="text-[10px] text-slate-700 dark:text-slate-300 leading-relaxed break-all select-all font-mono">{value}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 重新生成按钮 */}
+                    <Button
+                      size="sm"
+                      variant={img ? 'outline' : 'default'}
+                      className="w-full h-7 text-xs gap-1 mt-auto"
+                      disabled={isRegen || isGeneratingAssets}
+                      onClick={() => handleRegenerateAsset(asset.id)}
+                    >
+                      {isRegen ? (
+                        <><Loader2 className="w-3 h-3 animate-spin" />生成中…</>
+                      ) : img ? (
+                        <><RefreshCw className="w-3 h-3" />重新生成</>
+                      ) : (
+                        <><Sparkles className="w-3 h-3" />生成参考图</>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              );
+            };
+
+            return (
+              <div className="flex flex-col flex-1 min-h-0">
+                {/* 工具栏 */}
+                <div className="px-4 pt-3 pb-2 border-b flex items-center gap-3 shrink-0">
+                  <div className="flex-1 min-w-0">
+                    {isGeneratingAssets && (
+                      <BatchProgress
+                        label="批量生成参考图"
+                        current={assetsBatchProgress.current}
+                        total={assetsBatchProgress.total}
+                        message={assetsBatchProgress.message}
+                      />
+                    )}
+                    {!isGeneratingAssets && totalCount > 0 && (
+                      <div className="flex items-center gap-2">
+                        <Progress value={totalCount > 0 ? ((totalCount - missingCount) / totalCount) * 100 : 0} className="h-2 flex-1" />
+                        <span className="text-xs text-muted-foreground shrink-0">
+                          {totalCount - missingCount}/{totalCount} 已生成
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs gap-1"
+                      disabled={isGeneratingAssets}
+                      onClick={() => {
+                        if (dramaId) getVisualAssets(dramaId).then(r => setVisualAssets(r.assets)).catch(() => {});
+                      }}
+                    >
+                      <RefreshCw className="w-3 h-3" />刷新
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-8 text-xs gap-1"
+                      disabled={isGeneratingAssets || missingCount === 0}
+                      onClick={() => handleBatchGenerateAssets(missingAssetIds)}
+                    >
+                      {isGeneratingAssets ? (
+                        <><Loader2 className="w-3 h-3 animate-spin" />生成中…</>
+                      ) : (
+                        <><Sparkles className="w-3 h-3" />一键生成参考图{missingCount > 0 ? `（${missingCount}）` : ''}</>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* 资产列表 */}
+                <ScrollArea className="flex-1">
+                  {!charAssets.length && !locAssets.length ? (
+                    <div className="flex flex-col items-center justify-center gap-3 text-muted-foreground py-20">
+                      <Users className="w-10 h-10 opacity-30" />
+                      <p className="text-sm">本集暂无角色/场景资产信息</p>
+                      <p className="text-xs max-w-xs text-center">完成分镜生成后，本集涉及的角色和场景将在此展示</p>
+                    </div>
+                  ) : (
+                    <div className="p-4 space-y-6">
+                      {charAssets.length > 0 && (
+                        <section>
+                          <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
+                            <Users className="w-4 h-4" />本集角色
+                            <span className="text-muted-foreground font-normal text-xs">({charAssets.length})</span>
+                          </h3>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                            {charAssets.map(a => <AssetCard key={a.id} asset={a} />)}
+                          </div>
+                        </section>
+                      )}
+                      {locAssets.length > 0 && (
+                        <section>
+                          <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
+                            <ImageIcon className="w-4 h-4" />本集场景
+                            <span className="text-muted-foreground font-normal text-xs">({locAssets.length})</span>
+                          </h3>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                            {locAssets.map(a => <AssetCard key={a.id} asset={a} />)}
+                          </div>
+                        </section>
+                      )}
+                    </div>
+                  )}
+                </ScrollArea>
+              </div>
+            );
+          })()}
         </TabsContent>
       </Tabs>
     </div>

@@ -29,7 +29,13 @@ export class MemoryRetrieverService implements OnModuleInit {
     private readonly embeddingService: EmbeddingService,
   ) {}
 
-  async onModuleInit() { await this.initPgVector(); }
+  async onModuleInit() {
+    if (!this.embeddingService.available) {
+      this.logger.log('Embedding 未配置（无 apiKey/baseUrl），跳过 pgvector 初始化，使用纯结构化检索');
+      return;
+    }
+    await this.initPgVector();
+  }
 
   /** 初始化 pgvector 扩展、向量列、HNSW 索引；三张表统一处理，维度不匹配自动重建。 */
   private async initPgVector(): Promise<void> {
@@ -37,6 +43,27 @@ export class MemoryRetrieverService implements OnModuleInit {
     const dim = this.embeddingService.dimensions;
     try {
       await qr.query('CREATE EXTENSION IF NOT EXISTS vector');
+
+      // 检查 pgvector 扩展版本：< 0.5.0 的旧版本使用定长存储格式，每个维度占一个 PostgreSQL
+      // 物理列槽位，导致 vector(1536) 在添加时触发 "tables can have at most 1600 columns" 错误。
+      // 0.5.0+ 改用 varlena（变长二进制）存储，不受列数限制。
+      const extRow: { installed_version: string | null }[] = await qr.query(
+        `SELECT installed_version FROM pg_available_extensions WHERE name = 'vector'`,
+      );
+      const rawVersion = extRow[0]?.installed_version ?? '0.0.0';
+      const [major, minor] = rawVersion.split('.').map(Number);
+      const isOldPgvector = major === 0 && minor < 5;
+      if (isOldPgvector && dim > 1580) {
+        this.logger.warn(
+          `pgvector ${rawVersion} < 0.5.0 不支持 ${dim} 维向量（每维占 1 PostgreSQL 列槽，合计 ${dim} + 表列数 > 1600 限制）。` +
+          `请执行以下任意操作后重启服务：` +
+          `(1) 将数据库 pgvector 扩展升级至 0.5.0+（推荐）：ALTER EXTENSION vector UPDATE；` +
+          `(2) 在配置文件中将 llm.embedding.dimensions 设为 ≤ 1580 的值（如 1024 或 512）。` +
+          `当前降级为纯结构化检索。`,
+        );
+        return;
+      }
+
       const tables = ['chapter_memories', 'arc_summaries', 'volume_summaries'];
       for (const tbl of tables) {
         const colCheck: { atttypmod: number }[] = await qr.query(
@@ -52,7 +79,7 @@ export class MemoryRetrieverService implements OnModuleInit {
         else this.logger.warn(`${tbl}.embedding dim=${dim} 超过 hnsw 上限 2000，已跳过索引创建并使用无索引向量检索`);
       }
       this.vectorReady = true;
-      this.logger.log(`pgvector 三层金字塔初始化完成 (dim=${dim})`);
+      this.logger.log(`pgvector 三层金字塔初始化完成 (dim=${dim}, pgvector=${rawVersion})`);
     } catch (e) {
       this.logger.warn(`pgvector 初始化失败，降级纯结构化检索: ${e instanceof Error ? e.message : String(e)}`);
     } finally { await qr.release(); }

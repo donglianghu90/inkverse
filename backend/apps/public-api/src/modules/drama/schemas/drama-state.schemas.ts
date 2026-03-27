@@ -153,7 +153,7 @@ export const dramaPromptProfileSchema = z.object({
   }),
   audioStyleGuide: z.object({
     bgmMoodPreferences: na(z.string()),
-    sfxDensity: z.enum(['sparse', 'moderate', 'rich']).default('moderate'),
+    sfxDensity: z.preprocess(v => v ?? 'moderate', z.enum(['sparse', 'moderate', 'rich'])),
     silenceUsage: ns(), // 静默使用策略
     voiceActingStyle: ns(), // 配音风格（夸张/克制/自然）
     /** 题材专属音频品牌指令（由 profiler LLM 生成，用户可编辑）。
@@ -163,12 +163,12 @@ export const dramaPromptProfileSchema = z.object({
   }),
   reviewerCalibration: z.object({
     dimensionWeights: z.object({
-      visualImpact: z.number().transform(v => weightClamp(v, 1.2)).default(1.2),
-      dialogueNaturalness: z.number().transform(v => weightClamp(v, 1.2)).default(1.2),
-      pacing: z.number().transform(v => weightClamp(v, 1.0)).default(1.0),
-      hookStrength: z.number().transform(v => weightClamp(v, 1.3)).default(1.3),
-      consistency: z.number().transform(v => weightClamp(v, 1.0)).default(1.0),
-      emotionalImpact: z.number().transform(v => weightClamp(v, 1.0)).default(1.0),
+      visualImpact: z.preprocess(v => v ?? 1.2, z.number().transform(v => weightClamp(v, 1.2))),
+      dialogueNaturalness: z.preprocess(v => v ?? 1.2, z.number().transform(v => weightClamp(v, 1.2))),
+      pacing: z.preprocess(v => v ?? 1.0, z.number().transform(v => weightClamp(v, 1.0))),
+      hookStrength: z.preprocess(v => v ?? 1.3, z.number().transform(v => weightClamp(v, 1.3))),
+      consistency: z.preprocess(v => v ?? 1.0, z.number().transform(v => weightClamp(v, 1.0))),
+      emotionalImpact: z.preprocess(v => v ?? 1.0, z.number().transform(v => weightClamp(v, 1.0))),
     }),
     genreSpecificChecks: na(z.string()),
     calibrationHistory: z.union([
@@ -290,7 +290,7 @@ export const characterIdentitySchema = z.object({
   distinguishingFeatures: z.string(),
   age: z.string(),
   agePrompt: z.string().default(''),
-  faceReferencePrompt: z.string(),
+  faceReferencePrompt: z.string().min(1, 'faceReferencePrompt 不能为空'),
   bodyTypePrompt: z.string().default(''),
   hairStylePrompt: z.string().default(''),
 
@@ -375,7 +375,10 @@ export const sceneLocationSchema = z.object({
   name: z.string(), // 如 "男主总裁办公室"
   description: z.string(), // 详细描述
   visualPrompt: z.string(), // T2I 场景参考提示词（英文）
-  lightingDefault: z.string(), // 默认光线
+  // lightingDefault 必须为英文（T2I 模型不识别中文），包含中文时自动清空并记录警告
+  lightingDefault: z.string().transform((val) =>
+    /[\u4e00-\u9fff]/.test(val) ? '' : val
+  ), // 默认光线（英文）
   ambientSoundDefault: z.string(), // 默认环境音
   colorTone: z.string(), // 色调
   keyProps: na(z.string()), // 场景内普通道具文字列表（仅用于剧本上下文，不生图）
@@ -738,7 +741,7 @@ export const shotSchema = z.object({
   audio: shotAudioSchema.nullish().transform(v => v ?? {}),
   visualPrompt: z.string(), // T2V 视觉提示词（英文，含风格/光影/构图/角色参考）
   subtitle: shotSubtitleSchema.nullish(),
-  estimatedDurationSec: z.number().min(0.5).max(30),
+  estimatedDurationSec: z.number().min(0.5).max(15), // 硬上限 15s：Kling/Sora 2 物理上限均为 15s
   transitionToNext: z.enum(['cut', 'fade_black', 'fade_white', 'dissolve', 'wipe_left', 'wipe_right', 'flash', 'match_cut', 'occlusion_cut']).default('cut'),
   isFlashback: z.boolean().default(false), // 是否为闪回镜头
   flashbackSourceEpisode: z.number().int().min(1).nullish(), // AI 可能输出 null
@@ -749,6 +752,19 @@ export const shotSchema = z.object({
   firstFrameImageUrl: z.string().nullish(), // T2I 生成前为 null
   lastFrameImageUrl: z.string().nullish(),
   characterVariationIds: z.record(z.string(), z.string()).nullish(), // characterId → variationId 映射
+
+  // ─── Shot 组合生成（多镜共享一个 Sora 视频）────────────────────────────────
+  /**
+   * Shot 所属的合并组标识（null = 独立 Shot，由 Kling 单独生成）。
+   * 同一组内的 Shot 合并为一次 Sora 请求（10-15s），按 groupOffsetSec 裁剪。
+   * 格式建议：`sg_{sceneId}_{N}`，例如 "sg_scene3_1"。
+   */
+  shotGroupId: z.string().nullish(),
+  /**
+   * 该 Shot 在组内视频的起始偏移（秒）。
+   * 组内第1个 Shot=0，第2个=第1个 estimatedDurationSec，以此类推。
+   */
+  groupOffsetSec: z.number().min(0).nullish(),
 
   // ─── 剪辑切点精度 ──────────────────────────────────────────────────────────
   /** Shot 内的精确入点(秒)，从 Shot 起始处偏移。省略=从头开始 */
@@ -974,7 +990,8 @@ export const dramaStateSchema = z.object({
 
   visualStyleHint: ns(), // 用户在前端选择的原始视觉风格提示（如"3D 东方玄幻风格：..."），用于 debug/重试
   suggestedVisualStyle: ns(), // 视觉风格枚举值（如 period_live / live_action / 2d_anime），由前端推荐流程确定后透传
-  generationMode: z.enum(['fast', 'balanced', 'quality']).default('balanced'), // 媒体生成策略档位
+  generationMode: z.enum(['fast', 'balanced', 'quality']).default('balanced'),
+  videoProvider: z.enum(['auto', 'volcengine', 'kling', 'hailuo', 'veo', 'sora', 'kling-avatar']).default('auto'),
   visualStyle: visualStyleGuideSchema.optional(),
   visualBible: visualBibleSchema.optional(),
   characters: na(characterIdentitySchema),

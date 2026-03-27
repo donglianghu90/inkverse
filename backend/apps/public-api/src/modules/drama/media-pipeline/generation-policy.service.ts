@@ -83,7 +83,7 @@ export class GenerationPolicyService {
         candidateCount: 1,
         gateMaxAttempts: 1,
         gateMinScore: 5.6,
-        videoQuality: '480p',
+        videoQuality: '720p',
       };
     }
 

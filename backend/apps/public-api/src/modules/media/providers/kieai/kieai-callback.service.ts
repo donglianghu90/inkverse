@@ -14,6 +14,12 @@ export interface KieAiTaskData {
   completeTime?: number;
   costTime?: number;
   model?: string;
+  /** 创建任务时的原始 input JSON（GET recordInfo 的 param） */
+  param?: string;
+  createTime?: number;
+  updateTime?: number;
+  /** 0–100，文档称仅 sora2 / sora2 pro 返回 */
+  progress?: number;
 }
 
 interface Deferred {

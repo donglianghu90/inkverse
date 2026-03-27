@@ -72,6 +72,7 @@ export class DramaController {
       terminal: false,
       ...(event.episodeNumber !== undefined ? { episodeNumber: event.episodeNumber } : {}),
       ...(event.error ? { error: event.error } : {}),
+      ...(event.data ? { data: event.data } : {}),
     });
   }
 
@@ -514,6 +515,34 @@ export class DramaController {
     return subject.asObservable().pipe(finalize(() => { clearInterval(heartbeat); unsub(); }));
   }
 
+  /** LLM 自动修复指定角色的 faceReferencePrompt（建剧时 LLM 遗漏导致字段为空时使用） */
+  @Post(':dramaId/characters/:characterId/redesign-face-prompt')
+  async redesignCharacterFacePrompt(
+    @Param('dramaId') dramaId: string,
+    @Param('characterId') characterId: string,
+    @Req() req: any,
+  ) {
+    return this.dramaService.redesignCharacterFacePrompt(dramaId, characterId, req.user?.id);
+  }
+
+  /** 手动编辑指定角色的文本字段（前端直接写入正确值） */
+  @Patch(':dramaId/characters/:characterId')
+  async patchCharacter(
+    @Param('dramaId') dramaId: string,
+    @Param('characterId') characterId: string,
+    @Body() body: {
+      faceReferencePrompt?: string;
+      faceDescription?: string;
+      bodyTypePrompt?: string;
+      hairStylePrompt?: string;
+      defaultCostumePrompt?: string;
+      defaultCostume?: string;
+      distinguishingFeatures?: string;
+    },
+  ) {
+    return this.dramaService.patchCharacter(dramaId, characterId, body);
+  }
+
   @Post(':dramaId/visual-assets/:assetId/variation/:variationId/regenerate')
   async regenerateVariationImage(
     @Param('dramaId') dramaId: string,
@@ -775,6 +804,18 @@ export class DramaController {
     const episodeNumber = parseInt(ep, 10);
     if (isNaN(episodeNumber)) throw new NotFoundException('episodeNumber 无效');
     return this.dramaService.generateShotImage(dramaId, episodeNumber, shotId);
+  }
+
+  /** 单镜视频生成（同步 HTTP，适合制作台逐 Shot 手动触发） */
+  @Post(':dramaId/episodes/:episodeNumber/shots/:shotId/generate-video')
+  async generateShotVideo(
+    @Param('dramaId') dramaId: string,
+    @Param('episodeNumber') ep: string,
+    @Param('shotId') shotId: string,
+  ) {
+    const episodeNumber = parseInt(ep, 10);
+    if (isNaN(episodeNumber)) throw new NotFoundException('episodeNumber 无效');
+    return this.dramaService.generateShotVideo(dramaId, episodeNumber, shotId);
   }
 
 }

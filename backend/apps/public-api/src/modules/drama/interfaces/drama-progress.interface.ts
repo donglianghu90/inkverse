@@ -20,6 +20,8 @@ export interface DramaProgressEvent {
   terminal: boolean;
   terminalStatus?: DramaTerminalStatus;
   error?: string;
+  /** 附加业务数据，供前端按 _type/stepKey 解析（如新角色引入警告） */
+  data?: Record<string, unknown>;
 }
 
 export interface DramaGenerationStatus {

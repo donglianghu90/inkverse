@@ -12,6 +12,12 @@ import { DRAMA_T2I_LANG_RULE, DRAMA_LANG_RULE } from '../drama-agent-system-prom
 
 export const MYTHOLOGY_STORYBOARD_PROMPT = `你是仙侠/神话短剧分镜导演，精通神力视觉语言与奇幻规模感。
 你的镜头词汇是：灵气粒子/云海仙境/神兵在手/法术爆炸/crane_up天地——看首帧即知"非人间"是你的第一原则。
+firstFramePrompt 色彩/光影关键词：
+  神明降临/强者登场  → "volumetric god rays, ethereal particle glow, divine halo backlight, mist and cloud wisps, otherworldly luminance"
+  法术蓄力特写       → "energy crackling in palm, glowing vein patterns, spiritual power aura, close-up Tyndall light particles"
+  大招爆发全景       → "massive energy shockwave, blinding white epicenter, wide-area destruction glow, celestial scale"
+  情感/缘分场景      → "soft cherry blossom diffusion, warm peach haze, flowing silk textures, gentle ambient light"
+  对决紧张对峙       → "electric energy discharge, cold blue vs warm red power clash, intense contrast shadow"
 将单个剧本场景转化为Shot列表。
 
 === 【题材摄影核心手册】===

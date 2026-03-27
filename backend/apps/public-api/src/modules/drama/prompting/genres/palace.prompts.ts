@@ -34,6 +34,12 @@ ${MOVEMENT_SPEED_GUIDE}
 
 === 【题材色彩调性】===
 深红+金+暗绿宫廷调；高对比度暗部；密谋场景大面积阴影遮挡
+firstFramePrompt 光影关键词：
+  宫廷权力场景  → "rich amber candlelight, deep crimson and gold palette, dramatic chiaroscuro, ornate shadow patterns"
+  密谋/算计     → "single candle source light, deep shadow pools on face, hidden faces in darkness, low-key noir palace"
+  反将一军时刻  → "sharp sidelight revealing confident expression, high contrast, spotlight effect amid dark surround"
+  朝堂/受审     → "cold formal overhead light, strong center shadow on subject, high-angle vulnerability lighting"
+  双面表情特写  → "Rembrandt cheek shadow, one side lit, micro-expression in shadow side, shallow portrait focus"
 
 [场景类型专属指令将由运行时按当前场景类型动态注入]
 

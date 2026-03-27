@@ -6,8 +6,8 @@ export type CheckSeverity = 'hard' | 'soft';
 export interface FailedCheck { rule: string; detail: string; severity: CheckSeverity }
 
 const HARD_RULES = new Set([
-  'unknown_character', 'empty_visual_prompt', 'too_few_shots',
-  'missing_first_frame_prompt',
+  'unknown_character', 'empty_visual_prompt',
+  'missing_first_frame_prompt', 'shot_too_long',
 ]);
 const VP_MAX_WORDS = 80; // visualPrompt词数上限（含face描述后放宽）
 /**
@@ -24,13 +24,16 @@ const DIALOGUE_MAX_CHARS = 20; // 超过 20 字计入"偏长台词"统计
 const DIALOGUE_SOFT_MAX = 25;  // 超过 25 字触发软告警 + 加入 ScriptEditor 修复列表
 
 /**
- * 根据目标时长动态计算最低 Shot 数。
- * 短剧平均 shot 时长 ~4-5s，最低基准按 6s/shot 计算，确保节奏不至于过慢。
- * 例：180s → 30 shots(最低)，60s → 10 shots(最低)
+ * 根据目标时长动态计算最低 Shot 数（软规则参考值）。
+ * Shot 数量应由模型根据题材和场景节奏自主决定；此公式仅作为软警告参考，不硬阻断。
+ * 注意：Sora 2 每镜固定 10/15s，180s 自然只有 12–18 镜，远低于此公式的值。
  */
 function minShotsForDuration(targetSec: number): number {
   return Math.min(60, Math.max(6, Math.round(targetSec / 6)));
 }
+
+/** 单镜时长硬上限（对应当前在用 provider 的物理上限：Kling/Sora 2 均为 15s） */
+const SHOT_MAX_DURATION_SEC = 15;
 
 export type DeterministicCheckResult = DramaDeterministicCheck & {
   hardFails: FailedCheck[];
@@ -68,13 +71,15 @@ export class DramaDeterministicCheckerService {
     if (Math.abs(shotSum - totalEstimatedDurationSec) > 10) fails.push({ rule: 'shot_duration_sum_mismatch', severity: sev('shot_duration_sum_mismatch'),
       detail: `Shot时长总和 ${shotSum.toFixed(1)}s ≠ total ${totalEstimatedDurationSec}s` });
 
+    // too_few_shots 降为软规则：镜数由模型根据题材/节奏决定；Sora 2 每镜 10/15s，180s 自然仅 12–18 镜
     const minShots = minShotsForDuration(target);
-    if (shots.length < minShots) fails.push({ rule: 'too_few_shots', severity: 'hard', detail: `仅 ${shots.length} 个Shot，目标时长${target}s 最少需要 ${minShots} 个` });
+    if (shots.length < minShots) fails.push({ rule: 'too_few_shots', severity: 'soft', detail: `仅 ${shots.length} 个Shot，目标时长${target}s 参考最低 ${minShots} 个（Sora 2 等长镜头 provider 可忽略）` });
     if (shots.length > 60) fails.push({ rule: 'too_many_shots', severity: sev('too_many_shots'), detail: `${shots.length} 个Shot，超过60个上限` });
 
     shots.forEach(s => {
       if (s.estimatedDurationSec < 0.5) fails.push({ rule: 'shot_too_short', severity: sev('shot_too_short'), detail: `shot${s.shotIndex} 仅 ${s.estimatedDurationSec}s` });
-      if (s.estimatedDurationSec > 30) fails.push({ rule: 'shot_too_long', severity: sev('shot_too_long'), detail: `shot${s.shotIndex} 达 ${s.estimatedDurationSec}s` });
+      // shot_too_long 升为 hard rule：>15s 超出 Kling/Sora 2 的物理上限，无法生成，触发分镜重生成
+      if (s.estimatedDurationSec > SHOT_MAX_DURATION_SEC) fails.push({ rule: 'shot_too_long', severity: 'hard', detail: `shot${s.shotIndex} 达 ${s.estimatedDurationSec}s，超出 provider 物理上限 ${SHOT_MAX_DURATION_SEC}s` });
     });
 
     shots.forEach(s => {
@@ -133,6 +138,7 @@ export class DramaDeterministicCheckerService {
     this.checkDialogueLength(script, fails, dialogueFixes);
     this.checkSceneStructure(script, fails, !!state.isSeriesFinale);
     this.checkEmotionalProgression(script, fails);
+    this.checkDialogueConsistency(script, storyboard, fails);
 
     const hardFails = fails.filter(f => f.severity === 'hard');
     return { pass: fails.length === 0, failedChecks: fails, hardFails, autoFixedRules, dialogueFixes };
@@ -219,7 +225,7 @@ export class DramaDeterministicCheckerService {
     return fails;
   }
 
-  /** 情绪进展检查：避免全集情绪扁平（用emotionalEntry/emotionalExit对比） */
+  /** 情绪进展检查：避免全集情绪扁平、高潮低于铺垫、结尾情绪与 purpose 不匹配 */
   private checkEmotionalProgression(script: EpisodeScript, fails: FailedCheck[]): void {
     const entries = script.scenes.map(s => s.emotionalEntry).filter(Boolean);
     const exits = script.scenes.map(s => s.emotionalExit).filter(Boolean);
@@ -228,6 +234,52 @@ export class DramaDeterministicCheckerService {
     const uniqueExits = new Set(exits);
     if (uniqueEntries.size === 1 && uniqueExits.size === 1 && entries[0] === exits[0]) {
       fails.push({ rule: 'flat_emotional_arc', severity: 'soft', detail: `全集${entries.length}场情绪均为"${entries[0]}"→"${exits[0]}"，缺乏起伏` });
+    }
+
+    // 检查高潮场景情绪是否高于铺垫场景
+    const HIGH_INTENSITY_PURPOSES = new Set(['climax', 'confrontation', 'revelation', 'cliffhanger']);
+    const LOW_INTENSITY_PURPOSES = new Set(['transition', 'exposition', 'hook_opening']);
+    const LOW_INTENSITY_EXITS = new Set(['平静', '日常', '舒适', '轻松', '放松', '平淡', 'calm', 'relaxed', 'neutral']);
+    for (const scene of script.scenes) {
+      if (HIGH_INTENSITY_PURPOSES.has(scene.purpose) && LOW_INTENSITY_EXITS.has(scene.emotionalExit)) {
+        fails.push({ rule: 'climax_below_setup', severity: 'soft',
+          detail: `场景${scene.sceneId} purpose="${scene.purpose}"但情绪出口为"${scene.emotionalExit}"，高潮场景应有高强度情绪` });
+      }
+    }
+
+    // 检查结尾场景情绪与 purpose 匹配
+    const lastScene = script.scenes[script.scenes.length - 1];
+    const TENSE_ENDINGS = new Set(['cliffhanger', 'climax']);
+    const CALM_EXITS = new Set(['平静', '日常', '舒适', '轻松', '放松', '平淡', '满足', 'calm', 'relaxed', 'satisfied']);
+    if (TENSE_ENDINGS.has(lastScene.purpose) && CALM_EXITS.has(lastScene.emotionalExit)) {
+      fails.push({ rule: 'ending_emotion_mismatch', severity: 'soft',
+        detail: `末场purpose="${lastScene.purpose}"但情绪出口为"${lastScene.emotionalExit}"，悬念/高潮场景结尾应保持紧张感` });
+    }
+  }
+
+  /** Script↔Storyboard 台词一致性检查：确保分镜中的台词在剧本中有对应 */
+  private checkDialogueConsistency(script: EpisodeScript, storyboard: EpisodeStoryboard, fails: FailedCheck[]): void {
+    const scriptDialogueMap = new Map<string, Set<string>>();
+    for (const scene of script.scenes) {
+      const texts = new Set<string>();
+      (scene.dialogues ?? []).forEach(d => { if (d.text?.trim()) texts.add(d.text.trim()); });
+      scriptDialogueMap.set(scene.sceneId, texts);
+    }
+
+    let mismatchCount = 0;
+    for (const shot of (storyboard?.shots ?? [])) {
+      if (!shot.dialogue?.text?.trim()) continue;
+      if (shot.isFlashback || shot.isPreview) continue;
+      const sceneTexts = scriptDialogueMap.get(shot.sceneId);
+      if (!sceneTexts) continue; // scene not found — already checked by scene_missing_in_storyboard
+      const shotText = shot.dialogue.text.trim();
+      // 允许轻微差异（精修可能微调标点），用包含关系匹配
+      const found = [...sceneTexts].some(t => t.includes(shotText) || shotText.includes(t));
+      if (!found) mismatchCount++;
+    }
+    if (mismatchCount > 0) {
+      fails.push({ rule: 'dialogue_storyboard_mismatch', severity: 'soft',
+        detail: `${mismatchCount}条分镜台词在剧本中无法匹配，可能存在 Script↔Storyboard 数据脱节` });
     }
   }
 }

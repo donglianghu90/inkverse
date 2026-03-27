@@ -52,4 +52,10 @@ export interface T2VOptimizeOptions {
   cameraAngle?: string;
   emotionColorHint?: string;
   routeProfile?: string;
+  /** Avatar 专用：对话情绪标签（如 angry, sad, joyful） */
+  dialogueEmotion?: string;
+  /** Avatar 专用：语速（very_slow / slow / normal / fast / very_fast） */
+  dialoguePace?: string;
+  /** Avatar 专用：音量（whisper / low / normal / loud / scream） */
+  dialogueVolume?: string;
 }

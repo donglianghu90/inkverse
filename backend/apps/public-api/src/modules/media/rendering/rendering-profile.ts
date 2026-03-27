@@ -81,9 +81,8 @@ export interface RenderingProfile {
     qualitySuffix?: string;
   };
 
-  /** 角色多角度参考图策略 — 按角色重要性决定生成哪些视角 */
+  /** 角色参考图策略 — 逐集按需生成，仅保留链式权重 */
   characterViews: {
-    viewsByRole: Record<'protagonist' | 'antagonist' | 'supporting' | 'minor', readonly CharacterViewAngle[]>;
     /** 链式生成时，以 face_front 为参考图的权重 */
     chainReferenceWeight: number;
   };
@@ -250,18 +249,28 @@ export function assembleT2iPrompt(
  * 根据镜头参数选择最合适的角色参考图视角。
  * 核心逻辑：特写→面部，远景→全身，过肩→背面/3/4 侧面，中景→半身；
  * 中远景且角色在左/右时优先用 side_profile，保证成片服饰与正面定妆一致。
+ * 情绪增强：特写/中近景时若角色情绪包含 happy/angry，优先使用对应表情视角。
  */
 export function selectBestCharacterView(
   availableViews: CharacterViewAngle[],
   shotSize?: string,
   characterPosition?: string,
   cameraAngle?: string,
+  emotion?: string,
 ): CharacterViewAngle {
   if (!availableViews.length) return 'face_front';
-  // 表情变体视角（face_happy/face_angry）仅用于资产生成，不参与景别选择逻辑
   const geometricViews = availableViews.filter(v => v !== 'face_happy' && v !== 'face_angry') as CharacterViewAngle[];
   if (!geometricViews.length) return 'face_front';
   const has = (v: CharacterViewAngle) => geometricViews.includes(v);
+  const hasAll = (v: CharacterViewAngle) => availableViews.includes(v);
+
+  // 情绪增强：特写/中近景时，若角色有强烈情绪且有对应表情视角，优先使用
+  const isEmotionCloseEnough = CLOSE_SHOT_SIZES.includes(shotSize ?? '') || shotSize === 'medium_close_up' || shotSize === 'medium';
+  if (isEmotionCloseEnough && emotion) {
+    const emo = emotion.toLowerCase();
+    if (/happ|smile|joy|laugh|deligh|pleas|warm|tender/.test(emo) && hasAll('face_happy')) return 'face_happy';
+    if (/angr|fury|rage|furious|wrath|stern|fierce/.test(emo) && hasAll('face_angry')) return 'face_angry';
+  }
 
   // 过肩镜头：前景角色用背影，后景角色用侧脸
   if (cameraAngle === 'over_shoulder') {
@@ -364,8 +373,11 @@ export function buildLocationViewPrompt(
 ): string {
   const base = (loc.visualPrompt || loc.description || '').trim();
   if (!base) return '';
-  const lighting = loc.lightingDefault ? `, ${loc.lightingDefault} lighting` : '';
-  const color = loc.colorTone ? `, ${loc.colorTone} color tone` : '';
+  // 过滤中文：lightingDefault 应为英文，但旧数据或 LLM 可能写中文，中文进英文 T2I 会产生混乱指令
+  const hasChinese = (s: string) => /[\u4e00-\u9fff]/.test(s);
+  const lighting = loc.lightingDefault && !hasChinese(loc.lightingDefault)
+    ? `, ${loc.lightingDefault} lighting` : '';
+  const color = loc.colorTone ? `, ${loc.colorTone.replace(/_/g, ' ')} color tone` : '';
   // keyProps 是中文场景陈设描述（仅用于剧本上下文），不拼入 T2I prompt
   switch (viewAngle) {
     case 'establishing':
