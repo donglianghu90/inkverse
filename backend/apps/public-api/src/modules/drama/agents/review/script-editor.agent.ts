@@ -24,9 +24,9 @@ const batchEditorOutputSchema = z.object({
   shots: z.array(shotSchema),
   scriptPatches: z.array(z.object({
     sceneId: z.string(),
-    dialogueIndex: z.number().int().nonnegative().optional(),
-    newText: z.string().optional(),
-    newParenthetical: z.string().optional(),
+    dialogueIndex: z.number().int().nonnegative().nullish(),
+    newText: z.string().nullish(),
+    newParenthetical: z.string().nullish(),
   })).default([]),
 });
 

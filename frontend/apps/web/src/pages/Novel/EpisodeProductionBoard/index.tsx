@@ -581,7 +581,7 @@ const MOVEMENT_LABELS_S: Record<string, string> = {
 };
 
 function ScriptShotRow(
-  { shot, consistencyRisk, cameraRisk }: { shot: Shot; consistencyRisk?: boolean; cameraRisk?: boolean },
+  { shot, consistencyRisk, cameraRisk, charNames }: { shot: Shot; consistencyRisk?: boolean; cameraRisk?: boolean; charNames?: Map<string, string> },
 ) {
   const [open, setOpen] = useState(false);
   return (
@@ -628,7 +628,7 @@ function ScriptShotRow(
             <div className="mt-2 space-y-1">
               {shot.characters.map(c => (
                 <p key={c.characterId} className="text-xs text-muted-foreground">
-                  {c.characterId} — {c.action}（{c.emotion}）
+                  {charNames?.get(c.characterId) ?? c.characterId} — {c.action}（{c.emotion}）
                 </p>
               ))}
             </div>
@@ -1242,14 +1242,18 @@ const EpisodeProductionBoard: React.FC = () => {
         <TabsContent value="script" className="flex-1 mt-0 p-4">
           <ScrollArea className="h-[calc(100vh-220px)]">
             <div className="space-y-2 max-w-3xl mx-auto pr-3">
-              {storyOrderedShots.map((shot) => (
-                <ScriptShotRow
-                  key={shot.shotId}
-                  shot={shot}
-                  consistencyRisk={consistencyRiskSet.has(shot.shotId)}
-                  cameraRisk={cameraRiskSet.has(shot.shotId)}
-                />
-              ))}
+              {(() => {
+                const charNames = new Map<string, string>(visualAssets.filter(a => a.assetType === 'character').map(a => [a.refId, a.name]));
+                return storyOrderedShots.map((shot) => (
+                  <ScriptShotRow
+                    key={shot.shotId}
+                    shot={shot}
+                    consistencyRisk={consistencyRiskSet.has(shot.shotId)}
+                    cameraRisk={cameraRiskSet.has(shot.shotId)}
+                    charNames={charNames}
+                  />
+                ));
+              })()}
             </div>
           </ScrollArea>
         </TabsContent>

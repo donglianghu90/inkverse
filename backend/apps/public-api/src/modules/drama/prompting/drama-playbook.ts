@@ -66,6 +66,47 @@ import {
   buildCamTechSection,
 } from './drama-agent-system-prompts';
 import { GENRE_TEMPLATES } from './drama-genre-data';
+import { CHARACTER_INTENSITY_PROGRESSION, FIRST_EPISODE_CONSTRAINTS } from './shared-blocks';
+
+// ─── User Prompt 尾部强制约束块 ─────────────────────────────────────────────
+
+/**
+ * 构建 User Prompt 尾部的强制约束块（redLines + genreRules + continuityWarnings）。
+ *
+ * 设计原理（Lost in the Middle 效应对策）：
+ *   大模型对长 context 的注意力呈 U 型曲线——开头和结尾关注度最高，中间指令最易被忽略。
+ *   将 redLines、genreRules、continuityWarnings 等不可违反的硬约束放在 User Prompt 最末尾
+ *   （紧挨输出指令前），利用 "近因效应（Recency Bias）" 最大化模型遵循率。
+ *   同时 Deterministic Checker 在下游进行结构兜底，形成语义+规则双保险。
+ */
+export function buildUserPromptConstraintsTail(ctx: {
+  redLines?: string[];
+  genreRules?: string[];
+  continuityWarnings?: string[];
+}): string {
+  const parts: string[] = [];
+
+  if (ctx.genreRules?.length) {
+    parts.push(`=== 本剧题材铁律（必须遵守）===\n${ctx.genreRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}`);
+  }
+
+  if (ctx.continuityWarnings?.length) {
+    parts.push(`⚠️ 连续性警告（本次创作必须遵守以下修正建议）：\n${ctx.continuityWarnings.join('\n')}`);
+  }
+
+  if (ctx.redLines?.length) {
+    parts.push(
+      `🚨🚨🚨 === 不可违反的底线（RedLines）=== 🚨🚨🚨\n` +
+      `以下是本剧的绝对禁区，任何输出都不得违反：\n` +
+      `${ctx.redLines.map((r, i) => `  ${i + 1}. ${r}`).join('\n')}\n` +
+      `违反以上任何一条将导致整集作废重做。\n` +
+      `🚨🚨🚨 ========================== 🚨🚨🚨`
+    );
+  }
+
+  if (!parts.length) return '';
+  return '\n\n' + parts.join('\n\n');
+}
 
 // re-export for backward compatibility
 export { DRAMA_LANG_RULE } from './drama-agent-system-prompts';
@@ -79,12 +120,27 @@ function getTemplate(agentId: string, genreKey?: string): string {
   return tpl ?? GENRE_TEMPLATES['_custom']?.profile?.agentSystemPrompts?.[agentId] ?? '';
 }
 
+/**
+ * 预配置题材（boss / sweet / biography / ... ）的模板是 WYSIWYG：题材规则已内联。
+ * 此函数用于在 buildXxx 中判断是否应跳过 genreRules / adaptationNotes 等变量注入，
+ * 避免 Profiler 生成的规则与模板内置规则重复出现（浪费 ~1500-2000 tokens/调用）。
+ */
+function isWysiwygGenre(genreKey?: string): boolean {
+  return !!genreKey && genreKey !== '_custom';
+}
+
 // ─── 共享变量构建器 ─────────────────────────────────────────────────────────
 
 function genreRulesBlock(rules?: string[], label?: string): string {
   if (!rules?.length) return '';
   const heading = label ?? '本剧题材铁律';
   return `\n=== ${heading} ===\n${rules.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
+}
+
+/** 将 seed.redLines 格式化为不可违反的硬约束块，注入到所有下游 agent system prompt */
+function redLinesBlock(redLines?: string[]): string {
+  if (!redLines?.length) return '';
+  return `\n\n🚫🚫🚫 === 不可违反的底线（RedLines）=== 🚫🚫🚫\n以下是本剧的绝对禁区，任何输出都不得违反：\n${redLines.map((r, i) => `  ${i + 1}. ${r}`).join('\n')}\n违反以上任何一条将导致整集作废重做。\n🚫🚫🚫 ========================== 🚫🚫🚫`;
 }
 
 function adaptationBlock(ga?: GenreArchetype): string {
@@ -254,23 +310,28 @@ export function buildStrategySystemPrompt(ctx?: {
 export function buildArcDirectorSystemPrompt(ctx?: {
   genreArchetype?: GenreArchetype;
   genreRules?: string[];
+  redLines?: string[];
   arcDirectorGuide?: { genreSegmentPrinciples?: string; characterArcPrinciples?: string; conflictRhythm?: string };
 }, genreKey?: string): string {
   const template = getTemplate('arc-director', genreKey);
+  const wysiwyg = isWysiwygGenre(genreKey);
+  // redLines 和 genreRules 已迁移至 User Prompt 尾部注入（Lost-in-the-Middle 对策），此处不再拼接
   return resolveTemplate(template, {
     arcPrinciples: ctx?.arcDirectorGuide?.genreSegmentPrinciples?.trim() || '',
     characterArcPrinciples: ctx?.arcDirectorGuide?.characterArcPrinciples?.trim() || '',
     conflictRhythm: ctx?.arcDirectorGuide?.conflictRhythm?.trim() || '',
-    genreRules: genreRulesBlock(ctx?.genreRules, '本剧题材铁律（段落规划必须遵守）'),
-    adaptationNotes: adaptationBlock(ctx?.genreArchetype),
-  });
+    genreRules: wysiwyg ? '' : genreRulesBlock(ctx?.genreRules, '本剧题材铁律（段落规划必须遵守）'),
+    adaptationNotes: wysiwyg ? '' : adaptationBlock(ctx?.genreArchetype),
+  }) + CHARACTER_INTENSITY_PROGRESSION;
 }
 
 // ─── 6.5 Arc Expansion ───
 export function buildArcExpansionSystemPrompt(ctx?: {
   genreArchetype?: GenreArchetype;
   genreRules?: string[];
+  redLines?: string[];
 }, genreKey?: string): string {
+  // redLines 已迁移至 User Prompt 尾部注入（Lost-in-the-Middle 对策）
   return resolveTemplate(ARC_EXPANSION_TEMPLATE, {
     genreRules: genreRulesBlock(ctx?.genreRules, '本剧题材铁律（集级概要必须遵守）'),
     adaptationNotes: adaptationBlock(ctx?.genreArchetype),
@@ -283,24 +344,28 @@ export function buildEpisodeDirectorSystemPrompt(ctx?: {
   genreArchetype?: GenreArchetype;
   visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string; renderTechnique?: string; shotStyleGuide?: string };
   genreRules?: string[];
+  redLines?: string[];
   episodeDirectorGuide?: { emotionBeatExample?: string; tensionCurveNotes?: string; hookPatterns?: string };
 }, genreKey?: string): string {
   const template = getTemplate('episode-director', genreKey);
+  const wysiwyg = isWysiwygGenre(genreKey);
   const epGuide = ctx?.episodeDirectorGuide;
   const shotStyleHint = ctx?.visualStyle?.shotStyleGuide ?? '';
+  // redLines 和 genreRules 已迁移至 User Prompt 尾部注入（Lost-in-the-Middle 对策）
   return resolveTemplate(template, {
     maxChars: String(ctx?.maxPresentPerEpisode ?? 4),
-    emotionBeatSection: epGuide?.emotionBeatExample?.trim() || '',
-    tensionCurveSection: epGuide?.tensionCurveNotes?.trim()
+    // WYSIWYG 模板已内联情绪节拍示例/张力曲线/钩子模式，Profiler 生成的仅作 _custom 回退
+    emotionBeatSection: wysiwyg ? '' : (epGuide?.emotionBeatExample?.trim() || ''),
+    tensionCurveSection: wysiwyg ? '' : (epGuide?.tensionCurveNotes?.trim()
       ? `\n【题材专属张力曲线补充】\n${epGuide.tensionCurveNotes.trim()}\n`
-      : '',
-    hookPatternsSection: epGuide?.hookPatterns?.trim()
+      : ''),
+    hookPatternsSection: wysiwyg ? '' : (epGuide?.hookPatterns?.trim()
       ? `\n=== 题材专属集末钩子模式 ===\n${epGuide.hookPatterns.trim()}\n`
-      : '',
+      : ''),
     shotStyleSection: shotStyleHint ? `\n=== 本剧镜头风格指导 ===\n${shotStyleHint}` : '',
-    genreRules: genreRulesBlock(ctx?.genreRules, '本剧题材铁律（规划意图时必须遵守）'),
-    adaptationNotes: adaptationBlock(ctx?.genreArchetype),
-  });
+    genreRules: wysiwyg ? '' : genreRulesBlock(ctx?.genreRules, '本剧题材铁律（规划意图时必须遵守）'),
+    adaptationNotes: wysiwyg ? '' : adaptationBlock(ctx?.genreArchetype),
+  }) + FIRST_EPISODE_CONSTRAINTS;
 }
 
 // ─── 8. Continuity Guard ───
@@ -308,11 +373,13 @@ export function buildContinuityGuardSystemPrompt(ctx?: {
   genreSpecificChecks?: string[];
 }, genreKey?: string): string {
   const template = getTemplate('continuity-guard', genreKey);
+  const wysiwyg = isWysiwygGenre(genreKey);
   const checks = ctx?.genreSpecificChecks;
   return resolveTemplate(template, {
-    genreSpecificChecks: checks?.length
+    // WYSIWYG 模板已内联题材专项检查，Profiler 生成的仅作 _custom 回退
+    genreSpecificChecks: wysiwyg ? '' : (checks?.length
       ? `\n=== 题材专项检查 ===\n${checks.map((c, i) => `${13 + i}. ${c}`).join('\n')}\n`
-      : '',
+      : ''),
   });
 }
 
@@ -393,7 +460,7 @@ export function buildStoryboardDirectorStaticPrompt(ctx?: {
         `- 推荐每个Shot时长 ${vmp.sweetSpotSec} 秒（允许范围 ${vmp.minDurationSec}-${vmp.maxDurationSec} 秒）`,
         `- Prompt 风格：${vmp.promptStyleHint}`,
       ].join('\n')
-    : '- 每个Shot时长建议3-8秒';
+    : '- 每个Shot时长建议5-8秒（黄金镜头/高潮可至10-12秒）';
 
   return resolveTemplate(template, {
     genreIdentity: cam?.genreIdentity?.trim() || '',
@@ -543,14 +610,15 @@ export function buildPacingAnalyzerSystemPrompt(ctx?: {
   pacingAnalyzerGuide?: { genreRhythmTemplate?: string; paceIndicators?: string };
 }, genreKey?: string): string {
   const template = getTemplate('pacing-analyzer', genreKey);
+  const wysiwyg = isWysiwygGenre(genreKey);
   const pg = ctx?.pacingAnalyzerGuide;
   return resolveTemplate(template, {
-    paceIndicatorsBlock: pg?.paceIndicators?.trim() || '',
-    genreRhythmBlock: pg?.genreRhythmTemplate?.trim()
+    paceIndicatorsBlock: wysiwyg ? '' : (pg?.paceIndicators?.trim() || ''),
+    genreRhythmBlock: wysiwyg ? '' : (pg?.genreRhythmTemplate?.trim()
       ? `\n【题材专属理想节奏模板】\n${pg.genreRhythmTemplate.trim()}\n`
-      : '',
-    adaptationNotes: adaptationBlock(ctx?.genreArchetype),
-    genreRules: genreRulesBlock(ctx?.genreRules, '本剧题材铁律（节奏评估必须结合这些规则）'),
+      : ''),
+    adaptationNotes: wysiwyg ? '' : adaptationBlock(ctx?.genreArchetype),
+    genreRules: wysiwyg ? '' : genreRulesBlock(ctx?.genreRules, '本剧题材铁律（节奏评估必须结合这些规则）'),
   });
 }
 
@@ -562,18 +630,19 @@ export function buildHookCrafterStaticPrompt(ctx?: {
   extraHookTypes?: string;
 }, genreKey?: string): string {
   const template = getTemplate('hook-crafter', genreKey);
+  const wysiwyg = isWysiwygGenre(genreKey);
   const strategy = ctx?.strategy;
   return resolveTemplate(template, {
     extraHookTypes: ctx?.extraHookTypes?.trim()
       ? `\n${ctx.extraHookTypes.trim()}`
       : '',
-    genreHookGuidance: ctx?.genreArchetype?.adaptationNotes?.trim()
+    genreHookGuidance: wysiwyg ? '' : (ctx?.genreArchetype?.adaptationNotes?.trim()
       ? `\n=== 本剧题材适配规则（悬念设计必须遵循）===\n${ctx.genreArchetype.adaptationNotes.trim()}\n`
-      : '',
+      : ''),
     avoidRepeatWindow: String(strategy?.avoidRecentRepeatWindow ?? 3),
     preferredTypes: strategy?.preferredTypes?.join('、') || '无特殊偏好',
     urgencyBias: strategy?.urgencyBias ?? 'aggressive',
-    genreRules: genreRulesBlock(ctx?.genreRules, '本剧题材铁律（悬念设计必须符合）'),
+    genreRules: wysiwyg ? '' : genreRulesBlock(ctx?.genreRules, '本剧题材铁律（悬念设计必须符合）'),
   });
 }
 
@@ -594,6 +663,6 @@ export function buildEpisodeRecorderSystemPrompt(ctx?: {
 }, genreKey?: string): string {
   const template = getTemplate('episode-recorder', genreKey);
   return resolveTemplate(template, {
-    adaptationNotes: adaptationBlock(ctx?.genreArchetype),
+    adaptationNotes: isWysiwygGenre(genreKey) ? '' : adaptationBlock(ctx?.genreArchetype),
   });
 }

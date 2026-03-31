@@ -28,12 +28,15 @@ export const MODULE_SCOPE_GRANULARITY: Record<string, ScopeGranularity> = {
  * 解析 scope 提取粒度编号
  * @example parseScopeId('episode:5') => { granularity: 'episode', id: 5 }
  * @example parseScopeId('chapter:12') => { granularity: 'chapter', id: 12 }
+ * @example parseScopeId('shot:shot_first_frame') => { granularity: 'shot', id: 0, stringId: 'shot_first_frame' }
  */
-export function parseScopeId(scope: string): { granularity: ScopeGranularity; id: number } | null {
+export function parseScopeId(scope: string): { granularity: ScopeGranularity; id: number; stringId?: string } | null {
   if (scope === 'creation') return { granularity: 'creation', id: 0 };
-  const m = scope.match(/^(episode|chapter|scene|shot):(\d+)$/);
+  const m = scope.match(/^(episode|chapter|scene|shot):([\w-]+)$/);
   if (!m) return null;
-  return { granularity: m[1] as ScopeGranularity, id: +m[2] };
+  const numId = Number(m[2]);
+  if (Number.isFinite(numId) && numId >= 0) return { granularity: m[1] as ScopeGranularity, id: numId };
+  return { granularity: m[1] as ScopeGranularity, id: 0, stringId: m[2] };
 }
 
 /** 构建 scope 字符串 */

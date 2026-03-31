@@ -1,6 +1,6 @@
 /** 确定性规则校验器 — 纯逻辑校验，不调用LLM。含短剧内容质量硬规则。 */
-import { Injectable } from '@nestjs/common';
-import { DramaDeterministicCheck, EpisodeStoryboard, DramaState, EpisodeScript } from '../schemas/drama-state.schemas';
+import { Injectable, Logger } from '@nestjs/common';
+import { DramaDeterministicCheck, EpisodeStoryboard, DramaState, EpisodeScript, EpisodeIntent } from '../schemas/drama-state.schemas';
 
 export type CheckSeverity = 'hard' | 'soft';
 export interface FailedCheck { rule: string; detail: string; severity: CheckSeverity }
@@ -34,6 +34,8 @@ function minShotsForDuration(targetSec: number): number {
 
 /** 单镜时长硬上限（对应当前在用 provider 的物理上限：Kling/Sora 2 均为 15s） */
 const SHOT_MAX_DURATION_SEC = 15;
+/** 单镜时长软上限 — 超过此值 T2V 质量显著下降（运动不连贯），但仍在 provider 物理极限内 */
+const SHOT_QUALITY_WARN_SEC = 8;
 
 export type DeterministicCheckResult = DramaDeterministicCheck & {
   hardFails: FailedCheck[];
@@ -45,8 +47,9 @@ export type DeterministicCheckResult = DramaDeterministicCheck & {
 
 @Injectable()
 export class DramaDeterministicCheckerService {
+  private readonly logger = new Logger(DramaDeterministicCheckerService.name);
 
-  check(state: DramaState, script: EpisodeScript, storyboard: EpisodeStoryboard): DeterministicCheckResult {
+  check(state: DramaState, script: EpisodeScript, storyboard: EpisodeStoryboard, intent?: EpisodeIntent): DeterministicCheckResult {
     const fails: FailedCheck[] = [];
     const autoFixedRules: string[] = [];
     const dialogueFixes: DeterministicCheckResult['dialogueFixes'] = [];
@@ -74,10 +77,15 @@ export class DramaDeterministicCheckerService {
     // too_few_shots 降为软规则：镜数由模型根据题材/节奏决定；Sora 2 每镜 10/15s，180s 自然仅 12–18 镜
     const minShots = minShotsForDuration(target);
     if (shots.length < minShots) fails.push({ rule: 'too_few_shots', severity: 'soft', detail: `仅 ${shots.length} 个Shot，目标时长${target}s 参考最低 ${minShots} 个（Sora 2 等长镜头 provider 可忽略）` });
+    if (shots.length < 3) fails.push({ rule: 'too_few_shots_hard_limit', severity: 'hard', detail: `仅 ${shots.length} 个Shot，低于系统最低可用标准 (3个)` });
     if (shots.length > 60) fails.push({ rule: 'too_many_shots', severity: sev('too_many_shots'), detail: `${shots.length} 个Shot，超过60个上限` });
 
     shots.forEach(s => {
       if (s.estimatedDurationSec < 0.5) fails.push({ rule: 'shot_too_short', severity: sev('shot_too_short'), detail: `shot${s.shotIndex} 仅 ${s.estimatedDurationSec}s` });
+      // P1-3 fix: shot duration > 8s → soft warning (T2V quality degrades)
+      if (s.estimatedDurationSec > SHOT_QUALITY_WARN_SEC && s.estimatedDurationSec <= SHOT_MAX_DURATION_SEC) {
+        fails.push({ rule: 'shot_quality_risk', severity: 'soft', detail: `shot${s.shotIndex} 达 ${s.estimatedDurationSec}s，超过 ${SHOT_QUALITY_WARN_SEC}s 质量劣化阈值，建议拆分` });
+      }
       // shot_too_long 升为 hard rule：>15s 超出 Kling/Sora 2 的物理上限，无法生成，触发分镜重生成
       if (s.estimatedDurationSec > SHOT_MAX_DURATION_SEC) fails.push({ rule: 'shot_too_long', severity: 'hard', detail: `shot${s.shotIndex} 达 ${s.estimatedDurationSec}s，超出 provider 物理上限 ${SHOT_MAX_DURATION_SEC}s` });
     });
@@ -110,6 +118,20 @@ export class DramaDeterministicCheckerService {
       if (!knownCharIds.has(cid)) fails.push({ rule: 'unknown_character', severity: 'hard', detail: `Shot引用了未定义角色 ${cid}` });
     });
 
+    // P0-2 fix: 验证 proposedNewCharacters 在脚本中全部出现，防止角色设计浪费
+    if (intent?.proposedNewCharacters?.length) {
+      const scriptCharIds = new Set(script.scenes.flatMap(s => s.presentCharacterIds ?? []));
+      for (const proposed of intent.proposedNewCharacters) {
+        if (!scriptCharIds.has(proposed.characterId) && !allChars.has(proposed.characterId)) {
+          fails.push({
+            rule: 'proposed_character_unused', severity: 'soft',
+            detail: `集导演声明的新角色 ${proposed.characterId}(${proposed.name}) 在剧本和分镜中均未出现，该角色的视觉设计被浪费`,
+          });
+          this.logger.warn(`[P0-2] proposedNewCharacter ${proposed.characterId}(${proposed.name}) 未被编剧/分镜使用`);
+        }
+      }
+    }
+
     shots.forEach(s => {
       if (!s.characterVariationIds) return;
       Object.entries(s.characterVariationIds).forEach(([cid, vid]) => {
@@ -132,6 +154,19 @@ export class DramaDeterministicCheckerService {
         detail: `剧本场景 ${id} 在分镜中找不到对应Shot` });
     });
 
+    // === 多余角色检查（P2-12）：出现在分镜但不在本集 activeCharacters 的角色 ===
+    if (intent?.activeCharacters?.length) {
+      const activeIds = new Set(intent.activeCharacters.map(c => c.characterId));
+      allChars.forEach(cid => {
+        if (knownCharIds.has(cid) && !activeIds.has(cid)) {
+          fails.push({
+            rule: 'excess_character', severity: 'soft',
+            detail: `角色 ${cid} 出现在分镜中但不在本集 activeCharacters 列表内，可能是 episode-director 未规划的角色`,
+          });
+        }
+      });
+    }
+
     // shot_index_gap 已在方法开头自动修复，此处不再重复校验
 
     // === 短剧内容质量规则 ===
@@ -139,6 +174,7 @@ export class DramaDeterministicCheckerService {
     this.checkSceneStructure(script, fails, !!state.isSeriesFinale);
     this.checkEmotionalProgression(script, fails);
     this.checkDialogueConsistency(script, storyboard, fails);
+    this.checkConsecutiveSilentShots(storyboard, fails);
 
     const hardFails = fails.filter(f => f.severity === 'hard');
     return { pass: fails.length === 0, failedChecks: fails, hardFails, autoFixedRules, dialogueFixes };
@@ -281,5 +317,40 @@ export class DramaDeterministicCheckerService {
       fails.push({ rule: 'dialogue_storyboard_mismatch', severity: 'soft',
         detail: `${mismatchCount}条分镜台词在剧本中无法匹配，可能存在 Script↔Storyboard 数据脱节` });
     }
+  }
+
+  /** 连续静默镜头检查：连续 N 个 shot 无对话+无有效动作 = 拖沓风险 */
+  private checkConsecutiveSilentShots(storyboard: EpisodeStoryboard, fails: FailedCheck[]): void {
+    const shots = (storyboard?.shots ?? []).filter(s => !s.isPreview && !s.isFlashback);
+    const MAX_CONSECUTIVE = 3;
+    let consecutive = 0;
+    let startIdx = 0;
+
+    const emitIfNeeded = () => {
+      if (consecutive >= MAX_CONSECUTIVE) {
+        const totalDur = shots.slice(startIdx, startIdx + consecutive)
+          .reduce((s, sh) => s + sh.estimatedDurationSec, 0);
+        fails.push({
+          rule: 'consecutive_silent_shots',
+          severity: 'soft',
+          detail: `shot${startIdx}-shot${startIdx + consecutive - 1} 连续${consecutive}个镜头无对话无动作(${totalDur.toFixed(0)}s)，节奏拖沓风险`,
+        });
+      }
+    };
+
+    for (let i = 0; i < shots.length; i++) {
+      const hasDialogue = !!shots[i].dialogue?.text?.trim();
+      const hasAction = shots[i].characters.some(c =>
+        c.action && !/stand|sits?|remain|still|frozen|hold/i.test(c.action),
+      );
+      if (!hasDialogue && !hasAction) {
+        if (consecutive === 0) startIdx = i;
+        consecutive++;
+      } else {
+        emitIfNeeded();
+        consecutive = 0;
+      }
+    }
+    emitIfNeeded();
   }
 }

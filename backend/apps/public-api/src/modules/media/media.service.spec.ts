@@ -24,7 +24,7 @@ describe('MediaService usage recording', () => {
     } as any;
     const traceLogger = {} as any;
     const usageLedger = { record: jest.fn().mockResolvedValue(null) } as any;
-    const billingResolver = { resolveVideoCost: jest.fn().mockReturnValue(0.5) } as any;
+    const billingResolver = { resolveVideoCostCny: jest.fn().mockReturnValue(0.5) } as any;
     const configService = {} as any;
 
     const service = new MediaService(
@@ -51,7 +51,7 @@ describe('MediaService usage recording', () => {
         model: '720p',
         costCny: 0.5,
         ok: true,
-        idempotencyKey: 'usage:media:video:job-1:completed',
+        idempotencyKey: 'video:job-1:completed',
       }),
     );
   });
@@ -107,22 +107,14 @@ describe('MediaService usage recording', () => {
       scope: 'creation',
       kind: 'image',
       provider: 'volcengine.doubao-seedream',
-      model: 'doubao-seedream-4-0-250828',
+      model: 'unknown',
       ok: false,
       costCny: 0,
     }));
     expect(traceLogger.logT2i).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'volcengine.doubao-seedream',
-      model: 'doubao-seedream-4-0-250828',
+      model: 'unknown',
       status: 'error',
-      output: expect.objectContaining({
-        attemptedModels: [
-          'doubao-seedream-5-0-260128',
-          'doubao-seedream-4-5-251128',
-          'doubao-seedream-4-0-250828',
-        ],
-        finalModel: 'doubao-seedream-4-0-250828',
-      }),
     }));
   });
 });

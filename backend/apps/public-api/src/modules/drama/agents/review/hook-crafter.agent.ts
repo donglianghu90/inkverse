@@ -76,6 +76,12 @@ ${state.seriesOutline?.episodes?.[epNum - 1]?.cliffhanger ? `大纲建议悬念�
 ${flashbackCtx}
 
 下一集概要：${state.seriesOutline?.episodes?.[epNum]?.coreConflict ?? '未知'}
+${(() => {
+  const nextEp = state.seriesOutline?.episodes?.[epNum];
+  if (!nextEp?.keyCharacterIds?.length) return '';
+  const nextLocIds = state.locations.slice(0, 3).map(l => `${l.locationId}(${l.name}): ${l.description?.slice(0, 60) ?? ''}`);
+  return nextLocIds.length ? `\n下集可用场景视觉（previewShots 的 firstFramePrompt 应参考）：\n${nextLocIds.join('\n')}` : '';
+})()}
 ${dopaNote}
 ${state.isSeriesFinale ? `\n🏁 【大结局模式】这是全剧最后一集！\n- 不需要 cliffhanger，改为"余韵式结尾"——一句回味无穷的台词、一个意味深长的画面、或一段收束感的蒙太奇\n- hookType 设为 "finale_closure" 而非 cliffhanger\n- previewShots 改为"终章余韵镜头"（如角色远去、日落、空间回望等），不超过2个\n- hookStrengthSelfScore 评估标准改为"余韵强度"：观众看完后是否有满足感和回味感` : '请设计本集悬念 + 下集预告Shot（如适用）。'}
 previewShots 的 shotId 格式：ep${epNum}_preview_1。

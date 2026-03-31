@@ -1,5 +1,7 @@
 /** 媒体编排器 — 支持关键帧插值(首尾帧)、并发T2I/I2V、角色变体参考图、渲染配置驱动、质量关卡、连贯性校验 */
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { RedisService } from '@liaoliaots/nestjs-redis';
+import Redis from 'ioredis';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { ConfigService } from '@packages/modules';
@@ -18,13 +20,15 @@ import { RenderingProfileService } from '../../media/rendering/rendering-profile
 import {
   RenderingProfile, RefImageCandidate, CharacterImageSet, CharacterViewAngle,
   selectRefImages, selectBestCharacterView, buildCameraHint, assembleT2iPrompt,
-  ageToT2IPhrase, buildLocationViewPrompt,
+  ageToT2IPhrase, buildLocationViewPrompt, buildViewAnglePrompt,
 } from '../../media/rendering/rendering-profile';
 import { PromptOptimizerService } from '../../media/prompt-optimizer.service';
 import { MediaQualityGateService, QualityAssessment } from './media-quality-gate.service';
 import { ShotCoherenceValidatorService } from './shot-coherence-validator.service';
 import { EmotionMediaMapperService } from './emotion-media-mapper.service';
 import { GenerationPolicyService } from './generation-policy.service';
+import { ShotProductionOrderService } from './shot-production-order.service';
+import { ShotContextBuilderService } from './shot-context-builder.service';
 import { ImageProviderRouterService } from './image-provider-router.service';
 import { VideoProviderRouterService } from './video-provider-router.service';
 import type { DramaGenerationMode, DramaStyleBucket } from '../interfaces';
@@ -91,6 +95,9 @@ export class MediaOrchestratorService implements OnModuleInit {
     private readonly generationPolicy: GenerationPolicyService,
     private readonly imageRouter: ImageProviderRouterService,
     private readonly videoRouter: VideoProviderRouterService,
+    private readonly shotOrderService: ShotProductionOrderService,
+    private readonly shotContextService: ShotContextBuilderService,
+    private readonly redisService: RedisService,
   ) {}
 
   async onModuleInit() {
@@ -100,11 +107,34 @@ export class MediaOrchestratorService implements OnModuleInit {
     if (pipeline.t2iMaxConcurrency) this.t2iMaxConcurrency = Number(pipeline.t2iMaxConcurrency);
     if (pipeline.videoAwaitTimeoutMs) this.videoAwaitTimeoutMs = Number(pipeline.videoAwaitTimeoutMs);
     const t2iIntervalMs = Number(pipeline.t2iIntervalMs) || 3000;
-    this.acquireT2iSlot = async () => {
-      const waitMs = this.t2iNextSlotAt - Date.now();
-      this.t2iNextSlotAt = Math.max(Date.now(), this.t2iNextSlotAt) + t2iIntervalMs;
-      if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
-    };
+    // 全局 Redis 滑动窗口限流器（多 Pod 共享）
+    let redis: Redis | null = null;
+    try { redis = this.redisService.getOrThrow(); } catch { this.logger.warn('Redis 不可用，T2I 限流降级为内存令牌桶'); }
+    if (redis) {
+      const windowMs = t2iIntervalMs;
+      const maxPerWindow = this.t2iMaxConcurrency;
+      this.acquireT2iSlot = async () => {
+        const windowKey = `t2i:rate:${Math.floor(Date.now() / windowMs)}`;
+        try {
+          const count = await redis!.incr(windowKey);
+          if (count === 1) await redis!.expire(windowKey, Math.ceil(windowMs / 1000) + 1);
+          if (count > maxPerWindow) {
+            const sleepMs = windowMs - (Date.now() % windowMs) + 50;
+            await new Promise(r => setTimeout(r, sleepMs));
+          }
+        } catch {
+          // Redis 故障时降级为无限流
+          this.logger.warn('Redis T2I 限流故障，本次跳过限流');
+        }
+      };
+    } else {
+      // 降级为内存令牌桶（单 Pod 有效）
+      this.acquireT2iSlot = async () => {
+        const waitMs = this.t2iNextSlotAt - Date.now();
+        this.t2iNextSlotAt = Math.max(Date.now(), this.t2iNextSlotAt) + t2iIntervalMs;
+        if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+      };
+    }
     this.profile = this.renderingProfileService.getImageProfile();
     await this.recoverPendingEpisodes();
   }
@@ -188,8 +218,8 @@ export class MediaOrchestratorService implements OnModuleInit {
     const userId = drama.userId;
     const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
     const shots: Shot[] = storyboard?.shots ?? [];
-    const reviewRiskShotIds = this.extractReviewRiskShotIds(episode.review);
-    const orderedShots = this.orderShotsForProduction(shots, reviewRiskShotIds);
+    const reviewRiskShotIds = this.shotOrderService.extractReviewRiskShotIds(episode.review);
+    const orderedShots = this.shotOrderService.orderShotsForProduction(shots, reviewRiskShotIds);
     await this.ensureBaseReferenceImages(dramaId, state, shots, userId);
     const charImageMap = await this.buildCharacterImageMap(dramaId);
     // P5: 用 minorRolePool 中已有的参考图补充 charImageMap（零成本，跨集复用）
@@ -198,10 +228,15 @@ export class MediaOrchestratorService implements OnModuleInit {
         charImageMap.set(entry.characterId, { primary: entry.referenceImageUrl, views: { face_front: entry.referenceImageUrl } });
       }
     }
-    const characterAnchorMap = this.buildCharacterAnchorMap(state);
+    const characterAnchorMap = this.shotContextService.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
     await this.ensureVariationImages(dramaId, state, shots, charImageMap, variationImageMap, userId, episodeNumber);
+    // 多视角参考图暂停：当前 T2I provider 不区分参考图角度，Kling elements 做身份锁定不关心角度。
+    // 等引入 LoRA/IP-Adapter 后恢复（多视角作为训练集输入才有价值）。
+    // await this.ensureMultiViewImages(dramaId, state, shots, charImageMap, userId, episodeNumber);
     const locationImageMap = await this.buildLocationImageMap(dramaId); // B1: 跨集常驻场景参考图
+    const propImageMap = await this.buildPropImageMap(dramaId);         // 签名道具参考图
+    const propOwnerMap = this.buildPropOwnerMap(state);                 // 角色→道具归属
     const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
     const episodeNegPrompt = this.buildEpisodeNegativePrompt(mediaPolicy.styleBucket);
@@ -221,7 +256,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       `retry=${mediaPolicy.maxMediaRetries} gate=${mediaPolicy.enableQualityGate ? 'on' : 'off'} ` +
       `coherence=${mediaPolicy.enableCoherenceValidation ? 'on' : 'off'}`,
     );
-    this.logShotOrder(`E${episodeNumber}`, orderedShots);
+    this.shotOrderService.logShotOrder(`E${episodeNumber}`, orderedShots);
     const withMediaRetry = <T>(fn: () => Promise<T>, label: string) =>
       this.withRetry(fn, label, mediaPolicy.maxMediaRetries, mediaPolicy.retryBaseDelayMs);
 
@@ -247,6 +282,8 @@ export class MediaOrchestratorService implements OnModuleInit {
       // 非注册角色临时 anchor：guard_01 等小角色无 charImageMap 档案，
       // 首次 T2I 生成图缓存此处，Phase 0.5 连贯性重生成也可复用，保持外貌一致。
       const tempCharCache = new Map<string, string>();
+      // P6: 每角色的 Shot 首帧图收集器（Phase 0 完成后填充，I2V 阶段用于丰富 Kling elements）
+      let characterShotImages = new Map<string, string[]>();
 
       if (hasT2I) {
         // ═══ Phase 0: T2I 首帧 + 尾帧（并发池） ═══
@@ -285,7 +322,7 @@ export class MediaOrchestratorService implements OnModuleInit {
           if (!shotMediaMap[sid]?.imageUrl) {
             try {
               emit(phaseOff + i, `${sid} 首帧生成中...`);
-              const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
+              const styleLockedPrompt = this.shotContextService.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
               const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, locationLightingMap.get(shot.sceneId));
               const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
                 shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
@@ -294,7 +331,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                 routeProfile: shotPolicy.routeProfile,
                 provider: shotRoute.provider,
               });
-              const refs = this.buildRefImages(
+              const refs = this.shotContextService.buildRefImages(
                 shot,
                 charImageMap,
                 variationImageMap,
@@ -302,8 +339,9 @@ export class MediaOrchestratorService implements OnModuleInit {
                 styleRefImages,
                 sceneCache,
                 prevFrameCache,
-                'first',
+                'first', this.profile,
                 tempCharCache,
+                propImageMap, propOwnerMap,
               );
 
               const tier = this.normalizeQualityTier(shot.qualityTier);
@@ -331,7 +369,7 @@ export class MediaOrchestratorService implements OnModuleInit {
               let imgUrl: string;
               let gateQc: ShotMediaEntry['qc'] | undefined;
               if (shouldUseQualityGate) {
-                const characterRefs = this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap);
+                const characterRefs = this.shotContextService.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap);
                 const gateResult = await this.qualityGate.generateWithQualityGate(genFn, {
                   maxAttempts: shotPolicy.gateMaxAttempts,
                   minScore: shotPolicy.gateMinScore,
@@ -408,7 +446,7 @@ export class MediaOrchestratorService implements OnModuleInit {
           if (shot.lastFramePrompt && !shotMediaMap[sid]?.lastFrameImageUrl && !skipLastFrame) {
             try {
               emit(phaseOff + orderedShots.length + i, `${sid} 尾帧生成中...`);
-              const lastRefs = this.buildRefImages(
+              const lastRefs = this.shotContextService.buildRefImages(
                 shot,
                 charImageMap,
                 variationImageMap,
@@ -416,10 +454,11 @@ export class MediaOrchestratorService implements OnModuleInit {
                 styleRefImages,
                 sceneCache,
                 prevFrameCache,
-                'last',
+                'last', this.profile,
                 tempCharCache,
+                propImageMap, propOwnerMap,
               );
-              const styleLockedLastPrompt = this.applyStyleLockPrompt(shot.lastFramePrompt!, shot, state);
+              const styleLockedLastPrompt = this.shotContextService.applyStyleLockPrompt(shot.lastFramePrompt!, shot, state);
               const rawLastPrompt = this.assemblePrompt(styleLockedLastPrompt, shot.camera, t2iStylePrefix, true, locationLightingMap.get(shot.sceneId));
               const optLast = this.promptOptimizer.optimizeForT2I(rawLastPrompt, episodeNegPrompt ?? '', {
                 shotType: 'last_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
@@ -447,14 +486,41 @@ export class MediaOrchestratorService implements OnModuleInit {
         await flushFirstFrames(true);
         // P5: T2I 完成后，将池角色的最佳生成图写回 minorRolePool（内存操作，由 updateDramaState 统一落库）
         await this.updatePoolReferenceImages(state, shots, shotMediaMap);
+
         phaseOff += shots.length * 2;
+      }
+
+      // P6: 收集每个角色在不同 Shot 中的首帧图 → 丰富 Kling elements 身份数据
+      // 放在 if(hasT2I) 外部：断点续传模式（图片已存在）也需要收集，供 I2V 阶段使用。
+      {
+        const closeUpSizes = new Set(['close_up', 'extreme_close_up', 'medium_close_up', 'medium']);
+        const sortedForCharMap = [...orderedShots]
+          .filter(s => !s.isFlashback && !s.isPreview && shotMediaMap[s.shotId]?.imageUrl)
+          .sort((a, b) => {
+            const aClose = closeUpSizes.has(a.camera?.shotSize ?? '') ? 0 : 1;
+            const bClose = closeUpSizes.has(b.camera?.shotSize ?? '') ? 0 : 1;
+            return aClose - bClose;
+          });
+        for (const shot of sortedForCharMap) {
+          const imgUrl = shotMediaMap[shot.shotId]!.imageUrl!;
+          for (const c of shot.characters ?? []) {
+            const arr = characterShotImages.get(c.characterId) ?? [];
+            if (arr.length < 4 && !arr.includes(imgUrl)) {
+              arr.push(imgUrl);
+              characterShotImages.set(c.characterId, arr);
+            }
+          }
+        }
+        if (characterShotImages.size) {
+          this.logger.log(`[CharShotImages] 收集 ${characterShotImages.size} 个角色的 Shot 首帧参考: ${[...characterShotImages.entries()].map(([c, urls]) => `${c}(${urls.length}张)`).join(', ')}`);
+        }
       }
 
       // ═══ Phase 0.5: 镜头连贯性验证 + 自动重生成 flagged shots ═══
       if (hasT2I && mediaPolicy.enableCoherenceValidation) {
         try {
           await this.updateMedia(episode.id, 'generating_first_frames', shotMediaMap);
-          const coherence = await this.coherenceValidator.validateEpisodeCoherence(dramaId, episodeNumber);
+          const coherence = await this.coherenceValidator.validateEpisodeCoherence(dramaId, episodeNumber, mediaPolicy.enableVlmCoherence);
           if (coherence.flaggedShots.length > 0) {
             this.logger.warn(`E${episodeNumber} 连贯性标记 ${coherence.flaggedShots.length} 个Shot，自动重生成: ${coherence.flaggedShots.join(', ')}`);
             const flaggedSet = new Set(coherence.flaggedShots);
@@ -466,7 +532,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                 if (s.sceneId && !sceneCache.has(s.sceneId)) sceneCache.set(s.sceneId, shotMediaMap[s.shotId].imageUrl!);
               }
             }
-            const flaggedShots = this.orderShotsForProduction(shots.filter(s => flaggedSet.has(s.shotId)), reviewRiskShotIds);
+            const flaggedShots = this.shotOrderService.orderShotsForProduction(shots.filter(s => flaggedSet.has(s.shotId)), reviewRiskShotIds);
             for (const shot of flaggedShots) {
               const sid = shot.shotId;
               const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
@@ -476,7 +542,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                   qualityTier: shot.qualityTier, shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle,
                   isGolden: shot.isPreview || shot.qualityTier === 'golden', size: imgSize,
                 });
-                const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
+                const styleLockedPrompt = this.shotContextService.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
                 const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, locationLightingMap.get(shot.sceneId));
                 const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
                   shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
@@ -485,7 +551,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                   routeProfile: shotPolicy.routeProfile,
                   provider: regenRoute.provider,
                 });
-                const refs = this.buildRefImages(
+                const refs = this.shotContextService.buildRefImages(
                   shot,
                   charImageMap,
                   variationImageMap,
@@ -493,8 +559,9 @@ export class MediaOrchestratorService implements OnModuleInit {
                   styleRefImages,
                   sceneCache,
                   prevFrameCache,
-                  'first',
+                  'first', this.profile,
                   tempCharCache,
+                  propImageMap, propOwnerMap,
                 );
                 const res = await withMediaRetry(async () => {
                   await this.acquireT2iSlot();
@@ -579,7 +646,7 @@ export class MediaOrchestratorService implements OnModuleInit {
               // Step 1: 按角色 ID 收集参考图（variation → anchor → primary），保证每个角色有自己的 element
               const charUrlsById = new Map<string, string[]>(); // charId → urls (最多4张)
               for (const gs of groupShots) {
-                for (const cid of this.resolveLockedCharacterIds(gs)) {
+                for (const cid of this.shotContextService.resolveLockedCharacterIds(gs)) {
                   if (!charUrlsById.has(cid)) charUrlsById.set(cid, []);
                   const bucket = charUrlsById.get(cid)!;
                   const varId = gs.characterVariationIds?.[cid];
@@ -618,10 +685,10 @@ export class MediaOrchestratorService implements OnModuleInit {
               // Step 3: 每段 prompt 末尾追加该镜头出现的角色 element 引用及 @style_ref
               const multiPromptSegments = groupShots.map(gs => {
                 let p = this.promptOptimizer.optimizeForT2V(
-                  this.applyStyleLockPrompt(gs.visualPrompt, gs, state),
+                  this.shotContextService.applyStyleLockPrompt(gs.visualPrompt, gs, state),
                   { provider: 'kling', duration: gs.estimatedDurationSec, hasFirstFrame: !!gFirstFrame },
                 ).prompt;
-                for (const cid of this.resolveLockedCharacterIds(gs)) {
+                for (const cid of this.shotContextService.resolveLockedCharacterIds(gs)) {
                   const elemName = charIdToElem.get(cid);
                   if (elemName && !p.includes(`@${elemName}`)) p = `${p} @${elemName}`;
                 }
@@ -755,7 +822,16 @@ export class MediaOrchestratorService implements OnModuleInit {
           if (firstFrame) refImages.push({ url: firstFrame, role: 'first_frame' });
           const lastFrame = shotMediaMap[sid]?.lastFrameImageUrl;
           if (lastFrame) refImages.push({ url: lastFrame, role: 'last_frame' });
-          this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap).forEach(url => refImages.push({ url, role: 'character' }));
+          this.shotContextService.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap).forEach(url => refImages.push({ url, role: 'character' }));
+          // P6: 注入 Shot 首帧图丰富 Kling elements 身份数据（不同角度/表情/场景，零成本）
+          const shotCharIds = new Set((shot.characters ?? []).map(c => c.characterId));
+          for (const cid of shotCharIds) {
+            for (const url of characterShotImages.get(cid) ?? []) {
+              if (url !== firstFrame && !refImages.some(r => r.url === url)) {
+                refImages.push({ url, role: 'character' });
+              }
+            }
+          }
           styleRefImages.slice(0, 1).forEach((url) => refImages.push({ url, role: 'style' }));
 
           // P1-1: 前帧锚定（同场景过渡色调与构图控制）
@@ -770,7 +846,7 @@ export class MediaOrchestratorService implements OnModuleInit {
           const mediaParams = shotMediaParamsCache.get(sid);
           const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
 
-          const styleLockedVideoPrompt = this.applyStyleLockPrompt(shot.visualPrompt, shot, state);
+          const styleLockedVideoPrompt = this.shotContextService.applyStyleLockPrompt(shot.visualPrompt, shot, state);
           const videoRoute = this.videoRouter.route({
             overrideProvider: state.videoProvider,
           });
@@ -1012,10 +1088,12 @@ export class MediaOrchestratorService implements OnModuleInit {
         charImageMap.set(entry.characterId, { primary: entry.referenceImageUrl, views: { face_front: entry.referenceImageUrl } });
       }
     }
-    const characterAnchorMap = this.buildCharacterAnchorMap(state);
+    const characterAnchorMap = this.shotContextService.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
     await this.ensureVariationImages(dramaId, state, [shot], charImageMap, variationImageMap, userId, episodeNumber);
     const locationImageMap = await this.buildLocationImageMap(dramaId); // B1
+    const propImageMap = await this.buildPropImageMap(dramaId);
+    const propOwnerMap = this.buildPropOwnerMap(state);
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
 
     // 用已有媒体填充场景 & 前帧缓存，以保持视觉连贯性
@@ -1047,7 +1125,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       isGolden: shot.isPreview || shot.qualityTier === 'golden',
       size: imgSize,
     });
-    const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
+    const styleLockedPrompt = this.shotContextService.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
     const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, singleShotLighting);
     const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
       shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
@@ -1056,7 +1134,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       routeProfile: shotPolicy.routeProfile,
       provider: singleShotRoute.provider,
     });
-    const refs = this.buildRefImages(
+    const refs = this.shotContextService.buildRefImages(
       shot,
       charImageMap,
       variationImageMap,
@@ -1064,7 +1142,9 @@ export class MediaOrchestratorService implements OnModuleInit {
       styleRefImages,
       sceneCache,
       prevFrameCache,
-      'first',
+      'first', this.profile,
+      undefined,
+      propImageMap, propOwnerMap,
     );
     const genFn = async () => {
       const res = await this.withRetry(
@@ -1093,7 +1173,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     let imgUrl = '';
     let gateQc: ShotMediaEntry['qc'] | undefined;
     if (shouldUseQualityGate) {
-      const characterRefs = this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap);
+      const characterRefs = this.shotContextService.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap);
       const gateResult = await this.qualityGate.generateWithQualityGate(genFn, {
         maxAttempts: shotPolicy.gateMaxAttempts,
         minScore: shotPolicy.gateMinScore,
@@ -1164,7 +1244,7 @@ export class MediaOrchestratorService implements OnModuleInit {
         charImageMap.set(entry.characterId, { primary: entry.referenceImageUrl, views: { face_front: entry.referenceImageUrl } });
       }
     }
-    const characterAnchorMap = this.buildCharacterAnchorMap(state);
+    const characterAnchorMap = this.shotContextService.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
 
@@ -1174,11 +1254,37 @@ export class MediaOrchestratorService implements OnModuleInit {
     refImages.push({ url: firstFrame, role: 'first_frame' });
     const lastFrame = raw[shotId]?.lastFrameImageUrl;
     if (lastFrame) refImages.push({ url: lastFrame, role: 'last_frame' });
-    this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap).forEach(url => refImages.push({ url, role: 'character' }));
+    this.shotContextService.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap).forEach(url => refImages.push({ url, role: 'character' }));
+    // P6: 单镜视频重生成也注入 Shot 首帧图丰富 Kling elements
+    {
+      const allShots: Shot[] = storyboard.shots ?? [];
+      const closeUpSizes = new Set(['close_up', 'extreme_close_up', 'medium_close_up', 'medium']);
+      const shotCharIds = new Set((shot.characters ?? []).map(c => c.characterId));
+      const candidateUrls: string[] = [];
+      // 优先特写/近景
+      const sorted = [...allShots]
+        .filter(s => s.shotId !== shotId && !s.isFlashback && !s.isPreview && raw[s.shotId]?.imageUrl)
+        .sort((a, b) => {
+          const aClose = closeUpSizes.has(a.camera?.shotSize ?? '') ? 0 : 1;
+          const bClose = closeUpSizes.has(b.camera?.shotSize ?? '') ? 0 : 1;
+          return aClose - bClose;
+        });
+      for (const s of sorted) {
+        if (candidateUrls.length >= 3) break;
+        const hasChar = (s.characters ?? []).some(c => shotCharIds.has(c.characterId));
+        if (hasChar) {
+          const url = raw[s.shotId]!.imageUrl!;
+          if (url !== firstFrame && !refImages.some(r => r.url === url) && !candidateUrls.includes(url)) {
+            candidateUrls.push(url);
+          }
+        }
+      }
+      candidateUrls.forEach(url => refImages.push({ url, role: 'character' }));
+    }
     styleRefImages.slice(0, 1).forEach(url => refImages.push({ url, role: 'style' }));
 
     const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
-    const styleLockedVideoPrompt = this.applyStyleLockPrompt(shot.visualPrompt, shot, state);
+    const styleLockedVideoPrompt = this.shotContextService.applyStyleLockPrompt(shot.visualPrompt, shot, state);
     const videoRoute = this.videoRouter.route({
       overrideProvider: state.videoProvider,
     });
@@ -1281,18 +1387,20 @@ export class MediaOrchestratorService implements OnModuleInit {
     const episodeNegPrompt = this.buildEpisodeNegativePrompt(mediaPolicy.styleBucket);
     const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
     const shots: Shot[] = storyboard?.shots ?? [];
-    const reviewRiskShotIds = this.extractReviewRiskShotIds(episode.review);
-    const orderedShots = this.orderShotsForProduction(shots, reviewRiskShotIds);
+    const reviewRiskShotIds = this.shotOrderService.extractReviewRiskShotIds(episode.review);
+    const orderedShots = this.shotOrderService.orderShotsForProduction(shots, reviewRiskShotIds);
     const charImageMap = await this.buildCharacterImageMap(dramaId);
     for (const entry of state.minorRolePool ?? []) {
       if (entry.referenceImageUrl && !charImageMap.has(entry.characterId)) {
         charImageMap.set(entry.characterId, { primary: entry.referenceImageUrl, views: { face_front: entry.referenceImageUrl } });
       }
     }
-    const characterAnchorMap = this.buildCharacterAnchorMap(state);
+    const characterAnchorMap = this.shotContextService.buildCharacterAnchorMap(state);
     const variationImageMap = await this.buildVariationImageMap(dramaId, state);
     await this.ensureVariationImages(dramaId, state, shots, charImageMap, variationImageMap, userId, episodeNumber);
     const locationImageMap = await this.buildLocationImageMap(dramaId); // B1
+    const propImageMap = await this.buildPropImageMap(dramaId);
+    const propOwnerMap = this.buildPropOwnerMap(state);
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
     const imgSize = MediaOrchestratorService.resolveImageSize(aspectRatio);
@@ -1323,7 +1431,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       `[policy] images E${episodeNumber} mode=${mediaPolicy.mode} style=${mediaPolicy.styleBucket} ` +
       `t2i=${mediaPolicy.t2iConcurrency} retry=${mediaPolicy.maxMediaRetries}`,
     );
-    this.logShotOrder(`E${episodeNumber} images`, needsGen);
+    this.shotOrderService.logShotOrder(`E${episodeNumber} images`, needsGen);
 
     // Pre-fill caches from existing media (在 locationImageMap 之后，优先用当集已生成图片覆盖场景缓存)
     for (const s of shots) {
@@ -1357,7 +1465,7 @@ export class MediaOrchestratorService implements OnModuleInit {
           isGolden: shot.isPreview || shot.qualityTier === 'golden', size: imgSize,
         });
         const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, imgSceneMap.get(shot.sceneId));
-        const styleLockedPrompt = this.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
+        const styleLockedPrompt = this.shotContextService.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
         const batchLighting = state.locations?.find(l => l.locationId === shot.sceneId)?.lightingDefault;
         const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, batchLighting);
         const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
@@ -1367,7 +1475,7 @@ export class MediaOrchestratorService implements OnModuleInit {
           routeProfile: shotPolicy.routeProfile,
           provider: batchShotRoute.provider,
         });
-        const refs = this.buildRefImages(
+        const refs = this.shotContextService.buildRefImages(
           shot,
           charImageMap,
           variationImageMap,
@@ -1375,7 +1483,9 @@ export class MediaOrchestratorService implements OnModuleInit {
           styleRefImages,
           sceneCache,
           prevFrameCache,
-          'first',
+          'first', this.profile,
+          undefined,
+          propImageMap, propOwnerMap,
         );
         const genFn = async () => {
           const res = await this.withRetry(
@@ -1403,7 +1513,7 @@ export class MediaOrchestratorService implements OnModuleInit {
         let imgUrl = '';
         let gateQc: ShotMediaEntry['qc'] | undefined;
         if (shouldUseQualityGate) {
-          const characterRefs = this.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap);
+          const characterRefs = this.shotContextService.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap);
           const gateResult = await this.qualityGate.generateWithQualityGate(genFn, {
             maxAttempts: shotPolicy.gateMaxAttempts,
             minScore: shotPolicy.gateMinScore,
@@ -1490,262 +1600,9 @@ export class MediaOrchestratorService implements OnModuleInit {
     await Promise.all(workers);
   }
 
-  private orderShotsForProduction(shots: Shot[], riskShotIds?: Set<string>): Shot[] {
-    return [...shots].sort((a, b) => this.compareShotPriority(a, b, riskShotIds));
-  }
-
-  private compareShotPriority(a: Shot, b: Shot, riskShotIds?: Set<string>): number {
-    const riskDiff = Number(riskShotIds?.has(b.shotId)) - Number(riskShotIds?.has(a.shotId));
-    if (riskDiff !== 0) return riskDiff;
-
-    const regenDiff = this.priorityScore(b.regenPriority) - this.priorityScore(a.regenPriority);
-    if (regenDiff !== 0) return regenDiff;
-
-    const masterDiff = Number(b.isMasterShot) - Number(a.isMasterShot);
-    if (masterDiff !== 0) return masterDiff;
-
-    const tierDiff = this.qualityTierScore(b.qualityTier) - this.qualityTierScore(a.qualityTier);
-    if (tierDiff !== 0) return tierDiff;
-
-    const typeDiff = this.shotTypeScore(b.shotType) - this.shotTypeScore(a.shotType);
-    if (typeDiff !== 0) return typeDiff;
-
-    return a.shotIndex - b.shotIndex;
-  }
-
-  private extractReviewRiskShotIds(review: unknown): Set<string> {
-    const root = (review && typeof review === 'object') ? (review as Record<string, unknown>) : {};
-    const ids = new Set<string>();
-    const pick = (list: unknown) => {
-      if (!Array.isArray(list)) return;
-      for (const item of list) {
-        if (!item || typeof item !== 'object') continue;
-        const shotId = (item as Record<string, unknown>).shotId;
-        if (typeof shotId === 'string' && shotId.trim()) ids.add(shotId);
-      }
-    };
-    pick(root.consistencyRiskShots);
-    pick(root.cameraReadabilityRiskShots);
-    return ids;
-  }
-
-  private priorityScore(priority?: Shot['regenPriority']): number {
-    if (priority === 'high') return 3;
-    if (priority === 'low') return 1;
-    return 2;
-  }
-
-  private qualityTierScore(tier?: Shot['qualityTier']): number {
-    if (tier === 'golden') return 3;
-    if (tier === 'filler') return 1;
-    return 2;
-  }
-
-  private shotTypeScore(shotType?: Shot['shotType']): number {
-    if (shotType === 'action') return 3;
-    if (shotType === 'dialogue') return 3;
-    if (shotType === 'wide') return 2;
-    if (shotType === 'portrait') return 2;
-    if (shotType === 'insert') return 1;
-    return 2;
-  }
-
-  private logShotOrder(tag: string, shots: Shot[]): void {
-    if (!shots.length) return;
-    const top = shots.slice(0, 10).map((s) => {
-      const master = s.isMasterShot ? '*' : '';
-      return `${s.shotId}[${s.regenPriority || 'medium'}${master}/${s.qualityTier || 'standard'}]`;
-    }).join(', ');
-    this.logger.log(`[scheduler] ${tag} order(top${Math.min(10, shots.length)}): ${top}`);
-  }
-
-  private buildCharacterAnchorMap(state: DramaState): Map<string, string[]> {
-    const map = new Map<string, string[]>();
-    for (const pack of state.visualBible?.identityPack ?? []) {
-      const urls = [pack.anchorImages?.faceFront, pack.anchorImages?.face34, pack.anchorImages?.upperOrFull]
-        .filter((u): u is string => typeof u === 'string' && !!u.trim());
-      if (!urls.length) continue;
-      map.set(pack.characterId, [...new Set(urls)]);
-    }
-    return map;
-  }
-
-  private resolveLockedCharacterIds(shot: Shot): string[] {
-    const ids: string[] = [];
-    for (const ref of shot.characterLockRefs ?? []) {
-      const id = this.parseCharacterIdFromLockRef(ref);
-      if (!id) continue;
-      if (!ids.includes(id)) ids.push(id);
-    }
-    if (ids.length) return ids;
-    for (const c of shot.characters ?? []) {
-      if (c?.characterId && !ids.includes(c.characterId)) ids.push(c.characterId);
-    }
-    return ids;
-  }
-
-  private parseCharacterIdFromLockRef(lockRef: string): string | null {
-    if (!lockRef) return null;
-    if (lockRef.startsWith('character:')) {
-      const cid = lockRef.slice('character:'.length).trim();
-      return cid || null;
-    }
-    if (lockRef.startsWith('vb:')) {
-      const parts = lockRef.split(':');
-      return parts[2]?.trim() || null;
-    }
-    if (!lockRef.includes(':')) return lockRef.trim() || null;
-    return null;
-  }
-
-  private applyStyleLockPrompt(basePrompt: string, shot: Shot, state: DramaState): string {
-    const styleTokens = this.resolveStyleLockTokens(shot, state);
-    if (!styleTokens.length) return basePrompt;
-    return this.mergePromptSegments([...styleTokens, basePrompt]);
-  }
-
-  private resolveStyleLockTokens(shot: Shot, state: DramaState): string[] {
-    const ref = (shot.styleLockRef ?? '').trim();
-    const tokens: string[] = [];
-    const push = (value: string) => { if (value && !tokens.includes(value)) tokens.push(value); };
-
-    if (ref.startsWith('vb-style:')) {
-      for (const t of state.visualBible?.stylePack?.styleTokens ?? []) push(t);
-      const lut = state.visualBible?.stylePack?.colorLutHint ?? '';
-      if (lut) push(lut);
-      return tokens.slice(0, 8);
-    }
-
-    if (ref.startsWith('style:')) {
-      ref.slice('style:'.length).split('|').map(s => s.trim()).filter(Boolean).forEach(push);
-      return tokens.slice(0, 8);
-    }
-
-    if (ref) {
-      if (ref.includes('|')) ref.split('|').map(s => s.trim()).filter(Boolean).forEach(push);
-      else push(ref);
-    }
-    return tokens.slice(0, 8);
-  }
-
-  private mergePromptSegments(chunks: string[]): string {
-    const deduped: string[] = [];
-    const seen = new Set<string>();
-    for (const chunk of chunks) {
-      if (!chunk) continue;
-      for (const segment of chunk.split(',').map(s => s.trim()).filter(Boolean)) {
-        const key = segment.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        deduped.push(segment);
-      }
-    }
-    return deduped.join(', ');
-  }
-
-  // ═══ 动态参考图构建 ═══
-
-  /** 构建参考图候选列表，按镜头角度匹配最佳角色视角 + RenderingProfile 优先级筛选 */
-  private buildRefImages(
-    shot: Shot, charMap: Map<string, CharacterImageSet>, varMap: Map<string, string>,
-    anchorMap: Map<string, string[]>,
-    styleRefs: string[],
-    sceneCache: Map<string, string>, prevFrameCache: Map<number, string>,
-    frameType: 'first' | 'last',
-    tempCharCache?: Map<string, string>,  // 非注册角色临时 anchor（guard_01 等）
-  ): Array<{ url: string; weight: number }> {
-    const isCloseUp = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.shotSize ?? '');
-    const charWeight = isCloseUp ? 0.6 : 0.4;
-    const lockCharWeight = isCloseUp ? 0.8 : 0.55;
-    const sceneWeight = isCloseUp ? 0.2 : 0.4;
-    const styleWeight = isCloseUp ? 0.1 : 0.2;
-
-    const candidates: RefImageCandidate[] = [];
-    const seenUrls = new Set<string>();
-    const pushCandidate = (url: string | undefined, weight: number, role: RefImageCandidate['role']) => {
-      if (!url) return;
-      if (seenUrls.has(url)) return;
-      seenUrls.add(url);
-      candidates.push({ url, weight, role });
-    };
-
-    if (shot.sceneId && sceneCache.has(shot.sceneId)) {
-      pushCandidate(sceneCache.get(shot.sceneId), sceneWeight, 'scene');
-    }
-
-    const lockedIds = this.resolveLockedCharacterIds(shot);
-    for (const cid of lockedIds) {
-      const varId = shot.characterVariationIds?.[cid];
-      const varUrl = varId ? varMap.get(`${cid}_${varId}`) : undefined;
-      if (varUrl) {
-        pushCandidate(varUrl, lockCharWeight, 'character_face');
-      }
-      const anchorUrls = anchorMap.get(cid) ?? [];
-      for (const anchorUrl of anchorUrls) {
-        pushCandidate(anchorUrl, lockCharWeight, 'character_face');
-      }
-      const imageSet = charMap.get(cid);
-      if (imageSet?.primary) {
-        pushCandidate(imageSet.primary, lockCharWeight, 'character_face');
-      }
-    }
-
-    (shot.characters ?? []).forEach(c => {
-      const varId = shot.characterVariationIds?.[c.characterId];
-      const varUrl = varId ? varMap.get(`${c.characterId}_${varId}`) : undefined;
-      if (varUrl) {
-        pushCandidate(varUrl, charWeight, 'character_face');
-      } else {
-        const imageSet = charMap.get(c.characterId);
-        if (imageSet) {
-          const availableViews = Object.keys(imageSet.views) as CharacterViewAngle[];
-          const bestView = selectBestCharacterView(availableViews, shot.camera?.shotSize, c.position, shot.camera?.cameraAngle, c.emotion);
-          const url = imageSet.views[bestView] || imageSet.primary;
-          pushCandidate(url, charWeight, 'character_face');
-        } else if (tempCharCache?.has(c.characterId)) {
-          // 无档案角色（guard_01 等）：使用同集首次出现时缓存的 anchor 图保持外貌一致
-          pushCandidate(tempCharCache.get(c.characterId), charWeight * 0.9, 'character_face');
-        }
-      }
-    });
-    if (frameType === 'first' && shot.shotIndex > 0 && prevFrameCache.has(shot.shotIndex - 1)) {
-      pushCandidate(prevFrameCache.get(shot.shotIndex - 1), 0.15, 'prev_frame');
-    }
-    if (styleRefs.length) {
-      pushCandidate(styleRefs[0], styleWeight, 'style');
-    }
-    return selectRefImages(candidates, this.profile, shot.camera?.shotSize, shot.camera?.cameraAngle);
-  }
-
-  /** 收集角色参考图URL（支持变体 + 多角度） */
-  private collectRefImages(
-    shot: Shot,
-    charMap: Map<string, CharacterImageSet>,
-    varMap: Map<string, string>,
-    anchorMap: Map<string, string[]>,
-  ): string[] {
-    const urls: string[] = [];
-    const push = (url: string | undefined) => {
-      if (!url) return;
-      if (urls.includes(url)) return;
-      urls.push(url);
-    };
-
-    for (const cid of this.resolveLockedCharacterIds(shot)) {
-      const varId = shot.characterVariationIds?.[cid];
-      if (varId) push(varMap.get(`${cid}_${varId}`));
-      (anchorMap.get(cid) ?? []).forEach(push);
-      push(charMap.get(cid)?.primary);
-    }
-
-    for (const c of shot.characters ?? []) {
-      const varId = shot.characterVariationIds?.[c.characterId];
-      if (varId) push(varMap.get(`${c.characterId}_${varId}`));
-      push(charMap.get(c.characterId)?.primary);
-    }
-
-    return urls.slice(0, 4);
-  }
+  // ═══ Shot 排序/上下文构建已抽取 ═══
+  // → ShotProductionOrderService (shot-production-order.service.ts)
+  // → ShotContextBuilderService  (shot-context-builder.service.ts)
 
   // ═══ 事件驱动视频等待 ═══
 
@@ -1889,6 +1746,37 @@ export class MediaOrchestratorService implements OnModuleInit {
       }));
     }
     this.logger.log(`[LocationCache] 持久化场景图 ${locationId}(${name}) → ${imageUrl.slice(-40)}`);
+  }
+
+  /** 从 VisualAssetEntity 加载签名道具的参考图（propId → imageUrl） */
+  private async buildPropImageMap(dramaId: string): Promise<Map<string, string>> {
+    const assets = await this.assetRepo.find({ where: { dramaId, assetType: 'prop' as any } });
+    const map = new Map<string, string>();
+    for (const a of assets) {
+      if (a.referenceImageUrl) map.set(a.refId, a.referenceImageUrl);
+    }
+    return map;
+  }
+
+  /** 从 signatureProps 构建角色→道具映射（characterId → propId[]） */
+  private buildPropOwnerMap(state: DramaState): Map<string, string[]> {
+    const map = new Map<string, string[]>();
+    for (const p of state.signatureProps ?? []) {
+      if (!p.visualPrompt?.trim() || !p.characterOwner) continue;
+      // characterOwner 可能是 characterId 或 name，需双向匹配
+      const owners: string[] = [];
+      for (const ch of state.characters ?? []) {
+        if (p.characterOwner === ch.characterId || p.characterOwner === ch.name) {
+          owners.push(ch.characterId);
+        }
+      }
+      for (const oid of owners) {
+        const arr = map.get(oid) ?? [];
+        arr.push(p.propId);
+        map.set(oid, arr);
+      }
+    }
+    return map;
   }
 
   /**
@@ -2218,13 +2106,23 @@ export class MediaOrchestratorService implements OnModuleInit {
         this.pendingVariations.set(key, genPromise);
 
         try {
-          const refImages = [{ url: baseImg, weight: 0.6 }];
+          // age/transformation 变体使用 faceOverridePrompt 替代基础面部提示词
+          const isAgeBased = (v as any).variationType === 'age' || (v as any).variationType === 'transformation';
+          const facePrompt = (isAgeBased && (v as any).faceOverridePrompt)
+            ? (v as any).faceOverridePrompt
+            : (ch as any).faceReferencePrompt;
+          // age 变体降低参考图权重（面部需要改变），transformation 更低
+          const refWeight = (v as any).variationType === 'transformation' ? 0.35
+            : (v as any).variationType === 'age' ? 0.45
+            : 0.6;
+          const refImages = [{ url: baseImg, weight: refWeight }];
           const rawPrompt = [
-            (ch as any).faceReferencePrompt,
+            facePrompt,
+            (v as any).ageHint, // age 变体年龄外貌词（如 "elderly, 70 years old, deep wrinkles"）
             (ch as any).hairStylePrompt || (ch as any).hairStyle,
             (ch as any).bodyTypePrompt || (ch as any).bodyType,
             v.visualPromptOverride,
-            'same person as reference',
+            isAgeBased ? 'same facial bone structure as reference' : 'same person as reference',
           ].filter(Boolean).join(', ');
 
           const varRoute = this.imageRouter.routeCharacterVariation('2:3');
@@ -2310,6 +2208,112 @@ export class MediaOrchestratorService implements OnModuleInit {
       }
     }
     return result;
+  }
+
+  /**
+   * P2 #7：按需生成多视角参考图。
+   * 扫描本集 shots 的 cameraAngle/position，识别需要 side_profile 或 back_view 视角但角色缺少该视角参考图的情况，
+   * 使用 face_front 为基础通过 I2I 自动生成缺失视角。
+   * 仅对 protagonist/antagonist/supporting 角色执行（minor 角色不值得额外生成成本）。
+   */
+  private async ensureMultiViewImages(
+    dramaId: string,
+    state: DramaState,
+    shots: Shot[],
+    charImageMap: Map<string, CharacterImageSet>,
+    userId?: string,
+    episodeNumber?: number,
+  ): Promise<void> {
+    // 角度→需要的视角映射
+    const ANGLE_TO_VIEW: Record<string, CharacterViewAngle> = {
+      side_profile: 'side_profile',
+      over_shoulder: 'back_view',
+      back_of_head: 'back_view',
+    };
+    // 收集需要的 (characterId, viewAngle) 组合
+    const needed = new Map<string, Set<CharacterViewAngle>>();
+    for (const shot of shots) {
+      const cameraAngle = shot.camera?.cameraAngle;
+      const requiredView = cameraAngle ? ANGLE_TO_VIEW[cameraAngle] : undefined;
+      if (!requiredView) continue;
+
+      for (const sc of shot.characters ?? []) {
+        // 过肩镜头：前景角色需要 back_view
+        if (cameraAngle === 'over_shoulder' && sc.position !== 'foreground') continue;
+        const imageSet = charImageMap.get(sc.characterId);
+        if (!imageSet) continue;
+        if (imageSet.views[requiredView]) continue; // 已有该视角
+
+        // 角色需有定义且有 face_front 基础图（否则 I2I 链无锚点）
+        const ch = state.characters?.find(c => c.characterId === sc.characterId);
+        if (!ch) continue;
+
+        if (!needed.has(sc.characterId)) needed.set(sc.characterId, new Set());
+        needed.get(sc.characterId)!.add(requiredView);
+      }
+    }
+    if (!needed.size) return;
+
+    this.logger.log(`[MultiView] 需补充视角: ${[...needed.entries()].map(([c, vs]) => `${c}(${[...vs].join(',')})`).join(', ')}`);
+
+    const vs = state.visualStyle;
+    const charStylePrefix = vs ? ((vs.characterStylePrompt ?? '').trim() || undefined) : undefined;
+    const stylePrefix = charStylePrefix ? charStylePrefix + ', ' : undefined;
+    const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
+
+    for (const [charId, views] of needed) {
+      const ch = state.characters?.find(c => c.characterId === charId);
+      if (!ch) continue;
+      const imageSet = charImageMap.get(charId);
+      const baseImg = imageSet?.views?.face_front || imageSet?.primary;
+      if (!baseImg) continue;
+
+      for (const viewAngle of views) {
+        try {
+          const rawPrompt = buildViewAnglePrompt(ch as any, viewAngle);
+          const varRoute = this.imageRouter.routeCharacterViewAngle('2:3');
+          const assembled = assembleT2iPrompt(rawPrompt, this.profile, { stylePrefix });
+          const optimized = this.promptOptimizer.optimizeForT2I(assembled, this.negPrompt ?? '', {
+            shotType: 'character',
+            qualityTier: 'standard',
+            provider: varRoute.provider,
+            styleBucket: mediaPolicy.styleBucket,
+          });
+
+          this.logger.log(`[MultiView] 生成 ${charId}/${viewAngle}`);
+          const result = await this.mediaService.generateImage({
+            prompt: optimized.prompt,
+            negativePrompt: optimized.negativePrompt || undefined,
+            size: '2:3',
+            count: 1,
+            referenceImages: [{ url: baseImg, weight: this.profile.characterViews.chainReferenceWeight }],
+            dramaId,
+            assetType: 'character_view',
+            refId: `${charId}_${viewAngle}`,
+            userId,
+            episodeNumber,
+          });
+
+          const imageUrl = result.images?.[0]?.url ?? '';
+          if (imageUrl) {
+            // 更新内存中的 charImageMap
+            imageSet!.views[viewAngle] = imageUrl;
+            // 持久化到 VisualAssetEntity
+            const asset = await this.assetRepo.findOne({ where: { dramaId, assetType: 'character' as any, refId: charId } });
+            if (asset) {
+              const existingRefs = asset.referenceImages ?? [];
+              if (!existingRefs.some(r => r.viewAngle === viewAngle)) {
+                existingRefs.push({ viewAngle, imageUrl });
+                await this.assetRepo.update(asset.id, { referenceImages: existingRefs });
+              }
+            }
+            this.logger.log(`[MultiView] ✅ ${charId}/${viewAngle} 生成成功`);
+          }
+        } catch (err) {
+          this.logger.warn(`[MultiView] ❌ ${charId}/${viewAngle} 生成失败，跳过: ${(err as Error).message}`);
+        }
+      }
+    }
   }
 
   private async updateMedia(id: string, status: EpisodeMediaStatus, map: Record<string, ShotMediaEntry>): Promise<void> {

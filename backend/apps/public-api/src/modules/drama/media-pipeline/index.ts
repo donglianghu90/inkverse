@@ -19,3 +19,5 @@ export {
 export { GenerationPolicyService } from './generation-policy.service';
 export { ImageProviderRouterService } from './image-provider-router.service';
 export { VideoProviderRouterService } from './video-provider-router.service';
+export { ShotProductionOrderService } from './shot-production-order.service';
+export { ShotContextBuilderService } from './shot-context-builder.service';

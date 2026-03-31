@@ -45,6 +45,7 @@ import {
   upsertReferenceByView,
 } from '../utils/asset-prompt.utils';
 import { ageToT2IPhrase, assembleT2iPrompt } from '../../media/rendering/rendering-profile';
+import { DramaStateStore } from '../drama-state-store.service';
 
 const STEP_ORDER = [ // 步骤顺序定义（用于断点续跑）
   'arc_planned', 'intent_ready', 'continuity_checked', 'script_drafted',
@@ -59,7 +60,7 @@ type NodeEnabledMap = Record<string, boolean>;
 @Injectable()
 export class EpisodeWorkflowService {
   private readonly logger = new Logger(EpisodeWorkflowService.name);
-  private readonly runningEpisodes = new Set<string>(); // 并发互斥锁：dramaId:epNum
+  // 并发互斥锁已升级为 Redis 分布式锁 — 见 DramaStateStore.startEpisodeGen()
 
   private static readonly CHAR_IMAGE_SIZE = '2:3';
 
@@ -90,13 +91,13 @@ export class EpisodeWorkflowService {
     private readonly renderingProfileService: RenderingProfileService,
     private readonly promptOptimizer: PromptOptimizerService,
     private readonly imageRouter: ImageProviderRouterService,
+    private readonly stateStore: DramaStateStore,
   ) {}
 
   async generateEpisode(dramaId: string, episodeNumber: number): Promise<void> {
-    const lockKey = `${dramaId}:${episodeNumber}`;
-    if (this.runningEpisodes.has(lockKey)) throw new Error(`E${episodeNumber} 正在生成中，请勿重复提交`);
-    this.runningEpisodes.add(lockKey);
-    try { await this._generateEpisodeImpl(dramaId, episodeNumber); } finally { this.runningEpisodes.delete(lockKey); }
+    const acquired = await this.stateStore.startEpisodeGen(dramaId, episodeNumber);
+    if (!acquired) throw new Error(`E${episodeNumber} 正在生成中（分布式锁），请勿重复提交`);
+    try { await this._generateEpisodeImpl(dramaId, episodeNumber); } finally { await this.stateStore.stopEpisodeGen(dramaId, episodeNumber); }
   }
 
   private async _generateEpisodeImpl(dramaId: string, episodeNumber: number): Promise<void> {
@@ -295,6 +296,23 @@ export class EpisodeWorkflowService {
               knownIds.add(char.characterId);
             }
           }
+          // Persist 角色到 VisualAssetEntity（与场景处理方式一致）
+          for (const char of all) {
+            const existing = await this.visualAssetRepo.findOne({
+              where: { dramaId, assetType: 'character', refId: char.characterId },
+            });
+            if (!existing) {
+              await this.visualAssetRepo.save(this.visualAssetRepo.create({
+                dramaId,
+                assetType: 'character',
+                refId: char.characterId,
+                name: char.name,
+                data: char as unknown as Record<string, unknown>,
+                referenceImageUrl: '',
+                referenceImages: [],
+              }));
+            }
+          }
           // 更新 minorRolePool 的使用记录
           const poolMap = new Map((state.minorRolePool ?? []).map(p => [p.characterId, p]));
           for (const u of poolUsageUpdates) {
@@ -306,6 +324,9 @@ export class EpisodeWorkflowService {
           }
           drama.state = state as any;
           await this.dramaRepo.save(drama);
+          // ── 中间检查点：角色设计完成 ── 避免 Zod 失败重试时重做 episode-director
+          await saveStep('chars_designed', { intent, characters: all.map(c => ({ characterId: c.characterId, name: c.name })) });
+          logDrama('chars_designed', 'ok', `角色资产就绪: ${all.map(c => `${c.characterId}(${c.name})`).join(', ')}`);
 
           if (reused.length > 0) {
             emitEp(1, `从角色池复用 ${reused.length} 个角色: ${reused.map(c => c.name).join('、')}`);
@@ -454,7 +475,7 @@ export class EpisodeWorkflowService {
         await assertOwnership();
         logDrama('storyboard_start', 'ok', '分镜生成');
         emitEp(5, '分镜生成...');
-        storyboard = await this.storyboardDirector.direct(state, script, intent);
+        storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description));
         await saveStep('storyboard_drafted', { storyboard }); await checkpoint('storyboard_drafted');
         logDrama('storyboard_done', 'ok', '分镜生成完成', { shotCount: storyboard?.shots?.length });
         emitEp(5, '分镜生成完成', true);
@@ -465,7 +486,7 @@ export class EpisodeWorkflowService {
           if (!script?.scenes?.length) throw new Error('剧本数据缺失，无法重新生成分镜');
           this.logger.warn(`[E${episodeNumber}] 分镜数据缺失，回退重新生成分镜`);
           emitEp(5, '分镜数据缺失，重新生成分镜...');
-          storyboard = await this.storyboardDirector.direct(state, script, intent);
+          storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description));
           await saveStep('storyboard_drafted', { storyboard }); await checkpoint('storyboard_drafted');
           emitEp(5, '分镜重新生成完成', true);
         }
@@ -491,7 +512,7 @@ export class EpisodeWorkflowService {
         if (!storyboard?.shots?.length) throw new Error('分镜数据缺失，无法进行硬规则校验');
         logDrama('deterministic_start', 'ok', '硬规则校验');
         emitEp(7, '硬规则校验...');
-        detCheck = this.deterministicChecker.check(state, script, storyboard);
+        detCheck = this.deterministicChecker.check(state, script, storyboard, intent);
 
         if (detCheck.autoFixedRules?.length) {
           this.logger.log(`E${episodeNumber} 自动修复规则: ${detCheck.autoFixedRules.join(', ')}`);
@@ -510,7 +531,7 @@ export class EpisodeWorkflowService {
           const knownIds = new Set(state.characters.map(c => c.characterId));
           const fallbackProposed = unknownIds.filter(id => !knownIds.has(id)).map(id => ({
             characterId: id,
-            name: id.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+            name: id, // 保留原始 characterId 作为临时名称；LLM designNewCharacters 会输出正确的中文名
             role: 'minor' as const,
             narrativePurpose: `剧本/分镜中引用的临时角色`,
             appearanceHint: `符合${state.seed.genre}题材的角色`,
@@ -523,12 +544,27 @@ export class EpisodeWorkflowService {
                 char.scope = 'episode'; // 兜底补充的临时角色，本集结束后归档
                 state.characters.push(char);
                 knownIds.add(char.characterId);
+                // Persist 兜底角色到 VisualAssetEntity
+                const existing = await this.visualAssetRepo.findOne({
+                  where: { dramaId, assetType: 'character', refId: char.characterId },
+                });
+                if (!existing) {
+                  await this.visualAssetRepo.save(this.visualAssetRepo.create({
+                    dramaId,
+                    assetType: 'character',
+                    refId: char.characterId,
+                    name: char.name,
+                    data: char as unknown as Record<string, unknown>,
+                    referenceImageUrl: '',
+                    referenceImages: [],
+                  }));
+                }
               }
             }
             drama.state = state as any;
             await this.dramaRepo.save(drama);
             logDrama('fallback_char_design_done', 'ok', `补充设计完成: ${designed.map(c => `${c.characterId}(${c.name})`).join(', ')}`);
-            detCheck = this.deterministicChecker.check(state, script, storyboard);
+            detCheck = this.deterministicChecker.check(state, script, storyboard, intent);
           }
         }
 
@@ -542,14 +578,14 @@ export class EpisodeWorkflowService {
           this.logger.warn(`E${episodeNumber} 分镜结构性硬规则触发重生成: ${retryReasons}`);
           logDrama('storyboard_retry_hard_rule', 'ok', `分镜结构性硬规则，重生成分镜`, { reasons: retryReasons });
           emitEp(7, `分镜结构校验失败，重新生成分镜...`);
-          storyboard = await this.storyboardDirector.direct(state, script, intent);
+          storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description));
           if (enableAudioDirector) {
             try { storyboard = await this.audioDirector.enhance(state, storyboard, intent); }
             catch (audioErr) { this.logger.warn(`E${episodeNumber} 重生成后音频设计降级: ${(audioErr as Error).message}`); }
           }
           await saveStep('storyboard_drafted', { storyboard });
           await saveStep('audio_designed', { storyboard });
-          detCheck = this.deterministicChecker.check(state, script, storyboard);
+          detCheck = this.deterministicChecker.check(state, script, storyboard, intent);
           if (detCheck.autoFixedRules?.length) {
             this.logger.log(`E${episodeNumber} 重生成后自动修复规则: ${detCheck.autoFixedRules.join(', ')}`);
           }
@@ -662,9 +698,9 @@ export class EpisodeWorkflowService {
           if (storyboardRebakeTriggered) {
             this.logger.warn(`[E${episodeNumber}] 分镜回炉触发：visualImpact=${dims.visualImpact} pacing=${dims.pacing}，重新生成分镜`);
             emitEp(9, `视觉质量低（${visualIssueScore.toFixed(1)}分），重新生成分镜...`);
-            storyboard = await this.storyboardDirector.direct(state, script, intent);
+            storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description));
             // 回炉后重新校验硬规则（新分镜可能引入新的未知角色或 shotIndex 错误）
-            detCheck = this.deterministicChecker.check(state, script, storyboard);
+            detCheck = this.deterministicChecker.check(state, script, storyboard, intent);
             if (detCheck.hardFails?.some(f => f.rule !== 'unknown_character')) {
               this.logger.warn(`[E${episodeNumber}] 分镜回炉后硬规则校验发现问题: ${detCheck.hardFails.map(f => f.rule).join(', ')}，继续执行`);
             }
@@ -711,7 +747,7 @@ export class EpisodeWorkflowService {
                 this.logger.warn(`[E${episodeNumber}] 重写后台词润色降级: ${(dErr as Error).message}`);
               }
             }
-            storyboard = await this.storyboardDirector.direct(state, script, intent);
+            storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description));
             if (enableAudioDirector) {
               try { storyboard = await this.audioDirector.enhance(state, storyboard, intent); } catch (audioErr) {
                 this.logger.warn(`[E${episodeNumber}] 重写后音频设计降级: ${(audioErr as Error).message}`);
@@ -736,7 +772,7 @@ export class EpisodeWorkflowService {
         }
         // Fix 2 (P0): 精修后重跑确定性校验 — 检测精修引入的新硬规则违规
         if (editRoundsUsed > 0 && storyboard && script) {
-          const postEditCheck = this.deterministicChecker.check(state, script, storyboard);
+          const postEditCheck = this.deterministicChecker.check(state, script, storyboard, intent);
           if (postEditCheck.hardFails?.length) {
             this.logger.warn(`[E${episodeNumber}] 精修后硬规则校验: ${postEditCheck.hardFails.map(f => `${f.rule}(${f.detail})`).join('; ')}`);
             logDrama('post_edit_hard_check', 'error', `精修后${postEditCheck.hardFails.length}条硬错误`, { fails: postEditCheck.hardFails.map(f => f.rule) });
@@ -765,10 +801,13 @@ export class EpisodeWorkflowService {
         emitEp(10, '节奏分析...');
         let pacingSkipped = false;
         if (enablePacingAnalyzer) {
-          // Fix 4 (P1): 始终对最终 storyboard 重新分析节奏（精修/回炉后 pacing 可能已过时）
-          if (storyboard?.shots?.length) {
+          // 仅在分镜发生变更时重新分析（精修/回炉后 pacing 已过时），否则复用前置分析结果
+          const needsReanalysis = editRoundsUsed > 0 || !pacing;
+          if (needsReanalysis && storyboard?.shots?.length) {
             try { pacing = await this.pacingAnalyzer.analyze(state, storyboard); }
             catch (err) { this.logger.warn(`E${episodeNumber} 节奏分析降级: ${(err as Error).message}`); }
+          } else if (pacing) {
+            this.logger.log(`E${episodeNumber} 节奏分析复用前置结果(无精修): score=${pacing.score}`);
           }
         } else {
           pacingSkipped = true;
@@ -1159,18 +1198,18 @@ export class EpisodeWorkflowService {
           });
         }
       }
-      // 池上限 50 条，保留最近使用的
-      if (state.minorRolePool.length > 50) {
+      // 池上限 30 条，保留最近使用的
+      if (state.minorRolePool.length > 30) {
         state.minorRolePool = [...state.minorRolePool]
           .sort((a, b) => b.lastUsedEpisode - a.lastUsedEpisode)
-          .slice(0, 50);
+          .slice(0, 30);
       }
     }
 
     // DramaState 裁剪（防止无限膨胀）
-    if (state.episodeSummaries.length > 60) state.episodeSummaries = state.episodeSummaries.slice(-60);
-    if (state.flashbackBank.length > 120) state.flashbackBank = state.flashbackBank.slice(-120);
-    if (state.kpiHistory.length > 60) state.kpiHistory = state.kpiHistory.slice(-60);
+    if (state.episodeSummaries.length > 30) state.episodeSummaries = state.episodeSummaries.slice(-30);
+    if (state.flashbackBank.length > 40) state.flashbackBank = state.flashbackBank.slice(-40);
+    if (state.kpiHistory.length > 30) state.kpiHistory = state.kpiHistory.slice(-30);
     if (state.dopamineSchedule.history.length > 60) state.dopamineSchedule.history = state.dopamineSchedule.history.slice(-60);
     // secretLedger 上限：保留所有未解决 + 最近 5 集内解决的，超出后归档已解决的旧秘密
     const SECRET_KEEP_RECENT_EPISODES = 5;
@@ -1188,13 +1227,22 @@ export class EpisodeWorkflowService {
       state.secretLedger = [...unresolved, ...recentResolved, ...olderResolved.slice(0, Math.max(0, remaining))];
       this.logger.log(`[E${epNum}] secretLedger 裁剪: ${unresolved.length} 未解决 + ${recentResolved.length} 近期已解决 + ${Math.max(0, remaining)} 旧已解决 = ${state.secretLedger.length}`);
     }
-    // episodeCharacterArchive 保留最近 60 集（极小数据无需激进裁剪）
+    // episodeCharacterArchive 保留最近 20 集（仅供调试回溯）
     if (state.episodeCharacterArchive) {
       const archiveKeys = Object.keys(state.episodeCharacterArchive).sort((a, b) => Number(a) - Number(b));
-      if (archiveKeys.length > 60) {
-        const toDelete = archiveKeys.slice(0, archiveKeys.length - 60);
+      if (archiveKeys.length > 20) {
+        const toDelete = archiveKeys.slice(0, archiveKeys.length - 20);
         for (const k of toDelete) delete state.episodeCharacterArchive![k];
       }
+    }
+
+    // DramaState 体积监控: > 500KB 时发出预警
+    const stateSize = Buffer.byteLength(JSON.stringify(state), 'utf8');
+    const stateSizeKB = Math.round(stateSize / 1024);
+    if (stateSizeKB > 500) {
+      this.logger.warn(`[DramaState] E${epNum} 体积预警: ${stateSizeKB}KB (> 500KB)，建议检查累积数据`);
+    } else {
+      this.logger.debug(`[DramaState] E${epNum} 体积: ${stateSizeKB}KB`);
     }
 
     state.updatedAt = new Date().toISOString();
@@ -1243,12 +1291,19 @@ export class EpisodeWorkflowService {
         this.logger.log(`[AutoFace] 生成定妆照: ${ch.name}(${charId})`);
         const faceRoute = this.imageRouter.routeCharacterFace(EpisodeWorkflowService.CHAR_IMAGE_SIZE);
         const agePhrase = ageToT2IPhrase((ch as any).age) || (ch as any).agePrompt?.trim() || '';
+        // 签名道具注入：查找归属此角色的 signature props，将其 visualPrompt 加入定妆照
+        const charSigProps = (state.signatureProps ?? [])
+          .filter(p => p.characterOwner === ch.name || p.characterOwner === charId)
+          .filter(p => p.narrativeRole === 'signature' && p.visualPrompt?.trim())
+          .map(p => `holding or wearing ${p.visualPrompt}`)
+          .slice(0, 2); // 最多注入 2 个道具，避免 prompt 过长
         const faceParts = [
           ch.faceReferencePrompt,
           agePhrase,
           ch.hairStylePrompt || ch.hairStyle,
           ch.defaultCostumePrompt ? `wearing ${ch.defaultCostumePrompt}` : '',
           (ch as any).bodyTypePrompt || (ch as any).bodyType,
+          ...charSigProps,
           'front-facing, looking at camera, neutral plain background, character reference sheet portrait',
         ].filter(Boolean).join(', ');
         const optimized = this.promptOptimizer.optimizeForT2I(faceParts, profile.negativePrompt.defaultValue, {

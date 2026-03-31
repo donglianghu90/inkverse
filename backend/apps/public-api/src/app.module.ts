@@ -12,6 +12,7 @@ import { LlmModule } from "./modules/novel/llm/llm.module";
 import { LlmModule as DramaLlmModule } from "./modules/llm/llm.module"; // 新版多Provider网关，供短剧引擎新架构 agents 使用
 import { NovelModule } from "./modules/novel/novel.module";
 import { DramaModule } from "./modules/drama/drama.module";
+import { MarketModule } from "./modules/market/market.module";
 import { MediaModule } from "./modules/media/media.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { UsageModule } from "./modules/usage/usage.module";
@@ -144,6 +145,7 @@ import { UsageModule } from "./modules/usage/usage.module";
     UsageModule,
     NovelModule,
     DramaModule,
+    MarketModule,
     MediaModule,
   ],
   controllers: [],

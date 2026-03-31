@@ -317,6 +317,7 @@ export class LlmService {
     input: StructuredGenerationInput<T>, provider: LlmProvider, tier: ModelTier, modelName: string, temperature: number, tags: string[],
   ): Promise<z.infer<T>> {
     const t0 = Date.now();
+    const callId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const providerCfg = this.cfg.providers[provider];
     const rates = providerCfg.costRates[tier];
     const chatModel = this.createChatModel(provider, providerCfg, modelName, temperature);
@@ -371,6 +372,7 @@ export class LlmService {
             action: input.taskName, kind: 'llm', provider, model: modelName,
             tokensIn: errTokens.prompt, tokensOut: errTokens.completion,
             costCny: errCost, ok: false, durationMs: Date.now() - t0,
+            idempotencyKey: `llm:${callId}:${provider}:error`,
           }).catch(() => {});
           throw error;
         }
@@ -405,6 +407,7 @@ export class LlmService {
       // tokensOut 含 thinking tokens（Gemini 按 output 价格计费），与 costCny 保持口径一致
       tokensIn: usage.promptTokens, tokensOut: usage.completionTokens + usage.thinkingTokens,
       costCny: cost, ok: wrapped.parsed != null, durationMs,
+      idempotencyKey: `llm:${callId}:${provider}:${wrapped.parsed != null ? 'ok' : 'fail'}`,
     }).catch(() => {});
 
     if (wrapped.parsed == null) {

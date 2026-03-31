@@ -30,6 +30,7 @@ export class GenerationPolicyService {
         // fast 降低候选和阈值，但仍保留质量门禁，避免严重翻车
         enableQualityGate: true,
         enableCoherenceValidation: false,
+        enableVlmCoherence: false,
         dbFlushEvery: 8,
       };
     }
@@ -43,6 +44,7 @@ export class GenerationPolicyService {
         retryBaseDelayMs: 2500,
         enableQualityGate: true,
         enableCoherenceValidation: true,
+        enableVlmCoherence: true,
         dbFlushEvery: 2,
       };
     }

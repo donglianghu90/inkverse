@@ -39,7 +39,7 @@ const MSG_MAP: Array<[string[], string]> = [
   [['not found', '不存在', '404'], 'NOT_FOUND'],
   [['invalid', 'missing', 'required', 'bad request'], 'INVALID_PARAMS'],
   [['rate limit', 'quota', 'throttle', '429'], 'RATE_LIMIT'],
-  [['sensitive', 'unsafe', 'blocked', '违规', '敏感'], 'SENSITIVE_CONTENT'],
+  [['sensitive', 'unsafe', 'blocked', 'filtered', 'content_policy', 'contentpolicyviolation', '违规', '敏感'], 'SENSITIVE_CONTENT'],
   [['timeout', 'timed out', 'deadline'], 'GENERATION_TIMEOUT'],
   [['503', 'unavailable', 'overloaded'], 'EXTERNAL_ERROR'],
   [['network', 'econnreset', 'econnrefused', 'socket hang up', 'fetch failed'], 'NETWORK_ERROR'],

@@ -8,7 +8,7 @@ import { z } from 'zod';
 import {
   arcSegmentSchema, ArcSegment, DramaState, EpisodeSynopsis, episodeSynopsisSchema,
 } from '../../schemas/drama-state.schemas';
-import { buildArcDirectorSystemPrompt, buildArcExpansionSystemPrompt } from '../../prompting/drama-playbook';
+import { buildArcDirectorSystemPrompt, buildArcExpansionSystemPrompt, buildUserPromptConstraintsTail } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 
 const arcOutputSchema = z.object({ segment: arcSegmentSchema });
@@ -24,10 +24,22 @@ export class ArcDirectorAgent {
     if (current && episodeNumber <= current.endEpisode && current.status === 'active') return current;
 
     const recentSummaries = state.episodeSummaries.slice(-5).map(s => `E${s.episodeNumber}: ${s.summary}`).join('\n');
+
+    // P0-1 fix: 注入总导演的 detailedEpisodes 作为硬约束，防止段落导演覆写大纲
+    const outlineEpisodes = state.seriesOutline?.episodes ?? [];
+    const relevantEpisodes = outlineEpisodes.filter(
+      ep => ep.episodeNumber >= episodeNumber && ep.coreConflict && ep.coreConflict !== '待展开',
+    );
+    const detailedEpisodesBlock = relevantEpisodes.length > 0
+      ? `\n\n===== 总导演已有的详细分集大纲（硬约束，段落规划必须与此对齐） =====\n${relevantEpisodes.slice(0, 20).map(ep =>
+        `E${ep.episodeNumber}「${ep.title}」：${ep.coreConflict}（情绪弧线：${ep.emotionalArc}，悬念：${ep.cliffhanger}）`,
+      ).join('\n')}\n⚠️ 以上分集大纲已由总导演确定，段落规划的 startEpisode/endEpisode 范围和 coreConflict 必须覆盖并兼容这些集的内容，不得重新发明故事线。\n=====`
+      : '';
+
     const raw = await this.llm.generateStructured({
       taskName: 'drama-arc-director',
       schema: arcOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcDirectorSystemPrompt({ genreArchetype: state.promptProfile?.genreArchetype, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules, arcDirectorGuide: state.promptProfile?.arcDirectorGuide ?? undefined })),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcDirectorSystemPrompt({ genreArchetype: state.promptProfile?.genreArchetype, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules, redLines: state.seed.redLines, arcDirectorGuide: state.promptProfile?.arcDirectorGuide ?? undefined })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber },
       userPrompt: `当前状态：
 全剧标题：${state.seed.title}
@@ -39,9 +51,9 @@ ${current ? `上一段落：${current.segmentTitle}（${current.startEpisode}-${
 ${state.storySoFar ? `全局剧情概要：\n${state.storySoFar.slice(0, 800)}` : ''}
 上集悬念：${state.lastCliffhanger || '无'}
 主角：${state.seed.protagonistConcept.name}
-角色列表：${state.characters.map(c => c.name).join('、')}
+角色列表：${state.characters.map(c => c.name).join('、')}${detailedEpisodesBlock}
 
-请为第 ${episodeNumber} 集开始的新段落做规划。segmentId 格式：arc_${state.arcSegments.length + 1}`,
+请为第 ${episodeNumber} 集开始的新段落做规划。segmentId 格式：arc_${state.arcSegments.length + 1}${buildUserPromptConstraintsTail({ redLines: state.seed.redLines })}`,
       temperature: 0.5,
     });
 
@@ -66,7 +78,7 @@ ${state.storySoFar ? `全局剧情概要：\n${state.storySoFar.slice(0, 800)}` 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-arc-director',
       schema: expansionOutputSchema,
-      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcExpansionSystemPrompt({ genreArchetype: state.promptProfile?.genreArchetype, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules })),
+      systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcExpansionSystemPrompt({ genreArchetype: state.promptProfile?.genreArchetype, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules, redLines: state.seed.redLines })),
       metadata: { dramaId: state.dramaId, userId: state.userId },
       userPrompt: `请为以下骨架集补充详细概要：
 
@@ -84,7 +96,7 @@ ${state.storySoFar ? `全局概要：\n${state.storySoFar.slice(0, 600)}` : ''}
 上集悬念：${state.lastCliffhanger || '无'}
 可用角色：${state.characters.map(c => `${c.characterId}(${c.name})`).join('、')}
 
-每集必须包含：title/coreConflict/cliffhanger/emotionalArc/keyCharacterIds/estimatedDurationSec=${state.seed.targetEpisodeDurationSec}`,
+每集必须包含：title/coreConflict/cliffhanger/emotionalArc/keyCharacterIds/estimatedDurationSec=${state.seed.targetEpisodeDurationSec}${buildUserPromptConstraintsTail({ redLines: state.seed.redLines })}`,
       temperature: 0.5,
     });
 

@@ -277,12 +277,28 @@ ${visualStyleHint ? `\n【用户指定视觉风格】：${visualStyleHint}
 6. defaultCostume（中文）= 服饰中文描述
 7. voiceProfile = 如有台词必须设计配音风格；无台词可用默认值
 8. variations = minor 角色可以没有变体（空数组），supporting 角色至少1个
+   变体类型（variationType）规则：
+   - costume（默认）：换装，面部不变
+   - age：年龄跨度，需填写 ageHint（英文年龄外貌词）和 faceOverridePrompt（年龄化面部提示词）
+   - transformation：变身/化形/修炼突破，需填写 faceOverridePrompt
+   - disguise：伪装，发型/妆容变化
+${['biography', 'rebirth', 'timetravel', 'history', 'warrior', 'mythology'].includes(state.seed.genre) ? `
+   ⚠️ 题材「${state.seed.genre}」年龄/变身变体要求：
+   - protagonist/supporting 角色如有年龄跨度/时间线变化/变身需求，必须设计 variationType="age" 或 "transformation" 的变体
+   - 传记/历史：主角必须有 2-3 个年龄段变体（少年/壮年/晚年），每个含不同的 ageHint 和 faceOverridePrompt
+   - 重生/穿越：主角需要重生前后/穿越前后变体
+   - 武侠/神话：主角如有修炼突破/化形需求，需设计 transformation 变体` : ''}
 9. 所有英文 T2I 字段的画面风格关键词必须与全剧 visualStyle 一致
 10. T2I 内容审核兼容：英文 T2I 字段禁用以下词汇（括号内为替代词）：
     sinister/evil→sharp/cold, hypocritical→composed/enigmatic, drunken→heavy-lidded,
     rebellious→proud/unyielding, tragic→solemn/dramatic, menacing→commanding,
     weathered face with dirt→weathered and rugged face
-    始终用视觉属性描述外观，不用道德评判词`,
+    始终用视觉属性描述外观，不用道德评判词
+11. soulProfile（灵魂画像）所有字段必须使用【简体中文】输出，禁止英文。
+    示例：coreDesire: "追求绝对的精神自由与建功立业的理想"，而非 "Absolute freedom and artistic perfection"
+12. scope 规则：protagonist/antagonist → 'series'，supporting → 'arc'，minor → 'episode'
+13. characterId 输出时保持输入值不变，不要自行修改（系统会自动归一化为小写无分隔符格式）
+14. name 字段必须输出中文角色名称（如"李白""高力士"），禁止输出英文ID（如"li_bai"）`,
       userPrompt: `剧名：${state.seed.title}
 题材：${state.seed.genre}
 调性：${state.seed.tone}
@@ -347,16 +363,49 @@ ${charRequests}
     const orphanActive = (intent.activeCharacters ?? []).filter(
       ac => ac.characterId && !currentIds.has(ac.characterId) && !reuseIds.has(ac.characterId),
     );
+
+    // ── 角色名称推断辅助函数 ──
+    // 将 characterId（如 "li_bai"）与 seed concept 名称（如 "李白"）做模糊匹配
+    const normalizeCid = (s: string) => s.toLowerCase().replace(/[\s\-_]+/g, '');
+    const protagonistName = state.seed?.protagonistConcept?.name ?? '';
+    const antagonistName = state.seed?.antagonistConcept?.name ?? '';
+    // 构建 characterId → seed outline 中已知角色信息的查找表
+    const outlineCharMap = new Map<string, { name: string; role: string }>();
+    for (const ep of state.seriesOutline?.episodes ?? []) {
+      for (const kid of ep.keyCharacterIds ?? []) {
+        // outline 中 keyCharacterIds 是 characterId 格式，不含中文名
+        if (!outlineCharMap.has(kid)) outlineCharMap.set(kid, { name: kid, role: 'supporting' });
+      }
+    }
+    // 从 intent.proposedNewCharacters 中预取中文角色名（这些通常有正确的中文 name）
+    const proposedNameMap = new Map<string, string>();
+    for (const p of intent.proposedNewCharacters ?? []) {
+      if (p.characterId && p.name && p.name !== p.characterId) {
+        proposedNameMap.set(p.characterId, p.name);
+      }
+    }
+
     const autoProposed: ProposedCharacter[] = orphanActive.map(ac => {
-      // 从 seed 中推断角色类型和外观提示
-      const protagonistName = state.seed?.protagonistConcept?.name ?? '';
-      const antagonistName = state.seed?.antagonistConcept?.name ?? '';
       const cid = ac.characterId;
-      const isProtag = protagonistName && (cid === protagonistName || cid === protagonistName.toLowerCase?.());
-      const isAntag = antagonistName && (cid === antagonistName || cid === antagonistName.toLowerCase?.());
+      const cidNorm = normalizeCid(cid);
+      // 匹配主角：对比 characterId 与主角名称的拼音形式
+      const isProtag = protagonistName && (
+        cid === protagonistName || cidNorm === normalizeCid(protagonistName)
+        // 宽松匹配：seed 中角色名为中文时，检查 outline 中第一集的 keyCharacterIds
+        || (state.seriesOutline?.episodes?.[0]?.keyCharacterIds?.includes(cid)
+            && ac.role === 'protagonist')
+      );
+      const isAntag = !isProtag && antagonistName && (
+        cid === antagonistName || cidNorm === normalizeCid(antagonistName)
+        || (ac.role === 'antagonist')
+      );
       const concept = isProtag ? state.seed?.protagonistConcept
         : isAntag ? state.seed?.antagonistConcept : undefined;
-      const name = concept?.name ?? cid;
+      // 名称优先级：seed concept 中文名 > proposedNewCharacters 中文名 > activeCharacters.name > characterId
+      const name = concept?.name
+        ?? proposedNameMap.get(cid)
+        ?? ((ac as any).name && (ac as any).name !== cid ? (ac as any).name : undefined)
+        ?? cid;
       const personality = (concept as any)?.personality ?? '';
       const situation = (concept as any)?.situation ?? (concept as any)?.motivation ?? '';
       return {
@@ -374,7 +423,14 @@ ${charRequests}
     }
 
     // Step B: proposedNewCharacters + autoProposed，排除已复用/已知的，剩余提交 LLM 设计
-    const genuinelyNew = [...autoProposed, ...(intent.proposedNewCharacters ?? [])].filter(
+    // ⚠️ 去重：autoProposed 与 proposedNewCharacters 可能包含相同 characterId，
+    //    优先保留 proposedNewCharacters（有更丰富的 appearanceHint/narrativePurpose）
+    const proposedIds = new Set((intent.proposedNewCharacters ?? []).map(p => p.characterId));
+    const deduped = [
+      ...autoProposed.filter(p => !proposedIds.has(p.characterId)), // auto 的只有不在 proposed 中的才保留
+      ...(intent.proposedNewCharacters ?? []),
+    ];
+    const genuinelyNew = deduped.filter(
       (p): p is ProposedCharacter =>
         !!p.characterId && !!p.name && !currentIds.has(p.characterId) && !reuseIds.has(p.characterId),
     );
@@ -423,7 +479,11 @@ ${charRequests}
 === 设计要求 ===
 每个场景必须包含以下字段：
 1. locationId / name / description（中文）
-2. visualPrompt（英文，20-30词）：场景视觉特征，禁止写人物，禁止写全局风格词
+2. visualPrompt（英文，25-40词）必须覆盖三个维度，不要只罗列物品：
+   ① 空间构图（architectural structure, spatial depth, symmetry/asymmetry, scale）
+   ② 光影氛围（specific light source, shadow direction, time of day, light quality）
+   ③ 情绪暗示（atmosphere keyword hinting at narrative tension, e.g. oppressive/serene/desolate）
+   禁止写人物，禁止写全局风格词
 3. lightingDefault（英文）：该场景默认光线条件
 4. colorTone（英文短语）：如 "warm_amber_and_brown"
 5. ambientSoundDefault：默认环境音

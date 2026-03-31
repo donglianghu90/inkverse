@@ -7,7 +7,7 @@ import { z } from 'zod';
 import {
   episodeIntentSchema, EpisodeIntent, DramaState, EpisodeSynopsis,
 } from '../../schemas/drama-state.schemas';
-import { buildEpisodeDirectorSystemPrompt } from '../../prompting/drama-playbook';
+import { buildEpisodeDirectorSystemPrompt, buildUserPromptConstraintsTail } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 import { DramaCalibrationService } from '../../workflow/drama-calibration.service';
 
@@ -125,12 +125,16 @@ activeCharacters 包含本集所有出场角色，来源分三类：
 ② 复用临时角色池：使用"可复用的历史临时角色池"中的 characterId（相同 characterId，无需在 proposedNewCharacters 中重新声明）
 ③ 声明全新角色：若①②都没有合适的，先在 proposedNewCharacters 中声明，然后同一个 characterId 也必须出现在 activeCharacters 中
 
-=== proposedNewCharacters 填写规范 ===
-${visualAnchor ? `本剧视觉基准（所有新角色的 appearanceHint 必须与此一致）：${visualAnchor}\n` : ''}每个全新角色需要：
-- characterId：简短英文ID（如 guard_01 / old_man / waiter），同集内不同角色不能重复
-- name：中文角色名（如"宫门侍卫""街头老者"）
-- role：'minor'（路人/群演，无独立剧情线）或 'supporting'（有台词且推动剧情的配角）
-- narrativePurpose：该角色在本集的叙事作用（一句话说清楚，如"阻拦主角进入宫殿，制造冲突"）
+=== proposedNewCharacters 填写规范（⚠️ 极其重要）===
+${visualAnchor ? `本剧视觉基准（所有新角色的 appearanceHint 必须与此一致）：${visualAnchor}\n` : ''}⚠️ 铁律：所有在本集中有台词的角色（无论重要性）都必须声明在 proposedNewCharacters 中。
+包括功能性角色（如考官、守卫、信使、店小二、旁人），哪怕只有一句台词也必须声明。
+只有完全无台词的路人背景可以不注册。未注册的角色ID将导致后续配音/生图/分镜系统阻断。
+
+每个全新角色需要：
+- characterId：简短英文ID（如 exam_official / guard_01 / waiter），同集内不同角色不能重复
+- name：中文角色名（如"主考官""宫门侍卫""街头老者"）
+- role：'minor'（功能性角色/群演，无独立剧情线）或 'supporting'（有台词且推动剧情的配角）
+- narrativePurpose：该角色在本集的叙事作用（一句话说清楚，如"宣读科举资格，制造体制否定冲突"）
 - appearanceHint：【必须包含】面部特征 + 体型 + 服饰三部分，风格须与上方"本剧视觉基准"严格一致，禁止模糊描述（禁止"一个士兵""普通路人"）
 - hasDialogue：是否有台词（决定后续是否需要配音设计）
 - scope：'episode'（本集临时，不再复用）或 'arc'（段落内可能复用）——默认填 'episode'
@@ -138,7 +142,7 @@ ${state.isSeriesFinale ? `\n🏁 【大结局模式】这是全剧最后一集�
 额外要求：
 1. masterShotPlan 至少输出 6 条，按叙事顺序排列。
 2. 每条主镜都要满足"一镜一动作"，actionVerb 必须是单动词（如 reveal/confront/strike/turn）。
-3. minDurSec <= maxDurSec，且建议落在 1.5-8 秒区间。`,
+3. minDurSec <= maxDurSec，且建议落在 1.5-8 秒区间。${buildUserPromptConstraintsTail({ redLines: state.seed.redLines, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules })}`,
       temperature: 0.5,
     });
 

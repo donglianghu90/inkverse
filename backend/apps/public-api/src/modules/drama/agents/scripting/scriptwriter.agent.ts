@@ -7,7 +7,7 @@ import { z } from 'zod';
 import {
   episodeScriptSchema, EpisodeScript, DramaState, EpisodeIntent, DramaContinuityCheck,
 } from '../../schemas/drama-state.schemas';
-import { buildScriptwriterSystemPrompt } from '../../prompting/drama-playbook';
+import { buildScriptwriterSystemPrompt, buildUserPromptConstraintsTail } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 import { DramaCalibrationService } from '../../workflow/drama-calibration.service';
 
@@ -97,14 +97,27 @@ ${intent.locationIds.map(id => {
   return loc ? `${id}(${loc.name}): ${loc.description.slice(0, 80)}` : id;
 }).join('\n')}
 
+${intent.emotionBeats?.length ? `=== ⚠️ 情绪节拍覆盖要求（违反即不合格）===
+本集预设 ${intent.emotionBeats.length} 个情绪节拍，你的场景必须覆盖所有高强度节拍（intensity≥0.7）：
+${intent.emotionBeats.filter(b => b.intensity >= 0.7).map(b => `- ${b.beatId}(${b.emotion}, 强度${b.intensity}): ${b.trigger}`).join('\n')}
+每个高强度节拍至少对应 1 个场景中的关键台词/动作/转折。不允许出现"分镜无法覆盖"的空白节拍。
+` : ''}
 ${weakDims ? `=== 质量警告（前几集弱项，本集务必加强） ===\n${weakDims}` : ''}
 ${this.calibration.buildCalibrationHint(state)}
+=== ⚠️ 角色ID铁律（违反直接导致系统阻断）===
+dialogues[].characterId 和 actions[].characterId【只能】使用以下已注册 ID：
+[${[...new Set([...intent.activeCharacters.map(a => a.characterId), ...(intent.proposedNewCharacters ?? []).map(p => p.characterId)])].join(', ')}]
+禁止使用未注册的角色ID。如果场景需要路人/群演发言，改用旁白方式（isVoiceover=true, characterId 留空或使用 narrator）。
+
 === 创作铁律（违反即不合格） ===
 1. 每句台词不超过15个中文字（关键独白除外，最多25字）
 2. 第一场必须是 hook_opening；${state.isSeriesFinale ? '本集是大结局，最后一场必须是 climax/emotional/closure/revelation 之一（禁止 cliffhanger——大结局要给观众完整的情感闭合）' : '最后一场必须是 cliffhanger 或 climax，保持追剧张力'}
 3. 知道秘密的角色说话要有"知情者的优越感"，不知道的要有"被蒙在鼓里的天真"
 4. 每场戏必须有信息增量（推进剧情/揭露线索/反转/情绪爆发），禁止无意义过场
-5. sceneId 格式：ep${epNum}_sc1, ep${epNum}_sc2...`,
+5. sceneId 格式：ep${epNum}_sc1, ep${epNum}_sc2...
+6. 场景信息密度：estimatedDurationSec 超过 50 秒的场景，内部必须包含 ≥2 个转折点（turningPoint 只写最关键的那个，但 dialogues/actions 中必须体现至少 2 次情绪/信息转折）
+7. 全集所有场景的 estimatedDurationSec 总和必须达到目标时长（${intent.durationTargetSec}秒）的 80%-110%
+8. 每个场景的 objective 中标注本场覆盖的 emotionBeat ID（如"覆盖 eb_3, eb_4"），确保高强度节拍无遗漏${buildUserPromptConstraintsTail({ redLines: state.seed?.redLines })}`,
       temperature: 0.65,
     });
 

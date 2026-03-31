@@ -28,5 +28,7 @@ export interface DramaMediaRunPolicy {
   retryBaseDelayMs: number;
   enableQualityGate: boolean;
   enableCoherenceValidation: boolean;
+  /** 启用 VLM 视觉比对增强（quality 模式专用，默认关闭 = 纯元数据检查） */
+  enableVlmCoherence?: boolean;
   dbFlushEvery: number;
 }

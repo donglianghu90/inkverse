@@ -85,8 +85,8 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
       const job = await this.jobService.findById(evt.jobId);
       if (!job || job.jobType !== 'video') return;
       const module = job.dramaId ? 'drama' : 'novel';
-      const resourceId = job.dramaId || '_unknown';
-      const scope = job.episodeNumber != null ? `episode:${job.episodeNumber}` : (job.assetType?.startsWith('shot_') ? `shot:${job.refId || 'unknown'}` : 'creation');
+      const resourceId = job.dramaId || (job as any).bookId || '_unknown';
+      const scope = job.episodeNumber != null ? `episode:${job.episodeNumber}` : ((job as any).chapterNumber != null ? `chapter:${(job as any).chapterNumber}` : (job.assetType?.startsWith('shot_') ? `shot:${job.refId || 'unknown'}` : 'creation'));
       const quality = (job.request as any)?.quality as string | undefined;
       const vidCost = evt.status === 'completed' ? this.billingResolver.resolveVideoCostCny(job.provider, quality) : 0;
       const durationMs = evt.status === 'completed' && job.durationMs ? job.durationMs : 0;
@@ -125,9 +125,10 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
   async generateImage(opts: GenerateImageOptions): Promise<ImageGenerationResult & { jobId: string }> {
     const provider = this.registry.getImageProvider(opts.provider);
     const t0 = Date.now();
+    const callId = randomUUID();
     try {
       const result = await provider.generate(opts);
-      return await this.finalizeImageResult(result, provider.name, opts, t0);
+      return await this.finalizeImageResult(result, provider.name, opts, t0, callId);
     } catch (primaryErr) {
       // 跨 Provider 降级：volcengine 内容审核等全链路失败时，切换到备用 Provider 重试
       if (opts.fallbackProvider) {
@@ -135,6 +136,16 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(
           `Provider ${provider.name} 全链路失败，降级至 ${fbProvider.name}: ${(primaryErr as Error).message?.slice(0, 120)}`,
         );
+        // 记录主 Provider 的失败事件（无论降级是否成功，主 Provider 确实失败了）
+        this.usageLedger.record({
+          userId: opts.userId ?? '', module: this.resolveModule(opts),
+          resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
+          action: opts.assetType ?? 'image', kind: 'image',
+          provider: provider.name, model: 'unknown',
+          quantity: opts.count ?? 1, costCny: 0,
+          ok: false, durationMs: Date.now() - t0,
+          idempotencyKey: `img:${callId}:${provider.name}:fail`,
+        }).catch(() => {});
         try {
           const fbOpts: GenerateImageOptions = {
             ...opts,
@@ -144,7 +155,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
             fallbackExtra: undefined,
           };
           const fbResult = await fbProvider.generate(fbOpts);
-          return await this.finalizeImageResult(fbResult, fbProvider.name, opts, t0);
+          return await this.finalizeImageResult(fbResult, fbProvider.name, opts, t0, callId);
         } catch (fbErr) {
           this.logger.error(
             `备用 Provider ${fbProvider.name} 亦失败: ${(fbErr as Error).message?.slice(0, 120)}`,
@@ -157,6 +168,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
             provider: fbProvider.name, model: 'unknown',
             quantity: opts.count ?? 1, costCny: 0,
             ok: false, durationMs: Date.now() - t0,
+            idempotencyKey: `img:${callId}:${fbProvider.name}:fail`,
           }).catch(() => {});
         }
       }
@@ -178,6 +190,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
         provider: provider.name, model: 'unknown',
         quantity: opts.count ?? 1, costCny: 0,
         ok: false, durationMs: Date.now() - t0,
+        idempotencyKey: `img:${callId}:${provider.name}:fail`,
       }).catch(() => {});
       throw primaryErr;
     }
@@ -188,6 +201,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
     providerName: string,
     opts: GenerateImageOptions,
     t0: number,
+    callId?: string,
   ): Promise<ImageGenerationResult & { jobId: string }> {
     await this.persistImagesToOss(result, opts);
     const job = await this.jobService.createJob({
@@ -212,6 +226,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
       status: 'success', jobId: job.id,
       costCny: imgCount * imgUnitCost,
     });
+    const idempotencyKey = callId ? `img:${callId}:${providerName}:ok` : `img:${job.id}:ok`;
     this.usageLedger.record({
       userId: opts.userId ?? '', module: this.resolveModule(opts),
       resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
@@ -219,6 +234,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
       provider: providerName, model: result.model,
       quantity: imgCount, costCny: imgCount * imgUnitCost,
       ok: true, durationMs: result.durationMs,
+      idempotencyKey,
     }).catch(() => {});
     return { ...result, jobId: job.id };
   }
@@ -252,6 +268,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
 
   async submitVideo(opts: SubmitVideoOptions): Promise<{ jobId: string; providerTaskId: string }> {
     const provider = this.registry.getVideoProvider(opts.provider);
+    const callId = randomUUID();
     try {
       const submitResult = await provider.submit(opts);
       const job = await this.jobService.createJob({
@@ -269,6 +286,16 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(
           `视频 Provider ${provider.name} 提交失败，降级至 ${fbProvider.name}: ${(primaryErr as Error).message?.slice(0, 120)}`,
         );
+        // 记录主 Provider 的提交失败事件
+        this.usageLedger.record({
+          userId: opts.userId ?? '', module: this.resolveModule(opts),
+          resourceId: this.resolveResourceId(opts), scope: this.resolveScope(opts),
+          action: opts.assetType ?? 'video', kind: 'video',
+          provider: provider.name, model: opts.quality ?? 'default',
+          quantity: 1, costCny: 0,
+          ok: false, durationMs: 0,
+          idempotencyKey: `vid:${callId}:${provider.name}:submit-fail`,
+        }).catch(() => {});
         try {
           // submit() 只接受 VideoGenerationRequest，将 SubmitVideoOptions 的扩展字段剥离后传入
           const { provider: _p, fallbackProvider: _fb, dramaId: _d, bookId: _b, module: _m,
@@ -293,6 +320,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
             provider: fbProvider.name, model: opts.quality ?? 'default',
             quantity: 1, costCny: 0,
             ok: false, durationMs: 0,
+            idempotencyKey: `vid:${callId}:${fbProvider.name}:submit-fail`,
           }).catch(() => {});
         }
       }
@@ -303,6 +331,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
         provider: provider.name, model: opts.quality ?? 'default',
         quantity: 1, costCny: 0,
         ok: false, durationMs: 0,
+        idempotencyKey: `vid:${callId}:${provider.name}:submit-fail`,
       }).catch(() => {});
       throw primaryErr;
     }
@@ -366,6 +395,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
     const tts = this.registry.getTtsProvider(prov);
     const ttsUnitCost = this.billingResolver.resolveTtsCostCny(tts.name, req.voiceId);
     const t0 = Date.now();
+    const ttsCallId = randomUUID();
     const dir = path.dirname(outPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     try {
@@ -392,6 +422,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
         userId: meta.userId ?? '', module: mod, resourceId, scope,
         action: 'tts', kind: 'tts', provider: tts.name, model: req.voiceId || 'default',
         quantity: 1, costCny: ttsUnitCost, ok: true, durationMs: Date.now() - t0,
+        idempotencyKey: `tts:${ttsCallId}:ok`,
       }).catch(() => {});
       return result;
     } catch (err) {
@@ -402,6 +433,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
         userId: meta.userId ?? '', module: mod, resourceId, scope,
         action: 'tts', kind: 'tts', provider: tts.name, model: req.voiceId || 'default',
         quantity: 1, costCny: 0, ok: false, durationMs: Date.now() - t0,
+        idempotencyKey: `tts:${ttsCallId}:fail`,
       }).catch(() => {});
       throw err;
     }

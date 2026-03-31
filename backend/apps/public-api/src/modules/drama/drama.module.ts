@@ -13,8 +13,20 @@ import { DramaAgentPipelineEntity } from './entities/drama-agent-pipeline.entity
 import { DramaTaskEntity } from './entities/task.entity';
 import { DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity } from './entities/run.entity';
 import { MediaModule } from '../media/media.module';
+// ── Controllers ──
 import { DramaController } from './drama.controller';
+import { DramaGenreTemplateController } from './drama-genre-template.controller';
+import { DramaVisualStyleTemplateController } from './drama-visual-style-template.controller';
+import { DramaPipelineController } from './drama-pipeline.controller';
+import { DramaEpisodeController } from './drama-episode.controller';
+import { DramaGlobalSettingsController } from './drama-global-settings.controller';
+import { DramaIdeaController } from './drama-idea.controller';
+// ── Core Services ──
 import { DramaService } from './drama.service';
+import { DramaSseHelper } from './drama-sse.helper';
+import { DramaIdeaService } from './drama-idea.service';
+import { DramaVisualAssetService } from './drama-visual-asset.service';
+import { DramaStateStore } from './drama-state-store.service';
 // ── Workflow Services（桶导入）──
 import {
   EpisodeWorkflowService, DramaAgentPipelineService, DramaWorkflowTopologyService,
@@ -25,6 +37,7 @@ import { DramaDeterministicCheckerService } from './workflow/deterministic-check
 import {
   MediaOrchestratorService, MediaQualityGateService, ShotCoherenceValidatorService,
   EmotionMediaMapperService, GenerationPolicyService, ImageProviderRouterService, VideoProviderRouterService,
+  ShotProductionOrderService, ShotContextBuilderService,
 } from './media-pipeline';
 // ── 基础服务 ──
 import { DramaProgressService } from './drama-progress.service';
@@ -48,14 +61,8 @@ import { ScriptReviewerAgent, ScriptEditorAgent, PacingAnalyzerAgent, HookCrafte
 import { DramaPromptTemplateService } from './prompting/drama-prompt-template.service';
 import { DramaPromptBakerService } from './prompting/drama-prompt-baker.service';
 import { DramaTaskRecoveryService } from './drama-task-recovery.service';
+import { DramaMediaWatchdogService } from './drama-media-watchdog.service';
 import { DRAMA_QUEUE } from './task/types';
-// ── 市场数据 ──
-import { MarketDramaEntity } from './entities/market-drama.entity';
-import { MarketController } from './market/market.controller';
-import { MarketDataService } from './market/market-data.service';
-import { MarketSchedulerService } from './market/market-scheduler.service';
-import { DouyinDramaCrawler } from './market/crawlers/douyin-drama.crawler';
-import { HongguoDramaCrawler } from './market/crawlers/hongguo-drama.crawler';
 import { DramaGlobalPromptSettingEntity } from './entities/drama-global-prompt-setting.entity';
 import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.service';
 
@@ -63,7 +70,7 @@ import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.s
   imports: [
     TypeOrmModule.forFeature([
       DramaEntity, EpisodeEntity, VisualAssetEntity, DramaWorkflowExecutionEntity, DramaGenreTemplateEntity, DramaAgentPipelineEntity,
-      DramaTaskEntity, MarketDramaEntity,
+      DramaTaskEntity,
       DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity,
       DramaVisualStyleTemplateEntity, DramaGlobalPromptSettingEntity,
     ]),
@@ -74,10 +81,15 @@ import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.s
     ),
     MediaModule,
   ],
-  controllers: [DramaController, MarketController],
+  controllers: [
+    DramaController, DramaGenreTemplateController, DramaVisualStyleTemplateController,
+    DramaPipelineController, DramaEpisodeController, DramaGlobalSettingsController,
+    DramaIdeaController,
+  ],
   providers: [
-    DramaService, EpisodeWorkflowService, DramaWorkflowExecutionService, DramaAgentPipelineService, DramaWorkflowTopologyService,
+    DramaService, DramaSseHelper, DramaIdeaService, DramaVisualAssetService, DramaStateStore, EpisodeWorkflowService, DramaWorkflowExecutionService, DramaAgentPipelineService, DramaWorkflowTopologyService,
     MediaOrchestratorService, MediaQualityGateService, ShotCoherenceValidatorService, EmotionMediaMapperService, GenerationPolicyService, ImageProviderRouterService, VideoProviderRouterService,
+    ShotProductionOrderService, ShotContextBuilderService,
     DramaProgressService, DramaGenreTemplateService, DramaVisualStyleTemplateService,
     DramaTaskService, TaskSubmitterService,
     DramaTextProcessor, DramaImageProcessor, DramaVideoProcessor, DramaVoiceProcessor,
@@ -87,10 +99,10 @@ import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.s
     StoryboardDirectorAgent, AudioDirectorAgent,
     ScriptReviewerAgent, ScriptEditorAgent, PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent,
     DramaDeterministicCheckerService, DramaPromptTemplateService, DramaPromptBakerService, DramaCalibrationService,
-    DramaTaskRecoveryService,
-    MarketDataService, MarketSchedulerService, DouyinDramaCrawler, HongguoDramaCrawler,
+    DramaTaskRecoveryService, DramaMediaWatchdogService,
     DramaGlobalPromptSettingService,
   ],
   exports: [DramaTaskService, TaskSubmitterService, DramaRunService],
 })
 export class DramaModule {}
+

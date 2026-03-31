@@ -17,6 +17,13 @@ export async function withTaskLifecycle( // 统一 Worker 执行包装
   const heartbeat = setInterval(() => taskService.touchHeartbeat(taskId).catch(() => {}), 10_000); // 每10秒心跳
 
   try {
+    // 防御性检查：如果 task 记录已被删除（cancelAndDeleteByDrama）或已终态，直接跳过
+    const task = await taskService.findById(taskId);
+    if (!task) { logger.warn(`[${taskId}] 任务记录不存在（可能已被删除），跳过执行`); return; }
+    if (['cancelled', 'completed', 'failed'].includes(task.status)) {
+      logger.warn(`[${taskId}] 任务已处于终态 ${task.status}，跳过执行`); return;
+    }
+
     const marked = await taskService.tryMarkProcessing(taskId);
     if (!marked) { logger.warn(`[${taskId}] 任务非 queued 状态，跳过执行`); return; } // 非 queued 状态跳过
 

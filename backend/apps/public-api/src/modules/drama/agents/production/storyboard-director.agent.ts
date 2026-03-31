@@ -6,7 +6,7 @@ import {
   shotSchema, episodeStoryboardSchema, EpisodeStoryboard, EpisodeScript, EpisodeIntent,
   DramaState, ScriptScene, CharacterIdentity,
 } from '../../schemas/drama-state.schemas';
-import { buildStoryboardDirectorStaticPrompt, buildStoryboardSceneContext } from '../../prompting/drama-playbook';
+import { buildStoryboardDirectorStaticPrompt, buildStoryboardSceneContext, buildUserPromptConstraintsTail } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 import { VideoProviderRouterService } from '../../media-pipeline/video-provider-router.service';
 
@@ -26,7 +26,7 @@ export class StoryboardDirectorAgent {
     private readonly videoRouter: VideoProviderRouterService,
   ) {}
 
-  async direct(state: DramaState, script: EpisodeScript, intent?: EpisodeIntent): Promise<EpisodeStoryboard> {
+  async direct(state: DramaState, script: EpisodeScript, intent?: EpisodeIntent, continuityWarnings?: string[]): Promise<EpisodeStoryboard> {
     const scenes = script?.scenes ?? [];
     if (!scenes.length) throw new Error('剧本场景为空，无法生成分镜');
     const allShots: z.infer<typeof shotSchema>[] = [];
@@ -38,7 +38,7 @@ export class StoryboardDirectorAgent {
       const isLastScene = si === scenes.length - 1;
       if (si > 0) await new Promise(r => setTimeout(r, 800));
       this.logger.log(`E${script?.episodeNumber ?? 1} 场景 ${si + 1}/${scenes.length} [${scene?.purpose ?? ''}]: ${scene?.sceneHeading ?? ''}`);
-      const shots = await this.directScene(state, script, scene, globalIdx, isLastScene, intent, prevSceneLastShots);
+      const shots = await this.directScene(state, script, scene, globalIdx, isLastScene, intent, prevSceneLastShots, continuityWarnings);
       allShots.push(...shots);
       globalIdx += shots.length;
       // 保留最后 2 个 shot 作为下一场景的视觉衔接锚点
@@ -58,13 +58,19 @@ export class StoryboardDirectorAgent {
     state: DramaState, script: EpisodeScript, scene: ScriptScene,
     startIdx: number, isLastScene: boolean, intent?: EpisodeIntent,
     prevSceneLastShots: z.infer<typeof shotSchema>[] = [],
+    continuityWarnings?: string[],
   ) {
     const profile = state.promptProfile;
     const camGuide = profile?.cameraStyleGuide;
     const epNum = script.episodeNumber;
     const scenePurpose = scene.purpose;
 
-    const chars = state.characters.map(c => {
+    // P1-2 fix: 只传本场景出场角色的档案，减少 ~30% prompt tokens
+    const sceneCharIds = new Set(scene.presentCharacterIds ?? []);
+    const sceneChars = sceneCharIds.size > 0
+      ? state.characters.filter(c => sceneCharIds.has(c.characterId))
+      : state.characters; // 降级：若场景未指定角色列表，传全量
+    const chars = sceneChars.map(c => {
       const face = c.faceReferencePrompt || '';
       const body = c.bodyTypePrompt || c.bodyType || '';
       const hair = c.hairStylePrompt || c.hairStyle || '';
@@ -95,6 +101,17 @@ export class StoryboardDirectorAgent {
       : isFiller
         ? Math.min(Math.ceil(targetDur / shotDensitySec), 5)
         : Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 3), 12);
+    // 签名道具上下文：查找与本场景角色关联的签名道具
+    const sigProps = (state.signatureProps ?? [])
+      .filter(p => p.visualPrompt?.trim())
+      .map(p => `${p.propId}(${p.name}, 归属${p.characterOwner ?? '全剧'}): "${p.visualPrompt}"`);
+    const sigPropsCtx = sigProps.length > 0
+      ? `\n📌 签名道具（角色持有这些道具时，firstFramePrompt/lastFramePrompt 中必须包含其精确描述）：\n${sigProps.join('\n')}\n`
+      : '';
+    // masterShotPlan 上下文
+    const masterShotCtx = intent?.masterShotPlan?.length
+      ? `\n📷 导演规划的主镜头（至少为每个属于本场景的主镜生成 1 个对应 Shot，设 isMasterShot=true）：\n${intent.masterShotPlan.map(m => `- ${m.beatId}: ${m.visualGoal} | ${m.emotionGoal} (${m.actionVerb}, ${m.minDurSec}-${m.maxDurSec}s)`).join('\n')}\n`
+      : '';
 
     const raw = await this.llm.generateStructured({
       taskName: 'drama-storyboard-director',
@@ -144,9 +161,10 @@ ${chars}
 
 场景视觉：
 ${locDesc}
-
+${masterShotCtx}${sigPropsCtx}
 要求：shots数组，每个Shot必须包含firstFramePrompt、lastFramePrompt 和 qualityTier。visualPrompt专注描述运动/动作（禁止face描述），firstFramePrompt/lastFramePrompt专注描述静态画面（必须含face描述）
-${flashbackCtx}`,
+${flashbackCtx}
+${continuityWarnings?.length ? `\n⚠️ 连续性警告（分镜创作时必须遵守以下修正建议）：\n${continuityWarnings.join('\n')}` : ''}${buildUserPromptConstraintsTail({ redLines: state.seed?.redLines })}`,
       temperature: 0.5,
     });
 
@@ -304,6 +322,20 @@ ${flashbackCtx}`,
     // 此处只需一个简短关键词（如 "cinematic live action"）防止 LLM 生成的首尾帧偏离风格基调。
     const styleRef = state.visualStyle?.styleReferencePrompt ?? '';
     const stylePrefix = styleRef.split(',')[0]?.trim() ?? '';
+    // 签名道具映射：characterOwner → visualPrompt（仅 signature 类型）
+    const sigPropsByOwner = new Map<string, string[]>();
+    for (const p of state.signatureProps ?? []) {
+      if (p.narrativeRole !== 'signature' || !p.visualPrompt?.trim() || !p.characterOwner) continue;
+      const ownerKey = p.characterOwner;
+      // 用 characterId 和 name 双向匹配
+      for (const [cid, c] of charMap) {
+        if (ownerKey === cid || ownerKey === c.name) {
+          const arr = sigPropsByOwner.get(cid) ?? [];
+          arr.push(p.visualPrompt.trim());
+          sigPropsByOwner.set(cid, arr);
+        }
+      }
+    }
     shots.forEach(shot => {
       const shotSize = shot.camera?.shotSize;
       const cameraAngle = shot.camera?.cameraAngle;
@@ -311,8 +343,32 @@ ${flashbackCtx}`,
       if (!faceFragments) return;
       if (shot.firstFramePrompt) shot.firstFramePrompt = this.injectFaceLock(shot.firstFramePrompt, faceFragments, stylePrefix);
       if (shot.lastFramePrompt) shot.lastFramePrompt = this.injectFaceLock(shot.lastFramePrompt, faceFragments, stylePrefix);
+      // 签名道具后处理：将角色专属道具注入 firstFramePrompt（仅中景及以上）+ 填充 shot.props
+      if (shotSize && !['extreme_wide', 'wide'].includes(shotSize)) {
+        const charIds = shot.characters.map(c => c.characterId);
+        const matchedProps: Array<{ propId: string; visualPrompt: string }> = [];
+        for (const cid of charIds) {
+          for (const p of state.signatureProps ?? []) {
+            if (!p.visualPrompt?.trim() || !p.characterOwner) continue;
+            if (p.characterOwner === cid || charMap.get(cid)?.name === p.characterOwner) {
+              if (!matchedProps.some(mp => mp.propId === p.propId)) {
+                matchedProps.push({ propId: p.propId, visualPrompt: p.visualPrompt.trim() });
+              }
+            }
+          }
+        }
+        const propFragments = matchedProps.map(mp => mp.visualPrompt).slice(0, 2);
+        if (propFragments.length > 0) {
+          const propStr = propFragments.join(', ');
+          if (shot.firstFramePrompt && !shot.firstFramePrompt.includes(propFragments[0].slice(0, 20))) {
+            shot.firstFramePrompt = `${shot.firstFramePrompt}, ${propStr}`;
+          }
+          // 填充结构化 props 字段
+          (shot as any).props = matchedProps.map(mp => ({ propId: mp.propId }));
+        }
+      }
     });
-    this.logger.log(`锁脸后处理完成：${shots.length} shots（首尾帧T2I prompt，风格前缀="${stylePrefix || '无'}"）`);
+    this.logger.log(`锁脸后处理完成：${shots.length} shots（首尾帧T2I prompt，风格前缀="${stylePrefix || '无'}"，签名道具角色数=${sigPropsByOwner.size}）`);
   }
 
   /**

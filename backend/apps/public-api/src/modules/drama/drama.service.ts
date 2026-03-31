@@ -23,21 +23,8 @@ import { DramaStrategyAgent } from './agents/preparation/drama-strategy.agent';
 import { EpisodeWorkflowService } from './workflow/episode-workflow.service';
 import { MediaOrchestratorService } from './media-pipeline/media-orchestrator.service';
 import { DramaProgressService } from './drama-progress.service';
-import { MediaService } from '../media/media.service';
-import { RenderingProfileService } from '../media/rendering/rendering-profile.service';
-import {
-  CHARACTER_VIEW_ANGLES, CharacterViewAngle, buildViewAnglePrompt, assembleT2iPrompt, ageToT2IPhrase,
-  LOCATION_VIEW_ANGLES, LocationViewAngle, buildLocationViewPrompt,
-} from '../media/rendering/rendering-profile';
-import {
-  detectStyleBucket as detectStyleBucketUtil,
-  buildAssetStylePrefix as buildAssetStylePrefixUtil,
-  upsertReferenceByView as upsertReferenceByViewUtil,
-} from './utils/asset-prompt.utils';
-import { PromptOptimizerService } from '../media/prompt-optimizer.service';
 import { DramaGenreTemplateService } from './drama-genre-template.service';
 import { DramaVisualStyleTemplateService } from './drama-visual-style-template.service';
-import { ImageProviderRouterService } from './media-pipeline/image-provider-router.service';
 import { VideoProviderRouterService } from './media-pipeline/video-provider-router.service';
 import { DramaTaskService } from './task/task.service';
 import { DramaRunService } from './run/run.service';
@@ -61,6 +48,9 @@ import { LocalStorageService } from '../media/local-storage.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { DRAMA_QUEUE } from './task/types';
+import { DramaIdeaService } from './drama-idea.service';
+import { DramaVisualAssetService } from './drama-visual-asset.service';
+import { DramaStateStore } from './drama-state-store.service';
 
 interface CreateDramaOptions { userId?: string; progressDramaId?: string; }
 type ProblemFixTarget = 'all' | 'identity' | 'style' | 'camera' | 'motion';
@@ -78,9 +68,6 @@ const CREATION_CHECKPOINTS = ['seed_analyzed', 'outline_planned', 'visual_design
 @Injectable()
 export class DramaService implements OnModuleInit {
   private readonly logger = new Logger(DramaService.name);
-  private readonly generatingDramas = new Set<string>();
-  private readonly pausedDramas = new Set<string>();
-  private readonly cancelledDramas = new Set<string>();
 
   constructor(
     @InjectRepository(DramaEntity) private readonly dramaRepo: Repository<DramaEntity>,
@@ -95,9 +82,6 @@ export class DramaService implements OnModuleInit {
     private readonly episodeWorkflow: EpisodeWorkflowService,
     private readonly mediaOrchestrator: MediaOrchestratorService,
     private readonly progressService: DramaProgressService,
-    private readonly mediaService: MediaService,
-    private readonly renderingProfileService: RenderingProfileService,
-    private readonly promptOptimizer: PromptOptimizerService,
     private readonly genreTemplateService: DramaGenreTemplateService,
     private readonly visualStyleTemplateService: DramaVisualStyleTemplateService,
     private readonly llm: LlmService,
@@ -109,8 +93,10 @@ export class DramaService implements OnModuleInit {
     private readonly promptBaker: DramaPromptBakerService,
     private readonly mediaJobService: MediaJobService,
     private readonly localStorage: LocalStorageService,
-    private readonly imageRouter: ImageProviderRouterService,
     private readonly videoRouter: VideoProviderRouterService,
+    private readonly ideaService: DramaIdeaService,
+    private readonly visualAssetService: DramaVisualAssetService,
+    private readonly stateStore: DramaStateStore,
     @InjectQueue(DRAMA_QUEUE.TEXT) private readonly textQueue: Queue,
     @InjectQueue(DRAMA_QUEUE.IMAGE) private readonly imageQueue: Queue,
     @InjectQueue(DRAMA_QUEUE.VIDEO) private readonly videoQueue: Queue,
@@ -135,7 +121,7 @@ export class DramaService implements OnModuleInit {
             d.state = { ...(d.state as Record<string, unknown>), _status: 'failed' };
             await this.dramaRepo.save(d);
           }
-        } catch {}
+        } catch (e) { this.logger.warn(`恢复期间更新状态失败 dramaId=${exec.dramaId}: ${(e as Error).message}`); }
       }
     }
   }
@@ -315,7 +301,7 @@ export class DramaService implements OnModuleInit {
             }
           : visualStyle;
 
-        this.sanitizeLiveActionVisualStyle(mergedVisualStyle, effectiveSuggestedVisualStyle, []);
+        this.visualAssetService.sanitizeLiveActionVisualStyle(mergedVisualStyle, effectiveSuggestedVisualStyle, []);
         Object.assign(out, { characters: [], locations: [], visualStyle: mergedVisualStyle, signatureProps });
         logDrama('visual_design_done', 'ok', '视觉风格设计完成');
         emitCreate(2, '视觉风格设计完成', true);
@@ -370,6 +356,7 @@ export class DramaService implements OnModuleInit {
             strategy: out.strategy,
             visualStyle: out.visualStyle,
             genreKey: effectiveGenreKey,
+            redLines: out.seed?.redLines,
             visualStyleExtras: bakeVisualStyleExtras,
             videoModelProfile: this.videoRouter.getModelProfile(
               this.videoRouter.resolvePrimaryProvider({
@@ -406,7 +393,7 @@ export class DramaService implements OnModuleInit {
         videoProvider: resolvedVideoProvider as DramaState['videoProvider'],
         ...(dto.visualStyleTemplateId ? { visualStyleTemplateId: dto.visualStyleTemplateId } : {}),
         promptProfile: out.promptProfile, strategy: out.strategy, visualStyle: out.visualStyle,
-        visualBible: this.buildVisualBible(
+        visualBible: this.visualAssetService.buildVisualBible(
           out.characters,
           out.visualStyle,
           out.promptProfile,
@@ -566,984 +553,6 @@ export class DramaService implements OnModuleInit {
   }
 
 
-  /**
-   * 为角色（多角度）+场景并发生成参考图，回写 VisualAssetEntity。
-   *
-   * Phase 1: 为所有角色生成 face_front（正面定妆照）+ 所有场景 establishing（全景）
-   * Phase 2: 按角色重要性链式生成额外视角（以 face_front 为参考图）
-   * Phase 2b: 按场景复用频率链式生成额外视角（以 establishing 为参考图）
-   * Phase 3: 角色外观变体参考图
-   */
-  private static readonly CHAR_IMAGE_SIZE = '2:3';
-  private static readonly SCENE_IMAGE_SIZE = '3:2';
-  private static readonly PROP_IMAGE_SIZE = '1:1';
-
-  /**
-   * 根据当前图片的提示词和用户反馈，由 LLM 重新生成一个完整的修正后英文提示词。
-   * LLM 理解用户意图（可能是中文吐槽、口语建议），结合剧集风格/题材上下文，输出语义完整的新 prompt。
-   */
-  private async rewritePromptByUserFeedback(
-    currentPrompt: string,
-    userFeedback: string,
-    assetType: 'character' | 'location' | 'prop' | string,
-    dramaId: string,
-    dramaState?: Record<string, any>,
-    userId?: string,
-  ): Promise<string> {
-    const schema = z.object({ revisedPrompt: z.string() });
-    const subjectLabel = assetType === 'character' ? 'character portrait' : assetType === 'location' ? 'scene/location image' : 'prop image';
-
-    const vs = dramaState?.visualStyle ?? {};
-    const styleCtx = [
-      dramaState?.title ? `Drama title: ${dramaState.title}` : '',
-      dramaState?.genre ? `Genre: ${dramaState.genre}` : '',
-      vs.overallAesthetic ? `Overall aesthetic: ${vs.overallAesthetic}` : '',
-      vs.renderTechnique ? `Render technique: ${vs.renderTechnique}` : '',
-      vs.colorGrading ? `Color grading: ${vs.colorGrading}` : '',
-      vs.lightingStyle ? `Lighting style: ${vs.lightingStyle}` : '',
-      vs.styleReferencePrompt ? `Style reference: ${vs.styleReferencePrompt}` : '',
-    ].filter(Boolean).join('\n');
-
-    try {
-      const result = await this.llm.generateStructured({
-        taskName: 'refine-prompt-rewrite',
-        schema,
-        metadata: { dramaId, userId },
-        systemPrompt: `You are an expert image prompt engineer for a cinematic AI drama platform. Your job is to rewrite an existing T2I image prompt based on user feedback, while staying true to the drama's visual style.
-
-Rules:
-- Output ONLY English prompt keywords/phrases suitable for T2I image generation
-- No Chinese characters, no explanations, no JSON wrappers
-- Preserve the core identity/composition/content that the user did NOT complain about
-- Address the user's complaint or request by adjusting or replacing only the relevant parts
-- The rewritten prompt MUST remain consistent with the drama's overall visual style and genre
-- Keep the rewritten prompt concise (under 120 words)`,
-        userPrompt: `Drama visual context:
-${styleCtx || '(no style context available)'}
-
-Current ${subjectLabel} prompt:
-"${currentPrompt}"
-
-User feedback (may be in Chinese or English):
-"${userFeedback}"
-
-Rewrite the prompt to address the user's feedback while keeping everything else intact and consistent with the drama's visual style.`,
-        temperature: 0.3,
-      });
-      const revised = schema.parse(result).revisedPrompt.trim();
-      return revised || currentPrompt;
-    } catch {
-      // 降级：保留原 prompt，过滤中文后追加剩余 ASCII 片段
-      const asciiHint = userFeedback.replace(/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef，。！？、""''【】《》]/g, '').trim();
-      return asciiHint ? `${currentPrompt}, ${asciiHint}` : currentPrompt;
-    }
-  }
-
-  private optimizeAssetPrompt(
-    rawPrompt: string,
-    shotType: 'character' | 'location' | 'style_guide',
-    stylePrefix?: string,
-    provider?: string,
-    styleBucket?: string,
-  ): { prompt: string; negativePrompt: string } {
-    const profile = this.renderingProfileService.getImageProfile();
-    const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, profile.negativePrompt.defaultValue, {
-      shotType,
-      qualityTier: 'golden',
-      provider,
-      styleBucket,
-    });
-    return { prompt: assembleT2iPrompt(optimized.prompt, profile, { stylePrefix }), negativePrompt: optimized.negativePrompt };
-  }
-
-  /**
-   * 真人实拍路径安全网：清洗 visualStyle 中因 LLM 直译中文「水墨晕染」而产生的绘画类词汇。
-   *
-   * 背景：用户用「水墨晕染美感」描述真人剧视觉，LLM 会在 styleReferencePrompt、textureStyle 等
-   * 字段里写入 ink-wash / painterly / brush stroke，导致场景图出现国画感，与写实人物图风格分裂。
-   * 此方法在 LLM 生成完成后对字符串做最终替换，是提示词层面管控的最后一道保险。
-   *
-   * 仅对真人实拍类 styleKey（live_action、period_live、hk_film、retro_wuxia、western_film）生效，
-   * 水墨/插画类模板不做清洗。
-   */
-  /**
-   * 真人实拍路径安全网：清洗 visualStyle 及 locations 中因 LLM 直译中文「水墨晕染」而产生的绘画类词汇。
-   *
-   * 背景：用户用「水墨晕染美感」描述真人剧，LLM 会在 styleReferencePrompt、location.visualPrompt 等
-   * 字段写入 ink-wash / painterly / brush stroke，导致场景图出现国画感，与写实人物图风格分裂。
-   *
-   * 仅对真人实拍类 styleKey 生效，水墨/插画类模板不做清洗。
-   */
-  private sanitizeLiveActionVisualStyle(
-    vs: Record<string, unknown>,
-    styleKey?: string,
-    locations?: Array<Record<string, unknown>>,
-  ): void {
-    const liveActionStyles = new Set(['live_action', 'period_live', 'hk_film', 'retro_wuxia', 'western_film']);
-    const isLiveAction = styleKey
-      ? liveActionStyles.has(styleKey)
-      : /live.?action|photorealistic|真实摄影|实拍|period drama/i.test(
-          [(vs['renderTechnique'] ?? ''), (vs['overallAesthetic'] ?? '')].join(' ')
-        );
-    if (!isLiveAction) return;
-
-    // 绘画类词 → 等效影视词 替换表
-    const replacements: Array<[RegExp, string]> = [
-      [/\bink[-\s]?wash\b/gi, 'natural cinematic'],
-      [/\bsumi[-\s]?e\b/gi, 'film photography'],
-      [/\bpainterly\b/gi, 'photorealistic'],
-      [/\bbrush\s?stroke\b/gi, 'film grain'],
-      [/\bwatercolor\s?(?:painting|wash|style)?\b/gi, 'soft color grading'],
-      [/\billustration\s?(?:style|quality)?\b/gi, 'cinematic photography'],
-      [/\bink\s?painting\b/gi, 'film photography'],
-    ];
-
-    const applyReplacements = (val: string): string => {
-      for (const [pattern, replacement] of replacements) {
-        val = val.replace(pattern, replacement);
-      }
-      return val;
-    };
-
-    // 清洗 visualStyle 全局字段
-    for (const field of ['styleReferencePrompt', 'renderTechnique', 'textureStyle', 'referenceStyle']) {
-      if (typeof vs[field] === 'string') vs[field] = applyReplacements(vs[field] as string);
-    }
-
-    // 清洗每个场景的 visualPrompt
-    // 这是关键：LLM 在山野/自然场景中极易写 "ink-wash painting aesthetic"，
-    // 使场景图与写实人物图产生风格分裂
-    if (locations?.length) {
-      for (const loc of locations) {
-        if (typeof loc['visualPrompt'] === 'string') {
-          loc['visualPrompt'] = applyReplacements(loc['visualPrompt'] as string);
-        }
-      }
-    }
-  }
-
-  /**
-   * 从 visualStyle 推断视觉风格桶（与 GenerationPolicyService.detectStyleBucket 保持一致）。
-   * 避免注入额外依赖，简单字符串匹配即可。
-   */
-  private detectStyleBucket(vs?: DramaState['visualStyle']): string {
-    return detectStyleBucketUtil(vs);
-  }
-
-  /**
-   * 为 flux-2/pro-image-to-image 构建变换帧式（transformation-focused）角度提示词。
-   * 该模型接受参考图作为身份锚点，因此提示词聚焦"变换到什么角度/姿态"而非重复描述人脸。
-   */
-  private buildI2IViewAnglePrompt(
-    ch: { defaultCostume?: string; defaultCostumePrompt?: string; bodyType?: string; bodyTypePrompt?: string },
-    viewAngle: string,
-  ): string {
-    const costume = ch.defaultCostumePrompt || ch.defaultCostume || '';
-    const body = ch.bodyTypePrompt || ch.bodyType || '';
-    const costumeClause = costume ? `, wearing ${costume}` : '';
-    const bodyClause = body ? `, ${body} build` : '';
-    switch (viewAngle) {
-      case 'face_three_quarter':
-        return `Same person as reference photo, three quarter view portrait, slightly turned face${costumeClause}, consistent face and hair identity, neutral background`;
-      case 'upper_body_front':
-        return `Same person as reference photo, upper body portrait, facing forward${costumeClause}${bodyClause}, consistent identity, neutral background`;
-      case 'full_body_front':
-        return `Same person as reference photo, full body standing portrait, facing forward${costumeClause}${bodyClause}, neutral studio background, consistent identity`;
-      case 'side_profile':
-        return `Same person as reference photo, strict side profile, facing left${costumeClause}, consistent hair and facial features, neutral background`;
-      case 'back_view':
-        return `Same person as reference photo, back view${costumeClause}${bodyClause}, neutral background`;
-      case 'face_happy':
-        return `Same person as reference photo, front-facing portrait, happy expression, genuine slight smile, pleased and warm, subtle not exaggerated${costumeClause}, consistent facial bone structure, same face identity, no face drift, neutral background`;
-      case 'face_angry':
-        return `Same person as reference photo, front-facing portrait, angry expression, furrowed brows, sharp stern gaze, controlled tension in eyes, not distorted${costumeClause}, consistent facial bone structure, same face identity, no face drift, neutral background`;
-      default:
-        return `Same person as reference photo, ${viewAngle} view${costumeClause}, consistent identity`;
-    }
-  }
-
-  /**
-   * 构建 T2I 风格前缀。
-   *
-   * Character portrait 优先级：
-   *   1. characterStylePrompt（角色专用前缀，仅含时代+渲染，无场景条件词）
-   *   2. styleReferencePrompt（全局风格，通常无条件词）
-   *   3. Fallback：overallAesthetic + renderTechnique + referenceStyle
-   *      （排除 colorGrading / lightingStyle，避免"for X scenes / for interiors"等
-   *       多条件描述同时出现互相矛盾，且不适用于中性背景的角色定妆参考图）
-   *
-   * Scene / location 路径：
-   *   1. styleReferencePrompt
-   *   2. Fallback：全量 6 字段拼接
-   */
-  /**
-   * 某视角是否已有可用的参考图 URL。
-   * 批量「生成全部参考图」时用于跳过已生成项，避免重复计费；单资产重生仍走专用接口。
-   * 兼容仅写入 referenceImageUrl、未写入对应 referenceImages 行的历史数据。
-   */
-  private referenceViewFilled(
-    asset: Pick<VisualAssetEntity, 'referenceImageUrl' | 'referenceImages' | 'assetType'>,
-    viewAngle: string,
-  ): boolean {
-    const fromList = asset.referenceImages?.find((r) => r.viewAngle === viewAngle)?.imageUrl?.trim();
-    if (fromList) return true;
-    if (!asset.referenceImageUrl?.trim()) return false;
-    if (viewAngle === 'face_front' && asset.assetType === 'character') {
-      return !asset.referenceImages?.some((r) => r.viewAngle === 'face_front');
-    }
-    if (viewAngle === 'establishing' && asset.assetType === 'location') {
-      return !asset.referenceImages?.some((r) => r.viewAngle === 'establishing');
-    }
-    if (viewAngle === 'style_master' && asset.assetType === 'style_guide') {
-      return !asset.referenceImages?.some((r) => r.viewAngle === 'style_master');
-    }
-    if (viewAngle === 'product_shot' && asset.assetType === 'prop') {
-      return !asset.referenceImages?.some((r) => r.viewAngle === 'product_shot');
-    }
-    return false;
-  }
-
-  private buildAssetStylePrefix(vs?: DramaState['visualStyle'], shotType: 'character' | 'location' | 'style_guide' = 'location'): string | undefined {
-    return buildAssetStylePrefixUtil(vs, shotType);
-  }
-
-  private async generateReferenceImages(
-    dramaId: string, assets: VisualAssetEntity[],
-    characters: DramaState['characters'], locations: DramaState['locations'],
-    visualStyle?: DramaState['visualStyle'],
-    userId?: string,
-  ): Promise<void> {
-    const profile = this.renderingProfileService.getImageProfile();
-    const charAssets = assets.filter(a => a.assetType === 'character');
-    const locAssets = assets.filter(a => a.assetType === 'location');
-    const styleAssets = assets.filter(a => a.assetType === 'style_guide');
-    const propAssets = assets.filter(a => a.assetType === 'prop');
-
-    // ═══ Phase 1: face_front + 场景参考图（并发） ═══
-    // 角色 portrait 前缀不含 colorGrading/lightingStyle（避免场景条件词污染中性背景）
-    const charStylePrefix = this.buildAssetStylePrefix(visualStyle, 'character');
-    const sceneStylePrefix = this.buildAssetStylePrefix(visualStyle, 'location');
-    const assetStyleBucket = this.detectStyleBucket(visualStyle);
-    const phase1Tasks = [
-      ...charAssets.map(asset => async () => {
-        if (this.cancelledDramas.has(dramaId)) return;
-        const ch = characters.find(c => c.characterId === asset.refId);
-        if (!ch) return;
-        if (!ch.faceReferencePrompt?.trim()) {
-          // faceReferencePrompt 必须是英文 T2I 提示词，中文字段（faceDescription 等）不能替代
-          // 根因：建剧时 LLM 遗漏了该字段，需重新设计该角色或重跑建剧流程
-          this.logger.error(`[Phase1] 跳过 ${ch.name}(${asset.refId})：faceReferencePrompt 为空，无法生成参考图。请重新创建短剧或检查 LLM 输出`);
-          return;
-        }
-        if (this.referenceViewFilled(asset, 'face_front')) return;
-        try {
-          this.logger.log(`[Phase1] face_front: ${ch.name}(${asset.refId})`);
-          const faceRoute = this.imageRouter.routeCharacterFace(DramaService.CHAR_IMAGE_SIZE);
-          // Phase 1 面部定妆照：补充年龄、发型、服饰、体型、背景和朝向 prompt
-          // 始终从 age 字段推导（ageToT2IPhrase 取范围最小值），agePrompt 仅作兜底
-          const agePhrase = ageToT2IPhrase((ch as any).age) || (ch as any).agePrompt?.trim() || '';
-          const faceParts = [
-            ch.faceReferencePrompt,
-            agePhrase,
-            ch.hairStylePrompt || ch.hairStyle,
-            ch.defaultCostumePrompt ? `wearing ${ch.defaultCostumePrompt}` : '',
-            (ch as any).bodyTypePrompt || (ch as any).bodyType,
-            'front-facing, looking at camera, neutral plain background, character reference sheet portrait',
-          ].filter(Boolean).join(', ');
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(faceParts, 'character', charStylePrefix, faceRoute.provider, assetStyleBucket);
-          const result = await this.mediaService.generateImage({
-            prompt, negativePrompt, size: DramaService.CHAR_IMAGE_SIZE, count: 1,
-            dramaId, assetType: 'character_image', refId: asset.refId, userId,
-            ...faceRoute,
-          });
-          if (result.images?.[0]?.url) {
-            const updated = this.upsertReferenceByView(asset, 'face_front', result.images[0].url);
-            asset.referenceImageUrl = updated.referenceImageUrl;
-            asset.referenceImages = updated.referenceImages;
-            await this.visualAssetRepo.update(asset.id, {
-              referenceImageUrl: asset.referenceImageUrl,
-              referenceImages: asset.referenceImages,
-            });
-          }
-        } catch (err) {
-          this.logger.error(`[Phase1] face_front 生成失败，该角色将跳过多视角生成: ${ch.name}(${asset.refId}) — ${(err as Error).message}`);
-        }
-      }),
-      ...locAssets.map(asset => async () => {
-        if (this.cancelledDramas.has(dramaId)) return;
-        const loc = locations.find(l => l.locationId === asset.refId);
-        if (!loc?.visualPrompt) {
-          this.logger.warn(`[Phase1] 场景 ${asset.refId} 缺少 visualPrompt，跳过参考图生成`);
-          return;
-        }
-        if (this.referenceViewFilled(asset, 'establishing')) return;
-        try {
-          this.logger.log(`[Phase1] establishing: ${loc.name}(${asset.refId})`);
-          const rawPrompt = buildLocationViewPrompt(loc, 'establishing');
-          const locRoute = this.imageRouter.routeLocation(DramaService.SCENE_IMAGE_SIZE);
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt || loc.visualPrompt, 'location', sceneStylePrefix, locRoute.provider, assetStyleBucket);
-          const result = await this.mediaService.generateImage({
-            prompt, negativePrompt, size: DramaService.SCENE_IMAGE_SIZE, count: 1,
-            dramaId, assetType: 'location_image', refId: asset.refId, userId,
-            ...locRoute,
-          });
-          if (result.images?.[0]?.url) {
-            const updated = this.upsertReferenceByView(asset, 'establishing', result.images[0].url);
-            asset.referenceImageUrl = updated.referenceImageUrl;
-            asset.referenceImages = updated.referenceImages;
-            await this.visualAssetRepo.update(asset.id, {
-              referenceImageUrl: asset.referenceImageUrl,
-              referenceImages: asset.referenceImages,
-            });
-          }
-        } catch (err) { this.logger.error(`[Phase1] 场景参考图生成失败: ${loc.name}(${asset.refId}) — ${(err as Error).message}`); }
-      }),
-      ...styleAssets.map(asset => async () => {
-        if (this.cancelledDramas.has(dramaId)) return;
-        if (this.referenceViewFilled(asset, 'style_master')) return;
-        const style = asset.data as Record<string, unknown>;
-        // 优先使用视觉设计师生成的纯英文 styleReferencePrompt，避免中英混杂降低 T2I 质量
-        const styleRefPrompt = String(style.styleReferencePrompt ?? '').trim();
-        let rawPrompt: string;
-        if (styleRefPrompt && !/[\u4e00-\u9fff]/.test(styleRefPrompt)) {
-          // 使用纯英文的 styleReferencePrompt
-          rawPrompt = `${styleRefPrompt}, concept art mood board, consistent style sheet`;
-        } else {
-          // 回退：从各字段中过滤出英文部分（移除中文）
-          const parts = [
-            String(style.overallAesthetic ?? ''),
-            String(style.renderTechnique ?? ''),
-            String(style.textureStyle ?? ''),
-            String(style.colorGrading ?? ''),
-            String(style.lightingStyle ?? ''),
-            String(style.referenceStyle ?? ''),
-          ].map(p => p.replace(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufa2f]+/g, ' ').replace(/[，。！？、：；""''（）【】《》]/g, ' ').trim())
-           .filter(Boolean);
-          if (!parts.length) return;
-          rawPrompt = `${parts.join(', ')}, concept art mood board, consistent style sheet`;
-        }
-        try {
-          this.logger.log(`[Phase1] 风格参考图: ${asset.refId}`);
-          const styleRoute = this.imageRouter.routeStyleGuide(DramaService.SCENE_IMAGE_SIZE);
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'style_guide', undefined, styleRoute.provider, assetStyleBucket);
-          const result = await this.mediaService.generateImage({
-            prompt, negativePrompt,
-            size: DramaService.SCENE_IMAGE_SIZE,
-            count: 1,
-            dramaId,
-            assetType: 'style_guide_image',
-            refId: asset.refId,
-            userId,
-            ...styleRoute,
-          });
-          if (result.images?.[0]?.url) {
-            asset.referenceImageUrl = result.images[0].url;
-            asset.referenceImages = [{ viewAngle: 'style_master', imageUrl: result.images[0].url }];
-            await this.visualAssetRepo.update(asset.id, {
-              referenceImageUrl: asset.referenceImageUrl,
-              referenceImages: asset.referenceImages,
-            });
-          }
-        } catch (err) { this.logger.warn(`风格参考图失败: ${asset.refId} — ${(err as Error).message}`); }
-      }),
-      // Prop reference images (product-shot style, 1:1 square)
-      // Note: NO style prefix — prop visualPrompt already specifies "white background, studio lighting"
-      // which conflicts with drama's cinematic style prefix.
-      ...propAssets.map(asset => async () => {
-        if (this.cancelledDramas.has(dramaId)) return;
-        const propData = asset.data as Record<string, unknown>;
-        const rawPrompt = String(propData.visualPrompt ?? '').trim();
-        if (!rawPrompt) return;
-        if (this.referenceViewFilled(asset, 'product_shot')) return;
-        try {
-          this.logger.log(`[Phase1] prop: ${asset.name}(${asset.refId})`);
-          const propRoute = this.imageRouter.routeLocation(DramaService.PROP_IMAGE_SIZE);
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'location', undefined, propRoute.provider, assetStyleBucket);
-          const result = await this.mediaService.generateImage({
-            prompt, negativePrompt, size: DramaService.PROP_IMAGE_SIZE, count: 1,
-            dramaId, assetType: 'prop_image', refId: asset.refId, userId,
-            ...propRoute,
-          });
-          if (result.images?.[0]?.url) {
-            asset.referenceImageUrl = result.images[0].url;
-            asset.referenceImages = [{ viewAngle: 'product_shot', imageUrl: result.images[0].url }];
-            await this.visualAssetRepo.update(asset.id, {
-              referenceImageUrl: asset.referenceImageUrl,
-              referenceImages: asset.referenceImages,
-            });
-          }
-        } catch (err) { this.logger.warn(`道具参考图失败: ${asset.refId} — ${(err as Error).message}`); }
-      }),
-    ];
-    await this.runConcurrent(phase1Tasks, 3);
-
-    // Phase 2 / 2b（多视角链式生成）已移除 — 多视角参考图改为逐集按需生成
-
-    // ═══ Phase 3: 角色外观变体参考图 ═══
-    // 已迁移至媒体编排器懒加载：按需在 generateEpisodeMedia/generateEpisodeImages 中生成。
-    // 此处不再提前批量生成，避免生成未使用的变体图（浪费成本）并确保变体图与剧情语境匹配。
-  }
-
-  /** 重新生成单个角色外观变体参考图 */
-  async regenerateVariationImage(
-    dramaId: string,
-    assetId: string,
-    variationId: string,
-    userId?: string,
-  ): Promise<VisualAssetEntity> {
-    const asset = await this.visualAssetRepo.findOne({ where: { id: assetId, dramaId } });
-    if (!asset) throw new NotFoundException(`视觉资产 ${assetId} 不存在`);
-    if (asset.assetType !== 'character') throw new Error('仅角色资产支持变体重生');
-
-    const charData = asset.data as Record<string, unknown>;
-    const variations = (charData.variations ?? []) as Array<Record<string, unknown>>;
-    const variation = variations.find((v) => v.variationId === variationId);
-    if (!variation) throw new NotFoundException(`变体 ${variationId} 不存在`);
-
-    const drama = await this.dramaRepo.findOne({ where: { id: dramaId } });
-    const vs = (drama?.state as any)?.visualStyle as DramaState['visualStyle'] | undefined;
-    const stylePrefix = this.buildAssetStylePrefix(vs, 'character');
-    const styleBucket = this.detectStyleBucket(vs);
-
-    const baseImg = asset.referenceImageUrl;
-    const refImages = baseImg ? [{ url: baseImg, weight: 0.6 }] : [];
-
-    const rawPrompt = [
-      String(charData.faceReferencePrompt ?? ''),
-      String(charData.hairStylePrompt ?? charData.hairStyle ?? ''),
-      String(charData.bodyTypePrompt ?? charData.bodyType ?? ''),
-      String(variation.visualPromptOverride ?? ''),
-      'same person as reference',
-    ].filter(Boolean).join(', ');
-
-    const varRoute = this.imageRouter.routeCharacterVariation(DramaService.CHAR_IMAGE_SIZE);
-    const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'character', stylePrefix, varRoute.provider, styleBucket);
-
-    const result = await this.mediaService.generateImage({
-      prompt, negativePrompt,
-      size: DramaService.CHAR_IMAGE_SIZE, count: 1, referenceImages: refImages,
-      dramaId, assetType: 'character_variation', refId: `${charData.characterId}_${variationId}`, userId,
-      ...varRoute,
-    });
-
-    const imageUrl = result.images?.[0]?.url ?? '';
-    if (!imageUrl) throw new Error('变体图片生成结果为空');
-
-    variation.referenceImageUrl = imageUrl;
-    const updatedData = { ...charData, variations };
-    await this.visualAssetRepo.update(asset.id, { data: updatedData });
-
-    // 同步更新 drama.state.characters[].variations[].referenceImageUrl，确保媒体编排器读 state 时能感知新 URL
-    if (drama) {
-      const stateObj = drama.state as unknown as DramaState;
-      const stateChar = stateObj.characters?.find(c => c.characterId === String(charData.characterId ?? ''));
-      const stateVariation = stateChar?.variations?.find(v => v.variationId === variationId);
-      if (stateVariation) {
-        stateVariation.referenceImageUrl = imageUrl;
-        await this.dramaRepo.save(drama);
-      }
-    }
-
-    this.logger.log(`变体参考图重生完成: ${charData.characterId}/${variationId}`);
-
-    return (await this.visualAssetRepo.findOne({ where: { id: asset.id } })) ?? asset;
-  }
-
-  private normalizeCharacterViewAngle(viewAngle?: string): CharacterViewAngle {
-    const v = String(viewAngle ?? '').trim();
-    return (CHARACTER_VIEW_ANGLES as readonly string[]).includes(v) ? (v as CharacterViewAngle) : 'face_front';
-  }
-
-  private normalizeLocationViewAngle(viewAngle?: string): LocationViewAngle {
-    const v = String(viewAngle ?? '').trim();
-    return (LOCATION_VIEW_ANGLES as readonly string[]).includes(v) ? (v as LocationViewAngle) : 'establishing';
-  }
-
-  private normalizeRefineScope(scope?: string): RefineSyncScope {
-    if (scope === 'single' || scope === 'group' || scope === 'all') return scope;
-    return 'group';
-  }
-
-  private normalizeRefineStrength(strength?: string): RefineStrength {
-    if (strength === 'light' || strength === 'balanced' || strength === 'strong') return strength;
-    return 'balanced';
-  }
-
-  private resolveRefineStrengthHint(strength: RefineStrength): string {
-    if (strength === 'light') return 'small conservative adjustment, keep identity and composition stable';
-    if (strength === 'strong') return 'large visual change allowed, still keep core identity';
-    return 'balanced adjustment on target elements, keep key identity consistent';
-  }
-
-  private resolveCharacterSizeByView(viewAngle: CharacterViewAngle): string {
-    if (viewAngle === 'full_body_front' || viewAngle === 'back_view') return '9:16';
-    return DramaService.CHAR_IMAGE_SIZE;
-  }
-
-  private resolveAssetPrompt(asset: VisualAssetEntity, viewAngle?: string): string {
-    const data = (asset.data ?? {}) as Record<string, unknown>;
-    if (asset.assetType === 'character') {
-      const fallback = String(data.faceReferencePrompt || '').trim();
-      try {
-        return buildViewAnglePrompt(data as any, (viewAngle ?? 'face_front') as CharacterViewAngle) || fallback;
-      } catch {
-        return fallback;
-      }
-    }
-    if (asset.assetType === 'location') {
-      const locView = this.normalizeLocationViewAngle(viewAngle);
-      const locPrompt = buildLocationViewPrompt(data as any, locView);
-      return locPrompt || String(data.visualPrompt || '').trim();
-    }
-    if (asset.assetType === 'prop') {
-      return String(data.visualPrompt || '').trim();
-    }
-    return [
-      String(data.overallAesthetic ?? ''),
-      String(data.renderTechnique ?? ''),
-      String(data.textureStyle ?? ''),
-      String(data.colorGrading ?? ''),
-      String(data.lightingStyle ?? ''),
-      String(data.referenceStyle ?? ''),
-    ].map((p) => p.trim()).filter(Boolean).join(', ');
-  }
-
-  private collectAssetRefs(asset: Pick<VisualAssetEntity, 'referenceImageUrl' | 'referenceImages'>): Array<{ url: string; weight: number }> {
-    const refs: Array<{ url: string; weight: number }> = [];
-    if (asset.referenceImageUrl) refs.push({ url: asset.referenceImageUrl, weight: 0.6 });
-    for (const ref of asset.referenceImages ?? []) {
-      if (!ref?.imageUrl) continue;
-      if (refs.some((item) => item.url === ref.imageUrl)) continue;
-      refs.push({ url: ref.imageUrl, weight: 0.5 });
-      if (refs.length >= 3) break;
-    }
-    return refs;
-  }
-
-  private upsertReferenceByView(
-    asset: Pick<VisualAssetEntity, 'referenceImageUrl' | 'referenceImages'>,
-    viewAngle: string,
-    imageUrl: string,
-  ): { referenceImageUrl: string; referenceImages: Array<{ viewAngle: string; imageUrl: string }> } {
-    return upsertReferenceByViewUtil(asset, viewAngle, imageUrl);
-  }
-
-  private resolveAffectedCharacterViews(targetView: CharacterViewAngle, scope: RefineSyncScope): CharacterViewAngle[] {
-    if (scope === 'single') return [targetView];
-    if (scope === 'all' || targetView === 'face_front') {
-      return [...CHARACTER_VIEW_ANGLES];
-    }
-    const faceGroup: CharacterViewAngle[] = ['face_three_quarter', 'side_profile', 'back_view'];
-    const framingGroup: CharacterViewAngle[] = ['upper_body_front', 'full_body_front'];
-    if (faceGroup.includes(targetView)) {
-      return faceGroup;
-    }
-    if (framingGroup.includes(targetView)) {
-      return framingGroup;
-    }
-    return [targetView];
-  }
-
-  /**
-   * 批量生成一个短剧的所有参考图（角色定妆照 + 场景图 + 风格图）。
-   * 供创建完成后、工作台手动触发，不阻塞创建流程。
-   */
-  async generateAllVisualAssets(dramaId: string, userId?: string): Promise<void> {
-    const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
-    const state = drama.state as unknown as DramaState;
-    if (!state?.characters?.length) throw new Error(`短剧 ${dramaId} 尚未完成创建，无法生成参考图`);
-    const assets = await this.visualAssetRepo.find({ where: { dramaId } });
-    await this.generateReferenceImages(dramaId, assets, state.characters, state.locations ?? [], state.visualStyle, userId);
-    await this.refreshVisualBible(dramaId);
-  }
-
-  /**
-   * 用 LLM 重新生成指定角色的 faceReferencePrompt（及相关英文 T2I 字段）。
-   * 适用于建剧时 LLM 遗漏/截断导致字段为空，不需要重新跑整个建剧流程。
-   */
-  async redesignCharacterFacePrompt(dramaId: string, characterId: string, userId?: string): Promise<{ characterId: string; name: string; faceReferencePrompt: string }> {
-    const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
-    const state = drama.state as unknown as DramaState;
-    const char = state.characters?.find(c => c.characterId === characterId);
-    if (!char) throw new NotFoundException(`角色 ${characterId} 不存在`);
-
-    const vs = state.visualStyle;
-    const facePromptRule = (state as any).visualBible?.facePromptRule
-      ?? vs?.facePromptRule
-      ?? 'faceReferencePrompt 必须以【渲染风格词 + 角色身份词】开头，先锚定风格，再描述五官，最后必须加上 "front-facing, looking at camera"。';
-
-    const repairSchema = z.object({
-      faceReferencePrompt: z.string().min(1),
-      bodyTypePrompt: z.string().default(''),
-      hairStylePrompt: z.string().default(''),
-      defaultCostumePrompt: z.string().default(''),
-    });
-
-    const styleCtx = vs
-      ? `美学风格：${vs.overallAesthetic ?? ''}, 调色：${vs.colorGrading ?? ''}, 光影：${vs.lightingStyle ?? ''}, 渲染：${vs.renderTechnique ?? ''}`
-      : '风格未知';
-
-    const raw = await this.llm.generateStructured({
-      taskName: 'drama-repair-character-face-prompt',
-      schema: repairSchema,
-      metadata: { dramaId, userId },
-      systemPrompt: `你是短剧视觉总监，负责为角色生成精准的英文 T2I 面部提示词。
-全剧视觉风格：${styleCtx}
-faceReferencePrompt 规则：${facePromptRule}
-只输出英文 T2I 提示词，不要输出中文解释。`,
-      userPrompt: `请为以下角色生成 faceReferencePrompt：
-角色名：${char.name}
-角色定位：${char.role}
-面部描述（中文）：${char.faceDescription ?? '未知'}
-肤色：${char.skinTone ?? ''}
-体型：${char.bodyType ?? ''}
-发型：${char.hairStyle ?? ''}
-服饰：${char.defaultCostume ?? ''}
-标志特征：${char.distinguishingFeatures ?? ''}`,
-      temperature: 0.3,
-    });
-
-    const repaired = repairSchema.parse(raw);
-
-    // 更新 state.characters
-    char.faceReferencePrompt = repaired.faceReferencePrompt;
-    if (repaired.bodyTypePrompt) char.bodyTypePrompt = repaired.bodyTypePrompt;
-    if (repaired.hairStylePrompt) char.hairStylePrompt = repaired.hairStylePrompt;
-    if (repaired.defaultCostumePrompt) char.defaultCostumePrompt = repaired.defaultCostumePrompt;
-    drama.state = state as unknown as Record<string, unknown>;
-    await this.dramaRepo.save(drama);
-
-    this.logger.log(`[RepairFacePrompt] ${char.name}(${characterId}) 修复完成: "${repaired.faceReferencePrompt.slice(0, 80)}..."`);
-    return { characterId, name: char.name, faceReferencePrompt: repaired.faceReferencePrompt };
-  }
-
-  /**
-   * 手动 patch 指定角色的字段（前端手动编辑 faceReferencePrompt 等）。
-   * 只允许修改安全字段，不允许改 characterId / role / scope。
-   */
-  async patchCharacter(
-    dramaId: string,
-    characterId: string,
-    patch: Partial<Pick<DramaState['characters'][number], 'faceReferencePrompt' | 'faceDescription' | 'bodyTypePrompt' | 'hairStylePrompt' | 'defaultCostumePrompt' | 'defaultCostume' | 'distinguishingFeatures'>>,
-  ): Promise<{ characterId: string; name: string }> {
-    const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
-    const state = drama.state as unknown as DramaState;
-    const char = state.characters?.find(c => c.characterId === characterId);
-    if (!char) throw new NotFoundException(`角色 ${characterId} 不存在`);
-
-    const allowed: Array<keyof typeof patch> = [
-      'faceReferencePrompt', 'faceDescription', 'bodyTypePrompt',
-      'hairStylePrompt', 'defaultCostumePrompt', 'defaultCostume', 'distinguishingFeatures',
-    ];
-    for (const key of allowed) {
-      if (patch[key] !== undefined) (char as any)[key] = patch[key];
-    }
-
-    drama.state = state as unknown as Record<string, unknown>;
-    await this.dramaRepo.save(drama);
-    this.logger.log(`[PatchCharacter] ${char.name}(${characterId}) 字段已更新: ${Object.keys(patch).join(', ')}`);
-    return { characterId, name: char.name };
-  }
-
-  /** 从 DB 重新加载最新资产图片 URL，刷新 drama.state.visualBible */
-  private async refreshVisualBible(dramaId: string): Promise<void> {
-    const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
-    const state = drama.state as unknown as DramaState;
-    const assets = await this.visualAssetRepo.find({ where: { dramaId } });
-    state.visualBible = this.buildVisualBible(state.characters, state.visualStyle, state.promptProfile, assets);
-    drama.state = state as unknown as Record<string, unknown>;
-    await this.dramaRepo.save(drama);
-  }
-
-  /** 重新生成单个视觉资产的参考图（角色/场景均支持按视角重生） */
-  async regenerateAssetImage(
-    dramaId: string,
-    assetId: string,
-    userId?: string,
-    opts?: { viewAngle?: string },
-  ): Promise<VisualAssetEntity> {
-    const asset = await this.visualAssetRepo.findOne({ where: { id: assetId, dramaId } });
-    if (!asset) throw new NotFoundException(`视觉资产 ${assetId} 不存在`);
-    const isChar = asset.assetType === 'character';
-    const isLoc = asset.assetType === 'location';
-    const isProp = asset.assetType === 'prop';
-    const targetView = isChar
-      ? this.normalizeCharacterViewAngle(opts?.viewAngle)
-      : isLoc
-        ? this.normalizeLocationViewAngle(opts?.viewAngle)
-        : isProp
-          ? 'product_shot'
-          : 'establishing';
-    const prompt = this.resolveAssetPrompt(asset, targetView);
-    if (!prompt) throw new Error(`资产 ${assetId} 缺少生成提示词`);
-    const size = isChar
-      ? this.resolveCharacterSizeByView(targetView as CharacterViewAngle)
-      : isProp
-        ? DramaService.PROP_IMAGE_SIZE
-        : DramaService.SCENE_IMAGE_SIZE;
-    const nonCharShotType = asset.assetType === 'style_guide' ? 'style_guide' : 'location';
-    const drama = await this.dramaRepo.findOne({ where: { id: dramaId } });
-    const regenStyleBucket = this.detectStyleBucket((drama?.state as any)?.visualStyle);
-    // 按资产类型选择最优模型路由
-    const route = isChar
-      ? (targetView === 'face_front'
-        ? this.imageRouter.routeCharacterFace(size)
-        : this.imageRouter.routeCharacterViewAngle(size))
-      : (isLoc || isProp)
-        ? this.imageRouter.routeLocation(size)
-        : {};
-    const optimized = this.optimizeAssetPrompt(prompt, isChar ? 'character' : nonCharShotType, undefined, route.provider, regenStyleBucket);
-    // 主视角/道具：从零生成，不传参考图
-    const isPrimaryView = (isChar && targetView === 'face_front') || (isLoc && targetView === 'establishing') || isProp;
-    const refs = isPrimaryView ? [] : this.collectAssetRefs(asset);
-    const result = await this.mediaService.generateImage({
-      prompt: optimized.prompt,
-      negativePrompt: optimized.negativePrompt,
-      size,
-      count: 1,
-      referenceImages: refs,
-      dramaId,
-      assetType: `${asset.assetType}_image`,
-      refId: asset.refId,
-      userId,
-      ...route,
-    });
-    const imageUrl = result.images?.[0]?.url ?? '';
-    if (!imageUrl) throw new Error('重新生成结果为空');
-    if (isChar) {
-      // 懒加载：直接在已有视角上 upsert，不重建空槽
-      const updated = this.upsertReferenceByView(
-        { referenceImageUrl: asset.referenceImageUrl, referenceImages: asset.referenceImages ?? [] },
-        targetView,
-        imageUrl,
-      );
-      await this.visualAssetRepo.update(asset.id, {
-        referenceImageUrl: updated.referenceImageUrl,
-        referenceImages: updated.referenceImages,
-      });
-    } else if (isLoc) {
-      // 懒加载：直接在已有视角上 upsert，不重建空槽
-      const updated = this.upsertReferenceByView(
-        { referenceImageUrl: asset.referenceImageUrl, referenceImages: asset.referenceImages ?? [] },
-        targetView,
-        imageUrl,
-      );
-      await this.visualAssetRepo.update(asset.id, {
-        referenceImageUrl: updated.referenceImageUrl,
-        referenceImages: updated.referenceImages,
-      });
-    } else if (isProp) {
-      await this.visualAssetRepo.update(asset.id, {
-        referenceImageUrl: imageUrl,
-        referenceImages: [{ viewAngle: 'product_shot', imageUrl }],
-      });
-    } else {
-      await this.visualAssetRepo.update(asset.id, { referenceImageUrl: imageUrl });
-    }
-    const refreshed = (await this.visualAssetRepo.findOne({ where: { id: asset.id } })) ?? asset;
-    // 后台异步刷新 visualBible，确保集数生成时能引用最新角色参考图（不阻塞响应）
-    setImmediate(() => this.refreshVisualBible(dramaId).catch((e) => this.logger.warn(`refreshVisualBible failed: ${e?.message}`)));
-    return refreshed;
-  }
-
-  /** 图生图精修：支持按视角与同步范围进行角色联动 */
-  async refineAssetImage(
-    dramaId: string,
-    assetId: string,
-    input: {
-      instruction: string;
-      viewAngle?: string;
-      syncScope?: RefineSyncScope;
-      strength?: RefineStrength;
-      preserveIdentity?: boolean;
-      userId?: string;
-    },
-  ): Promise<{ asset: VisualAssetEntity; affectedViews: string[] }> {
-    const asset = await this.visualAssetRepo.findOne({ where: { id: assetId, dramaId } });
-    if (!asset) throw new NotFoundException(`视觉资产 ${assetId} 不存在`);
-    const rawInstruction = String(input.instruction || '').trim();
-    if (!rawInstruction) throw new Error('请输入修改要求');
-    const drama = await this.dramaRepo.findOne({ where: { id: dramaId } });
-    const dramaState = (drama?.state ?? {}) as any;
-    const regenStyleBucket = this.detectStyleBucket(dramaState?.visualStyle);
-    const isChar = asset.assetType === 'character';
-    const isLoc = asset.assetType === 'location';
-    const isProp = asset.assetType === 'prop';
-    const targetView = isChar
-      ? this.normalizeCharacterViewAngle(input.viewAngle)
-      : isLoc
-        ? this.normalizeLocationViewAngle(input.viewAngle)
-        : isProp
-          ? 'product_shot'
-          : 'establishing';
-    const syncScope = this.normalizeRefineScope(input.syncScope);
-    const strength = this.normalizeRefineStrength(input.strength);
-    const preserveIdentity = input.preserveIdentity ?? true;
-    const strengthHint = this.resolveRefineStrengthHint(strength);
-    // Props have only one view (product_shot), no multi-view sync needed
-    const affectedViews = isChar
-      ? this.resolveAffectedCharacterViews(targetView as CharacterViewAngle, syncScope)
-      : [targetView];
-    const targetViews = affectedViews;
-    let nextPrimary = asset.referenceImageUrl;
-    let nextRefs = [...(asset.referenceImages ?? [])];
-    let successCount = 0;
-
-    for (const view of targetViews) {
-      const basePrompt = this.resolveAssetPrompt({
-        ...asset,
-        referenceImageUrl: nextPrimary,
-        referenceImages: nextRefs,
-      } as VisualAssetEntity, view);
-      if (!basePrompt) continue;
-      // LLM 结合剧集风格上下文 + 当前 basePrompt + 用户反馈，输出修正后的完整提示词
-      const rewrittenPrompt = await this.rewritePromptByUserFeedback(basePrompt, rawInstruction, asset.assetType, dramaId, dramaState, input.userId);
-      this.logger.log(`[RefineAsset][${view}] prompt rewritten: "${basePrompt.slice(0, 60)}..." → "${rewrittenPrompt.slice(0, 60)}..."`);
-      const identityHint = isChar && preserveIdentity ? 'keep same identity, face structure, hairstyle and body profile' : '';
-      const locationHint = isLoc ? 'keep same location, maintain spatial layout and architectural details' : '';
-      const propHint = isProp ? 'keep same object, maintain shape and material details' : '';
-      const prompt = [
-        rewrittenPrompt,
-        strengthHint,
-        identityHint,
-        locationHint,
-        propHint,
-      ].filter(Boolean).join(', ');
-      const refineSize = isChar
-        ? this.resolveCharacterSizeByView(view as CharacterViewAngle)
-        : isProp
-          ? DramaService.PROP_IMAGE_SIZE
-          : DramaService.SCENE_IMAGE_SIZE;
-      const refineRoute = this.imageRouter.routeRefinement(refineSize);
-      const refineShotType = isChar ? 'character' : (asset.assetType === 'style_guide' ? 'style_guide' : 'location');
-      const optimized = this.optimizeAssetPrompt(prompt, refineShotType, undefined, refineRoute.provider, regenStyleBucket);
-      const refs = this.collectAssetRefs({ referenceImageUrl: nextPrimary, referenceImages: nextRefs });
-      const result = await this.mediaService.generateImage({
-        prompt: optimized.prompt,
-        negativePrompt: optimized.negativePrompt,
-        size: refineSize,
-        count: 1,
-        referenceImages: refs,
-        dramaId,
-        assetType: `${asset.assetType}_refine`,
-        refId: asset.refId,
-        userId: input.userId,
-        ...refineRoute,
-      });
-      const imageUrl = result.images?.[0]?.url ?? '';
-      if (!imageUrl) continue;
-      successCount += 1;
-      if (isChar || isLoc) {
-        const viewUpdated = this.upsertReferenceByView({ referenceImageUrl: nextPrimary, referenceImages: nextRefs }, view, imageUrl);
-        nextPrimary = viewUpdated.referenceImageUrl;
-        nextRefs = viewUpdated.referenceImages;
-      } else if (isProp) {
-        nextPrimary = imageUrl;
-        nextRefs = [{ viewAngle: 'product_shot', imageUrl }];
-      } else {
-        nextPrimary = imageUrl;
-      }
-    }
-
-    if (!successCount) throw new Error('精修失败，未产出图片');
-    await this.visualAssetRepo.update(asset.id, {
-      referenceImageUrl: nextPrimary,
-      ...((isChar || isLoc || isProp) ? { referenceImages: nextRefs } : {}),
-    });
-    const updated = (await this.visualAssetRepo.findOne({ where: { id: asset.id } })) ?? asset;
-    // 后台异步刷新 visualBible，确保集数生成时能引用最新角色参考图（不阻塞响应）
-    setImmediate(() => this.refreshVisualBible(dramaId).catch((e) => this.logger.warn(`refreshVisualBible failed: ${e?.message}`)));
-    return { asset: updated, affectedViews };
-  }
-
-  private buildVisualBible(
-    characters: DramaState['characters'],
-    visualStyle: DramaState['visualStyle'] | undefined,
-    promptProfile: DramaState['promptProfile'] | undefined,
-    visualAssets: Array<Partial<VisualAssetEntity>>,
-  ): NonNullable<DramaState['visualBible']> {
-    const charAssetMap = new Map(
-      visualAssets
-        .filter((a) => a.assetType === 'character' && a.refId)
-        .map((a) => [a.refId!, a]),
-    );
-    const locAssetMap = new Map(
-      visualAssets
-        .filter((a) => a.assetType === 'location' && a.refId)
-        .map((a) => [a.refId!, a]),
-    );
-    const styleAsset = visualAssets.find((a) => a.assetType === 'style_guide');
-
-    const identityPack = (characters ?? []).map((c) => {
-      const asset = charAssetMap.get(c.characterId);
-      const refs = Array.isArray(asset?.referenceImages) ? asset!.referenceImages! : [];
-      const faceFront = refs.find((r) => r.viewAngle === 'face_front')?.imageUrl || asset?.referenceImageUrl || '';
-      const face34 = refs.find((r) => r.viewAngle === 'face_three_quarter')?.imageUrl || '';
-      const upperOrFull = refs.find((r) => r.viewAngle === 'upper_body_front')?.imageUrl
-        || refs.find((r) => r.viewAngle === 'full_body_front')?.imageUrl
-        || '';
-      return {
-        characterId: c.characterId,
-        faceDna: c.faceDescription,
-        anchorImages: { faceFront, face34, upperOrFull },
-        variationPolicy: c.variations?.length
-          ? `allow:${c.variations.map(v => v.variationId).join(',')}`
-          : 'allow:default_only',
-      };
-    });
-
-    const styleTokens = [
-      visualStyle?.overallAesthetic,
-      visualStyle?.renderTechnique,
-      visualStyle?.textureStyle,
-      visualStyle?.colorGrading,
-      visualStyle?.lightingStyle,
-      visualStyle?.referenceStyle,
-    ].filter(Boolean) as string[];
-
-    const styleRefImages = [
-      styleAsset?.referenceImageUrl ?? '',
-      ...(Array.isArray(styleAsset?.referenceImages) ? styleAsset!.referenceImages!.map((r) => r.imageUrl) : []),
-    ].filter(Boolean);
-
-    const preferredAngles = promptProfile?.cameraStyleGuide?.preferredAngles ?? [];
-    const movementPolicy = promptProfile?.cameraStyleGuide?.signatureTechniques ?? [];
-    const transitionStyle = promptProfile?.cameraStyleGuide?.transitionStyle
-      ? [promptProfile.cameraStyleGuide.transitionStyle]
-      : [];
-
-    const scenePack = Array.from(locAssetMap.entries()).map(([locationId, asset]) => {
-      const refs = Array.isArray(asset?.referenceImages) ? asset!.referenceImages! : [];
-      return {
-        locationId,
-        anchorImages: {
-          establishing: refs.find((r) => r.viewAngle === 'establishing')?.imageUrl || asset?.referenceImageUrl || '',
-          interiorMedium: refs.find((r) => r.viewAngle === 'interior_medium')?.imageUrl || '',
-          detailClose: refs.find((r) => r.viewAngle === 'detail_close')?.imageUrl || '',
-        },
-      };
-    });
-
-    return {
-      version: `vb_${Date.now()}`,
-      identityPack,
-      scenePack,
-      stylePack: {
-        styleTokens,
-        styleRefImages,
-        colorLutHint: visualStyle?.colorGrading ?? '',
-      },
-      cameraPack: {
-        preferredAngles,
-        movementPolicy: [...movementPolicy, ...transitionStyle],
-        continuityRules: [
-          'same_scene_keep_axis',
-          'avoid_abrupt_scale_jump',
-          'emotion_peak_allow_fast_motion_only',
-        ],
-      },
-    };
-  }
 
   async listDramas(userId?: string): Promise<{ dramas: DramaEntity[] }> {
     const dramas = await this.dramaRepo.find({
@@ -1568,7 +577,7 @@ faceReferencePrompt 规则：${facePromptRule}
   }): string {
     const { ga, guide, reviewerCalibration, visualStyle, strategy, seed, profile } = ctx;
     switch (nodeId) {
-      // ── 创建阶段 Agent（全局 AI 指令页面使用）──
+      // 创建阶段 Agent 预览仅用默认值展示结构；实际运行时由 DTO 参数（用户选择）覆盖
       case 'seed-analyzer':
         return buildSeedAnalyzerSystemPrompt({ epMin: 60, epMax: 100, durSec: 180 });
       case 'series-director':
@@ -1676,13 +685,13 @@ faceReferencePrompt 规则：${facePromptRule}
     const drama = await this.dramaRepo.findOne({ where: { id: dramaId } });
     if (!drama) throw new NotFoundException(`短剧 ${dramaId} 不存在`);
     if (userId && drama.userId !== userId) throw new NotFoundException(`短剧 ${dramaId} 不存在`);
-    if (this.generatingDramas.has(dramaId)) {
+    if (await this.stateStore.isGenerating(dramaId)) {
       throw new Error('该短剧正在生成中，请先暂停后再删除');
     }
 
-    // 1. 清除内存状态（进度追踪 / 暂停标记）
-    this.cancelledDramas.add(dramaId);
-    this.pausedDramas.delete(dramaId);
+    // 1. 清除 Redis 状态（进度追踪 / 暂停标记 / 生成锁）
+    await this.stateStore.cancel(dramaId);
+    await this.stateStore.stopGenerating(dramaId); // 确保 generating SET + TTL key 被清除
     this.progressService.clearGenerating(`${dramaId}:generate`);
     this.progressService.clearGenerating(`${dramaId}:assets`); // 批量参考图生成锁
     const episodes = await this.episodeRepo.find({ where: { dramaId }, select: ['episodeNumber'] });
@@ -1715,18 +724,29 @@ faceReferencePrompt 规则：${facePromptRule}
     await this.wfExecRepo.delete({ dramaId });
     await this.dramaRepo.remove(drama);
 
+    // 9. 清理 EventEmitter 监听器（防止 SSE 监听器残留）
+    this.progressService.removeAllForDrama(dramaId);
+
     this.logger.log(`短剧已完整删除 dramaId=${dramaId}`);
-    setTimeout(() => this.cancelledDramas.delete(dramaId), 5 * 60 * 1000);
+    // cancelled TTL 由 Redis 自动管理（5 分钟后过期）
     return { success: true };
   }
 
   private async purgeQueueJobs(dramaId: string): Promise<void> {
     for (const queue of [this.textQueue, this.imageQueue, this.videoQueue, this.voiceQueue]) {
       try {
+        // 清理 waiting/delayed/prioritized 状态的 job（可直接 remove）
         const waiting = await queue.getJobs(['waiting', 'delayed', 'prioritized']);
         for (const job of waiting) {
           if (job.data?.dramaId === dramaId) {
             await job.remove().catch(() => {});
+          }
+        }
+        // 标记 active 状态的 job 为 failed（BullMQ 不允许 remove active job）
+        const active = await queue.getJobs(['active']);
+        for (const job of active) {
+          if (job.data?.dramaId === dramaId) {
+            await job.moveToFailed(new Error('短剧已删除，任务强制终止'), job.token ?? '0', false).catch(() => {});
           }
         }
       } catch (err) {
@@ -1737,28 +757,28 @@ faceReferencePrompt 规则：${facePromptRule}
 
   /** 异步启动逐集生成（含并发互斥），立即返回任务信息 */
   async generateEpisodes(dramaId: string): Promise<{ message: string; startEp: number; endEp: number }> {
-    this.pausedDramas.delete(dramaId);
+    await this.stateStore.resume(dramaId);
     const { startEp, endEp } = await this.prepareGenerateEpisodes(dramaId);
     this.runEpisodePipeline(dramaId, startEp, endEp).catch(err =>
       this.logger.error(`逐集生成失败 dramaId=${dramaId} E${startEp}-E${endEp}: ${err.message}`),
-    ).finally(() => { this.generatingDramas.delete(dramaId); });
+    ).finally(() => { this.stateStore.stopGenerating(dramaId); });
     return { message: `已启动 ${endEp - startEp + 1} 集生成（E${startEp}-E${endEp}）`, startEp, endEp };
   }
 
   /** 逐集生成并等待完成（供 SSE 使用，可推送进度） */
   async generateEpisodesAndWait(dramaId: string): Promise<{ message: string; startEp: number; endEp: number; paused: boolean }> {
-    this.pausedDramas.delete(dramaId);
+    await this.stateStore.resume(dramaId);
     const { startEp, endEp } = await this.prepareGenerateEpisodes(dramaId);
     try {
       const wasPaused = await this.runEpisodePipeline(dramaId, startEp, endEp);
       return { message: wasPaused ? '已暂停' : `E${startEp}-E${endEp} 全部完成`, startEp, endEp, paused: wasPaused };
     } finally {
-      this.generatingDramas.delete(dramaId);
+      await this.stateStore.stopGenerating(dramaId);
     }
   }
 
   private async prepareGenerateEpisodes(dramaId: string): Promise<{ startEp: number; endEp: number }> {
-    if (this.generatingDramas.has(dramaId)) throw new Error('该短剧正在生成中，请勿重复提交');
+    if (await this.stateStore.isGenerating(dramaId)) throw new Error('该短剧正在生成中，请勿重复提交');
     const drama = await this.getDrama(dramaId);
     const state = drama.state as unknown as DramaState;
     const creationStatus = (state as any)?._status;
@@ -1768,7 +788,7 @@ faceReferencePrompt 规则：${facePromptRule}
     const startEp = Number.isFinite(rawCursor) && rawCursor >= 1 ? rawCursor : Math.max(1, (drama.episodesGenerated ?? 0) + 1);
     const endEp = startEp;
     this.logger.log(`开始生成 E${startEp} — dramaId: ${dramaId}`);
-    this.generatingDramas.add(dramaId);
+    await this.stateStore.startGenerating(dramaId);
     return { startEp, endEp };
   }
 
@@ -1776,7 +796,7 @@ faceReferencePrompt 规则：${facePromptRule}
   private async runEpisodePipeline(dramaId: string, startEp: number, endEp: number): Promise<boolean> {
     try {
       for (let ep = startEp; ep <= endEp; ep++) {
-        if (this.pausedDramas.has(dramaId)) {
+        if (await this.stateStore.isPaused(dramaId)) {
           this.logger.log(`生成已暂停 dramaId=${dramaId}，停在 E${ep} 之前`);
           this.progressService.emit({
             dramaId,
@@ -1826,19 +846,19 @@ faceReferencePrompt 规则：${facePromptRule}
     }
   }
 
-  pauseGeneration(dramaId: string): boolean {
-    if (!this.generatingDramas.has(dramaId)) return false;
-    this.pausedDramas.add(dramaId);
+  async pauseGeneration(dramaId: string): Promise<boolean> {
+    if (!(await this.stateStore.isGenerating(dramaId))) return false;
+    await this.stateStore.pause(dramaId);
     this.logger.log(`暂停请求已标记 dramaId=${dramaId}`);
     return true;
   }
 
-  resumeGeneration(dramaId: string): void {
-    this.pausedDramas.delete(dramaId);
+  async resumeGeneration(dramaId: string): Promise<void> {
+    await this.stateStore.resume(dramaId);
   }
 
-  isGenerationPaused(dramaId: string): boolean {
-    return this.pausedDramas.has(dramaId);
+  async isGenerationPaused(dramaId: string): Promise<boolean> {
+    return this.stateStore.isPaused(dramaId);
   }
 
   async listEpisodes(dramaId: string): Promise<{ episodes: EpisodeEntity[] }> {
@@ -2110,190 +1130,16 @@ faceReferencePrompt 规则：${facePromptRule}
     }));
   }
 
+  // ── 创意辅助方法：已提取至 DramaIdeaService，此处保留委托接口供内部引用 ──
   async enhanceIdea(rawIdea: string, genre?: string, userId?: string) {
-    return this.llm.generateStructured({
-      taskName: 'drama-idea-enhancer',
-      schema: z.object({ enhanced: z.string(), highlights: z.array(z.string()).min(2).max(5) }),
-      tags: ['setup', 'drama-idea'],
-      metadata: { userId },
-      systemPrompt: `你是一位顶尖短剧策划编辑，擅长把粗糙的创意打磨成让观众一眼上头的短剧概念。
-
-=== 核心理念 ===
-所有创意最终都将制作成"短剧"——有角色、有对白、有戏剧冲突的竖屏微剧集。
-无论素材是虚构故事、历史人物、神话传说还是科幻设定，美化方向都是"如何让它成为一部好看的剧"。
-
-=== 美化原则 ===
-1. 冲突前置：埋入核心矛盾和身份反差，产生"接下来会怎样"的好奇。
-2. 角色驱动：赋予主角有趣的困境或身份反差，让观众代入。
-3. 爽点/情感钩子明确：突出让观众上头的核心体验（打脸逆袭/命运震撼/身份反转/甜蜜暴击/认知颠覆等）。
-4. 视觉化：描述要有画面感——观众能想象出具体的场景和冲突。
-
-=== 题材适配 ===
-- 霸总/甜宠/复仇/重生等：聚焦爽点反转、冲突升级、身份反差。
-- 传记剧（真实人物）：以人物视角演绎传奇一生，聚焦命运转折和人性抉择。保留历史框架，但以戏剧手法呈现（如李白醉酒对峙杨国忠，而非旁白介绍李白生平）。
-- 历史剧：以特定历史事件/时代为背景的权谋/战争/命运剧，聚焦人物在历史洪流中的抗争。
-- 神话传说：就是奇幻短剧，突出瑰丽想象和角色魅力（哪吒闹海、孙悟空大闹天宫本身就是好剧本）。
-- 科幻：聚焦未来世界的人性困境和高概念冲突。
-
-=== 通用约束 ===
-- 文案质感：简短有力、节奏紧凑，控制在100-200字。
-- 忠于原意：保留核心方向和情感基调，润色而非改写。
-- 适度原则：如果原始创意已足够精彩，微调即可。`,
-      userPrompt: `原始创意：\n${rawIdea}${genre ? `\n题材方向：${genre}` : ''}\n\n请将这个创意美化为一个有吸引力的短剧概念。输出美化后的创意和 2-5 个核心卖点（highlights 应体现让观众追看的核心驱动力）。`,
-      temperature: 0.75,
-    });
+    return this.ideaService.enhanceIdea(rawIdea, genre, userId);
   }
 
   async recommendGenreAndAudience(mainIdea: string, userId?: string) {
-    const GENRE_OPTS = ['霸总', '甜宠', '战神', '穿越', '宫斗', '复仇', '重生', '悬疑', '都市', '古装', '传记剧', '神话传说', '历史剧', '科幻'] as const;
-    const PLATFORM_OPTS = ['douyin', 'kuaishou', 'hongguo', 'wechat_mini', 'bilibili', 'tencent_video', 'mango_tv', 'iqiyi', 'reelshort', 'dramabox', 'generic'] as const;
-    const AUDIENCE_OPTS = ['18-30 岁女性', '18-30 岁男性', '25-40 岁女性', '全年龄'] as const;
-    const FOCUS_OPTS = ['female_lead', 'male_lead', 'dual_lead', 'ensemble'] as const;
-    const VISUAL_STYLE_OPTS = [
-      '3d_fantasy', '3d_british', '3d_chibi', '3d_realistic', '3d_voxel', '3d_mobile_game', '3d_toon_render', '3d_japanese_npr', '3d_cyberpunk', '3d_disney',
-      '2d_anime', '2d_film', '2d_fantasy_anime', '2d_retro_anime', '2d_british_anime', '2d_ghibli', '2d_korean_anime', '2d_action', '2d_cybercity', '2d_sports', '2d_tezuka', '2d_thick_line', '2d_death_note', '2d_shoujo', '2d_horror', '2d_chibi',
-      'chinese_ink', 'chinese_style', '2d_gongbi', '2d_watercolor', '2d_pixel', '2d_simple', '2d_sketch', '2d_british_comic', '2d_rubber_hose', '2d_golden',
-      'live_action', 'period_live', 'hk_film', 'retro_wuxia', 'western_film',
-      'stop_motion', 'clay_stop', 'lego_stop', 'felt_stop', 'paper_stop',
-    ] as const;
-    const ASPECT_RATIO_OPTS = ['9:16', '16:9'] as const;
-    const DURATION_OPTS = [120, 180, 300] as const;
-    const SCALE_OPTS = [
-      { min: 40, max: 60 },
-      { min: 60, max: 100 },
-      { min: 100, max: 150 },
-    ];
-    return this.llm.generateStructured({
-      taskName: 'drama-genre-audience-recommender',
-      metadata: { userId },
-      schema: z.object({
-        genreDisplayName: z.enum(GENRE_OPTS),
-        platformTarget: z.enum(PLATFORM_OPTS),
-        targetAudience: z.enum(AUDIENCE_OPTS),
-        protagonistFocus: z.enum(FOCUS_OPTS),
-        suggestedVisualStyle: z.enum(VISUAL_STYLE_OPTS),
-        aspectRatio: z.enum(ASPECT_RATIO_OPTS),
-        targetEpisodeDurationSec: z.number().int(),
-        plannedEpisodes: z.object({ min: z.number().int(), max: z.number().int() }),
-        reason: z.string().optional().nullable(),
-      }),
-      tags: ['setup', 'drama-recommend'],
-      systemPrompt: `你是一位资深短剧策划，根据用户的核心创意推荐最匹配的题材、平台、受众、叙事聚焦、视觉风格和规模配置。
-
-=== 题材判断 ===
-可选题材：${GENRE_OPTS.join('、')}
-- 豪门逆袭/霸道总裁 → 霸总；甜蜜恋爱 → 甜宠；战力碾压 → 战神；穿越时空 → 穿越
-- 宫廷权谋 → 宫斗；复仇打脸 → 复仇；重活一世 → 重生；推理悬疑 → 悬疑
-- 都市生活/职场 → 都市；古装爱情/武侠 → 古装
-- 真实人物传奇（李白/武则天/爱因斯坦） → 传记剧
-- 神话故事/民间传说/仙侠 → 神话传说
-- 历史事件/朝代兴亡/战争 → 历史剧
-- 科幻/未来/太空 → 科幻
-
-=== 平台判断（按题材×受众×内容调性综合决定）===
-| 平台 | 用户画像 | 适合题材 | 内容偏好 | 画幅 |
-|------|---------|---------|---------|------|
-| douyin | 国内年轻用户(18-35)，女性略多 | 霸总/甜宠/复仇/重生/都市 | 快节奏、强情绪、前3秒必须抓人 | 9:16竖屏 |
-| kuaishou | 国内下沉市场(25-45)，男性占比高 | 战神/复仇/古装/历史剧/传记剧 | 接地气、热血、家国情怀、朴实共情 | 9:16竖屏 |
-| hongguo | 国内全年龄，日活过亿，免费+广告分账 | 全题材覆盖，强情感向/反转 | 强留存hook、完播率优先 | 9:16竖屏 |
-| wechat_mini | 微信生态用户，付费+免费混合 | 霸总/甜宠/复仇/重生/悬疑 | 分销生态，悬念卡点驱动 | 9:16竖屏 |
-| bilibili | 年轻用户(16-30)，二次元+精品向 | 悬疑/科幻/古装/都市/校园 | 精品化、有深度、弹幕友好、可动漫化 | 16:9横屏 |
-| tencent_video | 全年龄偏女性，精品长视频用户 | 甜宠/都市/古装/宫斗/悬疑 | 精品化、制作感强、故事完整 | 16:9横屏 |
-| mango_tv | 年轻女性(18-35)，湖南卫视生态 | 甜宠/都市/古装/青春 | 甜蜜、青春、年轻态 | 16:9横屏 |
-| iqiyi | 全年龄偏女性，影视品质用户 | 悬疑/都市/古装/科幻 | 精品化、悬疑向表现好 | 16:9横屏 |
-| reelshort | 海外英语用户，年轻女性 | 霸总/复仇/甜宠/穿越 | 强反转、灰姑娘叙事、英文内容 | 9:16竖屏 |
-| dramabox | 海外多语种用户，年龄范围广 | 悬疑/科幻/古装/神话传说 | 高概念、视觉奇观、多语种 | 9:16竖屏 |
-| generic | 通用/不确定 | 所有题材 | 当创意无法明确归属某平台时使用 | 9:16竖屏 |
-
-决策权重：题材匹配(40%) > 受众画像(30%) > 内容调性(30%)
-- 传记剧/历史剧：偏正能量和家国叙事 → kuaishou；偏年轻化戏剧改编 → douyin
-- 神话传说：偏视觉奇观 → dramabox；偏国内热血 → kuaishou
-- 霸总/甜宠：国内向 → douyin/hongguo；海外向 → reelshort
-- 悬疑/科幻：高概念叙事 → dramabox/bilibili；快节奏反转 → douyin
-- 精品深度向：bilibili/tencent_video/iqiyi
-- 免费流量向：hongguo > douyin > kuaishou
-- 甜宠青春向：mango_tv/douyin
-
-=== 受众判断 ===
-- 女性向偏情感（霸总/甜宠/宫斗/重生/少女漫画风）→ 18-30 岁女性
-- 女性向偏成熟（都市/职场/复仇/宫斗权谋）→ 25-40 岁女性
-- 男性向偏战力/热血（战神/军事/体育）→ 18-30 岁男性
-- 传记剧/历史剧/神话传说/科普教育 → 全年龄
-
-=== 叙事聚焦 ===
-女主为主 → female_lead，男主为主 → male_lead，男女均衡 → dual_lead，多角色群像 → ensemble
-
-=== 视觉风格推荐（从可选值中选一个最匹配的）===
-可选值：${VISUAL_STYLE_OPTS.join(', ')}
-
-视觉风格映射参考：
-- 霸总/都市/职场/现代题材 → live_action / 2d_korean_anime / 3d_realistic
-- 甜宠/少女向 → 2d_shoujo / 2d_korean_anime / 2d_ghibli / 3d_disney
-- 战神/热血/格斗 → 2d_action / 3d_realistic / 2d_thick_line
-- 古装/宫斗 → period_live / chinese_style / 2d_gongbi / chinese_ink
-- 传记剧（中国历史人物）→ chinese_style / period_live / 2d_gongbi / chinese_ink
-- 传记剧（西方人物）→ live_action / 3d_realistic / western_film
-- 历史剧（中国）→ period_live / chinese_style / 2d_gongbi
-- 历史剧（非中国）→ live_action / western_film / 3d_realistic
-- 神话传说（东方）→ 3d_fantasy / chinese_style / chinese_ink / 2d_fantasy_anime
-- 神话传说（西方/通用）→ 3d_fantasy / 2d_fantasy_anime / 3d_toon_render
-- 穿越 → 根据穿越目标时代选择（穿越古代 → chinese_style；穿越未来 → 2d_cybercity）
-- 复仇 → live_action / 2d_film / hk_film
-- 重生 → 与原题材风格一致
-- 悬疑/惊悚 → 2d_death_note / live_action / 2d_film
-- 科幻 → 2d_cybercity / 3d_cyberpunk / 3d_realistic / western_film
-- 武侠/江湖 → retro_wuxia / chinese_ink / 2d_action
-- 轻松/搞笑/全年龄 → 3d_chibi / 2d_chibi / clay_stop / 3d_disney
-核心原则：视觉风格应与题材调性、目标受众审美偏好、平台内容生态三者一致。
-
-=== 画面比例 ===
-可选值：${ASPECT_RATIO_OPTS.join('、')}
-- 竖屏短剧平台（douyin/kuaishou/reelshort）→ 9:16
-- 横屏平台或电影感内容 → 16:9
-- 绝大多数短剧选 9:16；仅当创意明确指向电影/横屏体验时才选 16:9
-
-=== 每集时长（秒）===
-可选值：${DURATION_OPTS.join('、')}
-- 120秒(2分钟)：极快节奏，适合 douyin/reelshort 上的纯爽剧（霸总/战神/甜宠等高密度情绪输出题材）
-- 180秒(3分钟)：标准时长，适合大多数题材的最佳平衡点
-- 300秒(5分钟)：深度叙事，适合传记剧/历史剧/悬疑等需要铺陈背景和角色深度的题材，或 dramabox 等偏长内容平台
-决策逻辑：平台节奏偏好(40%) + 题材叙事密度(40%) + 受众耐心阈值(20%)
-
-=== 总集数规模 ===
-可选规模档位：${SCALE_OPTS.map(s => `${s.min}-${s.max}集`).join('、')}
-- 40-60集（紧凑型）：适合单线冲突、高密度反转（霸总/甜宠/战神/短线复仇）或海外平台(reelshort)
-- 60-100集（标准型）：适合多线交织、冲突层层递进（穿越/宫斗/都市/重生/科幻）
-- 100-150集（长线型）：适合史诗级叙事、人物一生跨度（传记剧/历史剧/长篇神话传说/大型宫斗权谋）
-决策逻辑：创意体量(50%) + 题材叙事容量(30%) + 平台用户追剧习惯(20%)
-- 创意描述涉及"一生""多个时代""多条线"等大体量关键词 → 倾向长线型
-- 创意聚焦单一事件/单一冲突 → 倾向紧凑型
-
-输出必须严格匹配上述各字段的枚举值。plannedEpisodes 的 min/max 必须匹配以上三个档位之一。targetEpisodeDurationSec 必须为 ${DURATION_OPTS.join('/')} 之一。`,
-      userPrompt: `核心创意：\n${mainIdea}\n\n请推荐最匹配的题材、平台、受众、叙事聚焦、视觉风格和规模配置，输出 JSON。`,
-      temperature: 0.3,
-    });
+    return this.ideaService.recommendGenreAndAudience(mainIdea, userId);
   }
 
   async generateStoryGoal(input: { mainIdea: string; genre: string; targetAudience: string }, userId?: string) {
-    return this.llm.generateStructured({
-      taskName: 'drama-goal-generator',
-      schema: z.object({ goal: z.string(), alternatives: z.array(z.string()).min(2).max(3) }),
-      tags: ['setup', 'drama-goal'],
-      metadata: { userId },
-      systemPrompt: `你是一位资深短剧策划，擅长从核心创意中提炼出让观众欲罢不能的主线目标。
-
-生成原则：
-1. 主线目标必须从核心创意中自然延伸，聚焦核心冲突或叙事脉络。
-2. 目标要有视觉冲击力和悬念感——观众能直接"看到"冲突/命运转折。
-3. 目标要有足够的延展性——能支撑多集的叙事。
-4. 语言简洁有力，20-60 字。
-5. 同时给出 2-3 个备选目标，风格/方向不同。
-6. 针对不同题材调整策略：
-   - 商业短剧（霸总/甜宠/复仇等）→ 聚焦爽点反转、冲突升级
-   - 传记剧/历史剧 → 聚焦人物命运弧线、时代碰撞
-   - 神话传说 → 聚焦使命/考验/成长`,
-      userPrompt: `核心创意：${input.mainIdea}\n题材：${input.genre}\n目标观众：${input.targetAudience}\n\n请生成一个最佳主线目标和 2-3 个备选方案。`,
-      temperature: 0.8,
-    });
+    return this.ideaService.generateStoryGoal(input, userId);
   }
 }

@@ -52,4 +52,12 @@ export class DramaProgressService {
     this.emitter.on(`progress:${dramaId}`, listener);
     return () => this.emitter.removeListener(`progress:${dramaId}`, listener);
   }
+
+  /** 删除短剧时彻底清理：移除所有 EventEmitter 监听器 + active Map 中该 dramaId 相关的 key */
+  removeAllForDrama(dramaId: string): void {
+    this.emitter.removeAllListeners(`progress:${dramaId}`);
+    for (const key of this.active.keys()) {
+      if (key.startsWith(`${dramaId}:`)) this.active.delete(key);
+    }
+  }
 }

@@ -270,16 +270,28 @@ export const dramaPromptProfileSchema = z.object({
 // Phase 2: 视觉资产 (Visual Assets)
 // ---------------------------------------------------------------------------
 
-export const characterVariationSchema = z.object({ // 角色外观变体（换装/受伤/伪装等）
+export const characterVariationSchema = z.object({ // 角色外观变体（换装/年龄/变身/伪装等）
   variationId: z.string(),
-  name: z.string(), // "正式西装" / "受伤状态" / "伪装造型"
+  name: z.string(), // "正式西装" / "少年时期" / "神形态" / "伪装造型"
+  /**
+   * 变体类型 — 决定下游参考图生成策略：
+   *   costume: 仅换装，face 保持不变（默认）
+   *   age: 年龄跨度，face 需年龄化修改（皱纹/肤质/发色）
+   *   transformation: 变身/化形/修炼突破，整体外貌可能大幅变化
+   *   disguise: 伪装，可能改变发型/妆容但骨骼结构不变
+   */
+  variationType: z.enum(['costume', 'age', 'transformation', 'disguise']).default('costume'),
   costume: z.string(), // 服饰描述
   visualPromptOverride: z.string(), // 覆盖 defaultCostume 的英文T2I提示词
+  /** 年龄提示词（variationType=age 时必填），如 "elderly, 70 years old, deep wrinkles, grey hair" */
+  ageHint: ns(),
+  /** 面部覆盖提示词（variationType=age/transformation 时可选），覆盖 faceReferencePrompt 的年龄/变身部分 */
+  faceOverridePrompt: ns(),
   referenceImageUrl: z.union([z.string(), z.null()]).transform(v => v ?? ''), // LLM 可能返回 null，统一转为空串
 });
 
 export const characterIdentitySchema = z.object({
-  characterId: z.string(),
+  characterId: z.string().transform(v => v.toLowerCase().replace(/[\s\-_]+/g, '')),
   name: z.string(),
   role: z.enum(['protagonist', 'antagonist', 'supporting', 'minor', 'narrator', 'historical_figure']),
   scope: z.enum(['series', 'arc', 'episode']).default('series'),
@@ -792,6 +804,20 @@ export const shotSchema = z.object({
   isHumanEdited: z.boolean().default(false), // true = 人工已修改，AI 重跑时跳过此 Shot
   humanEditedAt: z.string().nullish(),       // ISO 时间戳，记录最近人工修改时间
   humanEditNote: z.string().nullish(),       // 人工修改备注（可选）
+
+  // ─── 签名道具追踪（结构化，便于质检/验证/参考图注入）─────────────────────
+  /**
+   * 本 Shot 出场的签名道具列表（可选）。
+   * 由分镜导演 LLM 输出或 enforceFaceLock 后处理自动填充。
+   * 下游用途：
+   *   1. ShotContextBuilder 按 propId 查找 product_shot 参考图注入 T2I
+   *   2. CoherenceValidator 检测跨 Shot 道具一致性
+   *   3. QualityGate 可针对道具可见性进行专项评估
+   */
+  props: z.array(z.object({
+    propId: z.string(),               // 对应 signaturePropSchema.propId
+    visualOverride: z.string().nullish(), // 本 Shot 的道具特殊视觉描述（如打开状态/损坏状态）
+  })).nullish(),
 });
 
 export const episodeStoryboardSchema = z.object({

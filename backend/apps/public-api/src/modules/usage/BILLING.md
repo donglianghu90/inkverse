@@ -42,5 +42,5 @@
 ## 扩展新模型
 
 1. 在配置中补充对应 provider/model 的单价（CNY）
-2. 若需新粒度，在 `BillingResolverService` 中新增 `resolveXxxCostUsd` 方法
+2. 若需新粒度，在 `BillingResolverService` 中新增 `resolveXxxCostCny` 方法
 3. 调用方传入参数，由 BillingResolver 解析单价并计算 cost

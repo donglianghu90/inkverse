@@ -68,9 +68,6 @@ export class EpisodeEntity {
     };
   }> | null;
 
-  @Column({ name: 'media_cost_cny', type: 'decimal', precision: 8, scale: 4, default: 0 })
-  mediaCostCny: number;
-
   @Column({ type: 'text', default: '' })
   mediaError: string;
 

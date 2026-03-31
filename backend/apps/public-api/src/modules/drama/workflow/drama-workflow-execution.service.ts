@@ -167,33 +167,50 @@ export class DramaWorkflowExecutionService {
     return [...latestByEpisode.values()].sort((a, b) => b.episodeNumber - a.episodeNumber).slice(0, limitEpisodes);
   }
 
-  /** 查询此剧所有「进行中」或「最近中断」的执行记录（用于前端页面重入时恢复进度显示） */
+  /** 查询此剧所有「进行中」或「最近中断/失败」的执行记录（用于前端页面重入时恢复进度显示） */
   async findRunningForDrama(dramaId: string): Promise<Array<{
     episodeNumber: number; lastCheckpoint: string; isActive: boolean;
     heartbeatAgeMs: number; startedAt: string; progressPct: number;
-    stepLabel: string;
+    stepLabel: string; status: string; errorMessage: string;
   }>> {
+    // 查询 running / interrupted / failed 状态的记录，确保服务重启后也能展示恢复入口
     const runs = await this.repo.find({
-      where: { dramaId, status: 'running' as DramaExecStatus },
+      where: [
+        { dramaId, status: 'running' as DramaExecStatus },
+        { dramaId, status: 'interrupted' as DramaExecStatus },
+        { dramaId, status: 'failed' as DramaExecStatus },
+      ],
       order: { createdAt: 'DESC' },
       take: 20,
-      select: ['id', 'episodeNumber', 'lastCheckpoint', 'heartbeatAt', 'createdAt'],
+      select: ['id', 'episodeNumber', 'lastCheckpoint', 'heartbeatAt', 'createdAt', 'status', 'errorMessage', 'stepOutputs'],
     });
     const now = Date.now();
-    return runs.map(r => {
-      const hbTime = (r.heartbeatAt ?? r.createdAt).getTime();
-      const cp = r.lastCheckpoint ?? '';
-      const { pct, label } = checkpointToProgress(cp);
-      return {
-        episodeNumber: r.episodeNumber,
-        lastCheckpoint: cp,
-        isActive: now - hbTime < STALE_THRESHOLD_MS,
-        heartbeatAgeMs: now - hbTime,
-        startedAt: r.createdAt.toISOString(),
-        progressPct: pct,
-        stepLabel: label,
-      };
-    });
+    // 每集只保留最新一条记录（避免历史失败记录叠加）
+    const latestByEp = new Map<number, typeof runs[0]>();
+    for (const r of runs) {
+      if (!latestByEp.has(r.episodeNumber)) latestByEp.set(r.episodeNumber, r);
+    }
+    return [...latestByEp.values()]
+      .filter(r => {
+        // 有步骤产出才值得展示恢复入口
+        return r.stepOutputs && Object.keys(r.stepOutputs).length > 0;
+      })
+      .map(r => {
+        const hbTime = (r.heartbeatAt ?? r.createdAt).getTime();
+        const cp = r.lastCheckpoint ?? '';
+        const { pct, label } = checkpointToProgress(cp);
+        return {
+          episodeNumber: r.episodeNumber,
+          lastCheckpoint: cp,
+          isActive: r.status === 'running' && (now - hbTime < STALE_THRESHOLD_MS),
+          heartbeatAgeMs: now - hbTime,
+          startedAt: r.createdAt.toISOString(),
+          progressPct: pct,
+          stepLabel: label,
+          status: r.status,
+          errorMessage: r.errorMessage ?? '',
+        };
+      });
   }
 }
 

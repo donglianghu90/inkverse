@@ -72,13 +72,9 @@
 
 ---
 
-### 🟠 3. 用户取消视频无冲正（中优先级）
+### ~~🟠 3. 用户取消视频无冲正~~（已修复）
 
-**问题**：`cancelVideoJob` 会 `markFailed`，但 submit 时已 record 的 usage 不会回滚。
-
-**影响**：用户取消的任务仍会计费。
-
-**方案**：与 1 合并——改为 completion 时计费，取消则视为失败，不 record 或 record(ok: false, costUsd: 0)。
+**已修复**：改为 completion 时计费，取消视为失败，record(ok: false, costCny: 0)。submit 时不 record。
 
 ---
 
@@ -92,19 +88,15 @@
 
 ---
 
-### 🟡 5. parseScopeId 与 shot:refId 不兼容（低优先级）
+### ~~🟡 5. parseScopeId 与 shot:refId 不兼容~~（已修复）
 
-**问题**：`parseScopeId` 正则为 `^(episode|chapter|scene|shot):(\d+)$`，只匹配数字 ID。若 scope 为 `shot:shot_first_frame` 等字符串 refId，会解析失败。
-
-**现状**：已统一使用 `episode:N`，shot 归属 episode，此问题已规避。若未来恢复 shot 粒度，需扩展正则支持 `shot:[\w-]+`。
+**已修复**：扩展正则为 `/^(episode|chapter|scene|shot):([\w-]+)$/`，支持数字和字符串 ID。
 
 ---
 
-### 🟡 6. BILLING.md 文档过时（低优先级）
+### ~~🟡 6. BILLING.md 文档过时~~（已修复）
 
-**问题**：仍写 USD、pricing.multiplier 等，与当前「配置即人民币」不符。
-
-**建议**：更新为 CNY，移除 multiplier 相关描述。
+**已修复**：方法名更新为 `resolveXxxCostCny`，`billing-config.types.ts` 字段名改为 `inputCnyPer1M` / `outputCnyPer1M`。
 
 ---
 

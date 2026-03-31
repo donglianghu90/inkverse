@@ -44,6 +44,8 @@ export interface BakeContext {
    * 对应 agent 的题材专属模板（若无则回退到 _custom 基础模板）。
    */
   genreKey?: string;
+  /** seed.redLines — 不可违反的底线，注入到所有下游 agent system prompt */
+  redLines?: string[];
   /** 视觉风格模板的扩展字段（来自 DramaVisualStyleTemplateService），含 shotStyleGuide/scriptDialogueGuide 等 */
   visualStyleExtras?: {
     shotStyleGuide?: string;

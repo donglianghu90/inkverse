@@ -1,11 +1,13 @@
 /** 镜头连贯性验证器 — 检测相邻 Shot 间视觉一致性、角色外观漂移、场景跳变 */
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { createHash } from 'crypto';
+import { z } from 'zod';
 import { EpisodeEntity } from '../entities/episode.entity';
 import { DramaEntity } from '../entities/drama.entity';
 import { DramaState, Shot, EpisodeStoryboard } from '../schemas/drama-state.schemas';
+import { LlmService } from '../../llm/llm.service';
 import type { ShotMediaEntry } from '../interfaces';
 
 export interface CoherencePair {
@@ -21,6 +23,7 @@ export interface CoherenceReport {
   flaggedShots: string[];
   overallScore: number;
   checkedAt: string;
+  vlmChecked?: boolean;
 }
 
 const SAME_SCENE_MIN_SCORE = 0.6;
@@ -33,6 +36,7 @@ export class ShotCoherenceValidatorService {
   constructor(
     @InjectRepository(EpisodeEntity) private readonly episodeRepo: Repository<EpisodeEntity>,
     @InjectRepository(DramaEntity) private readonly dramaRepo: Repository<DramaEntity>,
+    @Optional() private readonly llm?: LlmService,
   ) {}
 
   /**
@@ -40,8 +44,9 @@ export class ShotCoherenceValidatorService {
    * 1. 相邻 Shot 同一 sceneId → 背景/光影/角色服饰应高度一致
    * 2. 跨场景 Shot → 角色面部应一致，背景可变化
    * 3. 标记不一致的 Shot 以供重新生成
+   * @param enableVlm 启用 VLM 视觉比对（quality 模式专用，额外调用 LLM 视觉能力）
    */
-  async validateEpisodeCoherence(dramaId: string, episodeNumber: number): Promise<CoherenceReport> {
+  async validateEpisodeCoherence(dramaId: string, episodeNumber: number, enableVlm = false): Promise<CoherenceReport> {
     const episode = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber } });
     if (!episode?.storyboard) return this.emptyReport();
 
@@ -69,6 +74,16 @@ export class ShotCoherenceValidatorService {
 
       const sameScene = shotA.sceneId === shotB.sceneId;
       const pair = this.evaluatePair(shotA, shotB, sameScene, state);
+
+      // VLM 视觉比对增强：仅对同场景相邻 Shot 且元数据检查未发现问题时执行
+      if (enableVlm && sameScene && pair.score >= SAME_SCENE_MIN_SCORE && this.llm) {
+        const vlmResult = await this.vlmVisualCheck(imgA, imgB, shotA, shotB, state);
+        if (vlmResult) {
+          pair.issues.push(...vlmResult.issues);
+          pair.score = Math.max(0, pair.score - vlmResult.penalty);
+        }
+      }
+
       pairs.push(pair);
 
       const threshold = sameScene ? SAME_SCENE_MIN_SCORE : CROSS_SCENE_MIN_SCORE;
@@ -87,12 +102,69 @@ export class ShotCoherenceValidatorService {
       flaggedShots: [...flaggedSet],
       overallScore,
       checkedAt: new Date().toISOString(),
+      vlmChecked: enableVlm && !!this.llm,
     };
 
     this.logger.log(
-      `E${episodeNumber} 连贯性检查: ${pairs.length} pairs | overall=${overallScore} | flagged=${flaggedSet.size}`,
+      `E${episodeNumber} 连贯性检查: ${pairs.length} pairs | overall=${overallScore} | flagged=${flaggedSet.size}${enableVlm ? ' | VLM=on' : ''}`,
     );
     return report;
+  }
+
+  /**
+   * VLM 视觉比对：使用 LLM 视觉能力比较两张相邻 Shot 图片的一致性。
+   * 仅检测人类肉眼可见的不一致（面部漂移、服饰突变、光影反转），忽略构图/景别变化（这是正常的）。
+   * 成本控制：单次调用 ≈ 500 tokens，仅在 quality 模式启用。
+   */
+  private async vlmVisualCheck(
+    imgUrlA: string, imgUrlB: string,
+    shotA: Shot, shotB: Shot,
+    state: DramaState,
+  ): Promise<{ issues: string[]; penalty: number } | null> {
+    if (!this.llm) return null;
+    try {
+      const commonChars = (shotA.characters ?? [])
+        .filter(ca => (shotB.characters ?? []).some(cb => cb.characterId === ca.characterId))
+        .map(c => state.characters?.find(ch => ch.characterId === c.characterId)?.name ?? c.characterId);
+
+      const vlmSchema = z.object({
+        issues: z.array(z.string()),
+        severity: z.enum(['none', 'minor', 'major']),
+      });
+
+      const result = await this.llm.generateStructured({
+        taskName: 'vlm-coherence-check',
+        schema: vlmSchema,
+        metadata: { dramaId: state.dramaId },
+        systemPrompt: `你是一位短剧视觉质检员。比较两张相邻镜头的图片，检测以下不一致问题：
+1. 同一角色的面部特征是否一致（五官、肤色、年龄感）
+2. 同一角色的服饰是否一致（颜色、款式、配饰）
+3. 背景环境是否一致（同场景应保持一致）
+4. 光影方向是否一致
+
+忽略以下正常变化：景别/角度不同、表情不同、人物位置不同。
+如果没有发现问题，issues 为空数组，severity 为 "none"。`,
+        userPrompt: `两张相邻镜头来自同一场景（${shotA.sceneId}）。
+共同出场角色：${commonChars.join('、') || '无'}
+镜头A：${shotA.visualPrompt?.slice(0, 100) ?? ''}
+镜头B：${shotB.visualPrompt?.slice(0, 100) ?? ''}
+
+请比较两张图片的视觉一致性。`,
+        imageUrls: [imgUrlA, imgUrlB],
+        temperature: 0.1,
+      });
+
+      if (!result.issues?.length || result.severity === 'none') return null;
+
+      const penalty = result.severity === 'major' ? 0.3 : 0.15;
+      return {
+        issues: result.issues.map((i: string) => `[VLM] ${i}`),
+        penalty,
+      };
+    } catch (err) {
+      this.logger.debug(`VLM 比对跳过: ${(err as Error).message}`);
+      return null;
+    }
   }
 
   /** 基于元数据的结构化连贯性评估（不依赖视觉模型，纯逻辑分析） */

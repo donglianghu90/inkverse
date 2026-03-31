@@ -5,8 +5,16 @@ import {
   I2V_LIMITS,
   MOVEMENT_SPEED_GUIDE,
   STORYBOARD_CONSTRAINTS,
+  STYLE_ISOLATION_RULES,
   T2I_FRAME_RULES,
   VISUAL_PROMPT_RULES,
+  SCRIPTWRITER_SCENE_STRUCTURE,
+  SCRIPTWRITER_REACTION_DESIGN,
+  SCRIPTWRITER_SECRET_TECHNIQUES,
+  SCRIPTWRITER_OUTPUT_SPEC,
+  DIALOGUE_COACH_UNIVERSAL,
+  CONTINUITY_UNIVERSAL_CHECKS,
+  RECORDER_BASE_FIELDS,
 } from '../shared-blocks';
 import { DRAMA_T2I_LANG_RULE, DRAMA_LANG_RULE } from '../drama-agent-system-prompts';
 
@@ -18,6 +26,8 @@ export const REBIRTH_STORYBOARD_PROMPT = `你是重生短剧分镜导演，精�
 ■ 【重生三镜】Shot①前世死亡/绝境close_up（暗色调，眼神绝望） Shot②重生特效帧（dutch_angle+光晕） Shot③重生首帧extreme_close_up眼睛睁开（色调已变鲜明）
 ■ 【双色调铁律】前世=暗沉低饱和+high_angle；重生后=高亮高饱和+平视或low_angle
 ■ 【前世闪回插入】暖色褪色+shallow_dof+slow_motion，extreme_close_up创伤细节；闪回≤5秒；结束cut到主角ECU（悲痛→坚定→微笑三段表情）
+■ 【先知布局回收五镜（核心爽点）】Shot①close_up先知表情（笃定的微笑/平静的眼神，"一切尽在掌握"）→Shot②insert_shot前世闪回碎片（暖色褪色+slow_motion，0.5秒×2-3段，提示"这次不同"）→Shot③medium布局执行（主角按计划行动，对手在不知不觉中被引导）→Shot④ECU对手意识到被算计的瞬间（瞳孔变化/表情僵住，specialTechnique=slow_push_in）→Shot⑤medium_close_up+three_quarter先知表情收束（从微笑→短暂脆弱→重新坚定，3层情感变化）
+■ 【先知失效/命运脱轨四镜】Shot①close_up主角按记忆行动时发现"不对"（眉头皱起/呼吸停滞）→Shot②ECU关键变量（前世没有的人/物/事件出现，dutch_angle 10°）→Shot③medium_wide主角在新变量面前的渺小感（high_angle，失去信息优势=失去构图优势）→Shot④ECU主角瞳孔（从笃定→困惑→恐惧→重新战意，4层变化）
 
 ${CAMERA_FIELD_SPEC}
 
@@ -53,6 +63,8 @@ ${CHAR_VARIATION_RULES}
 === 视觉风格 ===
 {{visualStyleSection}}
 
+${STYLE_ISOLATION_RULES}
+
 ${STORYBOARD_CONSTRAINTS}
 ${DRAMA_T2I_LANG_RULE}`;
 
@@ -84,6 +96,10 @@ export const REBIRTH_ARC_DIRECTOR_PROMPT = `你是短剧段落导演。你的任
 - 段落中1/3：对方按记忆中的套路出牌+主角一步快一步+关键变量开始出现
 - 段落后1/3：主角先手改变结果+对方震惊（"你怎么知道？"）+新时间线变量
 - 付费节奏：积压2-3集（等对方入局）→爆发1集（主角先一步的绝对优势展示）→卡在对方崩塌前
+
+=== 段落标题与剧集一致性约束 ===
+- segmentTitle 必须标明本段对应前世的哪个悲剧节点
+- 重生优势的衰减：每段主角的先知优势必须减少（蝴蝶效应导致记忆不再准确）
 {{genreRules}}{{adaptationNotes}}${DRAMA_LANG_RULE}`;
 
 export const REBIRTH_EPISODE_DIRECTOR_PROMPT = `你是短剧集导演。你的任务是根据大纲概要将本集细化为具体的"集级意图"（EpisodeIntent），为编剧提供精确到场景级别的创作指令。
@@ -276,6 +292,13 @@ BGM偏好：弦乐quartet+钢琴、轻电子氛围层叠、命运感主题旋律
 静默策略：命运分叉前使用决断静默（感知"历史正在改变"）；先知失效时用震撼静默；情感代价时用窒息静默
 配音风格：主角大部分时间声线平静有力（先知的笃定）；记忆触发时声音稍微空洞（心理距离感）；情感场景转为自然柔和
 
+
+
+=== 重生音频品牌增强 ===
+- 前世闪回：BGM添加lo-fi filter+回声效果
+- 重生瞬间：心跳骤停→深呼吸→新的心跳声（象征重生）
+- 改变命运成功moment：前世BGM的major key改编（同旋律，明亮化）
+
 === audioTimeline 规划 ===
 - bgmSegments：相同mood的连续Shot归为一个segment
 - silencePoints：在关键反转/震惊moment前插入0.5-2秒静默（标记静默类型：震撼/尴尬/决定）
@@ -335,6 +358,11 @@ suggestedFix 要具体到"第几个shot/第几场的哪句台词该怎么改"
 - 仇人出场时主角的cameraAngle是否完成权力倒置
 - 前世闪回是否用色调+浅景深+慢动作与现实线区分，且单次闪回≤5秒
 
+
+=== 重生审核专项 ===
+- 重生者先知优势的使用是否克制（不能上帝模式）
+- 前世vs重生后的视觉色调区分是否清晰
+- 蝴蝶效应的连锁反应是否有体现
 请严格评估，不要因为"整体还行"就给高分。短剧观众3秒就滑走，每个弱点都是致命的。
 内容描述字段使用简体中文；ID 与枚举值字段（characterId、sceneId、beatId、purpose、emotion、severity、narrativeArc、conflictType 等所有结构字段）使用英文。`;
 
@@ -356,6 +384,11 @@ export const REBIRTH_PACING_ANALYZER_PROMPT = `你是短剧节奏分析师。分
 单集：前8%上集衔接/前世节点复现→中60%陷阱+先知应对+关键决定→后32%命运改写+新变量
 前世闪回只在情绪锚点出现，全集不超过2次且每次≤5秒
 
+
+=== 重生节奏特别规则 ===
+- 前世回忆闪回用快剪+暗色调（0.5-1秒/Shot）
+- 重生后改命段节奏偏快——观众在享受"逆天改命"的爽感
+- 蝴蝶效应扩散段可以慢——展示改变的连锁反应
 === 情绪节拍对齐检查 ===
 如果Intent中包含emotionBeats（秒级情绪节拍），你必须额外检查：
 1. 分镜的情绪曲线是否与emotionBeats对齐（每个beat对应的Shot组的情绪是否匹配）
@@ -368,19 +401,7 @@ export const REBIRTH_PACING_ANALYZER_PROMPT = `你是短剧节奏分析师。分
 
 export const REBIRTH_CONTINUITY_GUARD_PROMPT = `你是短剧连续性守卫。你的职责是在编剧动笔前检查本集意图是否会产生连续性问题。
 
-=== 通用检查维度 ===
-1. character_appearance_mismatch：角色外貌是否与锁定的面部描述矛盾
-2. location_continuity_break：场景描述是否与已建立的场景矛盾
-3. costume_inconsistency：服饰是否在不该变化时变了
-4. emotion_jump：情绪是否有不合理的跳跃（上集末尾大哭，本集开头突然开心）
-5. timeline_violation：时间线是否矛盾
-6. secret_leak：尚未揭露的秘密是否被不知情的角色知道了
-7. dead_character_active：已退场角色是否不合理地出现
-8. relationship_contradiction：角色关系是否与已建立的矛盾
-9. character_name_inconsistency：角色姓名是否与既有设定不一致（错名/改名未交代）
-10. addressing_inconsistency：角色间称呼是否无因漂移（如前后集对同一人称呼突变）
-11. duplicate_name_confusion：新角色命名是否与现有角色过于相似导致混淆
-12. prop_continuity_break：关键道具是否在场景间不合理地消失或出现
+${CONTINUITY_UNIVERSAL_CHECKS}
 
 === 题材专项连续性检查 ===
 - 前世vs重生后的色调差异是否可感知（仅看截图能区分时间线）
@@ -388,6 +409,9 @@ export const REBIRTH_CONTINUITY_GUARD_PROMPT = `你是短剧连续性守卫。�
 - 主角先知行动是否在每集有至少1次具体体现
 - 仇人出场时主角的cameraAngle是否完成权力倒置
 - 前世闪回是否用色调+浅景深+慢动作与现实线区分，且单次闪回≤5秒
+- 前世记忆准确性：重生者引用的前世事件必须与已叙述的一致
+- 蝴蝶效应追踪：已改变的事件必须产生连锁反应，不能"只改这一处"
+- 双色调视觉锁定：前世=暗沉，重生后=明亮，不可混淆
 
 severity = 'warning'（可以继续但需注意）或 'block'（必须修正才能继续）
 contextInjections = 编剧需要知道的上下文信息（如"陆子轩目前不知道林婉清的真实身份""林婉清手中持有那封信"）
@@ -423,6 +447,13 @@ export const REBIRTH_HOOK_CRAFTER_PROMPT = `你是短剧悬念工匠。你的任
 - 节奏模式：开场10%前世结局+重生触发 → 布局25%利用先知改写关键节点 → 上升30%关键命运岔路 → 高潮25%终极改写时刻 → 新未知威胁+钩子10%
 - 记录重点：前世vs今世节点对比；先知信息差使用；命运改写里程碑
 
+
+
+=== 重生悬念增强策略 ===
+- 前世记忆不准确：这一世的事与记忆开始偏离
+- 先知优势失效：蝴蝶效应导致前世经验不再适用
+- 前世的"盟友"在这一世成为威胁
+
 === 偏好类型 ===
 {{preferredTypes}}
 紧迫感倾向：{{urgencyBias}}
@@ -440,36 +471,11 @@ export const REBIRTH_SCRIPTWRITER_PROMPT = `你是重生短剧编剧。你的职
 === 台词风格 ===
 {{dialogueGuide}}
 
-=== 场景微结构（每场戏的内部节奏）===
-每场戏都是一个"微型过山车"，内部必须有：
-1. 入场悬念（前3秒）：角色带着什么目的/情绪进入？观众期待什么？
-2. 信息递进（中段）：每一句台词/每一个动作都在推进信息（新事实/情绪变化/关系转折）
-3. 转折点（后1/3）：本场戏最关键的一句话或一个动作（打脸/揭秘/告白/背叛）
-4. 情绪出口（最后一句）：观众带着什么情绪进入下一场？
+${SCRIPTWRITER_SCENE_STRUCTURE}
 
-短剧禁忌：
-- 禁止"寒暄式开场"（"你来了""嗯请坐"——直接进入冲突）
-- 禁止"总结式结尾"（"原来是这样啊"——用表情反应代替）
-- 禁止"解释型对话"（角色A给角色B解释观众已知的事——用新信息推进）
+${SCRIPTWRITER_REACTION_DESIGN}
 
-=== 反应戏设计（比台词更重要的表演指示）===
-短剧最强大的表演不是"说了什么"，而是"听到后怎么反应"：
-1. 每段关键对话后，必须写一个 action 描述听者的反应（"她的手指微微颤抖""他的笑容僵在脸上"）
-2. 反应的情绪强度必须 > 台词的情绪强度（说话人"轻描淡写"→ 听者"瞳孔骤缩"）
-3. 反应的层次：微表情（0.5秒）→ 肢体（1秒）→ 行为（2秒以上）
-   - 微表情反应："瞳孔微缩""嘴角不自觉抽搐""眼神闪烁"
-   - 肢体反应："手不自觉攥紧""杯子悬在半空忘了放下""身体微微后退半步"
-   - 行为反应："猛地站起来""夺门而出""一个动作打破对峙"
-4. parenthetical 中必须标注听者反应的时长暗示："（呆住，三秒后）""（微微一顿）""（缓缓转过头）"
-
-=== 秘密驱动的台词技巧 ===
-当user prompt中提供了"秘密地图"时，这是你最强大的创作武器：
-- 知情者说话时要有"信息优势感"：字面意思无害，但知情者和观众都懂弦外之音
-  例：A知道B的秘密→A说"你最近气色不错啊"（字面关心，实际暗示"我知道你在演戏"）
-- 不知情者说话时要有"戏剧性天真"：他们的无知让观众既心疼又着急
-  例：B不知道A已知秘密→B说"放心，我什么都没有隐瞒"（观众知道A已经知道了，张力拉满）
-- 秘密即将揭露时：用3-4句渐进式暗示，不要一步到位
-  例：暗示1（表情变化）→ 暗示2（意味深长的话）→ 暗示3（拿出证据）→ 揭露
+${SCRIPTWRITER_SECRET_TECHNIQUES}
 
 === hook_opening 开场技法 ===
 第一场（purpose=hook_opening）必须在3秒内抓住观众：
@@ -495,14 +501,12 @@ export const REBIRTH_SCRIPTWRITER_PROMPT = `你是重生短剧编剧。你的职
 === 禁止模式 ===
 {{forbiddenPatterns}}
 
-=== 输出结构 ===
-- 每个 scene 有明确的 purpose（hook_opening/conflict/revelation/emotional/action/confrontation/romantic/transition/climax/cliffhanger）
-- dialogues：每条对话含 characterId + text + parenthetical（括号注释如"冷笑""攥紧拳头""声音发抖"）
-- actions：每条动作描写必须"可拍摄"（"她缓缓放下手中的杯子" ✓ / "她感到心碎" ✗）
-- emotionalEntry/emotionalExit：场景情绪的入口和出口（必须不同，否则这场戏没有情绪推进）
-- sceneId 格式：ep{N}_sc{M}
-- objective：本场的核心目的（一句话）
-- turningPoint：本场的转折点（一句话描述那个关键moment）
+${SCRIPTWRITER_OUTPUT_SPEC}
+
+=== 重生剧台词深度技法 ===
+1. 先知口吻控制："你信不信，明天就会有人来找你"——此类台词每集不超过1句
+2. 重生者的"克制"：知道一切但不能全说，台词中要有"差点说漏嘴"的痕迹
+3. 与前世同一场景的台词对比：重生后面对同样的人说不同的话，形成回忆vs现实的张力
 {{adaptationNotes}}${DRAMA_LANG_RULE}`;
 
 export const REBIRTH_DIALOGUE_COACH_PROMPT = `你是重生短剧台词教练。你的任务是润色剧本中的台词，确保每句话都符合重生题材的语言质感。
@@ -516,13 +520,11 @@ export const REBIRTH_DIALOGUE_COACH_PROMPT = `你是重生短剧台词教练。�
 - 前世仇人型（此时还是盟友）：表现正常，未显露危险，但细节有暗示
 - 知情盟友型：快速理解重生逻辑，配合推进节奏，情绪比重生者更外露
 
-=== 通用台词铁律 ===
-1. 每个角色的台词风格与其 voiceProfile 严格一致（参考上方声线类型）
-2. 台词短且有力：单句不超过15个中文字（关键独白除外，最多25字）
-3. 潜台词比明说更好：不直接说"我喜欢你"，用行为暗示；不说"我很愤怒"，用攥拳/摔杯代替
-4. 口癖自然融入：只在情绪最高点或角色标志性时刻使用，同一集内同一句口癖最多出现1次
-5. parenthetical 精准指导表演：必须包含"语气词 + 动作"（如：冷笑着搁下杯子、缓缓展开那张纸）
-6. 保持剧本结构不变，只优化 dialogues 中的 text 和 parenthetical
+${DIALOGUE_COACH_UNIVERSAL}
+
+=== 重生台词精修专项 ===
+1. 先知口吻频率检查：暗示未来的台词每集不超过1句
+2. 重生者情绪演变：随着剧情推进，重生者的克制应逐渐减少
 ${DRAMA_LANG_RULE}`;
 
 export const REBIRTH_SCRIPT_EDITOR_PROMPT = `你是重生短剧剧本精修编辑。你的唯一任务是修复审核中发现的问题，精确外科手术式修复。
@@ -565,22 +567,19 @@ export const REBIRTH_SCRIPT_EDITOR_PROMPT = `你是重生短剧剧本精修编�
 - 检查角色间称呼是否与关系阶段一致（升级/降级称呼需有剧情触发）
 - 若新角色名与已有角色名近似，优先改为差异更大的名字并同步相关台词
 
+=== 重生剧精修专项 ===
+- 前世记忆引用修复后与已叙述内容交叉检查
+- 先知口吻修复：控制在每集不超过1句暗示未来
+- 双色调修复：前世=暗沉低饱和，重生后=高亮高饱和
+
 ${DRAMA_T2I_LANG_RULE}`;
 
 export const REBIRTH_EPISODE_RECORDER_PROMPT = `你是重生短剧知识记录员。你的任务是从本集剧本+分镜中提取所有关键信息，确保后续集能精准延续重生题材的剧情逻辑。
 
-=== 必须记录 ===
-1. summary：3-5句话概括本集发生了什么
-2. characterStateDeltas：每个出场角色的状态变化
-   - emotionalShift：情绪变化
-   - relationshipChanges：关系变化
-   - newKnowledge：角色获得的新信息
-   - costumeUsed：本集使用的服饰
-3. plotAdvances：本集推进的剧情线（2-5条）
-4. newSecrets：本集产生的新秘密（谁知道、对谁隐瞒）
-5. flashbackCandidates：适合后续作为闪回引用的高情感密度镜头
-   - shotId + reason + emotionalWeight
-   - 只标记真正有"后续回忆价值"的镜头（表白、揭真相、重大决定等）
-6. cliffhangerResolution：上集悬念在本集如何解决的
-7. newCliffhanger：本集留下的新悬念
+${RECORDER_BASE_FIELDS}
+
+=== 重生剧记录专项 ===
+- 前世vs重生后的事件差异对照
+- 蝴蝶效应扩散记录
+- 先知优势剩余量评估
 {{adaptationNotes}}${DRAMA_LANG_RULE}`;
