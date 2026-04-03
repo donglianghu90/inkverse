@@ -29,9 +29,10 @@ import { EmotionMediaMapperService } from './emotion-media-mapper.service';
 import { GenerationPolicyService } from './generation-policy.service';
 import { ShotProductionOrderService } from './shot-production-order.service';
 import { ShotContextBuilderService } from './shot-context-builder.service';
+import { ShotPromptAssemblerService } from './shot-prompt-assembler.service';
 import { ImageProviderRouterService } from './image-provider-router.service';
 import { VideoProviderRouterService } from './video-provider-router.service';
-import type { DramaGenerationMode, DramaStyleBucket } from '../interfaces';
+import type { DramaStyleBucket } from '../interfaces';
 import type { ShotMediaEntry } from '../interfaces';
 import {
   detectStyleBucket as detectStyleBucketUtil,
@@ -97,6 +98,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     private readonly videoRouter: VideoProviderRouterService,
     private readonly shotOrderService: ShotProductionOrderService,
     private readonly shotContextService: ShotContextBuilderService,
+    private readonly shotPromptAssembler: ShotPromptAssemblerService,
     private readonly redisService: RedisService,
   ) {}
 
@@ -155,7 +157,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
   }
 
-  /** 按当前模型的 RenderingProfile 组装 T2I prompt */
+  /** 按当前模型的 RenderingProfile 组装 T2I prompt（兼容旧 API，已被 assembler 接管核心功能，保留供局部使用或待重构） */
   private assemblePrompt(raw: string, camera?: { shotSize?: string; shotSizeEnd?: string | null; cameraAngle?: string; composition?: string; depthOfField?: string }, stylePrefix?: string, useEndSize = false, lightingHint?: string): string {
     const effectiveCamera = useEndSize && camera?.shotSizeEnd
       ? { ...camera, shotSize: camera.shotSizeEnd }
@@ -246,12 +248,14 @@ export class MediaOrchestratorService implements OnModuleInit {
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
     // 场景光线映射：sceneId → lightingDefault（如 "warm lantern glow, dramatic chiaroscuro"）
     const locationLightingMap = new Map<string, string>();
+    const ambientPopulationMap = new Map<string, string>();
     for (const loc of state.locations ?? []) {
       if (loc.lightingDefault) locationLightingMap.set(loc.locationId, loc.lightingDefault);
+      if (loc.ambientPopulation) ambientPopulationMap.set(loc.locationId, loc.ambientPopulation);
     }
     const dramaGenre = state.seed?.genre;
     this.logger.log(
-      `[policy] E${episodeNumber} mode=${mediaPolicy.mode} style=${mediaPolicy.styleBucket} ` +
+      `[policy] E${episodeNumber} style=${mediaPolicy.styleBucket} ` +
       `t2i=${mediaPolicy.t2iConcurrency} i2v=${mediaPolicy.i2vConcurrency} ` +
       `retry=${mediaPolicy.maxMediaRetries} gate=${mediaPolicy.enableQualityGate ? 'on' : 'off'} ` +
       `coherence=${mediaPolicy.enableCoherenceValidation ? 'on' : 'off'}`,
@@ -274,6 +278,12 @@ export class MediaOrchestratorService implements OnModuleInit {
     try {
       const scriptScenes = ((episode.script as any)?.scenes ?? []) as import('../schemas/drama-state.schemas').ScriptScene[];
       const sceneMap = new Map(scriptScenes.map(s => [s.sceneId, s]));
+      // ── Bug2 fix: sceneId → locationId 映射，确保 lighting/ambient/visualPrompt 查找用正确的 key ──
+      const getLocationId = (sceneId: string): string => sceneMap.get(sceneId)?.locationId || sceneId;
+      const getLocationVisualPrompt = (sceneId: string): string | undefined => {
+        const locId = getLocationId(sceneId);
+        return state.locations?.find(l => l.locationId === locId)?.visualPrompt;
+      };
       const shotMediaParamsCache = new Map<string, ReturnType<EmotionMediaMapperService['mapShotToMediaParams']>>();
       for (const shot of shots) {
         shotMediaParamsCache.set(shot.shotId, this.emotionMapper.mapShotToMediaParams(shot, sceneMap.get(shot.sceneId)));
@@ -309,7 +319,7 @@ export class MediaOrchestratorService implements OnModuleInit {
 
           const mediaParams = shotMediaParamsCache.get(sid);
           const emotionColorHint = mediaParams?.colorGrade;
-          const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+          const shotPolicy = this.resolveShotRunPolicy(shot, state, mediaPolicy.styleBucket);
           // 在 Shot 级别预先确定 Provider，首帧/尾帧保持一致
           const shotRoute = this.imageRouter.routeShot({
             qualityTier: shot.qualityTier,
@@ -323,13 +333,19 @@ export class MediaOrchestratorService implements OnModuleInit {
             try {
               emit(phaseOff + i, `${sid} 首帧生成中...`);
               const styleLockedPrompt = this.shotContextService.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-              const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, locationLightingMap.get(shot.sceneId));
+              const rawPrompt = await this.shotPromptAssembler.assembleT2iPrompt(shot, state, styleLockedPrompt, {
+                stylePrefix: t2iStylePrefix || '',
+                maxTokens: Infinity, provider: shotRoute.provider || '',
+                batchLighting: locationLightingMap.get(getLocationId(shot.sceneId)),
+                sceneVisualPrompt: getLocationVisualPrompt(shot.sceneId),
+              });
               const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
                 shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
                 qualityTier: shot.qualityTier ?? 'standard',
                 shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle, emotionColorHint,
                 routeProfile: shotPolicy.routeProfile,
                 provider: shotRoute.provider,
+                ambientPopulation: ambientPopulationMap.get(getLocationId(shot.sceneId)),
               });
               const refs = this.shotContextService.buildRefImages(
                 shot,
@@ -418,12 +434,13 @@ export class MediaOrchestratorService implements OnModuleInit {
                 if (shot.sceneId && !sceneCache.has(shot.sceneId) && !isCloseUpShot) {
                   sceneCache.set(shot.sceneId, imgUrl);
                   // B2: isRecurring 场景第一次生成时，持久化到 VisualAssetEntity 供后续集复用
-                  if (!locationImageMap.has(shot.sceneId)) {
-                    const loc = state.locations?.find(l => l.locationId === shot.sceneId);
+                  const resolvedLocId = getLocationId(shot.sceneId);
+                  if (!locationImageMap.has(resolvedLocId)) {
+                    const loc = state.locations?.find(l => l.locationId === resolvedLocId);
                     if (loc?.isRecurring) {
-                      locationImageMap.set(shot.sceneId, imgUrl);
-                      this.saveLocationImage(dramaId, shot.sceneId, loc.name, imgUrl).catch(e =>
-                        this.logger.warn(`场景图持久化失败 ${shot.sceneId}: ${(e as Error).message}`));
+                      locationImageMap.set(resolvedLocId, imgUrl);
+                      this.saveLocationImage(dramaId, resolvedLocId, loc.name, imgUrl).catch(e =>
+                        this.logger.warn(`场景图持久化失败 ${resolvedLocId}: ${(e as Error).message}`));
                     }
                   }
                 }
@@ -459,7 +476,12 @@ export class MediaOrchestratorService implements OnModuleInit {
                 propImageMap, propOwnerMap,
               );
               const styleLockedLastPrompt = this.shotContextService.applyStyleLockPrompt(shot.lastFramePrompt!, shot, state);
-              const rawLastPrompt = this.assemblePrompt(styleLockedLastPrompt, shot.camera, t2iStylePrefix, true, locationLightingMap.get(shot.sceneId));
+              const rawLastPrompt = await this.shotPromptAssembler.assembleT2iPrompt(shot, state, styleLockedLastPrompt, {
+                stylePrefix: t2iStylePrefix || '',
+                maxTokens: Infinity, provider: shotRoute.provider || '',
+                batchLighting: locationLightingMap.get(getLocationId(shot.sceneId)),
+                sceneVisualPrompt: getLocationVisualPrompt(shot.sceneId),
+              });
               const optLast = this.promptOptimizer.optimizeForT2I(rawLastPrompt, episodeNegPrompt ?? '', {
                 shotType: 'last_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
                 qualityTier: shot.qualityTier ?? 'standard', emotionColorHint,
@@ -467,6 +489,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                 cameraAngle: shot.camera?.cameraAngle,
                 routeProfile: shotPolicy.routeProfile,
                 provider: shotRoute.provider,
+                ambientPopulation: ambientPopulationMap.get(getLocationId(shot.sceneId)),
               });
               const res = await withMediaRetry(async () => {
                 await this.acquireT2iSlot();
@@ -535,7 +558,7 @@ export class MediaOrchestratorService implements OnModuleInit {
             const flaggedShots = this.shotOrderService.orderShotsForProduction(shots.filter(s => flaggedSet.has(s.shotId)), reviewRiskShotIds);
             for (const shot of flaggedShots) {
               const sid = shot.shotId;
-              const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+              const shotPolicy = this.resolveShotRunPolicy(shot, state, mediaPolicy.styleBucket);
               try {
                 const mediaParams = shotMediaParamsCache.get(sid);
                 const regenRoute = this.imageRouter.routeShot({
@@ -543,13 +566,19 @@ export class MediaOrchestratorService implements OnModuleInit {
                   isGolden: shot.isPreview || shot.qualityTier === 'golden', size: imgSize,
                 });
                 const styleLockedPrompt = this.shotContextService.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-                const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, locationLightingMap.get(shot.sceneId));
+                const rawPrompt = await this.shotPromptAssembler.assembleT2iPrompt(shot, state, styleLockedPrompt, {
+                  stylePrefix: t2iStylePrefix || '',
+                  maxTokens: Infinity, provider: regenRoute.provider || '',
+                  batchLighting: locationLightingMap.get(getLocationId(shot.sceneId)),
+                  sceneVisualPrompt: getLocationVisualPrompt(shot.sceneId),
+                });
                 const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
                   shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
                   qualityTier: shot.qualityTier ?? 'standard',
                   shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle, emotionColorHint: mediaParams?.colorGrade,
                   routeProfile: shotPolicy.routeProfile,
                   provider: regenRoute.provider,
+                  ambientPopulation: ambientPopulationMap.get(getLocationId(shot.sceneId)),
                 });
                 const refs = this.shotContextService.buildRefImages(
                   shot,
@@ -844,7 +873,7 @@ export class MediaOrchestratorService implements OnModuleInit {
           }
 
           const mediaParams = shotMediaParamsCache.get(sid);
-          const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+          const shotPolicy = this.resolveShotRunPolicy(shot, state, mediaPolicy.styleBucket);
 
           const styleLockedVideoPrompt = this.shotContextService.applyStyleLockPrompt(shot.visualPrompt, shot, state);
           const videoRoute = this.videoRouter.route({
@@ -1114,10 +1143,12 @@ export class MediaOrchestratorService implements OnModuleInit {
     const scriptScenes = ((episode.script as any)?.scenes ?? []) as import('../schemas/drama-state.schemas').ScriptScene[];
     const sceneForShot = scriptScenes.find(s => s.sceneId === shot.sceneId);
     const t2iStylePrefix = this.buildT2iStylePrefix(state.visualStyle);
-    // 场景光线提示（单 shot 模式）
-    const singleShotLighting = state.locations?.find(l => l.locationId === shot.sceneId)?.lightingDefault;
+    // 场景光线提示（单 shot 模式）—— 通过 sceneId → locationId 映射查找
+    const singleLocId = sceneForShot?.locationId || shot.sceneId;
+    const singleShotLighting = state.locations?.find(l => l.locationId === singleLocId)?.lightingDefault;
+    const singleSceneVisualPrompt = state.locations?.find(l => l.locationId === singleLocId)?.visualPrompt;
     const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, sceneForShot);
-    const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+    const shotPolicy = this.resolveShotRunPolicy(shot, state, mediaPolicy.styleBucket);
     const singleShotRoute = this.imageRouter.routeShot({
       qualityTier: shot.qualityTier,
       shotSize: shot.camera?.shotSize,
@@ -1126,13 +1157,19 @@ export class MediaOrchestratorService implements OnModuleInit {
       size: imgSize,
     });
     const styleLockedPrompt = this.shotContextService.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-    const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, singleShotLighting);
+    const rawPrompt = await this.shotPromptAssembler.assembleT2iPrompt(shot, state, styleLockedPrompt, {
+      stylePrefix: t2iStylePrefix || '',
+      maxTokens: Infinity, provider: singleShotRoute.provider || '',
+      batchLighting: singleShotLighting,
+      sceneVisualPrompt: singleSceneVisualPrompt,
+    });
     const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
       shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
       qualityTier: shot.qualityTier ?? 'standard',
       shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle, emotionColorHint: mediaParams.colorGrade,
       routeProfile: shotPolicy.routeProfile,
       provider: singleShotRoute.provider,
+      ambientPopulation: state.locations?.find(l => l.locationId === singleLocId)?.ambientPopulation,
     });
     const refs = this.shotContextService.buildRefImages(
       shot,
@@ -1283,7 +1320,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
     styleRefImages.slice(0, 1).forEach(url => refImages.push({ url, role: 'style' }));
 
-    const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+    const shotPolicy = this.resolveShotRunPolicy(shot, state, mediaPolicy.styleBucket);
     const styleLockedVideoPrompt = this.shotContextService.applyStyleLockPrompt(shot.visualPrompt, shot, state);
     const videoRoute = this.videoRouter.route({
       overrideProvider: state.videoProvider,
@@ -1428,7 +1465,7 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     emit(`开始生成 ${totalSteps} 张分镜图...`);
     this.logger.log(
-      `[policy] images E${episodeNumber} mode=${mediaPolicy.mode} style=${mediaPolicy.styleBucket} ` +
+      `[policy] images E${episodeNumber} style=${mediaPolicy.styleBucket} ` +
       `t2i=${mediaPolicy.t2iConcurrency} retry=${mediaPolicy.maxMediaRetries}`,
     );
     this.shotOrderService.logShotOrder(`E${episodeNumber} images`, needsGen);
@@ -1457,7 +1494,7 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     await this.runConcurrent(needsGen, Math.min(mediaPolicy.t2iConcurrency, this.t2iMaxConcurrency), async (shot) => {
       const sid = shot.shotId;
-      const shotPolicy = this.resolveShotRunPolicy(shot, mediaPolicy.mode, mediaPolicy.styleBucket);
+      const shotPolicy = this.resolveShotRunPolicy(shot, state, mediaPolicy.styleBucket);
       try {
         emit(`${sid} 生成中...`);
         const batchShotRoute = this.imageRouter.routeShot({
@@ -1466,14 +1503,22 @@ export class MediaOrchestratorService implements OnModuleInit {
         });
         const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, imgSceneMap.get(shot.sceneId));
         const styleLockedPrompt = this.shotContextService.applyStyleLockPrompt(shot.firstFramePrompt || shot.visualPrompt, shot, state);
-        const batchLighting = state.locations?.find(l => l.locationId === shot.sceneId)?.lightingDefault;
-        const rawPrompt = this.assemblePrompt(styleLockedPrompt, shot.camera, t2iStylePrefix, false, batchLighting);
+        const batchLocId = imgSceneMap.get(shot.sceneId)?.locationId || shot.sceneId;
+        const batchLighting = state.locations?.find(l => l.locationId === batchLocId)?.lightingDefault;
+        const batchSceneVisualPrompt = state.locations?.find(l => l.locationId === batchLocId)?.visualPrompt;
+        const rawPrompt = await this.shotPromptAssembler.assembleT2iPrompt(shot, state, styleLockedPrompt, {
+          stylePrefix: t2iStylePrefix || '',
+          maxTokens: Infinity, provider: batchShotRoute.provider || '',
+          batchLighting,
+          sceneVisualPrompt: batchSceneVisualPrompt,
+        });
         const optimized = this.promptOptimizer.optimizeForT2I(rawPrompt, episodeNegPrompt ?? '', {
           shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
           qualityTier: shot.qualityTier ?? 'standard',
           shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle, emotionColorHint: mediaParams.colorGrade,
           routeProfile: shotPolicy.routeProfile,
           provider: batchShotRoute.provider,
+          ambientPopulation: state.locations?.find(l => l.locationId === batchLocId)?.ambientPopulation,
         });
         const refs = this.shotContextService.buildRefImages(
           shot,
@@ -1674,11 +1719,11 @@ export class MediaOrchestratorService implements OnModuleInit {
 
   private resolveShotRunPolicy(
     shot: Shot,
-    mode: DramaGenerationMode,
+    state: Pick<DramaState, 'imageResolution' | 'videoResolution'>,
     styleBucket: DramaStyleBucket,
   ) {
     return this.generationPolicy.resolveShotRunPolicy({
-      mode,
+      state,
       styleBucket,
       shotType: shot.shotType,
       qualityTier: shot.qualityTier,

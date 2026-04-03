@@ -1542,7 +1542,14 @@ const EpisodeProductionBoard: React.FC = () => {
                 if (d.hairStylePrompt) detailFields.push({ label: '发型', value: String(d.hairStylePrompt) });
                 if (d.defaultCostumePrompt) detailFields.push({ label: '服装', value: String(d.defaultCostumePrompt) });
                 if (d.defaultCostume) detailFields.push({ label: '服装描述', value: String(d.defaultCostume) });
-                if (d.voiceProfile) detailFields.push({ label: '配音', value: String(d.voiceProfile) });
+                if (d.voiceProfile) {
+                  const vp: any = d.voiceProfile;
+                  const parts = [];
+                  if (vp.timbre) parts.push(`音色: ${vp.timbre}`);
+                  if (vp.speakingStyle) parts.push(`风格: ${vp.speakingStyle}`);
+                  if (vp.catchphrase) parts.push(`口头禅: "${vp.catchphrase}"`);
+                  detailFields.push({ label: '配音', value: parts.length > 0 ? parts.join(' | ') : typeof vp === 'string' ? vp : JSON.stringify(vp) });
+                }
                 if (d.appearanceHint) detailFields.push({ label: '外观提示', value: String(d.appearanceHint) });
               } else {
                 if (d.description) detailFields.push({ label: '描述', value: String(d.description) });

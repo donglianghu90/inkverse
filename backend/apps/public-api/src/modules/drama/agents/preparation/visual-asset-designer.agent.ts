@@ -10,25 +10,32 @@
  * 设计原则：EpisodeDirector 关心"需要什么角色"（叙事），
  *           VisualAssetDesignerAgent 关心"从哪里来 / 长什么样"（视觉资产）。
  */
-import { Injectable, Logger } from '@nestjs/common';
-import { LlmService } from '../../../novel/llm/llm.service';
-import { z } from 'zod';
+import { Injectable, Logger } from "@nestjs/common";
+import { GENRE_TEMPLATES, resolveGenreKey } from "../../prompting/drama-genre-data";
+import { LlmService } from "../../../novel/llm/llm.service";
+import { z } from "zod";
 import {
-  characterIdentitySchema, characterVariationSchema, sceneLocationSchema, visualStyleGuideSchema,
+  characterIdentitySchema,
+  characterVariationSchema,
+  sceneLocationSchema,
+  visualStyleGuideSchema,
   signaturePropSchema,
-  DramaSeed, SeriesOutline, DramaState, CharacterIdentity, EpisodeIntent,
-} from '../../schemas/drama-state.schemas';
-import { buildVisualAssetDesignerSystemPrompt } from '../../prompting/drama-playbook';
-import type { GenreProductionGuidance } from '../../entities/drama-genre-template.entity';
-import type { VisualStyleGuide } from '../../entities/drama-visual-style-template.entity';
+  DramaSeed,
+  SeriesOutline,
+  DramaState,
+  CharacterIdentity,
+  EpisodeIntent,
+} from "../../schemas/drama-state.schemas";
+import { buildVisualAssetDesignerSystemPrompt } from "../../prompting/drama-playbook";
+import type { GenreProductionGuidance } from "../../entities/drama-genre-template.entity";
+import type { VisualStyleGuide } from "../../entities/drama-visual-style-template.entity";
 
 /** 建剧阶段只输出视觉风格 + 签名道具，角色/场景延迟到逐集生产 */
 const visualStyleOnlySchema = z.object({
   visualStyle: visualStyleGuideSchema,
-  signatureProps: z.preprocess(
-    v => v ?? [],
-    z.array(signaturePropSchema),
-  ).default([]),
+  signatureProps: z
+    .preprocess((v) => v ?? [], z.array(signaturePropSchema))
+    .default([]),
 });
 
 /** 逐集新场景设计输出 */
@@ -46,8 +53,8 @@ export type VisualAssetDesignOutput = z.infer<typeof visualStyleOnlySchema>;
 export interface ProposedCharacter {
   characterId: string;
   name: string;
-  role: 'supporting' | 'minor';
-  scope?: 'episode' | 'arc'; // 未填则默认按 episode 处理
+  role: "supporting" | "minor";
+  scope?: "episode" | "arc"; // 未填则默认按 episode 处理
   narrativePurpose: string;
   appearanceHint: string;
   hasDialogue: boolean;
@@ -63,19 +70,56 @@ export interface ProposedCharacter {
 /** 所有合法 styleKey 的白名单 — 必须与 drama-visual-style-template.service.ts 的模板 key 保持同步 */
 const KNOWN_STYLE_KEYS = new Set([
   // 真人影视
-  'live_action', 'period_live', 'hk_film', 'retro_wuxia', 'western_film',
+  "live_action",
+  "period_live",
+  "hk_film",
+  "retro_wuxia",
+  "western_film",
   // 2D 动漫
-  '2d_anime', '2d_film', '2d_fantasy_anime', '2d_retro_anime', '2d_british_anime',
-  '2d_ghibli', '2d_korean_anime', '2d_action', '2d_cybercity', '2d_sports',
-  '2d_tezuka', '2d_thick_line', '2d_death_note', '2d_shoujo', '2d_horror', '2d_chibi',
+  "2d_anime",
+  "2d_film",
+  "2d_fantasy_anime",
+  "2d_retro_anime",
+  "2d_british_anime",
+  "2d_ghibli",
+  "2d_korean_anime",
+  "2d_action",
+  "2d_cybercity",
+  "2d_sports",
+  "2d_tezuka",
+  "2d_thick_line",
+  "2d_death_note",
+  "2d_shoujo",
+  "2d_horror",
+  "2d_chibi",
   // 2D 画风
-  'chinese_ink', 'chinese_style', '2d_gongbi', '2d_watercolor', '2d_pixel',
-  '2d_simple', '2d_sketch', '2d_british_comic', '2d_rubber_hose', '2d_golden',
+  "chinese_ink",
+  "chinese_style",
+  "2d_gongbi",
+  "2d_watercolor",
+  "2d_pixel",
+  "2d_simple",
+  "2d_sketch",
+  "2d_british_comic",
+  "2d_rubber_hose",
+  "2d_golden",
   // 3D 动画
-  '3d_fantasy', '3d_british', '3d_chibi', '3d_realistic', '3d_voxel',
-  '3d_mobile_game', '3d_toon_render', '3d_japanese_npr', '3d_cyberpunk', '3d_disney',
+  "3d_fantasy",
+  "3d_british",
+  "3d_chibi",
+  "3d_realistic",
+  "3d_voxel",
+  "3d_mobile_game",
+  "3d_toon_render",
+  "3d_japanese_npr",
+  "3d_cyberpunk",
+  "3d_disney",
   // 定格动画
-  'stop_motion', 'clay_stop', 'lego_stop', 'felt_stop', 'paper_stop',
+  "stop_motion",
+  "clay_stop",
+  "lego_stop",
+  "felt_stop",
+  "paper_stop",
 ]);
 
 /**
@@ -88,7 +132,10 @@ const KNOWN_STYLE_KEYS = new Set([
  *  3. 对中文自由文本 hint 做关键词匹配，返回最接近的 styleKey。
  *  4. 未匹配，回退到 suggestedVisualStyle。
  */
-function resolveEffectiveVisualStyle(visualStyleHint?: string, suggestedVisualStyle?: string): string | undefined {
+function resolveEffectiveVisualStyle(
+  visualStyleHint?: string,
+  suggestedVisualStyle?: string,
+): string | undefined {
   // 规则 1：已有精确的 styleKey（来自模板选择），直接使用，不被 hint 覆盖
   if (suggestedVisualStyle && KNOWN_STYLE_KEYS.has(suggestedVisualStyle)) {
     return suggestedVisualStyle;
@@ -99,63 +146,160 @@ function resolveEffectiveVisualStyle(visualStyleHint?: string, suggestedVisualSt
   const h = visualStyleHint.toLowerCase();
 
   // 真人类（写实摄影）
-  if (h.includes('真人古装') || h.includes('古装真人') || h.includes('历史真人')) return 'period_live';
-  if (h.includes('港片') || h.includes('港式')) return 'hk_film';
-  if (h.includes('复古武侠') || h.includes('武侠片')) return 'retro_wuxia';
-  if (h.includes('好莱坞') || h.includes('西方电影') || h.includes('欧美大片')) return 'western_film';
-  if (h.includes('真人') || h.includes('实拍') || h.includes('影视')) return 'live_action';
+  if (
+    h.includes("真人古装") ||
+    h.includes("古装真人") ||
+    h.includes("历史真人")
+  )
+    return "period_live";
+  if (h.includes("港片") || h.includes("港式")) return "hk_film";
+  if (h.includes("复古武侠") || h.includes("武侠片")) return "retro_wuxia";
+  if (h.includes("好莱坞") || h.includes("西方电影") || h.includes("欧美大片"))
+    return "western_film";
+  if (h.includes("真人") || h.includes("实拍") || h.includes("影视"))
+    return "live_action";
 
   // 2D 中国传统
-  if (h.includes('水墨') || h.includes('国画') || h.includes('ink wash')) return 'chinese_ink';
-  if (h.includes('工笔') || h.includes('gongbi')) return '2d_gongbi';
-  if (h.includes('水彩') || h.includes('watercolor')) return '2d_watercolor';
-  if (h.includes('中国风') || h.includes('古风绘画') || h.includes('国风插画')) return 'chinese_style';
-  if (h.includes('黄金光堂') || h.includes('golden hall')) return '2d_golden';
+  if (h.includes("水墨") || h.includes("国画") || h.includes("ink wash"))
+    return "chinese_ink";
+  if (h.includes("工笔") || h.includes("gongbi")) return "2d_gongbi";
+  if (h.includes("水彩") || h.includes("watercolor")) return "2d_watercolor";
+  if (h.includes("中国风") || h.includes("古风绘画") || h.includes("国风插画"))
+    return "chinese_style";
+  if (h.includes("黄金光堂") || h.includes("golden hall")) return "2d_golden";
 
   // 2D 动漫
-  if (h.includes('少女漫') || h.includes('shoujo')) return '2d_shoujo';
-  if (h.includes('韩漫') || h.includes('条漫') || h.includes('webtoon')) return '2d_korean_anime';
-  if (h.includes('吉卜力') || h.includes('宫崎骏') || h.includes('ghibli')) return '2d_ghibli';
-  if (h.includes('赛博都市') || h.includes('cybercity')) return '2d_cybercity';
-  if (h.includes('热血') || h.includes('战斗漫画') || h.includes('少年漫')) return '2d_action';
-  if (h.includes('复古动画') || h.includes('80年代动画') || h.includes('90年代动画')) return '2d_retro_anime';
-  if (h.includes('奇幻动画') || h.includes('fantasy anime')) return '2d_fantasy_anime';
-  if (h.includes('英式动画') || h.includes('british anime')) return '2d_british_anime';
-  if (h.includes('运动漫') || h.includes('sports manga') || h.includes('篮球')) return '2d_sports';
-  if (h.includes('手冢') || h.includes('tezuka')) return '2d_tezuka';
-  if (h.includes('粗线条') || h.includes('thick line')) return '2d_thick_line';
-  if (h.includes('死神') || h.includes('暗黑') || h.includes('death note')) return '2d_death_note';
-  if (h.includes('恐怖漫') || h.includes('horror manga') || h.includes('伊藤润二')) return '2d_horror';
-  if (h.includes('q版') || h.includes('chibi') || h.includes('萌系可爱')) return '2d_chibi';
-  if (h.includes('电影动画') || h.includes('新海诚') || h.includes('shinkai')) return '2d_film';
-  if (h.includes('动漫') || h.includes('二次元') || h.includes('anime')) return '2d_anime';
+  if (h.includes("少女漫") || h.includes("shoujo")) return "2d_shoujo";
+  if (h.includes("韩漫") || h.includes("条漫") || h.includes("webtoon"))
+    return "2d_korean_anime";
+  if (h.includes("吉卜力") || h.includes("宫崎骏") || h.includes("ghibli"))
+    return "2d_ghibli";
+  if (h.includes("赛博都市") || h.includes("cybercity")) return "2d_cybercity";
+  if (h.includes("热血") || h.includes("战斗漫画") || h.includes("少年漫"))
+    return "2d_action";
+  if (
+    h.includes("复古动画") ||
+    h.includes("80年代动画") ||
+    h.includes("90年代动画")
+  )
+    return "2d_retro_anime";
+  if (h.includes("奇幻动画") || h.includes("fantasy anime"))
+    return "2d_fantasy_anime";
+  if (h.includes("英式动画") || h.includes("british anime"))
+    return "2d_british_anime";
+  if (h.includes("运动漫") || h.includes("sports manga") || h.includes("篮球"))
+    return "2d_sports";
+  if (h.includes("手冢") || h.includes("tezuka")) return "2d_tezuka";
+  if (h.includes("粗线条") || h.includes("thick line")) return "2d_thick_line";
+  if (h.includes("死神") || h.includes("暗黑") || h.includes("death note"))
+    return "2d_death_note";
+  if (
+    h.includes("恐怖漫") ||
+    h.includes("horror manga") ||
+    h.includes("伊藤润二")
+  )
+    return "2d_horror";
+  if (h.includes("q版") || h.includes("chibi") || h.includes("萌系可爱"))
+    return "2d_chibi";
+  if (h.includes("电影动画") || h.includes("新海诚") || h.includes("shinkai"))
+    return "2d_film";
+  if (h.includes("动漫") || h.includes("二次元") || h.includes("anime"))
+    return "2d_anime";
 
   // 2D 画风
-  if (h.includes('像素') || h.includes('pixel') || h.includes('8-bit')) return '2d_pixel';
-  if (h.includes('橡皮管') || h.includes('rubber hose') || h.includes('cuphead')) return '2d_rubber_hose';
-  if (h.includes('英式漫画') || h.includes('british comic') || h.includes('波普')) return '2d_british_comic';
-  if (h.includes('简画') || h.includes('极简') || h.includes('minimalist')) return '2d_simple';
-  if (h.includes('素描') || h.includes('铅笔') || h.includes('sketch')) return '2d_sketch';
+  if (h.includes("像素") || h.includes("pixel") || h.includes("8-bit"))
+    return "2d_pixel";
+  if (
+    h.includes("橡皮管") ||
+    h.includes("rubber hose") ||
+    h.includes("cuphead")
+  )
+    return "2d_rubber_hose";
+  if (
+    h.includes("英式漫画") ||
+    h.includes("british comic") ||
+    h.includes("波普")
+  )
+    return "2d_british_comic";
+  if (h.includes("简画") || h.includes("极简") || h.includes("minimalist"))
+    return "2d_simple";
+  if (h.includes("素描") || h.includes("铅笔") || h.includes("sketch"))
+    return "2d_sketch";
 
   // 3D 类 — 细粒度在前，宽泛 "3d" 兜底在最后
-  if (h.includes('赛博朋克') || h.includes('cyberpunk')) return '3d_cyberpunk';
-  if (h.includes('玄幻') || h.includes('仙侠') || h.includes('xianxia') || h.includes('3d奇幻')) return '3d_fantasy';
-  if (h.includes('迪士尼') || h.includes('皮克斯') || h.includes('pixar') || h.includes('disney')) return '3d_disney';
-  if (h.includes('日式3d') || h.includes('3d漫染') || h.includes('npr') || h.includes('ufotable')) return '3d_japanese_npr';
-  if (h.includes('卡通渲染') || h.includes('toon render') || h.includes('cel shading')) return '3d_toon_render';
-  if (h.includes('q版3d') || h.includes('3dq版') || h.includes('3d萌') || h.includes('chibi 3d')) return '3d_chibi';
-  if (h.includes('方块') || h.includes('体素') || h.includes('voxel') || h.includes('minecraft')) return '3d_voxel';
-  if (h.includes('手游') || h.includes('mobile game') || h.includes('原神') || h.includes('genshin')) return '3d_mobile_game';
-  if (h.includes('英式3d') || h.includes('维多利亚') || h.includes('victorian 3d')) return '3d_british';
-  if (h.includes('写实') || h.includes('photoreal') || h.includes('unreal engine')) return '3d_realistic';
-  if (h.includes('3d') || h.includes('三维') || h.includes('cg')) return '3d_realistic';
+  if (h.includes("赛博朋克") || h.includes("cyberpunk")) return "3d_cyberpunk";
+  if (
+    h.includes("玄幻") ||
+    h.includes("仙侠") ||
+    h.includes("xianxia") ||
+    h.includes("3d奇幻")
+  )
+    return "3d_fantasy";
+  if (
+    h.includes("迪士尼") ||
+    h.includes("皮克斯") ||
+    h.includes("pixar") ||
+    h.includes("disney")
+  )
+    return "3d_disney";
+  if (
+    h.includes("日式3d") ||
+    h.includes("3d漫染") ||
+    h.includes("npr") ||
+    h.includes("ufotable")
+  )
+    return "3d_japanese_npr";
+  if (
+    h.includes("卡通渲染") ||
+    h.includes("toon render") ||
+    h.includes("cel shading")
+  )
+    return "3d_toon_render";
+  if (
+    h.includes("q版3d") ||
+    h.includes("3dq版") ||
+    h.includes("3d萌") ||
+    h.includes("chibi 3d")
+  )
+    return "3d_chibi";
+  if (
+    h.includes("方块") ||
+    h.includes("体素") ||
+    h.includes("voxel") ||
+    h.includes("minecraft")
+  )
+    return "3d_voxel";
+  if (
+    h.includes("手游") ||
+    h.includes("mobile game") ||
+    h.includes("原神") ||
+    h.includes("genshin")
+  )
+    return "3d_mobile_game";
+  if (
+    h.includes("英式3d") ||
+    h.includes("维多利亚") ||
+    h.includes("victorian 3d")
+  )
+    return "3d_british";
+  if (
+    h.includes("写实") ||
+    h.includes("photoreal") ||
+    h.includes("unreal engine")
+  )
+    return "3d_realistic";
+  if (h.includes("3d") || h.includes("三维") || h.includes("cg"))
+    return "3d_realistic";
 
   // 定格动画
-  if (h.includes('乐高') || h.includes('lego')) return 'lego_stop';
-  if (h.includes('毛毡') || h.includes('felt') || h.includes('羊毛')) return 'felt_stop';
-  if (h.includes('纸艺') || h.includes('剪纸') || h.includes('paper')) return 'paper_stop';
-  if (h.includes('粘土') || h.includes('clay') || h.includes('claymation')) return 'clay_stop';
-  if (h.includes('定格') || h.includes('stop motion')) return 'stop_motion';
+  if (h.includes("乐高") || h.includes("lego")) return "lego_stop";
+  if (h.includes("毛毡") || h.includes("felt") || h.includes("羊毛"))
+    return "felt_stop";
+  if (h.includes("纸艺") || h.includes("剪纸") || h.includes("paper"))
+    return "paper_stop";
+  if (h.includes("粘土") || h.includes("clay") || h.includes("claymation"))
+    return "clay_stop";
+  if (h.includes("定格") || h.includes("stop motion")) return "stop_motion";
 
   // 未匹配到关键词，回退到 AI 推荐值
   return suggestedVisualStyle;
@@ -173,33 +317,63 @@ export class VisualAssetDesignerAgent {
     dramaId?: string,
     userId?: string,
     suggestedVisualStyle?: string,
-    audienceContext?: { protagonistFocus?: string; platformTarget?: string; audienceTags?: string[] },
+    audienceContext?: {
+      protagonistFocus?: string;
+      platformTarget?: string;
+      audienceTags?: string[];
+    },
     /** 来自视觉风格模板的 visualGuide（含 facePromptRule + scenePromptGuidance） */
-    styleGuide?: Pick<VisualStyleGuide, 'facePromptRule' | 'scenePromptGuidance'>,
+    styleGuide?: Pick<
+      VisualStyleGuide,
+      "facePromptRule" | "scenePromptGuidance"
+    >,
     /** 来自题材模板的生产引导（含 maleLeadFormula / femaleLeadFormula） */
-    genreGuidance?: Pick<GenreProductionGuidance, 'maleLeadFormula' | 'femaleLeadFormula'>,
+    genreGuidance?: Pick<
+      GenreProductionGuidance,
+      "maleLeadFormula" | "femaleLeadFormula"
+    >,
     additionalSystemPrompt?: string,
   ): Promise<VisualAssetDesignOutput> {
     // 建剧阶段只设计视觉风格 + 签名道具，角色/场景全部延迟到逐集生产
     const audienceLine = [
-      audienceContext?.platformTarget ? `目标平台：${audienceContext.platformTarget}` : '',
-      audienceContext?.protagonistFocus ? `叙事主角焦点：${audienceContext.protagonistFocus}` : '',
-      audienceContext?.audienceTags?.length ? `受众标签：${audienceContext.audienceTags.join('、')}` : (seed.targetAudience ? `受众：${seed.targetAudience}` : ''),
-    ].filter(Boolean).join('\n');
+      audienceContext?.platformTarget
+        ? `目标平台：${audienceContext.platformTarget}`
+        : "",
+      audienceContext?.protagonistFocus
+        ? `叙事主角焦点：${audienceContext.protagonistFocus}`
+        : "",
+      audienceContext?.audienceTags?.length
+        ? `受众标签：${audienceContext.audienceTags.join("、")}`
+        : seed.targetAudience
+          ? `受众：${seed.targetAudience}`
+          : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
 
-    const effectiveVisualStyle = resolveEffectiveVisualStyle(visualStyleHint, suggestedVisualStyle);
-    const styleOverrideNote = visualStyleHint && effectiveVisualStyle !== suggestedVisualStyle
-      ? `（用户已明确选择 ${effectiveVisualStyle}，覆盖了系统推荐的 ${suggestedVisualStyle}）`
-      : '';
+    const effectiveVisualStyle = resolveEffectiveVisualStyle(
+      visualStyleHint,
+      suggestedVisualStyle,
+    );
+    const styleOverrideNote =
+      visualStyleHint && effectiveVisualStyle !== suggestedVisualStyle
+        ? `（用户已明确选择 ${effectiveVisualStyle}，覆盖了系统推荐的 ${suggestedVisualStyle}）`
+        : "";
     if (styleOverrideNote) {
       this.logger.log(`[VisualDesigner] 风格覆盖${styleOverrideNote}`);
     }
 
-    let sysPrompt = buildVisualAssetDesignerSystemPrompt(effectiveVisualStyle, styleGuide, genreGuidance);
-    if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
+    let sysPrompt = buildVisualAssetDesignerSystemPrompt(
+      effectiveVisualStyle,
+      styleGuide,
+      genreGuidance,
+      seed.genre,
+    );
+    if (additionalSystemPrompt?.trim())
+      sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-visual-asset-designer',
+      taskName: "drama-visual-asset-designer",
       schema: visualStyleOnlySchema,
       systemPrompt: sysPrompt,
       metadata: { dramaId, userId },
@@ -210,25 +384,35 @@ export class VisualAssetDesignerAgent {
 调性：${seed.tone}
 ${audienceLine}
 主角：${seed.protagonistConcept.name}（${seed.protagonistConcept.personality}）— ${seed.protagonistConcept.situation}
-${seed.antagonistConcept ? `对手：${seed.antagonistConcept.name} — ${seed.antagonistConcept.motivation}` : ''}
+${seed.antagonistConcept ? `对手：${seed.antagonistConcept.name} — ${seed.antagonistConcept.motivation}` : ""}
 总集数：${outline.totalPlannedEpisodes}
-${visualStyleHint ? `\n【用户指定视觉风格】：${visualStyleHint}
+${
+  visualStyleHint
+    ? `\n【用户指定视觉风格】：${visualStyleHint}
 请将用户的美学意图翻译成适合本媒介类型的技术 T2I 词汇，写入 visualStyle。
 ⚠️ 翻译规则（真人/实拍路径，含古装真人）：
 - 「水墨、晕染、国画感、笔触」→ soft cinematic color grading, muted palette, natural film grain
 - 「柔和美感」→ soft low-saturation color grading, smooth tonal transitions
 - 「古典质感」→ period-accurate costume detail, realistic texture, film grain
-- 「真实感」→ photorealistic, realistic skin with natural pores, no airbrushing` : ''}
+- 「真实感」→ photorealistic, realistic skin with natural pores, no airbrushing`
+    : ""
+}
 
 === 重要：建剧阶段只设计视觉风格 ===
 角色和场景将在各集生产时按需设计，无需在此阶段预设。
 
 要求：
 1. visualStyle 定义全剧美学基调（这是最重要的输出）
+   ⚠️ visualStyle.styleReferencePrompt 是全剧的【全局风格与质感】，将作为风格后缀拼接到所有的画面中！
+   必须仅包含：“photorealistic, film grain, cinematic color grading”等纯粹的光影、质感、摄影修饰词。
+   绝对禁止：出现任何物理场景结构、天气、人物特征、服饰！否则会导致场景错乱。
 2. 全剧级签名道具（signatureProps）：只设计 2-5 个核心道具，满足以下任一条件才列入：
    a) 角色标志性随身物（narrativeRole="signature"）
    b) 剧情核心驱动物（narrativeRole="macguffin"）
-   每个道具含 propId / name / description / visualPrompt
+   ⚠️ 核心：道具的 visualPrompt 必须严格遵守**Nano-Banana 道具生成公式**进行组织表达，且用纯英文：
+   [道具主体 Object] + [结构/形态 Form] + [材质/工艺 Material] + [细节特征 Detail] + [使用状态 Condition]
+   例如："Tang dynasty bronze mirror, round symmetrical form, aged bronze with rich patina, intricate engraved patterns, slightly worn edges"
+   （构图、光影、背景将在分镜逻辑中自动拼装，请在此仅设计纯粹的物体资产属性！）
 3. 不要输出 characters 或 locations`,
       temperature: 0.5,
     });
@@ -245,36 +429,53 @@ ${visualStyleHint ? `\n【用户指定视觉风格】：${visualStyleHint}
     proposed: ProposedCharacter[],
   ): Promise<CharacterIdentity[]> {
     if (!proposed.length) return [];
-    const existing = state.characters.slice(0, 3).map(c =>
-      `${c.characterId}(${c.name}): face="${c.faceReferencePrompt?.slice(0, 80)}" costume="${c.defaultCostumePrompt?.slice(0, 60)}"`,
-    ).join('\n');
+    const existing = state.characters
+      .slice(0, 3)
+      .map(
+        (c) =>
+          `${c.characterId}(${c.name}): face="${c.faceReferencePrompt?.slice(0, 80)}" costume="${c.defaultCostumePrompt?.slice(0, 60)}"`,
+      )
+      .join("\n");
     const vs = state.visualStyle;
     const styleCtx = vs
-      ? `美学=${vs.overallAesthetic}, 调色=${vs.colorGrading}, 光影=${vs.lightingStyle}, 渲染=${vs.renderTechnique ?? ''}, 材质=${vs.textureStyle ?? ''}, 参考=${vs.referenceStyle ?? ''}, 时代=${vs.era}`
-      : '';
+      ? `美学=${vs.overallAesthetic}, 调色=${vs.colorGrading}, 光影=${vs.lightingStyle}, 渲染=${vs.renderTechnique ?? ""}, 材质=${vs.textureStyle ?? ""}, 参考=${vs.referenceStyle ?? ""}, 时代=${vs.era}`
+      : "";
 
-    const charRequests = proposed.map((p, i) =>
-      `${i + 1}. characterId="${p.characterId}", name="${p.name}", role=${p.role}\n` +
-      `   叙事作用：${p.narrativePurpose}\n` +
-      `   外观提示：${p.appearanceHint}\n` +
-      `   有无台词：${p.hasDialogue ? '有' : '无'}`,
-    ).join('\n');
+    const charRequests = proposed
+      .map(
+        (p, i) =>
+          `${i + 1}. characterId="${p.characterId}", name="${p.name}", role=${p.role}\n` +
+          `   叙事作用：${p.narrativePurpose}\n` +
+          `   外观提示：${p.appearanceHint}\n` +
+          `   有无台词：${p.hasDialogue ? "有" : "无"}`,
+      )
+      .join("\n");
 
-    const raw = await this.llm.generateStructured({
-      taskName: 'drama-new-character-designer',
-      schema: newCharactersOutputSchema,
-      metadata: { dramaId: state.dramaId, userId: state.userId },
-      systemPrompt: `你是一位短剧视觉总监，现在需要为已开拍的短剧补充新角色的视觉身份。
+    const baseCharacterPrompt = state.promptProfile?.agentSystemPrompts?.['character-designer'];
+    let systemPrompt: string;
+    if (baseCharacterPrompt) {
+      systemPrompt = baseCharacterPrompt.replace(
+        '{{facePromptRule}}',
+        vs?.facePromptRule ?? 'faceReferencePrompt 必须以【渲染风格词 + 角色身份词】开头，先锚定风格，再描述五官，最后必须加上 "front-facing, looking at camera"。'
+      ) + `\n13. characterId 输出时保持输入值不变，不要自行修改（系统会自动归一化为小写无分隔符格式）\n14. name 字段必须输出中文角色名称（如"李白""高力士"），禁止输出英文ID（如"li_bai"）`;
+    } else {
+      systemPrompt = `你是一位短剧视觉总监，现在需要为已开拍的短剧补充新角色的视觉身份。
 新角色必须与已有角色在同一美学体系下——面部描述精度、服饰风格、T2I提示词规范都要对齐。
 
-=== 设计要求 ===
-1. faceDescription（中文）= 面型+眼型+鼻型+唇型+肤色+标志特征，足够让 T2I 在多次生成中保持面部一致
-2. faceReferencePrompt（英文）= 精确对应 faceDescription 的 T2I 提示词。
-   ⚠️ 【本剧 faceReferencePrompt 规则】：${vs?.facePromptRule ?? 'faceReferencePrompt 必须以【渲染风格词 + 角色身份词】开头，先锚定风格，再描述五官，最后必须加上 "front-facing, looking at camera"。'}
-3. bodyTypePrompt（英文）= 体型描述
-4. hairStylePrompt（英文）= 发型描述
-5. defaultCostumePrompt（英文）= 服饰 T2I 提示词，必须匹配剧的时代和风格
-6. defaultCostume（中文）= 服饰中文描述
+=== 角色生成工程公式 ===
+角色组装公式为：[Identity] + [Face/Hair] + [Pose/Action] + [Costume] + [Camera] + [Light] + [Style]。
+你在这一阶段，专门负责设计并返回前序的物理特征组件（需用纯英文描述）：
+
+1. faceReferencePrompt（英文）= 负责 [Identity] + [Face/Hair]。
+   包含：年龄层、性别、身份角色 + 脸型/肤色/标志性五官。不要写太多，3-5个核心特征最佳以防脸崩。
+   ⚠️ 最后必须加上 "front-facing, looking at camera"。
+   本剧补充规则：${vs?.facePromptRule ?? '必须以角色身份词开头，先锚定年龄与身份，再描述五官。'}
+2. hairStylePrompt（英文）= 发型描述（单独提取，以备特殊镜头调用）
+3. defaultCostumePrompt（英文）= 负责 [Costume]。这也是提升历史感/叙事感的核心。
+   写明款式、织物材质、局部纹理（如 "luxurious embroidered hanfu, silk fabric, delicate patterns"）。
+   ⚠️ 注意：这里绝对只写服装道具，绝对不能出现任何动作（Pose）和背景（Background）！
+4. bodyTypePrompt（英文）= 体态特征
+5. faceDescription / defaultCostume（中文）= 对应上述英文的美学设计中文文案。
 7. voiceProfile = 如有台词必须设计配音风格；无台词可用默认值
 8. variations = minor 角色可以没有变体（空数组），supporting 角色至少1个
    变体类型（variationType）规则：
@@ -282,12 +483,6 @@ ${visualStyleHint ? `\n【用户指定视觉风格】：${visualStyleHint}
    - age：年龄跨度，需填写 ageHint（英文年龄外貌词）和 faceOverridePrompt（年龄化面部提示词）
    - transformation：变身/化形/修炼突破，需填写 faceOverridePrompt
    - disguise：伪装，发型/妆容变化
-${['biography', 'rebirth', 'timetravel', 'history', 'warrior', 'mythology'].includes(state.seed.genre) ? `
-   ⚠️ 题材「${state.seed.genre}」年龄/变身变体要求：
-   - protagonist/supporting 角色如有年龄跨度/时间线变化/变身需求，必须设计 variationType="age" 或 "transformation" 的变体
-   - 传记/历史：主角必须有 2-3 个年龄段变体（少年/壮年/晚年），每个含不同的 ageHint 和 faceOverridePrompt
-   - 重生/穿越：主角需要重生前后/穿越前后变体
-   - 武侠/神话：主角如有修炼突破/化形需求，需设计 transformation 变体` : ''}
 9. 所有英文 T2I 字段的画面风格关键词必须与全剧 visualStyle 一致
 10. T2I 内容审核兼容：英文 T2I 字段禁用以下词汇（括号内为替代词）：
     sinister/evil→sharp/cold, hypocritical→composed/enigmatic, drunken→heavy-lidded,
@@ -295,10 +490,16 @@ ${['biography', 'rebirth', 'timetravel', 'history', 'warrior', 'mythology'].incl
     weathered face with dirt→weathered and rugged face
     始终用视觉属性描述外观，不用道德评判词
 11. soulProfile（灵魂画像）所有字段必须使用【简体中文】输出，禁止英文。
-    示例：coreDesire: "追求绝对的精神自由与建功立业的理想"，而非 "Absolute freedom and artistic perfection"
 12. scope 规则：protagonist/antagonist → 'series'，supporting → 'arc'，minor → 'episode'
 13. characterId 输出时保持输入值不变，不要自行修改（系统会自动归一化为小写无分隔符格式）
-14. name 字段必须输出中文角色名称（如"李白""高力士"），禁止输出英文ID（如"li_bai"）`,
+14. name 字段必须输出中文角色名称（如"李白""高力士"），禁止输出英文ID（如"li_bai"）`;
+    }
+
+    const raw = await this.llm.generateStructured({
+      taskName: "drama-new-character-designer",
+      schema: newCharactersOutputSchema,
+      metadata: { dramaId: state.dramaId, userId: state.userId },
+      systemPrompt,
       userPrompt: `剧名：${state.seed.title}
 题材：${state.seed.genre}
 调性：${state.seed.tone}
@@ -315,7 +516,9 @@ ${charRequests}
     });
 
     const result = newCharactersOutputSchema.parse(raw);
-    this.logger.log(`新角色设计完成：${result.characters.map(c => `${c.characterId}(${c.name})`).join(', ')}`);
+    this.logger.log(
+      `新角色设计完成：${result.characters.map((c) => `${c.characterId}(${c.name})`).join(", ")}`,
+    );
     return result.characters;
   }
 
@@ -339,42 +542,52 @@ ${charRequests}
     all: CharacterIdentity[];
     poolUsageUpdates: Array<{ characterId: string }>;
   }> {
-    const poolMap = new Map((state.minorRolePool ?? []).map(p => [p.characterId, p]));
-    const currentIds = new Set(state.characters.map(c => c.characterId));
+    const poolMap = new Map(
+      (state.minorRolePool ?? []).map((p) => [p.characterId, p]),
+    );
+    const currentIds = new Set(state.characters.map((c) => c.characterId));
 
     // Step A: activeCharacters 中命中池的角色直接复用
     const reused: CharacterIdentity[] = [];
     const poolUsageUpdates: Array<{ characterId: string }> = [];
     for (const ac of intent.activeCharacters ?? []) {
-      if (currentIds.has(ac.characterId) || !poolMap.has(ac.characterId)) continue;
+      if (currentIds.has(ac.characterId) || !poolMap.has(ac.characterId))
+        continue;
       const poolEntry = poolMap.get(ac.characterId)!;
-      reused.push({ ...poolEntry.identity, scope: 'episode' });
+      reused.push({ ...poolEntry.identity, scope: "episode" });
       currentIds.add(ac.characterId);
       poolUsageUpdates.push({ characterId: ac.characterId });
     }
 
     if (reused.length > 0) {
-      this.logger.log(`[AssetLibrary] 池复用 ${reused.length} 个角色: ${reused.map(c => `${c.characterId}(${c.name})`).join(', ')}`);
+      this.logger.log(
+        `[AssetLibrary] 池复用 ${reused.length} 个角色: ${reused.map((c) => `${c.characterId}(${c.name})`).join(", ")}`,
+      );
     }
 
     // Step A2: activeCharacters 中既不在 state.characters 也不在池中的角色 → 自动提升为 proposedNewCharacters
     // 典型场景：第1集，state.characters=[]，主角/反派在 activeCharacters 中但无人设计
-    const reuseIds = new Set(reused.map(c => c.characterId));
+    const reuseIds = new Set(reused.map((c) => c.characterId));
     const orphanActive = (intent.activeCharacters ?? []).filter(
-      ac => ac.characterId && !currentIds.has(ac.characterId) && !reuseIds.has(ac.characterId),
+      (ac) =>
+        ac.characterId &&
+        !currentIds.has(ac.characterId) &&
+        !reuseIds.has(ac.characterId),
     );
 
     // ── 角色名称推断辅助函数 ──
     // 将 characterId（如 "li_bai"）与 seed concept 名称（如 "李白"）做模糊匹配
-    const normalizeCid = (s: string) => s.toLowerCase().replace(/[\s\-_]+/g, '');
-    const protagonistName = state.seed?.protagonistConcept?.name ?? '';
-    const antagonistName = state.seed?.antagonistConcept?.name ?? '';
+    const normalizeCid = (s: string) =>
+      s.toLowerCase().replace(/[\s\-_]+/g, "");
+    const protagonistName = state.seed?.protagonistConcept?.name ?? "";
+    const antagonistName = state.seed?.antagonistConcept?.name ?? "";
     // 构建 characterId → seed outline 中已知角色信息的查找表
     const outlineCharMap = new Map<string, { name: string; role: string }>();
     for (const ep of state.seriesOutline?.episodes ?? []) {
       for (const kid of ep.keyCharacterIds ?? []) {
         // outline 中 keyCharacterIds 是 characterId 格式，不含中文名
-        if (!outlineCharMap.has(kid)) outlineCharMap.set(kid, { name: kid, role: 'supporting' });
+        if (!outlineCharMap.has(kid))
+          outlineCharMap.set(kid, { name: kid, role: "supporting" });
       }
     }
     // 从 intent.proposedNewCharacters 中预取中文角色名（这些通常有正确的中文 name）
@@ -385,62 +598,92 @@ ${charRequests}
       }
     }
 
-    const autoProposed: ProposedCharacter[] = orphanActive.map(ac => {
+    const autoProposed: ProposedCharacter[] = orphanActive.map((ac) => {
       const cid = ac.characterId;
       const cidNorm = normalizeCid(cid);
       // 匹配主角：对比 characterId 与主角名称的拼音形式
-      const isProtag = protagonistName && (
-        cid === protagonistName || cidNorm === normalizeCid(protagonistName)
-        // 宽松匹配：seed 中角色名为中文时，检查 outline 中第一集的 keyCharacterIds
-        || (state.seriesOutline?.episodes?.[0]?.keyCharacterIds?.includes(cid)
-            && ac.role === 'protagonist')
-      );
-      const isAntag = !isProtag && antagonistName && (
-        cid === antagonistName || cidNorm === normalizeCid(antagonistName)
-        || (ac.role === 'antagonist')
-      );
-      const concept = isProtag ? state.seed?.protagonistConcept
-        : isAntag ? state.seed?.antagonistConcept : undefined;
+      const isProtag =
+        protagonistName &&
+        (cid === protagonistName ||
+          cidNorm === normalizeCid(protagonistName) ||
+          // 宽松匹配：seed 中角色名为中文时，检查 outline 中第一集的 keyCharacterIds
+          (state.seriesOutline?.episodes?.[0]?.keyCharacterIds?.includes(cid) &&
+            ac.role === "protagonist"));
+      const isAntag =
+        !isProtag &&
+        antagonistName &&
+        (cid === antagonistName ||
+          cidNorm === normalizeCid(antagonistName) ||
+          ac.role === "antagonist");
+      const concept = isProtag
+        ? state.seed?.protagonistConcept
+        : isAntag
+          ? state.seed?.antagonistConcept
+          : undefined;
       // 名称优先级：seed concept 中文名 > proposedNewCharacters 中文名 > activeCharacters.name > characterId
-      const name = concept?.name
-        ?? proposedNameMap.get(cid)
-        ?? ((ac as any).name && (ac as any).name !== cid ? (ac as any).name : undefined)
-        ?? cid;
-      const personality = (concept as any)?.personality ?? '';
-      const situation = (concept as any)?.situation ?? (concept as any)?.motivation ?? '';
+      const name =
+        concept?.name ??
+        proposedNameMap.get(cid) ??
+        ((ac as any).name && (ac as any).name !== cid
+          ? (ac as any).name
+          : undefined) ??
+        cid;
+      const personality = (concept as any)?.personality ?? "";
+      const situation =
+        (concept as any)?.situation ?? (concept as any)?.motivation ?? "";
       return {
         characterId: cid,
         name,
-        role: (isProtag ? 'protagonist' : isAntag ? 'antagonist' : ac.role ?? 'supporting') as 'supporting' | 'minor',
-        scope: 'arc' as const,
-        narrativePurpose: personality ? `${personality}; ${situation}` : '本集核心角色',
-        appearanceHint: concept ? `来自种子：${JSON.stringify(concept).slice(0, 200)}` : '',
+        role: (isProtag
+          ? "protagonist"
+          : isAntag
+            ? "antagonist"
+            : (ac.role ?? "supporting")) as "supporting" | "minor",
+        scope: "arc" as const,
+        narrativePurpose: personality
+          ? `${personality}; ${situation}`
+          : "本集核心角色",
+        appearanceHint: concept
+          ? `来自种子：${JSON.stringify(concept).slice(0, 200)}`
+          : "",
         hasDialogue: true,
       };
     });
     if (autoProposed.length > 0) {
-      this.logger.log(`[AssetLibrary] 自动提升 ${autoProposed.length} 个 activeCharacters 为新角色设计: ${autoProposed.map(p => `${p.characterId}(${p.name})`).join(', ')}`);
+      this.logger.log(
+        `[AssetLibrary] 自动提升 ${autoProposed.length} 个 activeCharacters 为新角色设计: ${autoProposed.map((p) => `${p.characterId}(${p.name})`).join(", ")}`,
+      );
     }
 
     // Step B: proposedNewCharacters + autoProposed，排除已复用/已知的，剩余提交 LLM 设计
     // ⚠️ 去重：autoProposed 与 proposedNewCharacters 可能包含相同 characterId，
     //    优先保留 proposedNewCharacters（有更丰富的 appearanceHint/narrativePurpose）
-    const proposedIds = new Set((intent.proposedNewCharacters ?? []).map(p => p.characterId));
+    const proposedIds = new Set(
+      (intent.proposedNewCharacters ?? []).map((p) => p.characterId),
+    );
     const deduped = [
-      ...autoProposed.filter(p => !proposedIds.has(p.characterId)), // auto 的只有不在 proposed 中的才保留
+      ...autoProposed.filter((p) => !proposedIds.has(p.characterId)), // auto 的只有不在 proposed 中的才保留
       ...(intent.proposedNewCharacters ?? []),
     ];
     const genuinelyNew = deduped.filter(
       (p): p is ProposedCharacter =>
-        !!p.characterId && !!p.name && !currentIds.has(p.characterId) && !reuseIds.has(p.characterId),
+        !!p.characterId &&
+        !!p.name &&
+        !currentIds.has(p.characterId) &&
+        !reuseIds.has(p.characterId),
     );
 
     let designed: CharacterIdentity[] = [];
     if (genuinelyNew.length > 0) {
       // 建立 characterId → proposed scope 的映射，让设计结果的生命周期与导演意图对齐
-      const proposedScopeMap = new Map(genuinelyNew.map(p => [p.characterId, p.scope ?? 'episode']));
+      const proposedScopeMap = new Map(
+        genuinelyNew.map((p) => [p.characterId, p.scope ?? "episode"]),
+      );
       const rawDesigned = await this.designNewCharacters(state, genuinelyNew);
-      designed = rawDesigned.map(c => ({ ...c, scope: proposedScopeMap.get(c.characterId) ?? 'episode' }));
+      designed = rawDesigned.map((c) => ({
+        ...c,
+        scope: proposedScopeMap.get(c.characterId) ?? "episode",
+      }));
     }
 
     const all = [...reused, ...designed];
@@ -453,43 +696,64 @@ ${charRequests}
    */
   async designNewLocations(
     state: DramaState,
-    locationHints: Array<{ locationId: string; name?: string; narrativeContext?: string }>,
-  ): Promise<z.infer<typeof newLocationsOutputSchema>['locations']> {
+    locationHints: Array<{
+      locationId: string;
+      name?: string;
+      narrativeContext?: string;
+    }>,
+  ): Promise<z.infer<typeof newLocationsOutputSchema>["locations"]> {
     if (!locationHints.length) return [];
-    const existing = state.locations.slice(0, 5).map(l =>
-      `${l.locationId}(${l.name}): visualPrompt="${l.visualPrompt?.slice(0, 80)}"`,
-    ).join('\n');
+    const existing = state.locations
+      .slice(0, 5)
+      .map(
+        (l) =>
+          `${l.locationId}(${l.name}): visualPrompt="${l.visualPrompt?.slice(0, 80)}"`,
+      )
+      .join("\n");
     const vs = state.visualStyle;
     const styleCtx = vs
-      ? `美学=${vs.overallAesthetic}, 调色=${vs.colorGrading}, 光影=${vs.lightingStyle}, 渲染=${vs.renderTechnique ?? ''}, 材质=${vs.textureStyle ?? ''}`
-      : '';
+      ? `美学=${vs.overallAesthetic}, 调色=${vs.colorGrading}, 光影=${vs.lightingStyle}, 渲染=${vs.renderTechnique ?? ""}, 材质=${vs.textureStyle ?? ""}`
+      : "";
 
-    const locRequests = locationHints.map((h, i) =>
-      `${i + 1}. locationId="${h.locationId}", name="${h.name ?? h.locationId}"\n` +
-      `   叙事语境：${h.narrativeContext ?? '本集剧情需要此场景'}`,
-    ).join('\n');
+    const locRequests = locationHints
+      .map(
+        (h, i) =>
+          `${i + 1}. locationId="${h.locationId}", name="${h.name ?? h.locationId}"\n` +
+          `   叙事语境：${h.narrativeContext ?? "本集剧情需要此场景"}`,
+      )
+      .join("\n");
 
-    const raw = await this.llm.generateStructured({
-      taskName: 'drama-new-location-designer',
-      schema: newLocationsOutputSchema,
-      metadata: { dramaId: state.dramaId, userId: state.userId },
-      systemPrompt: `你是一位短剧视觉总监，现在需要为已开拍的短剧设计新场景的视觉描述。
+    const baseLocationPrompt = state.promptProfile?.agentSystemPrompts?.['location-designer'];
+    const systemPromptTextLocation = baseLocationPrompt 
+      ? baseLocationPrompt + `\n10. locationId 输出时保持输入值不变。`
+      : `你是一位短剧视觉总监，现在需要为已开拍的短剧设计新场景的视觉描述。
 新场景必须与已有场景在同一美学体系下——T2I提示词规范、光影风格、色调都要对齐。
 
 === 设计要求 ===
 每个场景必须包含以下字段：
 1. locationId / name / description（中文）
-2. visualPrompt（英文，25-40词）必须覆盖三个维度，不要只罗列物品：
-   ① 空间构图（architectural structure, spatial depth, symmetry/asymmetry, scale）
-   ② 光影氛围（specific light source, shadow direction, time of day, light quality）
-   ③ 情绪暗示（atmosphere keyword hinting at narrative tension, e.g. oppressive/serene/desolate）
-   禁止写人物，禁止写全局风格词
+2. visualPrompt（英文，30-50词）这是一张电影概念设计图的底稿。必须严格按照以下【空间生成公式】构筑：
+   [主体场景 Scene] + [空间结构 Structure] + [材质微观 Material] + [环境光照 Light] + [氛围介质 Atmosphere]
+   - 主体场景：要具体到时代/类型，如 "Tang dynasty city gate", "desert battlefield ruins"
+   - 空间结构：决定几何关系（"arched gateway, massive stone wall"）
+   - 材质微观：决定逼真感（"weathered grey stone, peeling red paint"）
+   - 环境光照：交代时间的基调光（"morning sunlight, soft side lighting"）
+   - 氛围介质：让空间有空气感（"floating dust particles, low mist"）
+   ⚠️ 导演铁律：请克制！绝对不要输出任何【构图/镜头】（如 wide shot）或【风格/质感】（如 photorealistic，cinematic color grading），系统将在下游通过其他层挂载融合！
+   🚫 绝对底线：环境必须严格、绝对是【无人区域（no people）】，因为这是纯粹的地基底漆镜头！
 3. lightingDefault（英文）：该场景默认光线条件
 4. colorTone（英文短语）：如 "warm_amber_and_brown"
 5. ambientSoundDefault：默认环境音
 6. keyProps：场景内普通道具中文文字列表
 7. isRecurring：是否高频复用场景
-8. 所有英文 T2I 字段的画面风格关键词必须与全剧 visualStyle 一致`,
+8. 所有英文 T2I 字段的画面风格关键词必须与全剧 visualStyle 一致
+10. locationId 输出时保持输入值不变。`;
+
+    const raw = await this.llm.generateStructured({
+      taskName: "drama-new-location-designer",
+      schema: newLocationsOutputSchema,
+      metadata: { dramaId: state.dramaId, userId: state.userId },
+      systemPrompt: systemPromptTextLocation,
       userPrompt: `剧名：${state.seed.title}
 题材：${state.seed.genre}
 全剧视觉风格：${styleCtx}
@@ -505,7 +769,9 @@ ${locRequests}
     });
 
     const result = newLocationsOutputSchema.parse(raw);
-    this.logger.log(`新场景设计完成：${result.locations.map(l => `${l.locationId}(${l.name})`).join(', ')}`);
+    this.logger.log(
+      `新场景设计完成：${result.locations.map((l) => `${l.locationId}(${l.name})`).join(", ")}`,
+    );
     return result.locations;
   }
 }

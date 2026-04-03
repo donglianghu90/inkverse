@@ -120,7 +120,8 @@ export class DramaDeterministicCheckerService {
 
     // P0-2 fix: 验证 proposedNewCharacters 在脚本中全部出现，防止角色设计浪费
     if (intent?.proposedNewCharacters?.length) {
-      const scriptCharIds = new Set(script.scenes.flatMap(s => s.presentCharacterIds ?? []));
+      const normalizeId = (id: string) => id.toLowerCase().replace(/[\s\-_]+/g, '');
+      const scriptCharIds = new Set(script.scenes.flatMap(s => (s.presentCharacterIds ?? []).map(normalizeId)));
       for (const proposed of intent.proposedNewCharacters) {
         if (!scriptCharIds.has(proposed.characterId) && !allChars.has(proposed.characterId)) {
           fails.push({

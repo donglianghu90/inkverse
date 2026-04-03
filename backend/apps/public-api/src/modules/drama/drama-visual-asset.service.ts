@@ -23,6 +23,7 @@ import {
 } from './utils/asset-prompt.utils';
 import { PromptOptimizerService } from '../media/prompt-optimizer.service';
 import { ImageProviderRouterService } from './media-pipeline/image-provider-router.service';
+import { PromptCompilerService } from './media-pipeline/prompt-compiler.service';
 import { DramaStateStore } from './drama-state-store.service';
 
 type RefineSyncScope = 'single' | 'group' | 'all';
@@ -43,6 +44,7 @@ export class DramaVisualAssetService {
     private readonly mediaService: MediaService,
     private readonly renderingProfileService: RenderingProfileService,
     private readonly promptOptimizer: PromptOptimizerService,
+    private readonly promptCompiler: PromptCompilerService,
     private readonly imageRouter: ImageProviderRouterService,
     private readonly stateStore: DramaStateStore,
   ) {}
@@ -106,7 +108,7 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
 
   private optimizeAssetPrompt(
     rawPrompt: string,
-    shotType: 'character' | 'location' | 'style_guide',
+    shotType: 'character' | 'location' | 'style_guide' | 'prop',
     stylePrefix?: string,
     provider?: string,
     styleBucket?: string,
@@ -307,15 +309,17 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
           // Phase 1 面部定妆照：补充年龄、发型、服饰、体型、背景和朝向 prompt
           // 始终从 age 字段推导（ageToT2IPhrase 取范围最小值），agePrompt 仅作兜底
           const agePhrase = ageToT2IPhrase((ch as any).age) || (ch as any).agePrompt?.trim() || '';
-          const faceParts = [
-            ch.faceReferencePrompt,
-            agePhrase,
-            ch.hairStylePrompt || ch.hairStyle,
-            ch.defaultCostumePrompt ? `wearing ${ch.defaultCostumePrompt}` : '',
-            (ch as any).bodyTypePrompt || (ch as any).bodyType,
-            'front-facing, looking at camera, neutral plain background, character reference sheet portrait',
-          ].filter(Boolean).join(', ');
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(faceParts, 'character', charStylePrefix, faceRoute.provider, assetStyleBucket);
+          // Compile prompt via PromptCompilerService
+          const compiledPrompt = await this.promptCompiler.compile({
+            shotType: 'character',
+            face: ch.faceReferencePrompt,
+            age: agePhrase,
+            hair: ch.hairStylePrompt || ch.hairStyle,
+            costume: ch.defaultCostumePrompt,
+            body: (ch as any).bodyTypePrompt || (ch as any).bodyType,
+            style: charStylePrefix,
+          });
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(compiledPrompt, 'character', undefined, faceRoute.provider, assetStyleBucket);
           const result = await this.mediaService.generateImage({
             prompt, negativePrompt, size: DramaVisualAssetService.CHAR_IMAGE_SIZE, count: 1,
             dramaId, assetType: 'character_image', refId: asset.refId, userId,
@@ -344,9 +348,16 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
         if (this.referenceViewFilled(asset, 'establishing')) return;
         try {
           this.logger.log(`[Phase1] establishing: ${loc.name}(${asset.refId})`);
-          const rawPrompt = buildLocationViewPrompt(loc, 'establishing');
+          const compiledPrompt = await this.promptCompiler.compile({
+            shotType: 'location',
+            view_angle: 'establishing',
+            architecture: loc.visualPrompt,
+            lighting: (loc as any).lightingDefault,
+            color_tone: (loc as any).colorTone,
+            style: sceneStylePrefix,
+          });
           const locRoute = this.imageRouter.routeLocation(DramaVisualAssetService.SCENE_IMAGE_SIZE);
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt || loc.visualPrompt, 'location', sceneStylePrefix, locRoute.provider, assetStyleBucket);
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(compiledPrompt, 'location', undefined, locRoute.provider, assetStyleBucket);
           const result = await this.mediaService.generateImage({
             prompt, negativePrompt, size: DramaVisualAssetService.SCENE_IMAGE_SIZE, count: 1,
             dramaId, assetType: 'location_image', refId: asset.refId, userId,
@@ -423,7 +434,11 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
         try {
           this.logger.log(`[Phase1] prop: ${asset.name}(${asset.refId})`);
           const propRoute = this.imageRouter.routeLocation(DramaVisualAssetService.PROP_IMAGE_SIZE);
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(rawPrompt, 'location', undefined, propRoute.provider, assetStyleBucket);
+          const compiledPrompt = await this.promptCompiler.compile({
+            shotType: 'prop',
+            object: rawPrompt,
+          });
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(compiledPrompt, 'prop', undefined, propRoute.provider, assetStyleBucket);
           const result = await this.mediaService.generateImage({
             prompt, negativePrompt, size: DramaVisualAssetService.PROP_IMAGE_SIZE, count: 1,
             dramaId, assetType: 'prop_image', refId: asset.refId, userId,

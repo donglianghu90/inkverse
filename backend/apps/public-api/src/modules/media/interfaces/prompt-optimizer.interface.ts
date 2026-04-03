@@ -12,6 +12,7 @@ export interface T2IOptimizeOptions {
    * 图像生成层 shotType，决定 negative prompt 选择：
    * - 'character' / 'first_frame' / 'last_frame' → CHARACTER_NEGATIVE_EXTRA
    * - 'location'                                  → LOCATION_NEGATIVE_EXTRA
+   * - 'prop'                                      → PROP_NEGATIVE_EXTRA（产品摄影式无人排除）
    * - 'style_guide'                               → 无额外 negative
    */
   shotType?: string;
@@ -37,6 +38,7 @@ export interface T2IOptimizeOptions {
   cameraAngle?: string;
   emotionColorHint?: string;
   routeProfile?: string;
+  ambientPopulation?: string;
 }
 
 export interface T2VOptimizeOptions {

@@ -23,7 +23,6 @@ import type {
   GenreArchetypePreset,
   GenreFullProfile,
 } from '../entities/drama-genre-template.entity';
-import { BASE_AGENT_SYSTEM_PROMPTS } from './drama-agent-system-prompts';
 import {
   BOSS_STORYBOARD_PROMPT,
   BOSS_ARC_DIRECTOR_PROMPT,
@@ -37,6 +36,13 @@ import {
   BOSS_DIALOGUE_COACH_PROMPT,
   BOSS_SCRIPT_EDITOR_PROMPT,
   BOSS_EPISODE_RECORDER_PROMPT,
+  BOSS_CHARACTER_DESIGNER_PROMPT,
+  BOSS_LOCATION_DESIGNER_PROMPT,
+  BOSS_VISUAL_ASSET_DESIGNER_PROMPT,
+  BOSS_PURPOSE_DIRECTIVE_TEMPLATES,
+  BOSS_SEED_ANALYZER_PROMPT,
+  BOSS_SERIES_DIRECTOR_PROMPT,
+  BOSS_STRATEGY_PROMPT,
 } from './genres/boss.prompts';
 import {
   SWEET_STORYBOARD_PROMPT,
@@ -51,6 +57,13 @@ import {
   SWEET_DIALOGUE_COACH_PROMPT,
   SWEET_SCRIPT_EDITOR_PROMPT,
   SWEET_EPISODE_RECORDER_PROMPT,
+  SWEET_CHARACTER_DESIGNER_PROMPT,
+  SWEET_LOCATION_DESIGNER_PROMPT,
+  SWEET_VISUAL_ASSET_DESIGNER_PROMPT,
+  SWEET_PURPOSE_DIRECTIVE_TEMPLATES,
+  SWEET_SEED_ANALYZER_PROMPT,
+  SWEET_SERIES_DIRECTOR_PROMPT,
+  SWEET_STRATEGY_PROMPT,
 } from './genres/sweet.prompts';
 import {
   WARRIOR_STORYBOARD_PROMPT,
@@ -65,6 +78,13 @@ import {
   WARRIOR_DIALOGUE_COACH_PROMPT,
   WARRIOR_SCRIPT_EDITOR_PROMPT,
   WARRIOR_EPISODE_RECORDER_PROMPT,
+  WARRIOR_CHARACTER_DESIGNER_PROMPT,
+  WARRIOR_LOCATION_DESIGNER_PROMPT,
+  WARRIOR_VISUAL_ASSET_DESIGNER_PROMPT,
+  WARRIOR_PURPOSE_DIRECTIVE_TEMPLATES,
+  WARRIOR_SEED_ANALYZER_PROMPT,
+  WARRIOR_SERIES_DIRECTOR_PROMPT,
+  WARRIOR_STRATEGY_PROMPT,
 } from './genres/warrior.prompts';
 import {
   TIMETRAVEL_STORYBOARD_PROMPT,
@@ -79,6 +99,13 @@ import {
   TIMETRAVEL_DIALOGUE_COACH_PROMPT,
   TIMETRAVEL_SCRIPT_EDITOR_PROMPT,
   TIMETRAVEL_EPISODE_RECORDER_PROMPT,
+  TIMETRAVEL_CHARACTER_DESIGNER_PROMPT,
+  TIMETRAVEL_LOCATION_DESIGNER_PROMPT,
+  TIMETRAVEL_VISUAL_ASSET_DESIGNER_PROMPT,
+  TIMETRAVEL_PURPOSE_DIRECTIVE_TEMPLATES,
+  TIMETRAVEL_SEED_ANALYZER_PROMPT,
+  TIMETRAVEL_SERIES_DIRECTOR_PROMPT,
+  TIMETRAVEL_STRATEGY_PROMPT,
 } from './genres/timetravel.prompts';
 import {
   PALACE_STORYBOARD_PROMPT,
@@ -93,6 +120,13 @@ import {
   PALACE_DIALOGUE_COACH_PROMPT,
   PALACE_SCRIPT_EDITOR_PROMPT,
   PALACE_EPISODE_RECORDER_PROMPT,
+  PALACE_CHARACTER_DESIGNER_PROMPT,
+  PALACE_LOCATION_DESIGNER_PROMPT,
+  PALACE_VISUAL_ASSET_DESIGNER_PROMPT,
+  PALACE_PURPOSE_DIRECTIVE_TEMPLATES,
+  PALACE_SEED_ANALYZER_PROMPT,
+  PALACE_SERIES_DIRECTOR_PROMPT,
+  PALACE_STRATEGY_PROMPT,
 } from './genres/palace.prompts';
 import {
   REVENGE_STORYBOARD_PROMPT,
@@ -107,6 +141,13 @@ import {
   REVENGE_DIALOGUE_COACH_PROMPT,
   REVENGE_SCRIPT_EDITOR_PROMPT,
   REVENGE_EPISODE_RECORDER_PROMPT,
+  REVENGE_CHARACTER_DESIGNER_PROMPT,
+  REVENGE_LOCATION_DESIGNER_PROMPT,
+  REVENGE_VISUAL_ASSET_DESIGNER_PROMPT,
+  REVENGE_PURPOSE_DIRECTIVE_TEMPLATES,
+  REVENGE_SEED_ANALYZER_PROMPT,
+  REVENGE_SERIES_DIRECTOR_PROMPT,
+  REVENGE_STRATEGY_PROMPT,
 } from './genres/revenge.prompts';
 import {
   REBIRTH_STORYBOARD_PROMPT,
@@ -121,6 +162,13 @@ import {
   REBIRTH_DIALOGUE_COACH_PROMPT,
   REBIRTH_SCRIPT_EDITOR_PROMPT,
   REBIRTH_EPISODE_RECORDER_PROMPT,
+  REBIRTH_CHARACTER_DESIGNER_PROMPT,
+  REBIRTH_LOCATION_DESIGNER_PROMPT,
+  REBIRTH_VISUAL_ASSET_DESIGNER_PROMPT,
+  REBIRTH_PURPOSE_DIRECTIVE_TEMPLATES,
+  REBIRTH_SEED_ANALYZER_PROMPT,
+  REBIRTH_SERIES_DIRECTOR_PROMPT,
+  REBIRTH_STRATEGY_PROMPT,
 } from './genres/rebirth.prompts';
 import {
   SUSPENSE_STORYBOARD_PROMPT,
@@ -135,6 +183,13 @@ import {
   SUSPENSE_DIALOGUE_COACH_PROMPT,
   SUSPENSE_SCRIPT_EDITOR_PROMPT,
   SUSPENSE_EPISODE_RECORDER_PROMPT,
+  SUSPENSE_CHARACTER_DESIGNER_PROMPT,
+  SUSPENSE_LOCATION_DESIGNER_PROMPT,
+  SUSPENSE_VISUAL_ASSET_DESIGNER_PROMPT,
+  SUSPENSE_PURPOSE_DIRECTIVE_TEMPLATES,
+  SUSPENSE_SEED_ANALYZER_PROMPT,
+  SUSPENSE_SERIES_DIRECTOR_PROMPT,
+  SUSPENSE_STRATEGY_PROMPT,
 } from './genres/suspense.prompts';
 import {
   URBAN_STORYBOARD_PROMPT,
@@ -149,6 +204,13 @@ import {
   URBAN_DIALOGUE_COACH_PROMPT,
   URBAN_SCRIPT_EDITOR_PROMPT,
   URBAN_EPISODE_RECORDER_PROMPT,
+  URBAN_CHARACTER_DESIGNER_PROMPT,
+  URBAN_LOCATION_DESIGNER_PROMPT,
+  URBAN_VISUAL_ASSET_DESIGNER_PROMPT,
+  URBAN_PURPOSE_DIRECTIVE_TEMPLATES,
+  URBAN_SEED_ANALYZER_PROMPT,
+  URBAN_SERIES_DIRECTOR_PROMPT,
+  URBAN_STRATEGY_PROMPT,
 } from './genres/urban.prompts';
 import {
   ANCIENT_STORYBOARD_PROMPT,
@@ -163,6 +225,13 @@ import {
   ANCIENT_DIALOGUE_COACH_PROMPT,
   ANCIENT_SCRIPT_EDITOR_PROMPT,
   ANCIENT_EPISODE_RECORDER_PROMPT,
+  ANCIENT_CHARACTER_DESIGNER_PROMPT,
+  ANCIENT_LOCATION_DESIGNER_PROMPT,
+  ANCIENT_VISUAL_ASSET_DESIGNER_PROMPT,
+  ANCIENT_PURPOSE_DIRECTIVE_TEMPLATES,
+  ANCIENT_SEED_ANALYZER_PROMPT,
+  ANCIENT_SERIES_DIRECTOR_PROMPT,
+  ANCIENT_STRATEGY_PROMPT,
 } from './genres/ancient.prompts';
 import {
   HISTORY_STORYBOARD_PROMPT,
@@ -177,6 +246,13 @@ import {
   HISTORY_DIALOGUE_COACH_PROMPT,
   HISTORY_SCRIPT_EDITOR_PROMPT,
   HISTORY_EPISODE_RECORDER_PROMPT,
+  HISTORY_CHARACTER_DESIGNER_PROMPT,
+  HISTORY_LOCATION_DESIGNER_PROMPT,
+  HISTORY_VISUAL_ASSET_DESIGNER_PROMPT,
+  HISTORY_PURPOSE_DIRECTIVE_TEMPLATES,
+  HISTORY_SEED_ANALYZER_PROMPT,
+  HISTORY_SERIES_DIRECTOR_PROMPT,
+  HISTORY_STRATEGY_PROMPT,
 } from './genres/history.prompts';
 import {
   BIOGRAPHY_STORYBOARD_PROMPT,
@@ -191,6 +267,13 @@ import {
   BIOGRAPHY_DIALOGUE_COACH_PROMPT,
   BIOGRAPHY_SCRIPT_EDITOR_PROMPT,
   BIOGRAPHY_EPISODE_RECORDER_PROMPT,
+  BIOGRAPHY_CHARACTER_DESIGNER_PROMPT,
+  BIOGRAPHY_LOCATION_DESIGNER_PROMPT,
+  BIOGRAPHY_VISUAL_ASSET_DESIGNER_PROMPT,
+  BIOGRAPHY_PURPOSE_DIRECTIVE_TEMPLATES,
+  BIOGRAPHY_SEED_ANALYZER_PROMPT,
+  BIOGRAPHY_SERIES_DIRECTOR_PROMPT,
+  BIOGRAPHY_STRATEGY_PROMPT,
 } from './genres/biography.prompts';
 import {
   MYTHOLOGY_STORYBOARD_PROMPT,
@@ -205,6 +288,13 @@ import {
   MYTHOLOGY_DIALOGUE_COACH_PROMPT,
   MYTHOLOGY_SCRIPT_EDITOR_PROMPT,
   MYTHOLOGY_EPISODE_RECORDER_PROMPT,
+  MYTHOLOGY_CHARACTER_DESIGNER_PROMPT,
+  MYTHOLOGY_LOCATION_DESIGNER_PROMPT,
+  MYTHOLOGY_VISUAL_ASSET_DESIGNER_PROMPT,
+  MYTHOLOGY_PURPOSE_DIRECTIVE_TEMPLATES,
+  MYTHOLOGY_SEED_ANALYZER_PROMPT,
+  MYTHOLOGY_SERIES_DIRECTOR_PROMPT,
+  MYTHOLOGY_STRATEGY_PROMPT,
 } from './genres/mythology.prompts';
 import {
   SCIFI_STORYBOARD_PROMPT,
@@ -219,6 +309,13 @@ import {
   SCIFI_DIALOGUE_COACH_PROMPT,
   SCIFI_SCRIPT_EDITOR_PROMPT,
   SCIFI_EPISODE_RECORDER_PROMPT,
+  SCIFI_CHARACTER_DESIGNER_PROMPT,
+  SCIFI_LOCATION_DESIGNER_PROMPT,
+  SCIFI_VISUAL_ASSET_DESIGNER_PROMPT,
+  SCIFI_PURPOSE_DIRECTIVE_TEMPLATES,
+  SCIFI_SEED_ANALYZER_PROMPT,
+  SCIFI_SERIES_DIRECTOR_PROMPT,
+  SCIFI_STRATEGY_PROMPT,
 } from './genres/scifi.prompts';
 
 export interface GenreTemplateEntry {
@@ -423,7 +520,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 积压段BGM≥0.5 = 节奏控制失误（观众提前情绪泄压）
 - 全集无任何intensity=0的Shot = 缺少情绪锚点，打脸爆发效果大减`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: BOSS_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': BOSS_STORYBOARD_PROMPT,
         'arc-director': BOSS_ARC_DIRECTOR_PROMPT,
         'episode-director': BOSS_EPISODE_DIRECTOR_PROMPT,
@@ -436,6 +534,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': BOSS_DIALOGUE_COACH_PROMPT,
         'script-editor': BOSS_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': BOSS_EPISODE_RECORDER_PROMPT,
+        'character-designer': BOSS_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': BOSS_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': BOSS_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': BOSS_SEED_ANALYZER_PROMPT,
+        'series-director': BOSS_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': BOSS_STRATEGY_PROMPT,
       },
     },
   },
@@ -602,7 +706,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 全集无任何intensity≥0.8的甜蜜shot=本集价值缺失
 - 连续3集无新甜蜜互动=阻碍过长，立即触发甜蜜补偿机制`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: SWEET_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': SWEET_STORYBOARD_PROMPT,
         'arc-director': SWEET_ARC_DIRECTOR_PROMPT,
         'episode-director': SWEET_EPISODE_DIRECTOR_PROMPT,
@@ -615,6 +720,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': SWEET_DIALOGUE_COACH_PROMPT,
         'script-editor': SWEET_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': SWEET_EPISODE_RECORDER_PROMPT,
+        'character-designer': SWEET_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': SWEET_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': SWEET_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': SWEET_SEED_ANALYZER_PROMPT,
+        'series-director': SWEET_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': SWEET_STRATEGY_PROMPT,
       },
     },
   },
@@ -790,7 +901,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 动作场景Shot平均时长>4秒=节奏过慢（战神剧动作场景Shot应≤2.5秒）
 - 全集无intensity=0的Shot=缺乏爆发前蓄力感`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: WARRIOR_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': WARRIOR_STORYBOARD_PROMPT,
         'arc-director': WARRIOR_ARC_DIRECTOR_PROMPT,
         'episode-director': WARRIOR_EPISODE_DIRECTOR_PROMPT,
@@ -803,6 +915,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': WARRIOR_DIALOGUE_COACH_PROMPT,
         'script-editor': WARRIOR_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': WARRIOR_EPISODE_RECORDER_PROMPT,
+        'character-designer': WARRIOR_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': WARRIOR_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': WARRIOR_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': WARRIOR_SEED_ANALYZER_PROMPT,
+        'series-director': WARRIOR_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': WARRIOR_STRATEGY_PROMPT,
       },
     },
   },
@@ -973,7 +1091,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续3集无身份危机=张力消解（必须保持身份暴露威胁）
 - 历史背景说明段>3Shot=节奏拖沓（融入剧情，不要单独讲解）`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: TIMETRAVEL_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': TIMETRAVEL_STORYBOARD_PROMPT,
         'arc-director': TIMETRAVEL_ARC_DIRECTOR_PROMPT,
         'episode-director': TIMETRAVEL_EPISODE_DIRECTOR_PROMPT,
@@ -986,6 +1105,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': TIMETRAVEL_DIALOGUE_COACH_PROMPT,
         'script-editor': TIMETRAVEL_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': TIMETRAVEL_EPISODE_RECORDER_PROMPT,
+        'character-designer': TIMETRAVEL_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': TIMETRAVEL_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': TIMETRAVEL_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': TIMETRAVEL_SEED_ANALYZER_PROMPT,
+        'series-director': TIMETRAVEL_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': TIMETRAVEL_STRATEGY_PROMPT,
       },
     },
   },
@@ -1156,7 +1281,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 反转场景少于3Shot=爆发力不足
 - 生死危机场景平均Shot>5秒=缺乏紧迫感（危机场用2-3秒快切）`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: PALACE_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': PALACE_STORYBOARD_PROMPT,
         'arc-director': PALACE_ARC_DIRECTOR_PROMPT,
         'episode-director': PALACE_EPISODE_DIRECTOR_PROMPT,
@@ -1169,6 +1295,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': PALACE_DIALOGUE_COACH_PROMPT,
         'script-editor': PALACE_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': PALACE_EPISODE_RECORDER_PROMPT,
+        'character-designer': PALACE_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': PALACE_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': PALACE_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': PALACE_SEED_ANALYZER_PROMPT,
+        'series-director': PALACE_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': PALACE_STRATEGY_PROMPT,
       },
     },
   },
@@ -1334,7 +1466,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 清算场景低于3个镜头切换=力度不足（清算场必须是全集最快切段）
 - 复仇台词超过10字/句=失去冷峻感（简短冷然才是复仇风格）`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: REVENGE_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': REVENGE_STORYBOARD_PROMPT,
         'arc-director': REVENGE_ARC_DIRECTOR_PROMPT,
         'episode-director': REVENGE_EPISODE_DIRECTOR_PROMPT,
@@ -1347,6 +1480,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': REVENGE_DIALOGUE_COACH_PROMPT,
         'script-editor': REVENGE_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': REVENGE_EPISODE_RECORDER_PROMPT,
+        'character-designer': REVENGE_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': REVENGE_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': REVENGE_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': REVENGE_SEED_ANALYZER_PROMPT,
+        'series-director': REVENGE_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': REVENGE_STRATEGY_PROMPT,
       },
     },
   },
@@ -1517,7 +1656,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 重生剧允许"主角独处回忆"稍慢（前世信息整合），但不超过4Shot
 - 先知破局场景快慢必须极端对比：破局前最慢→破局瞬间最快`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: REBIRTH_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': REBIRTH_STORYBOARD_PROMPT,
         'arc-director': REBIRTH_ARC_DIRECTOR_PROMPT,
         'episode-director': REBIRTH_EPISODE_DIRECTOR_PROMPT,
@@ -1530,6 +1670,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': REBIRTH_DIALOGUE_COACH_PROMPT,
         'script-editor': REBIRTH_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': REBIRTH_EPISODE_RECORDER_PROMPT,
+        'character-designer': REBIRTH_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': REBIRTH_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': REBIRTH_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': REBIRTH_SEED_ANALYZER_PROMPT,
+        'series-director': REBIRTH_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': REBIRTH_STRATEGY_PROMPT,
       },
     },
   },
@@ -1707,7 +1853,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续5Shot都是4-5秒且无台词=拖沓（推理段要有信息密度，不是视觉留白）
 - 全集高强度（intensity≥0.7）超过50%=节奏过满，失去悬疑的克制感`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: SUSPENSE_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': SUSPENSE_STORYBOARD_PROMPT,
         'arc-director': SUSPENSE_ARC_DIRECTOR_PROMPT,
         'episode-director': SUSPENSE_EPISODE_DIRECTOR_PROMPT,
@@ -1720,6 +1867,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': SUSPENSE_DIALOGUE_COACH_PROMPT,
         'script-editor': SUSPENSE_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': SUSPENSE_EPISODE_RECORDER_PROMPT,
+        'character-designer': SUSPENSE_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': SUSPENSE_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': SUSPENSE_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': SUSPENSE_SEED_ANALYZER_PROMPT,
+        'series-director': SUSPENSE_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': SUSPENSE_STRATEGY_PROMPT,
       },
     },
   },
@@ -1894,7 +2047,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 全集intensity≥0.8超过25%=节奏过强，失去生活感
 - 情感共鸣场少于2个Shot停留>4秒=情感不够到位（需要留给观众感受的空间）`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: URBAN_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': URBAN_STORYBOARD_PROMPT,
         'arc-director': URBAN_ARC_DIRECTOR_PROMPT,
         'episode-director': URBAN_EPISODE_DIRECTOR_PROMPT,
@@ -1907,6 +2061,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': URBAN_DIALOGUE_COACH_PROMPT,
         'script-editor': URBAN_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': URBAN_EPISODE_RECORDER_PROMPT,
+        'character-designer': URBAN_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': URBAN_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': URBAN_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': URBAN_SEED_ANALYZER_PROMPT,
+        'series-director': URBAN_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': URBAN_STRATEGY_PROMPT,
       },
     },
   },
@@ -2081,7 +2241,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续2集无感情线推进或命运变化=节奏停滞
 - 武打场景Shot平均>3秒=节奏过慢（武打段需1.5-2.5秒/Shot）`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: ANCIENT_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': ANCIENT_STORYBOARD_PROMPT,
         'arc-director': ANCIENT_ARC_DIRECTOR_PROMPT,
         'episode-director': ANCIENT_EPISODE_DIRECTOR_PROMPT,
@@ -2094,6 +2255,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': ANCIENT_DIALOGUE_COACH_PROMPT,
         'script-editor': ANCIENT_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': ANCIENT_EPISODE_RECORDER_PROMPT,
+        'character-designer': ANCIENT_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': ANCIENT_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': ANCIENT_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': ANCIENT_SEED_ANALYZER_PROMPT,
+        'series-director': ANCIENT_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': ANCIENT_STRATEGY_PROMPT,
       },
     },
   },
@@ -2275,7 +2442,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续3集无历史格局变化=叙事停滞
 - 战役场景平均Shot>4秒=缺乏史诗感（战争场景需快切蒙太奇）`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: HISTORY_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': HISTORY_STORYBOARD_PROMPT,
         'arc-director': HISTORY_ARC_DIRECTOR_PROMPT,
         'episode-director': HISTORY_EPISODE_DIRECTOR_PROMPT,
@@ -2288,6 +2456,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': HISTORY_DIALOGUE_COACH_PROMPT,
         'script-editor': HISTORY_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': HISTORY_EPISODE_RECORDER_PROMPT,
+        'character-designer': HISTORY_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': HISTORY_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': HISTORY_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': HISTORY_SEED_ANALYZER_PROMPT,
+        'series-director': HISTORY_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': HISTORY_STRATEGY_PROMPT,
       },
     },
   },
@@ -2469,7 +2643,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续3集无人生里程碑或重大事件=节奏停滞
 - 人生领悟场景少于3Shot停留>5秒=情感不够深沉（传记剧需要情感沉淀时间）`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: BIOGRAPHY_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': BIOGRAPHY_STORYBOARD_PROMPT,
         'arc-director': BIOGRAPHY_ARC_DIRECTOR_PROMPT,
         'episode-director': BIOGRAPHY_EPISODE_DIRECTOR_PROMPT,
@@ -2482,6 +2657,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': BIOGRAPHY_DIALOGUE_COACH_PROMPT,
         'script-editor': BIOGRAPHY_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': BIOGRAPHY_EPISODE_RECORDER_PROMPT,
+        'character-designer': BIOGRAPHY_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': BIOGRAPHY_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': BIOGRAPHY_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': BIOGRAPHY_SEED_ANALYZER_PROMPT,
+        'series-director': BIOGRAPHY_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': BIOGRAPHY_STRATEGY_PROMPT,
       },
     },
   },
@@ -2660,7 +2841,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续2集无神力展示或神话任务推进=节奏停滞
 - 全集高强度（intensity≥0.8）超过45%=神话感稀释（超强段必须是稀缺的）`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: MYTHOLOGY_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': MYTHOLOGY_STORYBOARD_PROMPT,
         'arc-director': MYTHOLOGY_ARC_DIRECTOR_PROMPT,
         'episode-director': MYTHOLOGY_EPISODE_DIRECTOR_PROMPT,
@@ -2673,6 +2855,12 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': MYTHOLOGY_DIALOGUE_COACH_PROMPT,
         'script-editor': MYTHOLOGY_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': MYTHOLOGY_EPISODE_RECORDER_PROMPT,
+        'character-designer': MYTHOLOGY_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': MYTHOLOGY_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': MYTHOLOGY_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': MYTHOLOGY_SEED_ANALYZER_PROMPT,
+        'series-director': MYTHOLOGY_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': MYTHOLOGY_STRATEGY_PROMPT,
       },
     },
   },
@@ -2850,7 +3038,8 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
 - 连续3集无科幻世界规则新揭示=世界观停滞
 - 人类道德困境场少于2Shot停留>5秒=科幻剧流于纯爽，失去深度`,
       },
-      agentSystemPrompts: {
+purposeDirectiveTemplates: SCIFI_PURPOSE_DIRECTIVE_TEMPLATES,
+            agentSystemPrompts: {
         'storyboard-director': SCIFI_STORYBOARD_PROMPT,
         'arc-director': SCIFI_ARC_DIRECTOR_PROMPT,
         'episode-director': SCIFI_EPISODE_DIRECTOR_PROMPT,
@@ -2863,46 +3052,16 @@ export const GENRE_TEMPLATES: Record<string, GenreTemplateEntry> = {
         'dialogue-coach': SCIFI_DIALOGUE_COACH_PROMPT,
         'script-editor': SCIFI_SCRIPT_EDITOR_PROMPT,
         'episode-recorder': SCIFI_EPISODE_RECORDER_PROMPT,
+        'character-designer': SCIFI_CHARACTER_DESIGNER_PROMPT,
+        'location-designer': SCIFI_LOCATION_DESIGNER_PROMPT,
+        'visual-asset-designer': SCIFI_VISUAL_ASSET_DESIGNER_PROMPT,
+        'seed-analyzer': SCIFI_SEED_ANALYZER_PROMPT,
+        'series-director': SCIFI_SERIES_DIRECTOR_PROMPT,
+        'drama-strategy': SCIFI_STRATEGY_PROMPT,
       },
     },
   },
 
-  // ─────────────────────────── _custom ───────────────────────────
-  // 自定义/未知题材的兜底模板。所有内容均为通用描述，不含任何具体题材举例。
-  // 当 genreKey 不在 GENRE_TEMPLATES 中时，buildProfilerSystemPrompt 使用此模板。
-  _custom: {
-    displayName: '自定义题材',
-    description: '用户自定义或系统未收录的题材',
-    genreKeywords: [],
-    audienceTags: [],
-    protagonistFocusTags: [],
-    toneTags: [],
-    platformTags: [],
-    seedHints: {},
-    profile: {
-      profilerGuide: `你是一位短剧编剧培训专家。本次任务：为自定义题材生成编剧手册，须完全基于本剧种子特征，不得套用任何预设题材框架。
-【scriptwriterGuide 要点】
-- coreIdentity：一句话概括本剧编剧核心视角与最高优先级（格式："你是一位精通…的编剧，每场戏必须…"）
-- genreRules：至少5条针对本剧实际题材的铁律，禁止通用规则
-- dialogueGuide：本剧专属台词风格（语言寄存器 + 主角/反派特征 + 潜台词策略 + 禁止语气）`,
-      profilerArchetypeSection: `0. genreArchetype：根据本剧种子特征选择最匹配的枚举值，并生成专属 adaptationNotes。
-   - narrativeArc: conflict_resolution / life_journey / mystery_reveal / quest / rise_and_fall
-   - narrationRatio：0-0.5（纯剧情=0，含旁白叙事=0.05-0.2，跨时代传记≤0.25）
-   - factConstraint: none / inspired_by / period_accurate
-   - hookMechanism: plot_cliffhanger / revelation / emotional_peak / mystery / curiosity
-   - conflictType: interpersonal / fate_vs_will / good_vs_evil / internal / society
-   - characterEvolution: costume_only / age_progression / power_level / relationship / status
-   - visualTone: glamorous / gritty / ethereal / period / dark / whimsical / epic
-   - adaptationNotes：【必填】本题材生产规则基线，纯文本，用 "- " 列出，须覆盖：
-     ① 旁白规则（narrationRatio > 0 时必填）  ② 史实约束（factConstraint ≠ none 时必填）
-     ③ 叙事弧线阶段要求（narrativeArc ≠ conflict_resolution 时必填）
-     ④ 集末钩子偏好（hookMechanism ≠ plot_cliffhanger 时必填）
-     ⑤ 角色外观演变规则（characterEvolution ≠ costume_only 时必填）
-     ⑥ 台词风格（语言寄存器 + 主角/反派特征 + 禁止语气）  ⑦ 潜台词策略
-     ⑧ 节奏模式（理想节奏分布百分比）  ⑨ 记录重点（episodeRecorder 追踪维度）`,
-      agentSystemPrompts: BASE_AGENT_SYSTEM_PROMPTS,
-    },
-  },
 
 };
 

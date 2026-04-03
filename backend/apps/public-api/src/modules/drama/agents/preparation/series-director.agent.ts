@@ -30,7 +30,7 @@ export class SeriesDirectorAgent {
     const targetEp = Math.round((epMin + epMax) / 2);
     const durSec = seed.targetEpisodeDurationSec;
 
-    let sysPrompt = buildSeriesDirectorSystemPrompt({ targetEp, epMin, epMax, durSec, genre: seed.genre, genreGuidance });
+    let sysPrompt = buildSeriesDirectorSystemPrompt({ targetEp, epMin, epMax, durSec, genre: seed.genre, genreGuidance }, seed.genre);
     if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
 
     const raw = await this.llm.generateStructured({

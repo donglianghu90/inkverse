@@ -205,6 +205,9 @@ export interface GenreFullProfile {
    * 未指定的 agent 回退到 _custom 题材的默认模板（BASE_AGENT_SYSTEM_PROMPTS）。
    */
   agentSystemPrompts?: Record<string, string>;
+  /** 题材专属场景类型指令（climax/confrontation/revelation/romantic/action/cliffhanger/transition） */
+  purposeDirectiveTemplates?: Record<string, string>;
+
 }
 
 @Entity('drama_genre_templates')

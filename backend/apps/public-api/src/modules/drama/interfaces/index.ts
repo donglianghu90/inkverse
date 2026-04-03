@@ -25,7 +25,6 @@ export type {
 } from './drama-workflow-topology.interface';
 
 export type {
-  DramaGenerationMode,
   DramaStyleBucket,
   DramaShotType,
   DramaQualityTier,

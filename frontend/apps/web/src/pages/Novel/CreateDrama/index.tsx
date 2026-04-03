@@ -244,10 +244,9 @@ const SCALE_PRESETS = [
   { min: 100, max: 150, label: '100-150 集', desc: '长线型' },
 ];
 
-const GENERATION_MODE_PRESETS = [
-  { value: 'fast' as const, label: '极速', desc: '更快出片，质量门槛更宽松' },
-  { value: 'balanced' as const, label: '均衡', desc: '速度与质量平衡（推荐）' },
-  { value: 'quality' as const, label: '高质', desc: '更严格质量与重试，耗时更长' },
+const RESOLUTION_PRESETS = [
+  { value: 'standard' as const, label: '标清', desc: '1K 图片 + 720P 视频' },
+  { value: 'hd' as const, label: '高清', desc: '2K 图片 + 1080P 视频（推荐）' },
 ];
 
 const AUDIENCE_PRESETS = [
@@ -281,7 +280,7 @@ const GEN_STEPS = [
   { label: '完成', step: 'create_5' },
 ];
 
-interface FormState extends CreateDramaParams { customAudience: string; useCustomAudience: boolean; selectedVisualStyle: string; selectedVisualStyleTemplateId?: string; }
+interface FormState extends Omit<CreateDramaParams, 'imageResolution' | 'videoResolution'> { customAudience: string; useCustomAudience: boolean; selectedVisualStyle: string; selectedVisualStyleTemplateId?: string; resolutionTier: 'standard' | 'hd'; }
 
 const CreateDrama: React.FC = () => {
   const [step, setStep] = useState(() =>
@@ -325,7 +324,7 @@ const CreateDrama: React.FC = () => {
     tonePreference: '', audienceTags: [], titleHint: '', mainStoryGoal: '',
     platformTarget: 'generic', aspectRatio: '9:16',
     targetEpisodeDurationSec: 180, plannedMinEpisodes: 60, plannedMaxEpisodes: 100,
-    generationMode: 'balanced',
+    resolutionTier: 'hd',
     customAudience: '', useCustomAudience: false, selectedVisualStyle: '', selectedVisualStyleTemplateId: undefined,
   });
 
@@ -545,7 +544,8 @@ const CreateDrama: React.FC = () => {
       platformTarget: form.platformTarget, aspectRatio: form.aspectRatio,
       targetEpisodeDurationSec: form.targetEpisodeDurationSec,
       plannedMinEpisodes: form.plannedMinEpisodes, plannedMaxEpisodes: form.plannedMaxEpisodes,
-      generationMode: form.generationMode,
+      imageResolution: form.resolutionTier === 'standard' ? '1k' : '2k',
+      videoResolution: form.resolutionTier === 'standard' ? '720p' : '1080p',
       genreTemplateId: form.genreTemplateId || undefined,
       visualStyleTemplateId: form.selectedVisualStyleTemplateId || undefined,
       visualStyleHint: form.selectedVisualStyle
@@ -1148,19 +1148,19 @@ const CreateDrama: React.FC = () => {
 
           <div className="space-y-3">
             <div>
-              <Label>生成模式</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">影响图片/视频并发、重试与质量校验强度</p>
+              <Label>画面分辨率</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">选择生成图片和视频的清晰度</p>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              {GENERATION_MODE_PRESETS.map((opt) => (
+            <div className="grid grid-cols-2 gap-2">
+              {RESOLUTION_PRESETS.map((opt) => (
                 <button
                   key={opt.value}
                   type="button"
                   className={cn(
                     'flex flex-col items-center gap-1 rounded-lg border p-3 text-center transition-all',
-                    form.generationMode === opt.value ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : 'border-border',
+                    form.resolutionTier === opt.value ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : 'border-border',
                   )}
-                  onClick={() => setForm({ ...form, generationMode: opt.value })}
+                  onClick={() => setForm({ ...form, resolutionTier: opt.value })}
                 >
                   <span className="text-sm font-semibold">{opt.label}</span>
                   <span className="text-[11px] text-muted-foreground leading-tight">{opt.desc}</span>
@@ -1179,7 +1179,7 @@ const CreateDrama: React.FC = () => {
                 { label: '平台', value: PLATFORM_PRESETS.find(p => p.value === form.platformTarget)?.label || '通用' },
                 { label: '观众', value: effectiveAudience || '—' },
                 { label: '冲突', value: form.mainStoryGoal || '—', clamp: true },
-                { label: '生成', value: GENERATION_MODE_PRESETS.find(m => m.value === form.generationMode)?.label || '均衡' },
+                { label: '清晰度', value: RESOLUTION_PRESETS.find(m => m.value === form.resolutionTier)?.label || '高清' },
                 { label: '时长', value: `${(form.targetEpisodeDurationSec ?? 180) / 60} 分钟/集` },
                 { label: '集数', value: `${form.plannedMinEpisodes}-${form.plannedMaxEpisodes} 集` },
               ].map(({ label, value, clamp }) => (

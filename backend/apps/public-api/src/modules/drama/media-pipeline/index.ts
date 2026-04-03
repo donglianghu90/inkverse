@@ -21,3 +21,5 @@ export { ImageProviderRouterService } from './image-provider-router.service';
 export { VideoProviderRouterService } from './video-provider-router.service';
 export { ShotProductionOrderService } from './shot-production-order.service';
 export { ShotContextBuilderService } from './shot-context-builder.service';
+export { ShotPromptAssemblerService } from './shot-prompt-assembler.service';
+export { PromptCompilerService, CompilerInput, CompilerMode } from './prompt-compiler.service';

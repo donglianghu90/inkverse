@@ -11,14 +11,14 @@ export type { OptimizeResult, T2IOptimizeOptions, T2VOptimizeOptions } from './i
  * 示例：'kieai.nano-banana-2' → 'kieai.nano-banana' → 'kieai' → 'default'
  */
 const QUALITY_BOOSTERS: Record<string, string[]> = {
-  volcengine:          ['cinematic lighting', 'rich color depth'],
+  volcengine:          ['cinematic lighting', 'rich color depth', 'chiaroscuro', 'motivated practical lighting'],
   // nano-banana 系列：摄影写实风，emphasis on identity & sharpness
-  'kieai.nano-banana': ['highly detailed', 'professional photography', 'sharp focus', 'photorealistic'],
+  'kieai.nano-banana': ['highly detailed', 'professional cinema photography', 'sharp focus', 'photorealistic', '35mm format', 'film grain'],
   // flux-2 T2I：FLUX.2 擅长构图与概念艺术
-  'kieai.flux-2':      ['professional illustration', 'high quality', 'detailed composition', 'FLUX aesthetic'],
+  'kieai.flux-2':      ['professional film still', 'masterpiece', 'cinematic composition', 'FLUX aesthetic', 'volumetric atmospheric lighting'],
   // flux-2 I2I：最重要的是保留原图身份同时做精准变换
-  'kieai.flux-2-i2i':  ['consistent identity', 'high quality transformation', 'maintain facial features'],
-  default:             ['high quality', 'detailed', 'sharp focus'],
+  'kieai.flux-2-i2i':  ['consistent identity', 'high quality cinematic transformation', 'maintain facial features'],
+  default:             ['cinematic masterpiece', 'detailed', 'sharp focus', 'professional color grading'],
 };
 
 /** 按 provider 全名、逐级前缀、default 的顺序查找 booster */
@@ -49,6 +49,8 @@ const GOLDEN_EXTRA_LOCATION = ['cinematic composition', 'no human subjects', 'en
 const GOLDEN_EXTRA_ATMOSPHERIC = ['cinematic composition', 'atmospheric scene'];
 /** 风格参考图/情绪板：概念艺术不强制无人，同样不追加 dramatic atmosphere */
 const GOLDEN_EXTRA_STYLE_GUIDE = ['cinematic composition', 'concept art aesthetic'];
+/** 道具参考图：产品摄影式构图，严格无人，强调材质和工作室布光 */
+const GOLDEN_EXTRA_PROP = ['product photography', 'studio lighting', 'no human subjects', 'material texture detail'];
 const STANDARD_EXTRA: string[] = [];
 
 /**
@@ -61,13 +63,13 @@ const STANDARD_EXTRA: string[] = [];
  * - EWS          → 宏大全景，人物渺小或不可见
  */
 const FRAMING_SCALE_HINTS: Record<string, string> = {
-  extreme_close_up: 'extreme close-up, sharp facial detail, intense emotional expression, heavy bokeh background',
-  close_up:         'close-up portrait, sharp facial expression, shallow depth of field, face fills frame',
-  medium_close_up:  'medium close-up, face and shoulders composition, upper body framing',
-  medium:           'medium shot, waist-up composition, conversational framing',
-  medium_wide:      'medium wide shot, full figure framing, character and environment balanced',
-  wide:             'wide shot, full body visible, clear scene environment',
-  extreme_wide:     'extreme wide establishing shot, panoramic scale, vast environment, characters appear small',
+  extreme_close_up: 'extreme close-up, 100mm macro lens, sharp facial detail, intense emotional expression, heavy bokeh background, extremely shallow depth of field',
+  close_up:         'close-up portrait, 85mm portrait lens, sharp facial expression, shallow depth of field, face fills frame, background blur',
+  medium_close_up:  'medium close-up, 50mm lens, face and shoulders composition, upper body framing, natural perspective',
+  medium:           'medium shot, 35mm lens, waist-up composition, conversational framing, environmental context',
+  medium_wide:      'medium wide shot, 24mm lens, full figure framing, character and environment balanced, deep depth of field',
+  wide:             'wide shot, 14mm ultra-wide lens, full body visible, clear scene environment, edge distortion',
+  extreme_wide:     'extreme wide establishing shot, 12mm lens, panoramic scale, vast environment, characters appear small, epic scale',
 };
 
 /**
@@ -80,16 +82,16 @@ const FRAMING_SCALE_HINTS: Record<string, string> = {
  * - bird_eye    → 正俯视，命运视角/宏大格局感
  */
 const ANGLE_PERSPECTIVE_HINTS: Record<string, string> = {
-  front:         'front-facing direct view, straight-on composition',
-  three_quarter: 'three-quarter view angle, natural conversational perspective',
-  side_profile:  'strict side profile view, silhouette emphasis',
-  over_shoulder: 'over-the-shoulder shot, foreground character silhouette, conversation perspective',
-  pov:           'first person point of view, subjective camera, immersive perspective',
-  bird_eye:      'bird eye view, overhead top-down composition, aerial perspective',
-  high_angle:    'high angle shot, looking downward, surveying vulnerable perspective',
-  low_angle:     'low angle shot, looking upward, imposing powerful perspective',
+  front:         'front-facing direct view, straight-on composition, subject centered, deadpan framing',
+  three_quarter: 'three-quarter view angle, natural conversational perspective, rule of thirds composition',
+  side_profile:  'strict side profile view, silhouette emphasis, negative space framing',
+  over_shoulder: 'over-the-shoulder shot, foreground character silhouette, deep focus conversation perspective',
+  pov:           'first person point of view, subjective camera, immersive perspective, subjective focus',
+  bird_eye:      'bird eye view, overhead top-down composition, aerial perspective, god-like detached view',
+  high_angle:    'high angle shot, looking downward, surveying vulnerable perspective, diminished subject',
+  low_angle:     'low angle shot, looking upward, imposing powerful perspective, heroic framing',
   worm_eye:      'worm eye view, extreme low angle upward, towering overwhelming perspective',
-  dutch_angle:   'dutch tilt angle, diagonal frame distortion, skewed horizon',
+  dutch_angle:   'dutch tilt angle, diagonal frame distortion, skewed horizon, psychological unease',
   back_of_head:  'back of head view, following shot, mysterious trailing perspective',
 };
 
@@ -99,6 +101,12 @@ const BASE_NEGATIVE = [
 
 const CHARACTER_NEGATIVE_EXTRA = [
   'deformed face', 'extra fingers', 'extra limbs',
+];
+
+/** 道具参考图：排除人物、手部、环境背景——产品摄影在纯色/渐变背景下拍摄 */
+const PROP_NEGATIVE_EXTRA = [
+  'people', 'person', 'human', 'hands', 'fingers', 'figure',
+  'landscape', 'environment background', 'outdoor scene',
 ];
 
 /** 场景/地点图：明确排除人物，避免模型自行添加人物以"营造氛围" */
@@ -158,6 +166,7 @@ const STYLE_BUCKET_NEGATIVE: Record<string, string[]> = {
  */
 function resolveGoldenExtra(shotType?: string, dramaShotType?: string, shotSize?: string, cameraAngle?: string): string[] {
   if (shotType === 'location') return GOLDEN_EXTRA_LOCATION;
+  if (shotType === 'prop') return GOLDEN_EXTRA_PROP;
   if (shotType === 'style_guide') return GOLDEN_EXTRA_STYLE_GUIDE;
 
   if (dramaShotType === 'wide' || dramaShotType === 'insert') return GOLDEN_EXTRA_ATMOSPHERIC;
@@ -321,6 +330,15 @@ export class PromptOptimizerService implements OnModuleInit {
       }
     }
 
+    // 🌟 CINEMATIC UPDATE: 注入群演与环境生命力 (Ambient Population)
+    // 解决"空城计"和死气沉沉的背景问题。如果传入了环境人口描述，强制附加到提示词序列中。
+    if (opts.ambientPopulation && opts.ambientPopulation.trim() !== '') {
+       if (!prompt.toLowerCase().includes(opts.ambientPopulation.toLowerCase().slice(0, 15))) {
+          prompt = `${prompt}, background environment: ${opts.ambientPopulation.trim()}`;
+          added.push('ambient_population');
+       }
+    }
+
     const boosters = resolveBoosters(provider);
     const tierExtra = tier === 'golden'
       ? resolveGoldenExtra(opts.shotType, opts.dramaShotType, opts.shotSize, opts.cameraAngle)
@@ -343,6 +361,9 @@ export class PromptOptimizerService implements OnModuleInit {
       // 1. 防止空境乱入人物
       if (opts.shotType === 'location' && !prompt.toLowerCase().includes('no humans')) {
         inversionHints.push('absolutely no humans', 'empty scenery only', 'zero characters');
+      }
+      if (opts.shotType === 'prop' && !prompt.toLowerCase().includes('no people')) {
+        inversionHints.push('absolutely no people', 'isolated product shot', 'clean studio background');
       }
       
       // 2. 防止视觉风格漂移 (Style Drift)
@@ -385,6 +406,9 @@ export class PromptOptimizerService implements OnModuleInit {
     } else if (opts.shotType === 'location') {
       // 场景图：强制排除人物（volcengine 支持 negativePrompt，kieai 已通过 GOLDEN_EXTRA_LOCATION 正向处理）
       baseNeg.push(...LOCATION_NEGATIVE_EXTRA);
+    } else if (opts.shotType === 'prop') {
+      // 道具参考图：排除人物/手部/环境背景，强制产品摄影模式
+      baseNeg.push(...PROP_NEGATIVE_EXTRA);
     }
     // style_guide 不加人物排除词：概念艺术情绪板可以有人物剪影/局部
 
@@ -422,15 +446,6 @@ export class PromptOptimizerService implements OnModuleInit {
     const isKeywordDriven = !isNaturalLanguage && !isAvatar && !isWanAnimate;
 
     let prompt = rawPrompt.trim();
-
-    // Strip face-lock fragments injected by LLM: "[Name: face desc, hair, body, wearing ...]"
-    // 精确匹配 LLM 注入的角色描述块（含冒号分隔符），避免误删有意义的方括号内容
-    const faceStripped = prompt.replace(/\[[^\]]*?:\s*[^\]]{10,}\]/g, '').replace(/,\s*,/g, ',').replace(/^\s*,\s*/, '').trim();
-    if (faceStripped !== prompt) {
-      this.logger.debug(`T2V face-lock stripped: ${prompt.length} → ${faceStripped.length} chars`);
-      removed.push('face_lock_fragments');
-      prompt = faceStripped;
-    }
 
     // Strip static-image style prefixes that harm video generation
     prompt = prompt.replace(/^(cinematic\s+film\s+still|film\s+still|photograph|photo),?\s*/i, '');

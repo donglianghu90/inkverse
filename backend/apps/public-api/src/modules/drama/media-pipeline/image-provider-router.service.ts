@@ -5,24 +5,22 @@
  * ┌─────────────────────┬──────────────────────────────┬───────────────────────────────────────┐
  * │ 模型                 │ 优势                          │ 短剧中的最佳用途                         │
  * ├─────────────────────┼──────────────────────────────┼───────────────────────────────────────┤
- * │ seedream-5          │ 中文美学/古装/复杂场景/负提示词  │ 人脸初始生成、场景图、中景/全景 Shot       │
- * │ nano-banana-2       │ 14张参考图/最强角色一致性        │ 近景/特写 Shot、钩子帧、高质量关键帧        │
- * │ nano-banana-pro     │ 8张参考图/均衡质量              │ 备用 T2I 方案                          │
- * │ flux-2 (T2I)        │ FLUX.2/文字渲染/概念艺术        │ 风格参考图 (mood board)                │
+ * │ nano-banana-2       │ 14张参考图/最强角色一致性/20000字 │ 所有 T2I 场景（统一主力）                 │
  * │ flux-2-i2i          │ FLUX.2 I2I/最强形变控制         │ 角度变换、服装变体、图片精修              │
+ * │ volcengine          │ 中文美学/古装/负提示词           │ 跨 Provider 降级备用                    │
  * └─────────────────────┴──────────────────────────────┴───────────────────────────────────────┘
  *
  * 路由策略（全部可通过 drama.image.router.* 配置覆盖）：
- *   characterFace       → seedream-5         (初始人脸 T2I，中文美学最优)
- *   characterViewAngle  → kieai.flux-2-i2i   (角度变换 I2I，FLUX.2 形变最稳)
- *   characterVariation  → kieai.flux-2-i2i   (服装变体 I2I)
- *   location            → seedream-5         (场景构图)
- *   styleGuide          → kieai.flux-2       (风格参考图 concept art)
+ *   characterFace       → kieai.nano-banana-2 (角色细节生成质量佳，20000字符无截断)
+ *   characterViewAngle  → kieai.flux-2-i2i    (角度变换 I2I，FLUX.2 形变最稳)
+ *   characterVariation  → kieai.flux-2-i2i    (服装变体 I2I)
+ *   location            → kieai.nano-banana-2 (场景构图，14张参考图支持)
+ *   styleGuide          → kieai.nano-banana-2 (风格参考图，长 prompt 描述复杂风格)
  *   shotCloseUp         → kieai.nano-banana-2 (特写/近景，14 张参考图最强一致性)
- *   shotMedium          → seedream-5         (中景，场景+角色均衡)
- *   shotWide            → seedream-5         (全景/远景，场景优先)
+ *   shotMedium          → kieai.nano-banana-2 (中景，角色+场景均衡)
+ *   shotWide            → kieai.nano-banana-2 (全景/远景，长 prompt 保留完整场景描述)
  *   shotGolden          → kieai.nano-banana-2 (golden/preview 关键帧，最高质量)
- *   refinement          → kieai.flux-2-i2i   (精修 I2I)
+ *   refinement          → kieai.flux-2-i2i    (精修 I2I)
  */
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@packages/modules';
@@ -60,41 +58,33 @@ const ROUTE_KEYS = [
 ] as const;
 type RouteKey = typeof ROUTE_KEYS[number];
 
-/** 默认路由策略（可被配置覆盖） */
+/** 默认路由策略（可被配置覆盖）— 统一使用 nano-banana-2 作为 T2I 主力（20000字符/14张参考图） */
 const DEFAULT_ROUTES: Record<RouteKey, string> = {
-  characterFace:      'volcengine.doubao-seedream',
+  characterFace:      'kieai.nano-banana-2',
   characterViewAngle: 'kieai.flux-2-i2i',
   characterVariation: 'kieai.flux-2-i2i',
-  location:           'volcengine.doubao-seedream',
-  styleGuide:         'kieai.flux-2',
+  location:           'kieai.nano-banana-2',
+  styleGuide:         'kieai.nano-banana-2',
   shotCloseUp:        'kieai.nano-banana-2',
-  shotMedium:         'volcengine.doubao-seedream',
-  shotWide:           'volcengine.doubao-seedream',
+  shotMedium:         'kieai.nano-banana-2',
+  shotWide:           'kieai.nano-banana-2',
   shotGolden:         'kieai.nano-banana-2',
   refinement:         'kieai.flux-2-i2i',
 };
 
 /**
  * 默认跨 Provider 降级策略。
- * volcengine 内容审核触发时，doubao 全系列模型均会失败，
- * 此时应切换到 kieai 系列而非同 Provider 内的旧版模型。
- *
- * kieai 模型能力速查：
- *   nano-banana-2   — T2I + I2I，最多 14 张参考图，角色一致性最强 → 中景/人物镜头
- *   nano-banana-pro — T2I + I2I，最多 8 张参考图，均衡质量       → 宽景/全景（场景+角色均衡）
- *   flux-2          — 纯 T2I（不支持参考图），FLUX.2 场景/概念艺术 → 纯背景场景图
- *   flux-2-i2i      — 纯 I2I，受控形变                          → 角度变换/精修
+ * 主力 kieai.nano-banana-2 服务不可用时，降级到 volcengine（支持负提示词/中文美学）。
+ * I2I 路由（flux-2-i2i）无需 fallback — kieai 全局不可用时由上层重试机制处理。
  */
 const DEFAULT_FALLBACK_ROUTES: Partial<Record<RouteKey, string>> = {
-  // 初始人脸 T2I（此时无参考图），nano-banana-2 角色细节生成质量佳
-  characterFace: 'kieai.nano-banana-2',
-  // 纯场景图，无角色参考图需求，flux-2 FLUX.2 T2I 场景构图最优
-  location:      'kieai.flux-2',
-  // 中景：角色面部可见 + 场景，携带角色参考图（≤14张），一致性优先
-  shotMedium:    'kieai.nano-banana-2',
-  // 宽景/全景：场景为主但仍有角色参考图，nano-banana-pro（≤8张）均衡场景+角色，
-  // 不用 flux-2（纯T2I）是因为宽景镜头会传参考图，flux-2 会完全忽略它们
-  shotWide:      'kieai.nano-banana-pro',
+  characterFace: 'volcengine.doubao-seedream',
+  location:      'volcengine.doubao-seedream',
+  styleGuide:    'volcengine.doubao-seedream',
+  shotCloseUp:   'volcengine.doubao-seedream',
+  shotMedium:    'volcengine.doubao-seedream',
+  shotWide:      'volcengine.doubao-seedream',
+  shotGolden:    'volcengine.doubao-seedream',
 };
 
 /** kieai 模型的默认出图分辨率 */

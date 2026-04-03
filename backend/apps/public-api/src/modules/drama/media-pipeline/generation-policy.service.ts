@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DramaState } from '../schemas/drama-state.schemas';
 import type {
-  DramaGenerationMode,
   DramaStyleBucket,
   DramaShotType,
   DramaQualityTier,
@@ -11,66 +10,40 @@ import type {
 
 @Injectable()
 export class GenerationPolicyService {
-  resolveMediaPolicy(state: Pick<DramaState, 'generationMode' | 'visualStyleHint' | 'visualStyle'>): DramaMediaRunPolicy {
-    const mode: DramaGenerationMode = state.generationMode ?? 'balanced';
+  resolveMediaPolicy(state: Pick<DramaState, 'visualStyleHint' | 'visualStyle'>): DramaMediaRunPolicy {
     const styleBucket = this.detectStyleBucket(state);
-    const policy = this.basePolicyByMode(mode);
-    return this.applyStyleAdjustment(policy, styleBucket);
-  }
-
-  private basePolicyByMode(mode: DramaGenerationMode): DramaMediaRunPolicy {
-    if (mode === 'fast') {
-      return {
-        mode,
-        styleBucket: 'generic',
-        t2iConcurrency: 4,
-        i2vConcurrency: 3,
-        maxMediaRetries: 1,
-        retryBaseDelayMs: 1200,
-        // fast 降低候选和阈值，但仍保留质量门禁，避免严重翻车
-        enableQualityGate: true,
-        enableCoherenceValidation: false,
-        enableVlmCoherence: false,
-        dbFlushEvery: 8,
-      };
-    }
-    if (mode === 'quality') {
-      return {
-        mode,
-        styleBucket: 'generic',
-        t2iConcurrency: 2,
-        i2vConcurrency: 1,
-        maxMediaRetries: 3,
-        retryBaseDelayMs: 2500,
-        enableQualityGate: true,
-        enableCoherenceValidation: true,
-        enableVlmCoherence: true,
-        dbFlushEvery: 2,
-      };
-    }
-    return {
-      mode: 'balanced',
+    
+    // 强制执行统一的高质量、高一致性基础设定，不再做妥协
+    const policy: DramaMediaRunPolicy = {
       styleBucket: 'generic',
       t2iConcurrency: 3,
       i2vConcurrency: 2,
-      maxMediaRetries: 2,
-      retryBaseDelayMs: 2000,
+      maxMediaRetries: 3,
+      retryBaseDelayMs: 2500,
       enableQualityGate: true,
       enableCoherenceValidation: true,
+      enableVlmCoherence: true,
       dbFlushEvery: 4,
     };
+    
+    return this.applyStyleAdjustment(policy, styleBucket);
   }
 
   resolveShotRunPolicy(input: {
-    mode: DramaGenerationMode;
+    state: Pick<DramaState, 'imageResolution' | 'videoResolution'>;
     styleBucket: DramaStyleBucket;
     shotType?: DramaShotType;
     qualityTier?: DramaQualityTier;
   }): DramaShotRunPolicy {
     const shotType = input.shotType ?? 'dialogue';
     const qualityTier = input.qualityTier ?? 'standard';
+    
     let policy = this.baseShotPolicy(shotType, qualityTier, input.styleBucket);
-    policy = this.applyModeAdjustment(policy, input.mode);
+    
+    // 应用用户选定的最终产物分辨率配置
+    policy.videoQuality = (input.state.videoResolution === '4k' ? '1080p' : input.state.videoResolution as '720p' | '1080p') ?? '1080p';
+    policy.imageResolution = (input.state.imageResolution as '1k' | '2k' | '4k') ?? '2k';
+
     return this.clampShotPolicy(policy);
   }
 
@@ -86,6 +59,7 @@ export class GenerationPolicyService {
         gateMaxAttempts: 1,
         gateMinScore: 5.6,
         videoQuality: '720p',
+        imageResolution: '1k',
       };
     }
 
@@ -96,6 +70,7 @@ export class GenerationPolicyService {
         gateMaxAttempts: 3,
         gateMinScore: 8.0,
         videoQuality: '1080p',
+        imageResolution: '2k',
       };
     }
 
@@ -106,6 +81,7 @@ export class GenerationPolicyService {
         gateMaxAttempts: 3,
         gateMinScore: 7.8,
         videoQuality: '1080p',
+        imageResolution: '2k',
       };
     }
 
@@ -116,6 +92,7 @@ export class GenerationPolicyService {
         gateMaxAttempts: 2,
         gateMinScore: 7.2,
         videoQuality: '720p',
+        imageResolution: '1k',
       };
     }
 
@@ -126,6 +103,7 @@ export class GenerationPolicyService {
         gateMaxAttempts: 2,
         gateMinScore: 7.4,
         videoQuality: '720p',
+        imageResolution: '1k',
       };
     }
 
@@ -136,6 +114,7 @@ export class GenerationPolicyService {
         gateMaxAttempts: 3,
         gateMinScore: 7.8,
         videoQuality: '1080p',
+        imageResolution: '2k',
       };
     }
 
@@ -145,28 +124,8 @@ export class GenerationPolicyService {
       gateMaxAttempts: 2,
       gateMinScore: 6.8,
       videoQuality: '720p',
+      imageResolution: '1k',
     };
-  }
-
-  private applyModeAdjustment(base: DramaShotRunPolicy, mode: DramaGenerationMode): DramaShotRunPolicy {
-    if (mode === 'fast') {
-      return {
-        ...base,
-        candidateCount: Math.max(1, base.candidateCount - 1),
-        gateMaxAttempts: Math.max(1, base.gateMaxAttempts - 1),
-        gateMinScore: base.gateMinScore - 0.8,
-        videoQuality: base.videoQuality === '1080p' ? '720p' : base.videoQuality,
-      };
-    }
-    if (mode === 'quality') {
-      return {
-        ...base,
-        candidateCount: base.candidateCount + 1,
-        gateMaxAttempts: base.gateMaxAttempts + 1,
-        gateMinScore: base.gateMinScore + 0.5,
-      };
-    }
-    return base;
   }
 
   private clampShotPolicy(policy: DramaShotRunPolicy): DramaShotRunPolicy {
@@ -183,7 +142,7 @@ export class GenerationPolicyService {
     if (styleBucket === 'three_d' || styleBucket === 'live_action' || styleBucket === 'stop_motion') {
       next.t2iConcurrency = Math.max(1, next.t2iConcurrency - 1);
       next.i2vConcurrency = Math.max(1, next.i2vConcurrency - 1);
-    } else if (styleBucket === 'two_d' && next.mode !== 'quality') {
+    } else if (styleBucket === 'two_d') {
       next.t2iConcurrency = Math.min(6, next.t2iConcurrency + 1);
     }
     return next;

@@ -73,7 +73,7 @@ const weightClamp = (v: number, def: number) => { const n = Number(v); return is
 
 export const genreArchetypeSchema = z.object({
   narrativeArc: z.enum(['conflict_resolution', 'life_journey', 'mystery_reveal', 'quest', 'rise_and_fall']).default('conflict_resolution'),
-  narrationRatio: z.number().min(0).max(0.5).default(0),
+  narrationRatio: z.preprocess((val) => isNaN(Number(val)) ? 0 : (Number(val) > 1 ? Number(val) / 100 : Number(val)), z.number().min(0).max(1).catch(0)),
   factConstraint: z.enum(['none', 'inspired_by', 'period_accurate']).default('none'),
   hookMechanism: z.enum(['plot_cliffhanger', 'revelation', 'emotional_peak', 'mystery', 'curiosity']).default('plot_cliffhanger'),
   conflictType: z.enum(['interpersonal', 'fate_vs_will', 'good_vs_evil', 'internal', 'society']).default('interpersonal'),
@@ -264,6 +264,7 @@ export const dramaPromptProfileSchema = z.object({
      */
     continuityGuardChecks: na(z.string()),
   }).optional().nullable(),
+  agentSystemPrompts: z.record(z.string()).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -290,8 +291,11 @@ export const characterVariationSchema = z.object({ // 角色外观变体（换�
   referenceImageUrl: z.union([z.string(), z.null()]).transform(v => v ?? ''), // LLM 可能返回 null，统一转为空串
 });
 
+/** CharacterId 归一化 — 全系统必须使用统一的 ID 格式（小写、去除 _-空格） */
+export const normalizeCharacterId = (v: string) => v.toLowerCase().replace(/[\s\-_]+/g, '');
+
 export const characterIdentitySchema = z.object({
-  characterId: z.string().transform(v => v.toLowerCase().replace(/[\s\-_]+/g, '')),
+  characterId: z.string().transform(normalizeCharacterId),
   name: z.string(),
   role: z.enum(['protagonist', 'antagonist', 'supporting', 'minor', 'narrator', 'historical_figure']),
   scope: z.enum(['series', 'arc', 'episode']).default('series'),
@@ -393,6 +397,7 @@ export const sceneLocationSchema = z.object({
   ), // 默认光线（英文）
   ambientSoundDefault: z.string(), // 默认环境音
   colorTone: z.string(), // 色调
+  ambientPopulation: ns(), // 环境人口描述（如"酒馆里的醉汉","接头的路人"），用于注入T2I避免空城
   keyProps: na(z.string()), // 场景内普通道具文字列表（仅用于剧本上下文，不生图）
   propAssets: na(propAssetSchema), // @deprecated 旧数据兼容字段，新剧不再使用
   isRecurring: z.boolean().default(false), // 是否为反复出现的场景
@@ -522,14 +527,14 @@ export const episodeIntentSchema = z.object({
     maxDurSec: z.number().min(0.5).max(60),
   })),
   activeCharacters: na(z.object({
-    characterId: z.string(),
+    characterId: z.string().transform(normalizeCharacterId),
     costumeOverride: z.string().nullish().transform(v => v ?? ''), // AI 可能输出 null
     emotionalState: z.string(), // 本集情绪基调（静态快照，用于兼容）
     emotionalJourney: z.string().optional().nullable(), // 本集情绪旅程（三段式，如"从假装平静→内心崩溃→决定反击"）
     role: z.string(), // 本集角色定位（如"被揭穿者""复仇者""旁观者"）
   })),
   proposedNewCharacters: na(z.object({
-    characterId: z.string(), // 建议的角色ID（如 guard / old_man）
+    characterId: z.string().transform(normalizeCharacterId), // 建议的角色ID（如 guard / old_man）
     name: z.string(), // 角色名称（如 "宫门侍卫" / "街头老者"）
     role: z.enum(['supporting', 'minor']).default('minor'),
     scope: z.enum(['episode', 'arc']).default('episode'), // 复用范围：episode=本集结束归档，arc=弧段内常驻
@@ -558,7 +563,7 @@ export const scriptSceneSchema = z.object({
   ]),
   objective: z.string(),
   turningPoint: z.string(),
-  presentCharacterIds: na(z.string()),
+  presentCharacterIds: na(z.string().transform(normalizeCharacterId)),
   emotionalEntry: z.string(),
   emotionalExit: z.string(),
   dialogues: na(z.object({
@@ -663,7 +668,7 @@ export const shotCameraSchema = z.object({
 });
 
 export const shotCharacterSchema = z.object({
-  characterId: z.string(),
+  characterId: z.string().transform(normalizeCharacterId),
   action: z.string(), // 角色动作（如"缓缓放下文件，嘴角微扬"）
   emotion: z.string(), // 表情/情绪
   position: z.enum(['left', 'center', 'right', 'background', 'foreground']).default('center'),
@@ -686,7 +691,7 @@ export const shotCharacterSchema = z.object({
 });
 
 export const shotDialogueSchema = z.object({
-  characterId: z.string(),
+  characterId: z.string().transform(normalizeCharacterId),
   text: z.string(),
   emotion: z.string(), // TTS 情绪标签
   volume: z.enum(['whisper', 'low', 'normal', 'loud', 'scream']).default('normal'),
@@ -935,7 +940,7 @@ export const dramaStrategySchema = z.object({
   coreNarrativeContract: z.string(), // 本剧叙事契约
   toneGuardrails: na(z.string()),
   paywallStrategy: z.object({
-    firstPaywallEpisode: z.number().int().min(5).default(10),
+    firstPaywallEpisode: z.number().int().min(3).default(10),
     paywallInterval: z.number().int().min(3).default(5),
     paywallHookIntensity: z.enum(['high', 'extreme']).default('extreme'),
     freeEpisodeStrategy: z.string(), // 免费集的策略（如何吸引付费）
@@ -1016,7 +1021,9 @@ export const dramaStateSchema = z.object({
 
   visualStyleHint: ns(), // 用户在前端选择的原始视觉风格提示（如"3D 东方玄幻风格：..."），用于 debug/重试
   suggestedVisualStyle: ns(), // 视觉风格枚举值（如 period_live / live_action / 2d_anime），由前端推荐流程确定后透传
-  generationMode: z.enum(['fast', 'balanced', 'quality']).default('balanced'),
+  generationMode: z.enum(['fast', 'balanced', 'quality']).optional(), // @deprecated
+  imageResolution: z.enum(['1k', '2k', '4k']).default('2k'),
+  videoResolution: z.enum(['720p', '1080p', '4k']).default('1080p'),
   videoProvider: z.enum(['auto', 'volcengine', 'kling', 'hailuo', 'veo', 'sora', 'kling-avatar']).default('auto'),
   visualStyle: visualStyleGuideSchema.optional(),
   visualBible: visualBibleSchema.optional(),

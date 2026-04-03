@@ -858,10 +858,7 @@ export class EpisodeWorkflowService {
                   }
                   existingIds.add(ps.shotId);
                 });
-                // Fix 7 (P1): previewShots 角色锁脸处理
-                try { this.storyboardDirector.enforceFaceLock(hookResult.previewShots, state); } catch (flErr) {
-                  this.logger.warn(`E${episodeNumber} previewShots 锁脸降级: ${(flErr as Error).message}`);
-                }
+                // previewShots 角色锁脸已移至 T2I 生成阶段的 ShotPromptAssemblerService 运行，无需在此处前置注入
                 sbShots.push(...hookResult.previewShots);
                 storyboard!.shots = sbShots;
                 storyboard!.totalEstimatedDurationSec = Math.round(sbShots.reduce((s: number, sh: any) => s + (sh.estimatedDurationSec ?? 0), 0) * 10) / 10;

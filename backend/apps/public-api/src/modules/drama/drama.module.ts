@@ -37,7 +37,8 @@ import { DramaDeterministicCheckerService } from './workflow/deterministic-check
 import {
   MediaOrchestratorService, MediaQualityGateService, ShotCoherenceValidatorService,
   EmotionMediaMapperService, GenerationPolicyService, ImageProviderRouterService, VideoProviderRouterService,
-  ShotProductionOrderService, ShotContextBuilderService,
+  ShotProductionOrderService, ShotContextBuilderService, ShotPromptAssemblerService,
+  PromptCompilerService,
 } from './media-pipeline';
 // ── 基础服务 ──
 import { DramaProgressService } from './drama-progress.service';
@@ -89,7 +90,7 @@ import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.s
   providers: [
     DramaService, DramaSseHelper, DramaIdeaService, DramaVisualAssetService, DramaStateStore, EpisodeWorkflowService, DramaWorkflowExecutionService, DramaAgentPipelineService, DramaWorkflowTopologyService,
     MediaOrchestratorService, MediaQualityGateService, ShotCoherenceValidatorService, EmotionMediaMapperService, GenerationPolicyService, ImageProviderRouterService, VideoProviderRouterService,
-    ShotProductionOrderService, ShotContextBuilderService,
+    ShotProductionOrderService, ShotContextBuilderService, ShotPromptAssemblerService, PromptCompilerService,
     DramaProgressService, DramaGenreTemplateService, DramaVisualStyleTemplateService,
     DramaTaskService, TaskSubmitterService,
     DramaTextProcessor, DramaImageProcessor, DramaVideoProcessor, DramaVoiceProcessor,

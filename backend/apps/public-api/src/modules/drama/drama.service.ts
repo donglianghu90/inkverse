@@ -390,6 +390,8 @@ export class DramaService implements OnModuleInit {
         visualStyleHint: dto.visualStyleHint ?? '',
         suggestedVisualStyle: dto.suggestedVisualStyle ?? '',
         generationMode: dto.generationMode ?? 'balanced',
+        imageResolution: dto.imageResolution ?? '2k',
+        videoResolution: dto.videoResolution ?? '1080p',
         videoProvider: resolvedVideoProvider as DramaState['videoProvider'],
         ...(dto.visualStyleTemplateId ? { visualStyleTemplateId: dto.visualStyleTemplateId } : {}),
         promptProfile: out.promptProfile, strategy: out.strategy, visualStyle: out.visualStyle,

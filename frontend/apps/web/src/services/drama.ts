@@ -23,7 +23,8 @@ export interface CreateDramaParams {
   visualStyleTemplateId?: string; // 指定视觉风格模板 ID（与 drama_visual_style_templates 关联）
   visualStyleHint?: string; // 视觉风格提示（如"真人影视""2D 动漫""水墨古风"）
   suggestedVisualStyle?: string; // 视觉风格枚举值（如 period_live / live_action / 2d_anime）
-  generationMode?: 'fast' | 'balanced' | 'quality';
+  imageResolution?: '1k' | '2k' | '4k';
+  videoResolution?: '720p' | '1080p' | '4k';
 }
 
 export interface DramaListItem {

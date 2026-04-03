@@ -44,8 +44,8 @@ export class StoryboardDirectorAgent {
       // 保留最后 2 个 shot 作为下一场景的视觉衔接锚点
       prevSceneLastShots = shots.slice(-2);
     }
-    // 后处理：强制角色锁脸 + 风格前缀嵌入
-    this.enforceFaceLock(allShots, state);
+    // 旧版后处理强制角色锁脸移至 ShotPromptAssemblerService 组装期实现
+    // const totalDur = allShots.reduce((s, sh) => s + sh.estimatedDurationSec, 0);
     const totalDur = allShots.reduce((s, sh) => s + sh.estimatedDurationSec, 0);
     return episodeStoryboardSchema.parse({
       episodeNumber: script?.episodeNumber ?? 1, shots: allShots,
@@ -66,9 +66,11 @@ export class StoryboardDirectorAgent {
     const scenePurpose = scene.purpose;
 
     // P1-2 fix: 只传本场景出场角色的档案，减少 ~30% prompt tokens
-    const sceneCharIds = new Set(scene.presentCharacterIds ?? []);
+    // 防御性归一化：即使上游 Zod 已归一化，此处仍做一次以防止数据不一致
+    const normalizeId = (id: string) => id.toLowerCase().replace(/[\s\-_]+/g, '');
+    const sceneCharIds = new Set((scene.presentCharacterIds ?? []).map(normalizeId));
     const sceneChars = sceneCharIds.size > 0
-      ? state.characters.filter(c => sceneCharIds.has(c.characterId))
+      ? state.characters.filter(c => sceneCharIds.has(normalizeId(c.characterId)))
       : state.characters; // 降级：若场景未指定角色列表，传全量
     const chars = sceneChars.map(c => {
       const face = c.faceReferencePrompt || '';
@@ -156,13 +158,14 @@ ${prevSceneLastShots.map(s => `- shot${s.shotIndex} [${s.camera?.shotSize ?? ''}
 [${state.characters.map(c => `${c.characterId}(${c.name})`).join(', ')}]
 路人/守军/群演等非注册角色只能在 visualPrompt 文字描述中出现，禁止写入 characters 数组。
 
-角色档案（firstFramePrompt/lastFramePrompt中必须包含出场角色的完整face描述，visualPrompt中禁止包含face描述）：
+角色档案（提供给你的角色信息仅作参考，请通过视觉动作和交互来表现他们）：
 ${chars}
 
 场景视觉：
 ${locDesc}
 ${masterShotCtx}${sigPropsCtx}
-要求：shots数组，每个Shot必须包含firstFramePrompt、lastFramePrompt 和 qualityTier。visualPrompt专注描述运动/动作（禁止face描述），firstFramePrompt/lastFramePrompt专注描述静态画面（必须含face描述）
+要求：shots数组，每个Shot必须包含firstFramePrompt、lastFramePrompt 和 qualityTier。visualPrompt、firstFramePrompt 和 lastFramePrompt 必须纯粹描写"画面里有什么"，专注动作、姿态、光影氛围与场景布置。
+**重要准则**：禁止在 prompt 中出现诸如 "close_up", "medium shot", "looking at camera", 角色发型、衣服、脸部细节的描述！这些描述会在后期管线中自动根据 budget 拼接，如果在 prompt 中出现会导致 token 重复叠加污染画面！
 ${flashbackCtx}
 ${continuityWarnings?.length ? `\n⚠️ 连续性警告（分镜创作时必须遵守以下修正建议）：\n${continuityWarnings.join('\n')}` : ''}${buildUserPromptConstraintsTail({ redLines: state.seed?.redLines })}`,
       temperature: 0.5,
@@ -314,126 +317,4 @@ ${continuityWarnings?.length ? `\n⚠️ 连续性警告（分镜创作时必须
   }
 
   /** 后处理：确保首尾帧T2I prompt包含角色face描述（visualPrompt用于T2V，不注入face以节省token） */
-  /** 锁脸后处理 — 将角色 face 描述注入首尾帧 T2I prompt。对外开放供 EpisodeWorkflowService 对 previewShots 等调用。 */
-  enforceFaceLock(shots: z.infer<typeof shotSchema>[], state: DramaState): void {
-    const charMap = new Map(state.characters.map(c => [c.characterId, c]));
-    // 仅截取 styleReferencePrompt 首段（逗号前）作为轻量风格锚定前缀。
-    // 完整 styleReferencePrompt 由 MediaOrchestrator 在 T2I 组装阶段全量注入，
-    // 此处只需一个简短关键词（如 "cinematic live action"）防止 LLM 生成的首尾帧偏离风格基调。
-    const styleRef = state.visualStyle?.styleReferencePrompt ?? '';
-    const stylePrefix = styleRef.split(',')[0]?.trim() ?? '';
-    // 签名道具映射：characterOwner → visualPrompt（仅 signature 类型）
-    const sigPropsByOwner = new Map<string, string[]>();
-    for (const p of state.signatureProps ?? []) {
-      if (p.narrativeRole !== 'signature' || !p.visualPrompt?.trim() || !p.characterOwner) continue;
-      const ownerKey = p.characterOwner;
-      // 用 characterId 和 name 双向匹配
-      for (const [cid, c] of charMap) {
-        if (ownerKey === cid || ownerKey === c.name) {
-          const arr = sigPropsByOwner.get(cid) ?? [];
-          arr.push(p.visualPrompt.trim());
-          sigPropsByOwner.set(cid, arr);
-        }
-      }
-    }
-    shots.forEach(shot => {
-      const shotSize = shot.camera?.shotSize;
-      const cameraAngle = shot.camera?.cameraAngle;
-      const faceFragments = this.buildFaceFragments(shot.characters.map(c => c.characterId), charMap, shot.characterVariationIds, shotSize, cameraAngle);
-      if (!faceFragments) return;
-      if (shot.firstFramePrompt) shot.firstFramePrompt = this.injectFaceLock(shot.firstFramePrompt, faceFragments, stylePrefix);
-      if (shot.lastFramePrompt) shot.lastFramePrompt = this.injectFaceLock(shot.lastFramePrompt, faceFragments, stylePrefix);
-      // 签名道具后处理：将角色专属道具注入 firstFramePrompt（仅中景及以上）+ 填充 shot.props
-      if (shotSize && !['extreme_wide', 'wide'].includes(shotSize)) {
-        const charIds = shot.characters.map(c => c.characterId);
-        const matchedProps: Array<{ propId: string; visualPrompt: string }> = [];
-        for (const cid of charIds) {
-          for (const p of state.signatureProps ?? []) {
-            if (!p.visualPrompt?.trim() || !p.characterOwner) continue;
-            if (p.characterOwner === cid || charMap.get(cid)?.name === p.characterOwner) {
-              if (!matchedProps.some(mp => mp.propId === p.propId)) {
-                matchedProps.push({ propId: p.propId, visualPrompt: p.visualPrompt.trim() });
-              }
-            }
-          }
-        }
-        const propFragments = matchedProps.map(mp => mp.visualPrompt).slice(0, 2);
-        if (propFragments.length > 0) {
-          const propStr = propFragments.join(', ');
-          if (shot.firstFramePrompt && !shot.firstFramePrompt.includes(propFragments[0].slice(0, 20))) {
-            shot.firstFramePrompt = `${shot.firstFramePrompt}, ${propStr}`;
-          }
-          // 填充结构化 props 字段
-          (shot as any).props = matchedProps.map(mp => ({ propId: mp.propId }));
-        }
-      }
-    });
-    this.logger.log(`锁脸后处理完成：${shots.length} shots（首尾帧T2I prompt，风格前缀="${stylePrefix || '无'}"，签名道具角色数=${sigPropsByOwner.size}）`);
-  }
-
-  /**
-   * 按景别分级注入 face 描述：
-   * - close_up / extreme_close_up → face + hair + costume（面部主导画面）
-   * - medium / medium_close_up → face + hair（上半身可见）
-   * - wide / extreme_wide / medium_wide → 仅 face（角色小，全身描述无意义，为场景腾出 token 空间）
-   */
-  private buildFaceFragments(charIds: string[], charMap: Map<string, CharacterIdentity>, variationIds?: Record<string, string>, shotSize?: string, cameraAngle?: string): string {
-    const isCloseUp = ['close_up', 'extreme_close_up'].includes(shotSize ?? '');
-    const isMedium = ['medium', 'medium_close_up'].includes(shotSize ?? '');
-    
-    // 镜头方位冲突处理：如果是背影或侧颜机位，动态擦除 faceReferencePrompt 中的锁正面词汇
-    const needsProfileScrub = ['side_profile'].includes(cameraAngle ?? '');
-    const needsBackScrub = ['back_of_head', 'over_shoulder'].includes(cameraAngle ?? '');
-
-    // wide / extreme_wide / medium_wide / 未指定均走精简模式
-    return charIds.map(cid => {
-      const c = charMap.get(cid);
-      if (!c) return '';
-      const vid = variationIds?.[cid];
-      const variation = vid ? c.variations?.find(v => v.variationId === vid) : null;
-      const costume = variation?.visualPromptOverride || c.defaultCostumePrompt || c.defaultCostume;
-      const hair = c.hairStylePrompt || c.hairStyle;
-      
-      let facePrompt = c.faceReferencePrompt || '';
-      
-      if (needsProfileScrub || needsBackScrub) {
-        facePrompt = facePrompt
-          .replace(/front-facing,\s*looking at camera,?\s*/gi, '')
-          .replace(/looking at camera,?\s*/gi, '')
-          .replace(/front-facing,?\s*/gi, '')
-          .trim();
-      }
-      if (needsBackScrub) {
-        facePrompt = facePrompt
-          .replace(/eyes sharply in focus,\s*clear iris detail,?\s*/gi, '')
-          .replace(/clear iris detail,?\s*/gi, '')
-          .trim();
-      }
-
-      const parts: (string | undefined)[] = isCloseUp
-        ? [facePrompt, hair, costume]        // 特写：face + hair + costume
-        : isMedium
-          ? [facePrompt, hair]                 // 中景：face + hair
-          : [facePrompt];                      // 远景：仅 face
-      const filtered = parts.filter(Boolean);
-      // 用 characterId（英文全拼，如 libai/yangyuhuan）作为 bracket 标识，避免中文名无法匹配英文 prompt
-      return `[${c.characterId}: ${filtered.join(', ')}]`;
-    }).filter(Boolean).join(', ');
-  }
-
-  /** 将face描述注入prompt（去重：如果已含角色 characterId 关键词则不重复注入） */
-  private injectFaceLock(prompt: string, faceFragments: string, stylePrefix: string): string {
-    if (!prompt?.trim()) return `${stylePrefix}${faceFragments}`;
-    const hasStyle = stylePrefix && prompt.toLowerCase().startsWith(stylePrefix.toLowerCase().slice(0, 10));
-    // 用 characterId（英文全拼ID，如 [libai:）而非中文名来检测是否已注入，避免中英文不匹配
-    const hasFace = faceFragments.split('[').filter(Boolean).every(f => {
-      const cid = f.match(/^([^:]+):/)?.[1]?.trim();
-      return cid && prompt.includes(`[${cid}:`);
-    });
-    if (hasFace && hasStyle) return prompt;
-    const parts: string[] = [];
-    if (!hasStyle && stylePrefix) parts.push(stylePrefix.trim());
-    if (!hasFace) parts.push(faceFragments);
-    return parts.length ? `${parts.join(', ')}, ${prompt}` : prompt;
-  }
 }

@@ -1,6 +1,5 @@
 /** 媒体生成策略 — 契约 */
 
-export type DramaGenerationMode = 'fast' | 'balanced' | 'quality';
 export type DramaStyleBucket = 'two_d' | 'three_d' | 'live_action' | 'stop_motion' | 'generic';
 export type DramaShotType = 'portrait' | 'dialogue' | 'action' | 'wide' | 'insert';
 export type DramaQualityTier = 'golden' | 'standard' | 'filler';
@@ -17,10 +16,10 @@ export interface DramaShotRunPolicy {
   gateMaxAttempts: number;
   gateMinScore: number;
   videoQuality: '720p' | '1080p';
+  imageResolution: '1k' | '2k' | '4k';
 }
 
 export interface DramaMediaRunPolicy {
-  mode: DramaGenerationMode;
   styleBucket: DramaStyleBucket;
   t2iConcurrency: number;
   i2vConcurrency: number;

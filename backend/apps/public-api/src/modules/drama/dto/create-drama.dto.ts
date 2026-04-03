@@ -57,7 +57,13 @@ export class CreateDramaDto {
   suggestedVisualStyle?: string; // 视觉风格枚举值（如 period_live / live_action / 2d_anime），由前端推荐流程确定后透传
 
   @IsOptional() @IsEnum(['fast', 'balanced', 'quality'])
-  generationMode?: 'fast' | 'balanced' | 'quality';
+  generationMode?: 'fast' | 'balanced' | 'quality'; // @deprecated
+
+  @IsOptional() @IsEnum(['1k', '2k', '4k'])
+  imageResolution?: '1k' | '2k' | '4k';
+
+  @IsOptional() @IsEnum(['720p', '1080p', '4k'])
+  videoResolution?: '720p' | '1080p' | '4k';
 
   @IsOptional() @IsEnum(['auto', 'volcengine', 'kling', 'hailuo', 'veo', 'sora', 'kling-avatar'])
   videoProvider?: 'auto' | 'volcengine' | 'kling' | 'hailuo' | 'veo' | 'sora' | 'kling-avatar';

@@ -30,7 +30,7 @@ export const MODULE_SCOPE_GRANULARITY: Record<string, ScopeGranularity> = {
  * @example parseScopeId('chapter:12') => { granularity: 'chapter', id: 12 }
  * @example parseScopeId('shot:shot_first_frame') => { granularity: 'shot', id: 0, stringId: 'shot_first_frame' }
  */
-export function parseScopeId(scope: string): { granularity: ScopeGranularity; id: number; stringId?: string } | null {
+export function s(scope: string): { granularity: ScopeGranularity; id: number; stringId?: string } | null {
   if (scope === 'creation') return { granularity: 'creation', id: 0 };
   const m = scope.match(/^(episode|chapter|scene|shot):([\w-]+)$/);
   if (!m) return null;

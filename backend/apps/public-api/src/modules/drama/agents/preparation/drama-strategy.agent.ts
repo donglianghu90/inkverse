@@ -17,7 +17,7 @@ export class DramaStrategyAgent {
 
   async generate(seed: DramaSeed, outline: SeriesOutline, dramaId?: string, userId?: string, genreGuidance?: GenreProductionGuidance, additionalSystemPrompt?: string): Promise<DramaStrategy> {
 
-    let sysPrompt = buildStrategySystemPrompt({ genreGuidance });
+    let sysPrompt = buildStrategySystemPrompt({ genreGuidance }, seed.genre);
     if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
 
     const raw = await this.llm.generateStructured({

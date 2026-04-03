@@ -41,7 +41,7 @@ export class DramaSeedAnalyzerAgent {
 
     const hintBlock = this.buildSeedHintBlock(input.seedHints);
 
-    let sysPrompt = buildSeedAnalyzerSystemPrompt({ epMin, epMax, durSec, genre: input.genre, genreGuidance: input.genreGuidance });
+    let sysPrompt = buildSeedAnalyzerSystemPrompt({ epMin, epMax, durSec, genre: input.genre, genreGuidance: input.genreGuidance }, input.genre);
     if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
 
     const raw = await this.llm.generateStructured({
