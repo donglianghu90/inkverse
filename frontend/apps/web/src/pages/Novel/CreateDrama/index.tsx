@@ -590,6 +590,8 @@ const CreateDrama: React.FC = () => {
   // ─── Style thumbnail card ─────────────────────────────────────────
   const StyleCard: React.FC<{ style: StyleOption }> = ({ style }) => {
     const isSelected = form.selectedVisualStyle === style.value;
+    const tpl = visualStyleTemplates.find(t => t.styleKey === style.value);
+    const coverUrl = tpl?.coverUrl || style.thumbnailUrl;
     const handleStyleSelect = () => {
       const newValue = isSelected ? '' : style.value;
       // 尝试匹配对应的视觉风格模板（styleKey 与 style.value 一致）
@@ -611,10 +613,10 @@ const CreateDrama: React.FC = () => {
         {/* Thumbnail */}
         <div
           className="relative aspect-[4/3] w-full flex items-center justify-center overflow-hidden"
-          style={{ background: style.thumbnailUrl ? undefined : style.gradient }}
+          style={{ background: coverUrl ? undefined : style.gradient }}
         >
-          {style.thumbnailUrl ? (
-            <img src={style.thumbnailUrl} alt={style.label} className="w-full h-full object-cover" />
+          {coverUrl ? (
+            <img src={coverUrl} alt={style.label} className="w-full h-full object-cover" />
           ) : (
             <span className="text-3xl drop-shadow-lg select-none">{style.emoji}</span>
           )}
@@ -820,12 +822,18 @@ const CreateDrama: React.FC = () => {
                   const marketGenre = marketRecommended.find(m => m.genre === t.displayName || t.genreKeywords?.some(kw => m.genre.includes(kw)));
                   return (
                     <button key={t.id} type="button" className={cn(
-                      'flex flex-col items-center gap-1 rounded-lg border p-2.5 text-center transition-all hover:border-primary/50 relative',
+                      'flex flex-col items-center gap-1 rounded-lg border p-1.5 sm:p-2.5 text-center transition-all hover:border-primary/50 relative overflow-hidden',
                       form.genreTemplateId === t.id ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : 'border-border',
                     )} onClick={() => setForm({ ...form, genre: t.displayName, genreTemplateId: t.id })}>
-                      <span className="text-lg">{GENRE_ICONS[t.genreKey] ?? '📝'}</span>
-                      <span className="text-xs font-medium">{t.displayName}</span>
-                      <span className="text-[10px] text-muted-foreground line-clamp-1">{t.description}</span>
+                      {t.coverUrl ? (
+                        <div className="w-full aspect-[4/3] rounded-md overflow-hidden mb-1 border border-border/50">
+                          <img src={t.coverUrl} alt={t.displayName} className="w-full h-full object-cover" />
+                        </div>
+                      ) : (
+                        <span className="text-xl sm:text-2xl my-1">{GENRE_ICONS[t.genreKey] ?? '📝'}</span>
+                      )}
+                      <span className="text-[11px] sm:text-xs font-medium">{t.displayName}</span>
+                      <span className="text-[9px] sm:text-[10px] text-muted-foreground line-clamp-1">{t.description}</span>
                       {!t.isSystem && <span className="text-[9px] text-primary/60">自定义</span>}
                       {marketGenre && marketGenre.count > 0 && (
                         <span className="text-[9px] text-rose-500 mt-0.5 font-medium">
@@ -971,16 +979,17 @@ const CreateDrama: React.FC = () => {
             const tpl = form.selectedVisualStyleTemplateId
               ? visualStyleTemplates.find(t => t.id === form.selectedVisualStyleTemplateId)
               : null;
+            const coverUrl = tpl?.coverUrl || sel.thumbnailUrl;
             return (
               <Card className="border-primary/30 bg-primary/5 overflow-hidden">
                 <CardContent className="p-0">
                   <div className="flex items-start gap-4 p-4">
                     <div
-                      className="shrink-0 w-16 h-12 rounded-lg flex items-center justify-center overflow-hidden"
-                      style={{ background: sel.thumbnailUrl ? undefined : sel.gradient }}
+                      className="shrink-0 w-16 h-12 rounded-lg flex items-center justify-center overflow-hidden border border-border/50"
+                      style={{ background: coverUrl ? undefined : sel.gradient }}
                     >
-                      {sel.thumbnailUrl
-                        ? <img src={sel.thumbnailUrl} alt={sel.label} className="w-full h-full object-cover" />
+                      {coverUrl
+                        ? <img src={coverUrl} alt={sel.label} className="w-full h-full object-cover" />
                         : <span className="text-2xl">{sel.emoji}</span>
                       }
                     </div>

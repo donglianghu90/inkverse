@@ -438,6 +438,7 @@ export interface DramaGenreTemplate {
   isSystem: boolean;
   isUserModified: boolean;
   parentTemplateId: string | null;
+  coverUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -644,6 +645,7 @@ export interface DramaVisualStyleTemplate {
   platformTags: string[];
   isSystem: boolean;
   parentTemplateId: string | null;
+  coverUrl?: string;
   createdAt: string;
   updatedAt: string;
 }

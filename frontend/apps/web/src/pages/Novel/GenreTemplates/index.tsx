@@ -1003,8 +1003,15 @@ const DramaTemplateCard: React.FC<{
   const gradient = DRAMA_GENRE_COLORS[tpl.genreKey] ?? 'from-violet-500 to-fuchsia-600';
   return (
     <Card className="group cursor-pointer hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 overflow-hidden relative" onClick={() => onEdit(tpl)}>
-      <div className={cn('h-2 bg-gradient-to-r', gradient)} />
-      <CardContent className="p-4 space-y-3">
+      {tpl.coverUrl ? (
+        <div className="h-24 w-full relative">
+          <img src={tpl.coverUrl} alt={tpl.displayName} className="w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent" />
+        </div>
+      ) : (
+        <div className={cn('h-2 bg-gradient-to-r', gradient)} />
+      )}
+      <CardContent className={cn("space-y-3 relative z-10", tpl.coverUrl ? "p-4 pt-0" : "p-4")}>
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline gap-2">
@@ -1297,8 +1304,15 @@ const VisualStyleTemplateCard: React.FC<{
   const catMeta = VISUAL_STYLE_CATEGORY_META[tpl.styleCategory];
   return (
     <Card className="group cursor-pointer hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 overflow-hidden relative" onClick={() => onEdit(tpl)}>
-      <div className={cn('h-2 bg-gradient-to-r', gradient)} />
-      <CardContent className="p-4 space-y-3">
+      {tpl.coverUrl ? (
+        <div className="h-24 w-full relative">
+          <img src={tpl.coverUrl} alt={tpl.displayName} className="w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent" />
+        </div>
+      ) : (
+        <div className={cn('h-2 bg-gradient-to-r', gradient)} />
+      )}
+      <CardContent className={cn("space-y-3 relative z-10", tpl.coverUrl ? "p-4 pt-0" : "p-4")}>
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline gap-2">
