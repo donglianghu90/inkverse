@@ -1,7 +1,7 @@
 /** DramaVisualStyleTemplateController — 视觉风格模板 CRUD */
 import { Controller, Get, Post, Put, Delete, Param, Body, Req } from '@nestjs/common';
 import { DramaVisualStyleTemplateService } from './drama-visual-style-template.service';
-import { CreateDramaVisualStyleTemplateDto, UpdateDramaVisualStyleTemplateDto } from './dto/drama-visual-style-template.dto';
+import { CreateDramaVisualStyleTemplateDto, UpdateDramaVisualStyleTemplateDto } from '../dto/drama-visual-style-template.dto';
 
 @Controller('drama/visual-style-templates')
 export class DramaVisualStyleTemplateController {

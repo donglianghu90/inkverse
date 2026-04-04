@@ -7,7 +7,7 @@ import { LlmService } from '../../../novel/llm/llm.service';
 import { z } from 'zod';
 import { dramaSeedSchema, DramaSeed } from '../../schemas/drama-state.schemas';
 import { buildSeedAnalyzerSystemPrompt } from '../../prompting/drama-playbook';
-import { DramaSeedHints, GenreProductionGuidance } from '../../entities/drama-genre-template.entity';
+import { DramaSeedHints, GenreProductionGuidance } from '../../../template/entities/drama-genre-template.entity';
 
 export interface DramaSeedInput {
   mainIdea: string;

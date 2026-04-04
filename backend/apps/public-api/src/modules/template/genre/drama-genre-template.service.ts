@@ -3,11 +3,11 @@ import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/com
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { z } from 'zod';
-import { DramaGenreTemplateEntity, DramaSeedHints } from './entities/drama-genre-template.entity';
-import { GENRE_TEMPLATES } from './prompting/drama-genre-data';
-import { DramaEntity } from './entities/drama.entity';
-import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
-import { LlmService } from '../novel/llm/llm.service';
+import { DramaGenreTemplateEntity, DramaSeedHints } from '../entities/drama-genre-template.entity';
+const genreTemplatesData = require('../data/genre-system-templates.json');
+import { DramaEntity } from '../../drama/entities/drama.entity';
+import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto } from '../dto/drama-genre-template.dto';
+import { LlmService } from '../../novel/llm/llm.service';
 
 export interface GenreAnalytics {
   genre: string;
@@ -30,15 +30,26 @@ export class DramaGenreTemplateService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> { await this.seedSystemTemplates(); }
 
+  /**
+   * 启动时的全网大盘同步：将系统代码中预置的各短剧题材模板同步写入到数据库
+   * - 每次模块启动时（onModuleInit）触发
+   * - 库中如果没有该系统模板则新建 (userId 为 null，isSystem 为 true)
+   * - 如果已有同名系统模板，则覆盖并使其版本号 systemVersion + 1 ，以便于能够触发针对独立用户记录的升级同步
+   */
   private async seedSystemTemplates(): Promise<void> {
-    const entries = Object.entries(GENRE_TEMPLATES);
-    for (const [genreKey, tpl] of entries) {
+    const entries = Object.entries(genreTemplatesData);
+    for (const [genreKey, tplRaw] of entries) {
+      const tpl = tplRaw as any;
       const profileJson = tpl.profile as unknown as Record<string, unknown>;
+      
+      // 查找当前是否已经存在这个题材的公共系统模板记录
       const existing = await this.repo.findOne({ where: { userId: IsNull(), genreKey, isSystem: true } });
       if (existing) {
+        // 存在则全量更新其数据格式，并上调版本号（systemVersion + 1）
         existing.displayName = tpl.displayName;
         existing.description = tpl.description;
         existing.genreKeywords = tpl.genreKeywords;
+        existing.coverUrl = tpl.coverUrl ?? null;
         existing.seedHints = tpl.seedHints as DramaSeedHints;
         existing.audienceTags = tpl.audienceTags;
         existing.protagonistFocusTags = tpl.protagonistFocusTags as any;
@@ -48,9 +59,11 @@ export class DramaGenreTemplateService implements OnModuleInit {
         existing.systemVersion = existing.systemVersion + 1;
         await this.repo.save(existing);
       } else {
+        // 新增系统的题材预置模板入库
         await this.repo.save(this.repo.create({
           userId: null, genreKey, displayName: tpl.displayName,
           description: tpl.description, genreKeywords: tpl.genreKeywords,
+          coverUrl: tpl.coverUrl ?? null,
           profileJson, seedHints: tpl.seedHints as DramaSeedHints,
           audienceTags: tpl.audienceTags, protagonistFocusTags: tpl.protagonistFocusTags as any,
           toneTags: tpl.toneTags, platformTags: tpl.platformTags, isSystem: true,
@@ -79,6 +92,7 @@ export class DramaGenreTemplateService implements OnModuleInit {
         await this.repo.save(this.repo.create({
           userId, genreKey: sys.genreKey, displayName: sys.displayName,
           description: sys.description, genreKeywords: sys.genreKeywords,
+          coverUrl: sys.coverUrl,
           profileJson: sys.profileJson, seedHints: sys.seedHints,
           audienceTags: sys.audienceTags, protagonistFocusTags: sys.protagonistFocusTags,
           toneTags: sys.toneTags, platformTags: sys.platformTags,
@@ -88,6 +102,7 @@ export class DramaGenreTemplateService implements OnModuleInit {
         Object.assign(user, {
           displayName: sys.displayName, description: sys.description,
           genreKeywords: sys.genreKeywords, seedHints: sys.seedHints,
+          coverUrl: sys.coverUrl,
           profileJson: sys.profileJson,
           audienceTags: sys.audienceTags, protagonistFocusTags: sys.protagonistFocusTags,
           toneTags: sys.toneTags, platformTags: sys.platformTags,
@@ -132,6 +147,28 @@ export class DramaGenreTemplateService implements OnModuleInit {
     return this.repo.save(tpl);
   }
 
+  /**
+   * 单独更新某个 Agent 的系统提示词（写入 profileJson.agentSystemPrompts）。
+   * 前端题材模板详情页中每个 Agent 提示词编辑框保存时调用此接口。
+   * 与其他模板字段一样：只修改用户自己的副本，不影响系统默认或其他用户。
+   */
+  async updateAgentPrompt(
+    id: string,
+    userId: string,
+    agentType: string,
+    systemPrompt: string,
+  ): Promise<DramaGenreTemplateEntity> {
+    const tpl = await this.getById(id);
+    if (tpl.userId && tpl.userId !== userId) throw new NotFoundException('无权修改该模板');
+    const profile = (tpl.profileJson ?? {}) as Record<string, unknown>;
+    const agentSystemPrompts = ((profile.agentSystemPrompts ?? {}) as Record<string, string>);
+    agentSystemPrompts[agentType] = systemPrompt;
+    tpl.profileJson = { ...profile, agentSystemPrompts };
+    tpl.isUserModified = true;
+    return this.repo.save(tpl);
+  }
+
+
   async remove(id: string, userId: string): Promise<{ success: boolean }> {
     const tpl = await this.getById(id);
     if (tpl.isSystem) throw new Error('系统模板不可删除');
@@ -153,8 +190,8 @@ export class DramaGenreTemplateService implements OnModuleInit {
   }
 
   findBestMatch(genre: string): DramaSeedHints | null {
-    const entry = Object.values(GENRE_TEMPLATES).find(
-      t => t.genreKeywords.some(k => genre.includes(k)) || genre.includes(t.displayName),
+    const entry = Object.values(genreTemplatesData as Record<string, any>).find(
+      (t: any) => t.genreKeywords.some((k: string) => genre.includes(k)) || genre.includes(t.displayName),
     );
     return (entry?.seedHints ?? null) as DramaSeedHints | null;
   }

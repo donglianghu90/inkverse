@@ -20,7 +20,10 @@
       "referenceStyle": "国产顶级都市剧，Netflix亚洲制作标准，韩剧顶级摄影水准",
       "styleReferencePrompt": "cinematic live action photography, RAW photo, professional film color grading, shallow depth of field bokeh, Korean drama premium cinematic lighting, commercial broadcast production quality, photorealistic, 4K ultra-detailed, 85mm portrait lens compression, film grain texture, award-winning cinematography, masterpiece",
       "characterStylePrompt": "cinematic live action portrait, contemporary urban professional, photorealistic skin with natural pores and subsurface scattering, professional makeup and styling, 85mm lens compression shallow bokeh, Korean drama cinematic lighting, commercial quality photography, highly detailed, 4K resolution, masterpiece portrait",
-      "facePromptRule": "本剧为【现代都市真人】。\n\n【核心铁律】faceReferencePrompt 必须严格匹配角色的 gender（男/女）和职业身份，禁止用错性别。男性角色绝对禁止出现 woman/lady/female/goddess 等女性词汇；女性角色绝对禁止出现 businessman/gentleman 等纯男性词汇。每个角色的 faceReferencePrompt 必须各不相同，严禁多角色共用同一段描述。\n\n【格式要求】必须以 \"modern contemporary\" 或 \"stylish urban\" 开头，配合性别匹配的职业/身份词。\n示例（男性）：\"modern contemporary Chinese CEO, sharp confident face, strong jawline, front-facing, looking at camera, ...\"\n示例（男性）：\"modern contemporary Chinese lawyer, intellectual refined features, clean-cut appearance, front-facing, looking at camera, ...\"\n示例（女性）：\"modern contemporary Chinese businesswoman, elegant sharp features, confident gaze, front-facing, looking at camera, ...\"\n示例（女性）：\"stylish urban Chinese designer, creative artistic aura, delicate features, front-facing, looking at camera, ...\"\n\n必须包含 \"front-facing, looking at camera\"。真人风格质量要求：faceReferencePrompt 末尾必须加入 \"eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, natural subsurface scattering, no airbrushing, not plastic skin, 4K portrait masterpiece quality\"，确保生成电影级人像质感而非磨皮商业照。"
+      "facePromptRule": "本剧为【现代都市真人】。\n\n【核心铁律】faceReferencePrompt 必须严格匹配角色的 gender（男/女）和职业身份，禁止用错性别。男性角色绝对禁止出现 woman/lady/female/goddess 等女性词汇；女性角色绝对禁止出现 businessman/gentleman 等纯男性词汇。每个角色的 faceReferencePrompt 必须各不相同，严禁多角色共用同一段描述。\n\n【格式要求】必须以 \"modern contemporary\" 或 \"stylish urban\" 开头，配合性别匹配的职业/身份词。\n示例（男性）：\"modern contemporary Chinese CEO, sharp confident face, strong jawline, front-facing, looking at camera, ...\"\n示例（男性）：\"modern contemporary Chinese lawyer, intellectual refined features, clean-cut appearance, front-facing, looking at camera, ...\"\n示例（女性）：\"modern contemporary Chinese businesswoman, elegant sharp features, confident gaze, front-facing, looking at camera, ...\"\n示例（女性）：\"stylish urban Chinese designer, creative artistic aura, delicate features, front-facing, looking at camera, ...\"\n\n必须包含 \"front-facing, looking at camera\"。真人风格质量要求：faceReferencePrompt 末尾必须加入 \"eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, natural subsurface scattering, no airbrushing, not plastic skin, 4K portrait masterpiece quality\"，确保生成电影级人像质感而非磨皮商业照。",
+      "scenePromptGuidance": "示例：\n\"modern urban office interior, Korean drama premium lighting, warm key light with cool shadow, shallow depth of field bokeh, 9:16 vertical composition, film grain texture, photorealistic, 4K, masterpiece\"\n⚠️ 场景 visualPrompt 只写场景特有细节（空间/光线/材质/道具/氛围），全剧风格词（cinematic live action photography 等）已由系统自动注入，禁止在场景 visualPrompt 中重复写。\n⚠️ 必须包含写实质量词（photorealistic / film grain / 4K），禁止动漫类材质词。\ntextureStyle 使用：film grain / natural bokeh / realistic fabric / photorealistic skin。",
+      "scriptDialogueGuide": "【视觉风格：真人影视/写实】\n- 台词克制自然，情绪藏在潜台词里（\"不说\"比\"说\"更有力量）\n- 避免过度戏剧化的宣言式台词，用日常语言承载情感重量\n- 肢体语言胜过言语：沉默、回避、停顿是最强表达\n- 对话要有生活质感，允许不完整的句子和思维跳跃",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好手持感+冷静中景，对话场景用眼神反应镜（close_up+three_quarter交替），情绪用极简长镜头，写实风格避免超现实构图，高潮用 slow_push_in 而非快切"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -82,7 +85,8 @@
       "hongguo",
       "reelshort",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_live_action.png"
   },
   {
     "styleKey": "period_live",
@@ -105,7 +109,10 @@
       "referenceStyle": "国产顶级古装剧《甄嬛传》《琅琊榜》《长安十二时辰》《鹤唳华亭》",
       "styleReferencePrompt": "cinematic Chinese period drama live-action photography, photorealistic, soft natural cinematic color grading warm highlights muted shadows, shallow depth of field, 35mm film grain texture, 4K ultra-detailed, premium broadcast period drama lighting, inspired by The Longest Day in Chang'an cinematography, masterpiece",
       "characterStylePrompt": "Chinese historical drama, ancient period costume, cinematic hanfu, photorealistic portrait, film grain, silk and linen fabric texture, intricate embroidery detail, realistic skin with natural pores, no airbrushing, 4K portrait quality, neutral studio background, masterpiece period drama",
-      "facePromptRule": "本剧为【真人古装 / 中国历史题材实拍】（非国画水墨）。\n\n【核心铁律】faceReferencePrompt 必须严格匹配角色的 gender（男/女）和身份，禁止用错性别。男性角色绝对禁止出现 noblewoman/woman/lady/female/goddess 等女性词汇；女性角色绝对禁止出现 swordsman/emperor/warrior 等纯男性词汇。每个角色的 faceReferencePrompt 必须各不相同，严禁多角色共用同一段描述。\n\n【格式要求】必须以朝代词 + 性别匹配的身份词开头。\n示例（男性皇帝）：\"Tang dynasty ancient Chinese emperor in imperial dragon robe, commanding presence, front-facing, looking at camera, ...\"\n示例（男性文人）：\"Tang dynasty ancient Chinese scholarly poet, refined elegant features, literary temperament, front-facing, looking at camera, ...\"\n示例（男性官员）：\"Tang dynasty Chinese court official in purple robe, authoritative stern presence, front-facing, looking at camera, ...\"\n示例（男性侠客）：\"ancient Chinese swordsman, sharp intense gaze, weathered rugged face, front-facing, looking at camera, ...\"\n示例（男性太监）：\"Tang dynasty Chinese palace eunuch, smooth round face, shrewd cautious eyes, front-facing, looking at camera, ...\"\n示例（女性贵族）：\"Tang dynasty ancient Chinese noblewoman in imperial court attire, graceful elegance, front-facing, looking at camera, ...\"\n示例（女性道姑）：\"ancient Chinese Taoist priestess, ethereal serene face, delicate features, front-facing, looking at camera, ...\"\n\n禁止仅写 \"Chinese man/woman\"，否则模型会生成现代人。必须包含 \"front-facing, looking at camera\"。定妆前缀已由 characterStylePrompt 提供，faceReferencePrompt 内禁止重复长段光影/调色。真人风格质量要求：faceReferencePrompt 末尾必须加入 \"eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, no airbrushing, not plastic skin, 4K portrait masterpiece quality, period-accurate makeup\"，确保生成电影级人像质感。"
+      "facePromptRule": "本剧为【真人古装 / 中国历史题材实拍】（非国画水墨）。\n\n【核心铁律】faceReferencePrompt 必须严格匹配角色的 gender（男/女）和身份，禁止用错性别。男性角色绝对禁止出现 noblewoman/woman/lady/female/goddess 等女性词汇；女性角色绝对禁止出现 swordsman/emperor/warrior 等纯男性词汇。每个角色的 faceReferencePrompt 必须各不相同，严禁多角色共用同一段描述。\n\n【格式要求】必须以朝代词 + 性别匹配的身份词开头。\n示例（男性皇帝）：\"Tang dynasty ancient Chinese emperor in imperial dragon robe, commanding presence, front-facing, looking at camera, ...\"\n示例（男性文人）：\"Tang dynasty ancient Chinese scholarly poet, refined elegant features, literary temperament, front-facing, looking at camera, ...\"\n示例（男性官员）：\"Tang dynasty Chinese court official in purple robe, authoritative stern presence, front-facing, looking at camera, ...\"\n示例（男性侠客）：\"ancient Chinese swordsman, sharp intense gaze, weathered rugged face, front-facing, looking at camera, ...\"\n示例（男性太监）：\"Tang dynasty Chinese palace eunuch, smooth round face, shrewd cautious eyes, front-facing, looking at camera, ...\"\n示例（女性贵族）：\"Tang dynasty ancient Chinese noblewoman in imperial court attire, graceful elegance, front-facing, looking at camera, ...\"\n示例（女性道姑）：\"ancient Chinese Taoist priestess, ethereal serene face, delicate features, front-facing, looking at camera, ...\"\n\n禁止仅写 \"Chinese man/woman\"，否则模型会生成现代人。必须包含 \"front-facing, looking at camera\"。定妆前缀已由 characterStylePrompt 提供，faceReferencePrompt 内禁止重复长段光影/调色。真人风格质量要求：faceReferencePrompt 末尾必须加入 \"eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, no airbrushing, not plastic skin, 4K portrait masterpiece quality, period-accurate makeup\"，确保生成电影级人像质感。",
+      "scenePromptGuidance": "示例：\n\"Tang dynasty imperial palace throne room, warm golden candlelight amber light, film grain, rich silk and linen textures, dougong wooden architecture, photorealistic, 4K, masterpiece\"\n⚠️ 场景 visualPrompt 只写场景特有细节（空间/光线/材质/道具/氛围），全剧风格词（realistic cinematic photography / inspired by ... aesthetic 等）已由系统自动注入，禁止在场景 visualPrompt 中重复写，否则会造成 prompt 冗余和前缀跳过。\n⚠️ 严禁使用 ink wash edges / brush stroke / painterly 等绘画类材质词——这些属于水墨风格，会导致生成写实真人古装时出现水墨画感。\n⚠️ visualStyle.styleReferencePrompt 同样禁止 ink-wash / watercolor / illustration；柔和氛围用 soft cinematic color grading、film grain、muted palette。\ntextureStyle 只能使用写实材质词：film grain / natural skin texture / rich fabric textures / stone and wood details。",
+      "scriptDialogueGuide": "【视觉风格：真人古装/历史剧】\n- 台词与设定时代一致，禁止与该时代不符的用语（古代背景不用现代网络用语）\n- 称谓与时代一致（古装用陛下/朕/大人/公子等，民国用先生/小姐/太太等）\n- 情感表达方式符合时代感，可用隐喻与意象\n- 动作描写：服装/礼仪符合设定时代",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好对称构图+慢节奏推镜，权力场景用低角度仰拍（low_angle），情感场景用浅景深特写，宫廷场景多用 bird_eye 展示空间权力关系，避免手持感破坏古装庄重感"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -166,7 +173,8 @@
       "hongguo",
       "mango_tv",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_period_live.png"
   },
   {
     "styleKey": "hk_film",
@@ -189,7 +197,10 @@
       "referenceStyle": "王家卫《花样年华》《2046》，《无间道》，《英雄本色》，香港黄金时代noir电影",
       "styleReferencePrompt": "Hong Kong noir film photography, teal orange cinematic color grade, 35mm film grain high contrast, Chungking Express aesthetic, cyan magenta neon reflections, photorealistic, Wong Kar-wai visual poetry, award-winning Hong Kong cinematography, 9:16 vertical cinematic, masterpiece",
       "characterStylePrompt": "Hong Kong classic cinema portrait, 35mm film grain texture, neon light color cast on skin, realistic skin with natural pores, moody character composition, noir atmosphere, photorealistic, 4K portrait quality, atmospheric cinematic lighting, masterpiece",
-      "facePromptRule": "本剧为【港片风格】。\n\n【核心铁律】faceReferencePrompt 必须严格匹配角色的 gender（男/女）和身份，禁止用错性别。男性角色绝对禁止出现 woman/lady/female 等女性词汇；女性角色绝对禁止出现 triad boss/gangster 等纯男性词汇（可用 female assassin/nightclub madam 等）。每个角色的 faceReferencePrompt 必须各不相同，严禁多角色共用同一段描述。\n\n【格式要求】必须以 \"Hong Kong classic cinema style\" 开头，配合性别匹配的身份词。\n示例（男性）：\"Hong Kong classic cinema style triad boss, sharp angular face, slicked-back hair, neon light on cheekbones, front-facing, looking at camera, ...\"\n示例（男性）：\"Hong Kong classic cinema style undercover cop, weary determined face, stubble jaw, neon-lit side profile, front-facing, looking at camera, ...\"\n示例（女性）：\"Hong Kong classic cinema style elegant nightclub singer, refined beautiful face, melancholy gaze, neon pink highlight on cheekbone, front-facing, looking at camera, ...\"\n\n必须包含 \"front-facing, looking at camera\"。真人风格质量要求：faceReferencePrompt 末尾必须加入 \"eyes sharply in focus, clear iris detail, 35mm film grain skin texture, neon color cast, realistic pores, no airbrushing, masterpiece quality\"，确保生成胶片质感人像。"
+      "facePromptRule": "本剧为【港片风格】。\n\n【核心铁律】faceReferencePrompt 必须严格匹配角色的 gender（男/女）和身份，禁止用错性别。男性角色绝对禁止出现 woman/lady/female 等女性词汇；女性角色绝对禁止出现 triad boss/gangster 等纯男性词汇（可用 female assassin/nightclub madam 等）。每个角色的 faceReferencePrompt 必须各不相同，严禁多角色共用同一段描述。\n\n【格式要求】必须以 \"Hong Kong classic cinema style\" 开头，配合性别匹配的身份词。\n示例（男性）：\"Hong Kong classic cinema style triad boss, sharp angular face, slicked-back hair, neon light on cheekbones, front-facing, looking at camera, ...\"\n示例（男性）：\"Hong Kong classic cinema style undercover cop, weary determined face, stubble jaw, neon-lit side profile, front-facing, looking at camera, ...\"\n示例（女性）：\"Hong Kong classic cinema style elegant nightclub singer, refined beautiful face, melancholy gaze, neon pink highlight on cheekbone, front-facing, looking at camera, ...\"\n\n必须包含 \"front-facing, looking at camera\"。真人风格质量要求：faceReferencePrompt 末尾必须加入 \"eyes sharply in focus, clear iris detail, 35mm film grain skin texture, neon color cast, realistic pores, no airbrushing, masterpiece quality\"，确保生成胶片质感人像。",
+      "scenePromptGuidance": "示例：\n\"rain-wet Hong Kong alley at night, neon sign reflections teal and orange on wet pavement, 35mm film grain texture, high contrast moody shadows, photorealistic, 4K, masterpiece\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Hong Kong noir film photography / Wong Kar-wai visual poetry 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：film grain / rain-wet surfaces / neon glow reflections / glass reflections。",
+      "scriptDialogueGuide": "【视觉风格：真人影视/写实】\n- 台词克制自然，情绪藏在潜台词里（\"不说\"比\"说\"更有力量）\n- 避免过度戏剧化的宣言式台词，用日常语言承载情感重量\n- 肢体语言胜过言语：沉默、回避、停顿是最强表达\n- 对话要有生活质感，允许不完整的句子和思维跳跃",
+      "shotStyleGuide": "masterShotPlan镜头语言：王家卫式慢推镜+长时间凝视，大量手持感（hand-held），霓虹场景用侧面轮廓剪影（silhouette），对话多用三角切+反应镜，孤独感场景用wide+路人背景虚化"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -240,7 +251,8 @@
       "douyin",
       "kuaishou",
       "hongguo"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_hk_film.png"
   },
   {
     "styleKey": "retro_wuxia",
@@ -264,7 +276,10 @@
       "referenceStyle": "《笑傲江湖》《新龙门客栈》《卧虎藏龙》《英雄》，徐克、李安武侠电影美学",
       "styleReferencePrompt": "retro wuxia martial arts film photography, warm earth tone 35mm film grain, 1990s Hong Kong wuxia Tsui Hark cinema aesthetic, photorealistic, 4K ultra-detailed, masterpiece period wuxia film",
       "characterStylePrompt": "retro wuxia film portrait, ancient Chinese swordsman, 35mm film grain texture, warm amber color cast, weathered skin with natural pores, period-accurate warrior costume with wear and dirt, photorealistic, 4K portrait quality, no airbrushing, masterpiece",
-      "facePromptRule": "本剧为【复古武侠】。\n\n【核心铁律】faceReferencePrompt 必须严格匹配角色的 gender（男/女）和身份，禁止用错性别。男性角色绝对禁止出现 woman/lady/female 等女性词汇；女性角色绝对禁止出现 swordsman/warrior 等纯男性词汇（可用 swordswoman/female warrior/heroine）。每个角色的 faceReferencePrompt 必须各不相同，严禁多角色共用同一段描述。\n\n【格式要求】必须以 \"retro wuxia film style\" 开头，配合性别匹配的武侠身份词。\n示例（男性）：\"retro wuxia film style Chinese swordsman, weathered rugged face, intense gaze, front-facing, looking at camera, 1990s HK cinema aesthetic, ...\"\n示例（男性）：\"retro wuxia film style martial arts master, aged wise face, deep-set piercing eyes, front-facing, looking at camera, ...\"\n示例（女性）：\"retro wuxia film style Chinese swordswoman, sharp beautiful face, determined fierce gaze, wind-swept hair, front-facing, looking at camera, ...\"\n\n必须包含 \"front-facing, looking at camera\"。真人风格质量要求：faceReferencePrompt 末尾必须加入 \"eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, weathered skin details, 35mm film grain quality, no airbrushing, masterpiece\"，确保生成胶片质感人像。"
+      "facePromptRule": "本剧为【复古武侠】。\n\n【核心铁律】faceReferencePrompt 必须严格匹配角色的 gender（男/女）和身份，禁止用错性别。男性角色绝对禁止出现 woman/lady/female 等女性词汇；女性角色绝对禁止出现 swordsman/warrior 等纯男性词汇（可用 swordswoman/female warrior/heroine）。每个角色的 faceReferencePrompt 必须各不相同，严禁多角色共用同一段描述。\n\n【格式要求】必须以 \"retro wuxia film style\" 开头，配合性别匹配的武侠身份词。\n示例（男性）：\"retro wuxia film style Chinese swordsman, weathered rugged face, intense gaze, front-facing, looking at camera, 1990s HK cinema aesthetic, ...\"\n示例（男性）：\"retro wuxia film style martial arts master, aged wise face, deep-set piercing eyes, front-facing, looking at camera, ...\"\n示例（女性）：\"retro wuxia film style Chinese swordswoman, sharp beautiful face, determined fierce gaze, wind-swept hair, front-facing, looking at camera, ...\"\n\n必须包含 \"front-facing, looking at camera\"。真人风格质量要求：faceReferencePrompt 末尾必须加入 \"eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, weathered skin details, 35mm film grain quality, no airbrushing, masterpiece\"，确保生成胶片质感人像。",
+      "scenePromptGuidance": "示例：\n\"ancient Chinese tavern interior, warm earth tones, 35mm film grain, bamboo forest exterior dappled light, worn leather sword scabbard detail, photorealistic, 4K, masterpiece\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（retro wuxia film photography / 1990s HK wuxia Tsui Hark aesthetic 等）已由系统自动注入，禁止重复写。\n⚠️ 严禁使用绘画类材质词（ink wash / painterly / brush stroke），只用 film grain / dust / leather / worn fabric。",
+      "scriptDialogueGuide": "【视觉风格：复古武侠】\n- 台词江湖气十足，硬朗简练，有武侠韵律感\n- 武侠惯用语和成语可以使用，但不可堆砌到生涩难懂\n- 情感表达含蓄，以义气和侠情替代直白爱意\n- 动作描写注重动作感和气势，力道劲道要通过台词节奏传递",
+      "shotStyleGuide": "masterShotPlan镜头语言：动作场景偏好广角+快速切换，功夫对决用 slow_motion+extreme_close_up 捕捉动作细节，江湖豪情用 wide+bird_eye 展示宏大场面，情感场景用三角切法"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -314,7 +329,8 @@
       "douyin",
       "kuaishou",
       "hongguo"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_retro_wuxia.png"
   },
   {
     "styleKey": "2d_anime",
@@ -337,7 +353,10 @@
       "referenceStyle": "主流日本动画制作水准，ufotable画质，《鬼灭之刃》《进击的巨人》《咒术回战》",
       "styleReferencePrompt": "anime style illustration, 2D hand-drawn cel shading, clean precise line art, vibrant saturated colors, Japanese animation masterpiece quality, manga key visual, sharp cel shadow edges, beautiful anime character design, highly detailed, best quality, masterpiece anime illustration",
       "characterStylePrompt": "anime style character illustration, 2D cel shading, clean detailed line art, vibrant saturated colors, large expressive anime eyes with detailed catchlights, beautiful hair rendering with highlights, masterpiece quality, best quality, highly detailed anime illustration",
-      "facePromptRule": "本剧为【2D日系动漫】。faceReferencePrompt 必须以 \"anime style\" 开头，使用动漫五官描述（大眼、细腻线条），例如：\"anime style young male protagonist, sharp determined eyes, messy dark hair, angular jawline, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。动漫风格质量要求：faceReferencePrompt 末尾加入 \"detailed anime eyes with catchlight, clean line art, best quality, masterpiece\"。"
+      "facePromptRule": "本剧为【2D日系动漫】。faceReferencePrompt 必须以 \"anime style\" 开头，使用动漫五官描述（大眼、细腻线条），例如：\"anime style young male protagonist, sharp determined eyes, messy dark hair, angular jawline, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。动漫风格质量要求：faceReferencePrompt 末尾加入 \"detailed anime eyes with catchlight, clean line art, best quality, masterpiece\"。",
+      "scenePromptGuidance": "示例：\n\"urban classroom interior at sunset, vibrant saturated colors, clean cel-shading hard shadow, detailed background art, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（anime style illustration / Japanese animation masterpiece quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：cel-shading / clean line art / flat color fill。严禁使用写实材质词（film grain / photorealistic）。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -386,7 +405,8 @@
       "douyin",
       "kuaishou",
       "bilibili"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_anime.png"
   },
   {
     "styleKey": "2d_ghibli",
@@ -410,7 +430,10 @@
       "referenceStyle": "Studio Ghibli《千与千寻》《龙猫》《哈尔的移动城堡》《幽灵公主》",
       "styleReferencePrompt": "Studio Ghibli style masterpiece, Miyazaki Hayao animation, soft hand-painted watercolor background art, warm golden sunlight atmosphere, gentle natural lighting, lush detailed nature scenery, nostalgic heartwarming aesthetic, beautiful 2D animation film quality, highly detailed background art, soft warm color palette, masterpiece Ghibli film illustration, best quality",
       "characterStylePrompt": "Studio Ghibli style character, Miyazaki animation design, soft round features, warm expressive eyes, natural gentle expression, hand-drawn line art with soft watercolor fill, warm color palette, highly detailed, best quality, Ghibli masterpiece animation",
-      "facePromptRule": "本剧为【吉卜力/Ghibli风格】。faceReferencePrompt 必须以 \"Studio Ghibli style\" 或 \"Miyazaki anime style\" 开头，使用温暖圆润的五官描述，例如：\"Studio Ghibli style young girl, round soft face, gentle warm eyes, natural expression, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。质量要求：末尾加入 \"soft watercolor line art, warm Ghibli color palette, best quality, masterpiece\"。"
+      "facePromptRule": "本剧为【吉卜力/Ghibli风格】。faceReferencePrompt 必须以 \"Studio Ghibli style\" 或 \"Miyazaki anime style\" 开头，使用温暖圆润的五官描述，例如：\"Studio Ghibli style young girl, round soft face, gentle warm eyes, natural expression, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。质量要求：末尾加入 \"soft watercolor line art, warm Ghibli color palette, best quality, masterpiece\"。",
+      "scenePromptGuidance": "示例：\n\"lush countryside meadow in summer, dappled sunlight through trees, gentle natural soft atmosphere, highly detailed background art, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Studio Ghibli style masterpiece / Miyazaki Hayao animation 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：watercolor wash / hand-drawn texture / soft color gradient。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -460,7 +483,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_ghibli.png"
   },
   {
     "styleKey": "2d_korean_anime",
@@ -484,7 +508,10 @@
       "referenceStyle": "韩国top webtoon《我的ID是江南美人》《女神降临》《隐秘的角落》条漫版",
       "styleReferencePrompt": "Korean webtoon style illustration, manhwa artwork vertical scroll comic, soft pink purple pastel palette, beautiful idealized characters, delicate precision line art, gentle gradient cel shading, romance drama aesthetic, 9:16 vertical composition, highly detailed, best quality, professional webtoon artist masterpiece quality",
       "characterStylePrompt": "Korean webtoon style character, manhwa beautiful face, delicate precision line art, soft gradient shading, pastel color palette, tall nose bridge, fair skin, large expressive eyes, romantic drama aesthetic, highly detailed, best quality, masterpiece webtoon illustration",
-      "facePromptRule": "本剧为【韩漫 / 条漫风格】。faceReferencePrompt 必须以 \"Korean webtoon style\" 开头，例如：\"Korean webtoon style handsome male lead, clean sharp features, gradient dyed hair, tall nose bridge, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。质量要求：末尾加入 \"delicate webtoon line art, soft gradient shading, best quality, masterpiece\"。"
+      "facePromptRule": "本剧为【韩漫 / 条漫风格】。faceReferencePrompt 必须以 \"Korean webtoon style\" 开头，例如：\"Korean webtoon style handsome male lead, clean sharp features, gradient dyed hair, tall nose bridge, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。质量要求：末尾加入 \"delicate webtoon line art, soft gradient shading, best quality, masterpiece\"。",
+      "scenePromptGuidance": "示例：\n\"modern apartment interior warm natural light, pastel pink and cream tones, soft gradient shading, delicate decorative details, 9:16 vertical, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Korean webtoon style illustration / manhwa artwork 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：soft gradient / delicate line art / pastel color fill。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -534,7 +561,8 @@
       "kuaishou",
       "hongguo",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_korean_anime.png"
   },
   {
     "styleKey": "2d_shoujo",
@@ -558,7 +586,10 @@
       "referenceStyle": "《美少女战士》《玻璃假面》池田理代子风格，《红色河岸》现代少女漫",
       "styleReferencePrompt": "shoujo manga style illustration, Japanese girls comic, sparkling star effects, cherry blossom flower background, large expressive beautiful eyes with detailed catchlights, delicate precision line art, romantic dreamy atmosphere, screen tone halftone dots, pastel pink color palette, highly detailed, best quality, classic shoujo manga masterpiece quality",
       "characterStylePrompt": "shoujo manga style character, large sparkly gorgeous eyes with multiple catchlights, soft romantic round face, rosy delicate features, flowing hair with highlights, floral background elements, pink pastel palette, detailed line art, best quality, masterpiece shoujo manga illustration",
-      "facePromptRule": "本剧为【少女漫画风】。faceReferencePrompt 必须以 \"shoujo manga style\" 开头，例如：\"shoujo manga style young woman, large sparkling eyes with detailed catchlights, soft rounded face, rosy cheeks, delicate features, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。质量要求：末尾加入 \"highly detailed eye rendering with sparkle effects, best quality, masterpiece shoujo manga\"。"
+      "facePromptRule": "本剧为【少女漫画风】。faceReferencePrompt 必须以 \"shoujo manga style\" 开头，例如：\"shoujo manga style young woman, large sparkling eyes with detailed catchlights, soft rounded face, rosy cheeks, delicate features, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。质量要求：末尾加入 \"highly detailed eye rendering with sparkle effects, best quality, masterpiece shoujo manga\"。",
+      "scenePromptGuidance": "示例：\n\"school rooftop at golden sunset, cherry blossom petals floating, sparkle star effects, screen tone halftone dots, romantic dreamy pink atmosphere, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（shoujo manga style illustration / screen tone halftone 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：screen tone / sparkle effects / flower decorations / pastel gradient。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好唯美逆光+花卉背景大特写，情感高潮时用旋转构图或特写眼睛（eye close_up），背景虚化花瓣散落，多用仰拍突出角色高大感，告白场景必须用slow_push_in"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -606,7 +637,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_shoujo.png"
   },
   {
     "styleKey": "2d_film",
@@ -630,7 +662,10 @@
       "referenceStyle": "新海诚《你的名字》《天气之子》《铃芽之旅》，京阿尼《声之形》画风",
       "styleReferencePrompt": "Makoto Shinkai anime film style, cinematic 2D animation masterpiece, ultra-detailed background art, beautiful atmospheric lighting, volumetric light rays tyndall effect, atmospheric perspective gradient, film quality anime illustration, vibrant yet realistic colors, 9:16 vertical cinematic frame, highly detailed, best quality, award-winning anime film, masterpiece",
       "characterStylePrompt": "Makoto Shinkai style anime character, cinematic 2D animation film, large luminous eyes with detailed light reflections, soft realistic shading, detailed hair with light refraction, anime film quality, highly detailed, best quality, KyoAni character design level masterpiece",
-      "facePromptRule": "本剧为【2D电影动画 / 新海诚风格】。faceReferencePrompt 必须以 \"Makoto Shinkai anime style\" 或 \"cinematic 2D anime film style\" 开头，使用动漫五官描述，例如：\"Makoto Shinkai anime style young woman, large luminous eyes with detailed light reflections, delicate features, soft realistic shading, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。质量要求：末尾加入 \"detailed eye rendering beautiful lighting, best quality, anime film masterpiece\"。"
+      "facePromptRule": "本剧为【2D电影动画 / 新海诚风格】。faceReferencePrompt 必须以 \"Makoto Shinkai anime style\" 或 \"cinematic 2D anime film style\" 开头，使用动漫五官描述，例如：\"Makoto Shinkai anime style young woman, large luminous eyes with detailed light reflections, delicate features, soft realistic shading, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。质量要求：末尾加入 \"detailed eye rendering beautiful lighting, best quality, anime film masterpiece\"。",
+      "scenePromptGuidance": "示例：\n\"train station platform at golden hour, volumetric light rays streaming through windows, atmospheric perspective gradient, detailed environment, vibrant realistic colors, highly detailed, anime film masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Makoto Shinkai anime film style / cinematic 2D animation masterpiece 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：atmospheric perspective / volumetric light / detailed background art / film quality gradient。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好宽幅构图+精致环境空镜，新海诚式长镜头凝视（long take），用光线变化（窗边光/丁达尔）渲染情绪，情感场景用中近景细腻表情+背景虚化，空镜切入比例高（交代环境情绪）"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -678,7 +713,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_film.png"
   },
   {
     "styleKey": "2d_retro_anime",
@@ -702,7 +738,10 @@
       "referenceStyle": "《圣斗士星矢》《幽游白书》《龙珠Z》，高达系列，经典东映动画",
       "styleReferencePrompt": "1990s anime style illustration, retro Japanese animation aesthetic, traditional cel animation technique, warm vintage color palette with film grain, classic anime character design, old-school manga adaptation quality, VHS era 90s animation, nostalgic otaku culture, highly detailed, retro anime masterpiece quality, best quality",
       "characterStylePrompt": "1990s retro anime style character, classic cel animation, warm vintage color palette, traditional anime proportions, old-school line art style, film grain texture overlay, nostalgic 90s anime aesthetic, highly detailed retro illustration, best quality, masterpiece vintage anime",
-      "facePromptRule": "本剧为【2D复古动画 / 90年代日漫】。faceReferencePrompt 必须以 \"1990s retro anime style\" 或 \"classic cel animation style\" 开头，使用复古动漫五官描述，例如：\"1990s retro anime style young hero, sharp determined eyes, spiky dark hair, classic anime proportions, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【2D复古动画 / 90年代日漫】。faceReferencePrompt 必须以 \"1990s retro anime style\" 或 \"classic cel animation style\" 开头，使用复古动漫五官描述，例如：\"1990s retro anime style young hero, sharp determined eyes, spiky dark hair, classic anime proportions, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"Japanese school hallway afternoon, warm vintage color palette, cel animation quality lighting, nostalgic old-school atmosphere, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（1990s anime style illustration / retro Japanese animation aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：cel animation / film grain / vintage warm palette / retro grain。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -746,7 +785,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_retro_anime.png"
   },
   {
     "styleKey": "2d_action",
@@ -770,7 +810,10 @@
       "referenceStyle": "《鬼灭之刃》《咒术回战》《我的英雄学院》ufotable战斗场景",
       "styleReferencePrompt": "shounen action anime illustration, intense dynamic battle scene, motion speed lines, explosion impact effects, vibrant saturated colors, energy aura power-up glow, dynamic extreme pose, fight sequence composition, ufotable animation quality, masterpiece, best quality, highly detailed action anime illustration",
       "characterStylePrompt": "action anime character, intense battle pose, energy aura effect, vibrant powerful expression, dynamic muscle tension, detailed combat costume, motion blur effect, masterpiece quality, best quality highly detailed action anime illustration",
-      "facePromptRule": "本剧为【2D热血战斗动漫】。faceReferencePrompt 必须以 \"shounen action anime style\" 开头，使用热血动漫五官描述，例如：\"shounen action anime style hero, fierce determined eyes with power glow, wild spiky hair, strong jaw, intense battle expression, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【2D热血战斗动漫】。faceReferencePrompt 必须以 \"shounen action anime style\" 开头，使用热血动漫五官描述，例如：\"shounen action anime style hero, fierce determined eyes with power glow, wild spiky hair, strong jaw, intense battle expression, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"rooftop battle scene at night, speed lines radiating background, explosion sparks impact effects, vibrant saturated energy glow, dynamic extreme camera angle, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（shounen action anime illustration / ufotable animation quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：speed lines / explosion sparks / energy glow / dynamic motion blur。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：战斗场景极端景别快切（extreme_wide→extreme_close_up），大量低角度仰拍（low_angle）突出气势，动作高潮用 slow_motion+impact_frame，招牌动作前必须有 reaction_shot 铺垫"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -820,7 +863,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_action.png"
   },
   {
     "styleKey": "2d_cybercity",
@@ -844,7 +888,10 @@
       "referenceStyle": "《攻壳机动队》《赛博朋克：边缘行者》2D片段，《银翼杀手》动画版，《AKIRA》",
       "styleReferencePrompt": "2D cyberpunk anime illustration, neon urban night scene dystopian city, teal cyan magenta pink color scheme, holographic display overlays, rain-wet street reflections, high contrast dark atmosphere, sci-fi futuristic 2D animation style, Ghost in the Shell aesthetic, Cyberpunk Edgerunners visual, masterpiece, best quality, highly detailed cyberpunk illustration",
       "characterStylePrompt": "2D cyberpunk anime character, neon-lit face with teal and pink color cast, cyber augmentation details, dark tactical outfit, holographic eye implant, rain-soaked atmosphere, masterpiece quality, best quality cyberpunk illustration",
-      "facePromptRule": "本剧为【赛博朋克 / 科幻】。faceReferencePrompt 必须以 \"cyberpunk futuristic\" 或 \"sci-fi\" 开头，配合科技改造特征，例如：\"cyberpunk futuristic female hacker, neon-lit face with teal and pink color cast, glowing cyber eye implant, subtle facial implants, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【赛博朋克 / 科幻】。faceReferencePrompt 必须以 \"cyberpunk futuristic\" 或 \"sci-fi\" 开头，配合科技改造特征，例如：\"cyberpunk futuristic female hacker, neon-lit face with teal and pink color cast, glowing cyber eye implant, subtle facial implants, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"dystopian alley at night, rain-wet streets neon teal pink reflections, high contrast dark shadows, futuristic holographic billboard overlay, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（2D cyberpunk anime illustration / Ghost in the Shell aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：neon glow / holographic layer / rain reflections / digital noise。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好从高处俯瞰（bird_eye）城市，霓虹反光场景用极近仰拍（low_angle），追逐场景手持感+快切，孤独场景用wide+大量负空间，全息投影用overlay合成视角"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -891,7 +938,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_cybercity.png"
   },
   {
     "styleKey": "2d_thick_line",
@@ -915,7 +963,10 @@
       "referenceStyle": "《双城之战》（英雄联盟动画），漫威漫画原版，《蜘蛛侠：平行宇宙》风格",
       "styleReferencePrompt": "bold thick outline illustration, graphic novel comic book style, high contrast black outline strokes, simplified geometric character design, strong dynamic line weight, Marvel DC comic aesthetic, limited bold color palette, Arcane League of Legends animation style, masterpiece graphic novel quality, highly detailed bold illustration, best quality",
       "characterStylePrompt": "bold thick outline comic character, graphic novel style, high contrast simplified design, strong uniform line weight, dynamic pose, limited color palette, comic book hero aesthetic, masterpiece quality bold illustration, best quality",
-      "facePromptRule": "本剧为【粗线条 / 图形漫画风格】。faceReferencePrompt 必须以 \"bold graphic novel style\" 或 \"thick outline comic style\" 开头，例如：\"bold graphic novel style character, angular simplified face, thick black outline, strong jaw definition, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【粗线条 / 图形漫画风格】。faceReferencePrompt 必须以 \"bold graphic novel style\" 或 \"thick outline comic style\" 开头，例如：\"bold graphic novel style character, angular simplified face, thick black outline, strong jaw definition, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"urban alley night scene, high contrast bold black outline composition, limited flat color palette, graphic novel dramatic framing, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（bold thick outline illustration / graphic novel comic book style 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：bold ink outline / flat limited color / graphic novel texture / speed line。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -960,7 +1011,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_thick_line.png"
   },
   {
     "styleKey": "2d_fantasy_anime",
@@ -984,7 +1036,10 @@
       "referenceStyle": "《魔法少女小圆》《Fate/stay night》《无职转生》，奇幻动画美学",
       "styleReferencePrompt": "2D fantasy anime illustration, magical adventure epic aesthetic, colorful vivid magic spell particle effects, Japanese anime art style, brilliant particle spell aura, masterpiece, best quality, highly detailed 2D fantasy anime artwork, vibrant colors",
       "characterStylePrompt": "2D fantasy anime character, elaborate fantasy armor or mage costume, magical aura glow effect, detailed ornate accessories, epic adventure expression, vibrant color palette, masterpiece quality, best quality highly detailed fantasy anime illustration",
-      "facePromptRule": "本剧为【2D奇幻动漫】。faceReferencePrompt 必须以 \"fantasy anime style\" 开头，使用奇幻动漫五官描述，例如：\"fantasy anime style young mage, large determined eyes with magical glow, intricate hair with fantasy ornaments, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【2D奇幻动漫】。faceReferencePrompt 必须以 \"fantasy anime style\" 开头，使用奇幻动漫五官描述，例如：\"fantasy anime style young mage, large determined eyes with magical glow, intricate hair with fantasy ornaments, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"magical enchanted forest clearing, glowing spell particle effects, vibrant jewel tone atmosphere, detailed European fantasy tree architecture, epic adventurous scale, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（2D fantasy anime illustration / magical adventure epic aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：magical glow / particle effects / vibrant jewel color / detailed fantasy texture。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1029,7 +1084,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_fantasy_anime.png"
   },
   {
     "styleKey": "2d_british_anime",
@@ -1053,7 +1109,10 @@
       "referenceStyle": "《了不起的狐狸爸爸》，Wes Anderson风，《小熊维尼》原版，BBC经典动画",
       "styleReferencePrompt": "British animation style illustration, watercolor texture artwork, elegant refined character design, warm muted pastel English tones, pastoral countryside aesthetic, precise symmetrical Wes Anderson composition, BBC quality British animation, masterpiece, best quality, highly detailed elegant British illustration",
       "characterStylePrompt": "British animation style character, elegant refined design, warm muted color palette, watercolor line art, gentleman or lady Victorian attire, composed dignified expression, symmetrical composition, masterpiece quality British animation illustration, best quality",
-      "facePromptRule": "本剧为【2D英式动画 / Wes Anderson风格】。faceReferencePrompt 必须以 \"British animation style\" 或 \"Wes Anderson animation style\" 开头，例如：\"British animation style gentleman character, refined oval face, subtle expression, well-groomed appearance, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【2D英式动画 / Wes Anderson风格】。faceReferencePrompt 必须以 \"British animation style\" 或 \"Wes Anderson animation style\" 开头，例如：\"British animation style gentleman character, refined oval face, subtle expression, well-groomed appearance, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"cozy English countryside cottage afternoon, warm muted pastel atmosphere, watercolor paper texture feel, precise symmetrical composition, soft diffuse natural lighting, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（British animation style illustration / Wes Anderson animation style 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：watercolor texture / warm muted palette / paper grain / soft diffuse。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1101,7 +1160,8 @@
       "bilibili",
       "douyin",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_british_anime.png"
   },
   {
     "styleKey": "2d_sports",
@@ -1125,7 +1185,10 @@
       "referenceStyle": "《灌篮高手》《排球少年》《足球小将》，井上雄彦、古舘春一写实画风",
       "styleReferencePrompt": "sports manga illustration, Inoue Takehiko realistic human proportion, dynamic athletic motion speed lines, basketball volleyball court stadium, highly detailed athletic figure anatomy, high contrast dramatic stadium lighting, sweat determination intense expression, sports anime manga masterpiece quality, best quality highly detailed sports manga illustration",
       "characterStylePrompt": "sports manga style character, realistic athletic proportion, detailed muscle anatomy, sports uniform with texture detail, intense competitive expression, dynamic action pose, masterpiece quality, best quality sports manga illustration, highly detailed",
-      "facePromptRule": "本剧为【运动漫画 / 热血竞技】。faceReferencePrompt 必须以 \"sports manga style\" 开头，使用运动漫画五官描述，例如：\"sports manga style basketball player, determined burning eyes, athletic strong jaw, short practical hair, sweat detail, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【运动漫画 / 热血竞技】。faceReferencePrompt 必须以 \"sports manga style\" 开头，使用运动漫画五官描述，例如：\"sports manga style basketball player, determined burning eyes, athletic strong jaw, short practical hair, sweat detail, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"indoor basketball court overhead stadium lighting, dynamic speed lines, high contrast dramatic shadows, competition atmosphere, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（sports manga illustration / Inoue Takehiko realistic human proportion 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：halftone shadow / motion speed line / realistic fabric / sweat shine。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1173,7 +1236,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_sports.png"
   },
   {
     "styleKey": "2d_tezuka",
@@ -1197,7 +1261,10 @@
       "referenceStyle": "手冢治虫《铁臂阿童木》《怪医黑杰克》《火鸟》，东映经典动画",
       "styleReferencePrompt": "Tezuka Osamu manga style illustration, classic Japanese animation, large expressive round eyes, clean simple rounded line art, Astro Boy 1960s animation aesthetic, humanist storytelling art style, warm gentle colors, masterpiece classic anime quality, highly detailed Tezuka style illustration, best quality",
       "characterStylePrompt": "Tezuka Osamu style character, large round expressive eyes, simple clean rounded design, classic anime proportion, warm simple color palette, Astro Boy era animation quality, masterpiece classic illustration, best quality",
-      "facePromptRule": "本剧为【手冢治虫 / 经典日漫风格】。faceReferencePrompt 必须以 \"Tezuka Osamu anime style\" 或 \"classic Astro Boy animation style\" 开头，使用圆润大眼五官描述，例如：\"Tezuka Osamu anime style young hero, large round innocent eyes, clean simple round face, gentle expression, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【手冢治虫 / 经典日漫风格】。faceReferencePrompt 必须以 \"Tezuka Osamu anime style\" 或 \"classic Astro Boy animation style\" 开头，使用圆润大眼五官描述，例如：\"Tezuka Osamu anime style young hero, large round innocent eyes, clean simple round face, gentle expression, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"retro Japanese school scene, clean simple rounded line atmosphere, warm flat color palette, classic vintage ambiance, friendly cozy environment, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Tezuka Osamu manga style illustration / Astro Boy 1960s animation aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：clean flat color / simple cel shading / rounded line / retro print texture。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1240,7 +1307,8 @@
       "bilibili",
       "douyin",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_tezuka.png"
   },
   {
     "styleKey": "2d_death_note",
@@ -1264,7 +1332,10 @@
       "referenceStyle": "《死亡笔记》大场つぐみ/村田雄介，《进击的巨人》谏山创，《寄生兽》岩明均",
       "styleReferencePrompt": "dark psychological thriller anime illustration, Death Note aesthetic dark manga style, high contrast deep oppressive shadows, gothic atmosphere, sharp detailed precise line art, moody psychological horror lighting, mysterious villain character design, masterpiece quality dark anime, best quality highly detailed dark illustration",
       "characterStylePrompt": "dark psychological anime character, Death Note manga style, sharp angular features, cold calculating expression, high contrast shadow on face, gothic costume details, masterpiece quality dark anime illustration, best quality, highly detailed",
-      "facePromptRule": "本剧为【暗黑悬疑动漫】。faceReferencePrompt 必须以 \"dark psychological anime style\" 或 \"Death Note manga style\" 开头，使用暗黑系五官描述，例如：\"dark psychological anime style genius antagonist, sharp calculating eyes with shadows, angular refined face, cold expression, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【暗黑悬疑动漫】。faceReferencePrompt 必须以 \"dark psychological anime style\" 或 \"Death Note manga style\" 开头，使用暗黑系五官描述，例如：\"dark psychological anime style genius antagonist, sharp calculating eyes with shadows, angular refined face, cold expression, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"shadowy gothic library interior at night, high contrast black shadow dramatic split lighting, moody thriller oppressive atmosphere, deeply psychological composition, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（dark psychological thriller anime illustration / Death Note aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：high contrast shadow / gothic texture / dark atmosphere / precise line art。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好阴阳对比构图（split light），心理博弈用交替特写（close_up切换），大量侧逆光制造压迫感，计划揭露场景用low_angle+slow_zoom，沉默优先于动作镜头"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1310,7 +1381,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_death_note.png"
   },
   {
     "styleKey": "2d_horror",
@@ -1334,7 +1406,10 @@
       "referenceStyle": "伊藤润二《漩涡》《富江》《人间椅子》，horror manga美学，《寂静岭》概念艺术",
       "styleReferencePrompt": "Junji Ito horror manga style illustration, grotesque body horror aesthetic, dark deeply disturbing atmosphere, spiral motif horror, horror illustration masterpiece, deep oppressive shadows, unsettling off-putting composition, highly detailed disturbing illustration, best quality horror manga masterpiece",
       "characterStylePrompt": "Junji Ito horror manga character, grotesque distorted features, disturbing unnatural expression, pale skin with dark veins, horror manga precise line art style, deeply unsettling, masterpiece quality horror illustration, best quality",
-      "facePromptRule": "本剧为【恐怖灵异漫画】。faceReferencePrompt 必须以 \"Junji Ito horror manga style\" 或 \"horror manga style\" 开头，使用恐怖漫画五官描述，例如：\"Junji Ito horror manga style character, distorted unnatural face, hollow spiral eyes, disturbing smile, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【恐怖灵异漫画】。faceReferencePrompt 必须以 \"Junji Ito horror manga style\" 或 \"horror manga style\" 开头，使用恐怖漫画五官描述，例如：\"Junji Ito horror manga style character, distorted unnatural face, hollow spiral eyes, disturbing smile, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"abandoned hospital corridor at night, grotesque spiral pattern on walls, deep disturbing shadows, unsettling asymmetric composition, decay atmosphere, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Junji Ito horror manga style illustration / grotesque body horror aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：horror shadow / grotesque texture / ink line detail / disturbing distortion。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1377,7 +1452,8 @@
     "platformTags": [
       "douyin",
       "bilibili"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_horror.png"
   },
   {
     "styleKey": "2d_chibi",
@@ -1401,7 +1477,10 @@
       "referenceStyle": "《Re:Zero》Q版，《Fate/chibi》，日式萌系角色设计，Nendoroid风格",
       "styleReferencePrompt": "chibi anime style illustration, Q-version super deformed cute character, big oversized head small body, pastel candy colors palette, round simple kawaii design, expressive huge round cute eyes with multiple catchlights, adorable character design, best quality, masterpiece chibi illustration, highly detailed kawaii art",
       "characterStylePrompt": "chibi Q-version anime character, cute big head tiny body proportion, large shiny sparkling eyes with multiple catchlights, round simple features, candy pastel color palette, adorable kawaii design, masterpiece quality chibi illustration, best quality",
-      "facePromptRule": "本剧为【Q版 / Chibi 风格】。faceReferencePrompt 必须以 \"chibi cartoon style\" 开头，例如：\"chibi cartoon style cute girl, oversized round head, tiny body, big shiny sparkly dot eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【Q版 / Chibi 风格】。faceReferencePrompt 必须以 \"chibi cartoon style\" 开头，例如：\"chibi cartoon style cute girl, oversized round head, tiny body, big shiny sparkly dot eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"cute cozy school classroom, candy pastel pink and blue colors, round simplified furniture design, kawaii cheerful bright atmosphere, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（chibi anime style illustration / Q-version super deformed 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：flat pastel fill / simple cel shading / round smooth surface / candy color。",
+      "scriptDialogueGuide": "【视觉风格：2D动漫/动画】\n- 台词可以更外放、更有爆发力，允许\"中二\"式情绪宣泄\n- 角色情绪要\"大声说出来\"——动漫观众期待明确的情感表达\n- 允许适当夸张的动作描写（\"猛地站起来\"\"攥紧双拳发抖\"）\n- 招牌台词/名场面：每集至少设计一句有记忆点的\"金句\"",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好大特写+夸张动态构图，情绪高潮时允许超现实视觉隐喻，战斗/对抗场景多用极端景别切换（wide→extreme_close_up快切），情感场景用大眼特写捕捉动漫式情绪表达"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1448,7 +1527,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_chibi.png"
   },
   {
     "styleKey": "3d_toon_render",
@@ -1472,7 +1552,10 @@
       "referenceStyle": "《蜘蛛侠：平行宇宙》《双城之战》3D渲染，《龙珠超：布罗利》，《宝可梦》3D动画",
       "styleReferencePrompt": "3D NPR toon render animation, cel shading cartoon outline style, vibrant flat colors, anime aesthetic 3D character, clean precise line art outline stroke, stylized non-photorealistic render, Spider-verse animation quality, masterpiece 3D toon render, best quality, highly detailed stylized 3D animation",
       "characterStylePrompt": "3D NPR toon render character, cel shading with hard shadow edges, clean outline stroke, vibrant cartoon colors, anime proportion 3D model, high quality 3D animation, masterpiece quality toon render, best quality",
-      "facePromptRule": "本剧为【3D动画 / 卡通渲染】。faceReferencePrompt 必须以 \"3D toon render style\" 或 \"3D NPR cel shading character\" 开头，五官描述圆润夸张，例如：\"3D toon render style animated young woman, large expressive cel-shaded eyes, soft rounded cartoon face, clean outline stroke, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【3D动画 / 卡通渲染】。faceReferencePrompt 必须以 \"3D toon render style\" 或 \"3D NPR cel shading character\" 开头，五官描述圆润夸张，例如：\"3D toon render style animated young woman, large expressive cel-shaded eyes, soft rounded cartoon face, clean outline stroke, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"anime-style school classroom bright interior, vibrant flat colors, hard cel-shading shadow edges, clean outline strokes, cheerful cartoon atmosphere, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D NPR toon render animation / Spider-verse animation quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：cel-shading hard shadow / clean outline / flat color / NPR stylized surface。",
+      "scriptDialogueGuide": "【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待\"意外笑点\"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好动态跟镜+丰富景别切换，允许夸张喜剧动作，3D环境可使用大范围运镜（orbit/tracking），情感场景用精细表情特写配合丰富光线变化"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1518,7 +1601,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_3d_toon_render.png"
   },
   {
     "styleKey": "3d_japanese_npr",
@@ -1542,7 +1626,10 @@
       "referenceStyle": "《鬼灭之刃》剧场版3D，《进击的巨人》后期，ufotable制作水准，CloverWorks",
       "styleReferencePrompt": "Japanese 3D anime NPR render, ufotable studio quality masterpiece, soft cel shading with smooth gradients, beautiful detailed anime character, delicate atmospheric lighting, anime film quality 3D animation, high-end Japanese animation studio level, masterpiece, best quality, highly detailed Japanese 3D anime",
       "characterStylePrompt": "Japanese 3D NPR anime character, ufotable quality soft cel shading, beautiful detailed features, delicate hair with light refraction sheen, soft atmospheric lighting, high-end Japanese animation studio quality, masterpiece, best quality highly detailed",
-      "facePromptRule": "本剧为【日式3D漫染 / ufotable风格】。faceReferencePrompt 必须以 \"Japanese 3D NPR anime style\" 或 \"ufotable quality 3D anime character\" 开头，五官描述柔和精致，例如：\"Japanese 3D NPR anime style young woman, soft cel-shaded large eyes, delicate refined features, beautiful hair with light sheen, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【日式3D漫染 / ufotable风格】。faceReferencePrompt 必须以 \"Japanese 3D NPR anime style\" 或 \"ufotable quality 3D anime character\" 开头，五官描述柔和精致，例如：\"Japanese 3D NPR anime style young woman, soft cel-shaded large eyes, delicate refined features, beautiful hair with light sheen, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"sakura park spring afternoon, soft atmospheric natural lighting, delicate cherry blossom detail, beautiful environment ambiance, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Japanese 3D anime NPR render / ufotable studio quality masterpiece 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：soft cel shading / atmospheric glow / anime film quality surface / delicate material。",
+      "scriptDialogueGuide": "【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待\"意外笑点\"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好动态跟镜+丰富景别切换，允许夸张喜剧动作，3D环境可使用大范围运镜（orbit/tracking），情感场景用精细表情特写配合丰富光线变化"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1588,7 +1675,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_3d_japanese_npr.png"
   },
   {
     "styleKey": "3d_cyberpunk",
@@ -1610,9 +1698,12 @@
       "renderTechnique": "高质量3D渲染（路径追踪ray tracing），全息投影（holographic shader），赛博增强特效，屏幕空间反射",
       "textureStyle": "金属与混凝土（PBR材质），电路纹理（circuit board pattern），湿漉漉的雨水（wet surface shader），全息半透明",
       "referenceStyle": "《银翼杀手2049》《赛博朋克2077》游戏CG，《攻壳机动队》真人版",
-      "styleReferencePrompt": "3D cyberpunk render, neon-drenched rain-wet futuristic city streets, holographic display screens, high contrast teal magenta color scheme, volumetric fog atmosphere, cyber-enhanced character with implants, physically based rendering, ray tracing reflections, masterpiece 3D cyberpunk render, best quality, 8K ultra-detailed highly realistic",
-      "characterStylePrompt": "3D cyberpunk character render, futuristic cyber-enhanced body, neon teal magenta light color cast, high fidelity PBR metallic surfaces, circuit texture implants, rain-wet atmosphere, ray tracing quality, masterpiece 3D render, 8K quality, best quality",
-      "facePromptRule": "本剧为【赛博朋克 / 科幻】。faceReferencePrompt 必须以 \"cyberpunk futuristic\" 或 \"sci-fi\" 开头，配合科技改造特征，例如：\"cyberpunk futuristic female hacker, neon-lit face, glowing cyber eye, subtle facial implants, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "styleReferencePrompt": "3D cyberpunk render, neon-drenched rain-wet futuristic city streets, holographic display screens, high contrast teal magenta color scheme, volumetric fog atmosphere, cyber-enhanced character with implants, physically based rendering, ray tracing reflections, masterpiece 3D cyberpunk render, best quality",
+      "characterStylePrompt": "3D cyberpunk character render, futuristic cyber-enhanced body, neon teal magenta light color cast, high fidelity PBR metallic surfaces, circuit texture implants, rain-wet atmosphere, ray tracing quality, masterpiece 3D render, best quality",
+      "facePromptRule": "本剧为【赛博朋克 / 科幻】。faceReferencePrompt 必须以 \"cyberpunk futuristic\" 或 \"sci-fi\" 开头，配合科技改造特征，例如：\"cyberpunk futuristic female hacker, neon-lit face, glowing cyber eye, subtle facial implants, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"neon-drenched rain-wet city street at night, teal magenta color scheme shadows, volumetric fog atmosphere, holographic billboard reflections in wet ground, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D cyberpunk render / holographic display screens / ray tracing reflections 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：PBR metallic wet surface / neon glow / volumetric fog / ray tracing reflection。",
+      "scriptDialogueGuide": "【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待\"意外笑点\"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好从高处俯瞰霓虹城市（bird_eye），追逐场景快切+极端low_angle，全息界面用overlay视角，黑客场景用close_up手部+快速数字切换，孤独感用wide+体积光"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1627,7 +1718,7 @@
         "cyber",
         "masterpiece",
         "ray tracing",
-        "8K",
+        "",
         "highly detailed"
       ],
       "negativeKeywords": [
@@ -1659,7 +1750,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_3d_cyberpunk.png"
   },
   {
     "styleKey": "3d_realistic",
@@ -1678,11 +1770,14 @@
       "lightingStyle": "HDRI环境光（16K HDR），光线追踪（ray tracing全局光照），物理正确的阴影（contact shadow）",
       "era": "contemporary",
       "renderTechnique": "路径追踪渲染（path tracing），次表面散射皮肤（SSS），物理模拟布料（cloth simulation），Lumen实时全局光照",
-      "textureStyle": "超高精度PBR材质（8K texture maps），皮肤微孔细节（micro-detail normal map），服装纤维质感，环境反射",
+      "textureStyle": "超高精度PBR材质（ texture maps），皮肤微孔细节（micro-detail normal map），服装纤维质感，环境反射",
       "referenceStyle": "《最终幻想》CG电影，虚幻引擎5数字人，《矩阵》特效级别",
-      "styleReferencePrompt": "3D photorealistic render, Unreal Engine 5 quality, subsurface scattering human skin pores, path tracing global illumination, 8K texture detail, physically based rendering, hyper-realistic digital human, ray tracing reflections, masterpiece 3D photorealistic render, best quality, highly detailed realistic 3D, award-winning visual effects",
-      "characterStylePrompt": "3D photorealistic digital human character, Unreal Engine 5 MetaHuman quality, subsurface scattering realistic skin, detailed pore-level texture, realistic eye with corneal reflections, physically simulated hair strand, masterpiece photorealistic 3D, best quality, 8K",
-      "facePromptRule": "本剧为【3D写实 CG】。faceReferencePrompt 必须以 \"photorealistic 3D CG character\" 或 \"Unreal Engine 5 digital human\" 开头，例如：\"photorealistic 3D CG character, young Asian male, high-detail subsurface skin texture, realistic iris pattern, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "styleReferencePrompt": "3D photorealistic render, Unreal Engine 5 quality, subsurface scattering human skin pores, path tracing global illumination, physically based rendering, hyper-realistic digital human, ray tracing reflections, masterpiece 3D photorealistic render, best quality, highly detailed realistic 3D, award-winning visual effects",
+      "characterStylePrompt": "3D photorealistic digital human character, Unreal Engine 5 MetaHuman quality, subsurface scattering realistic skin, detailed pore-level texture, realistic eye with corneal reflections, physically simulated hair strand, masterpiece photorealistic 3D, best quality",
+      "facePromptRule": "本剧为【3D写实 CG】。faceReferencePrompt 必须以 \"photorealistic 3D CG character\" 或 \"Unreal Engine 5 digital human\" 开头，例如：\"photorealistic 3D CG character, young Asian male, high-detail subsurface skin texture, realistic iris pattern, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"modern luxury apartment interior, detailed surface materials wood and glass, HDRI studio lighting, physically based rendering quality, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D photorealistic render / Unreal Engine 5 quality / subsurface scattering 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：PBR material / subsurface scattering / HDRI reflection / detailed texture maps。",
+      "scriptDialogueGuide": "【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待\"意外笑点\"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好动态跟镜+丰富景别切换，允许夸张喜剧动作，3D环境可使用大范围运镜（orbit/tracking），情感场景用精细表情特写配合丰富光线变化"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1695,7 +1790,7 @@
         "PBR",
         "masterpiece",
         "best quality",
-        "8K",
+        "",
         "ultra-detailed",
         "realistic"
       ],
@@ -1730,7 +1825,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_3d_realistic.png"
   },
   {
     "styleKey": "3d_fantasy",
@@ -1752,9 +1848,12 @@
       "renderTechnique": "高质量3D渲染（PBR+NPR混合），粒子特效（particle system），体积光雾气（volumetric clouds），仙术光轨",
       "textureStyle": "PBR丝绸与金属（仙服），仙器光泽（magical glow），云雾体积感，灵气粒子散落",
       "referenceStyle": "《哪吒之魔童降世》《白蛇：缘起》《雄狮少年》，国产玄幻3D动画顶级水准",
-      "styleReferencePrompt": "3D Chinese xianxia fantasy render, immortal cultivation divine realm, magical spiritual aura particle effects, ancient Chinese mythology, volumetric cloud sea heaven, purple gold color palette epic scale, divine immortal cultivation aesthetic, masterpiece 3D xianxia render, best quality, 8K highly detailed Chinese fantasy 3D animation",
+      "styleReferencePrompt": "3D Chinese xianxia fantasy render, immortal cultivation divine realm, magical spiritual aura particle effects, ancient Chinese mythology, volumetric cloud sea heaven, purple gold color palette epic scale, divine immortal cultivation aesthetic, masterpiece 3D xianxia render, best quality",
       "characterStylePrompt": "3D Chinese xianxia immortal character, elaborate flowing celestial robes with PBR silk texture, magical spiritual weapon aura glow, ancient refined features, divine ethereal expression, masterpiece 3D fantasy render, best quality, highly detailed",
-      "facePromptRule": "本剧为【3D东方玄幻/仙侠】。faceReferencePrompt 以剧情决定：东方神话仙侠以 \"ancient Chinese xianxia immortal\" 或 \"Chinese mythological deity 3D character\" 开头；西方奇幻以 \"high fantasy 3D character\" + 种族/身份词开头，例如：\"high fantasy 3D character elven warrior, pointed ears, ethereal otherworldly beauty, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【3D东方玄幻/仙侠】。faceReferencePrompt 以剧情决定：东方神话仙侠以 \"ancient Chinese xianxia immortal\" 或 \"Chinese mythological deity 3D character\" 开头；西方奇幻以 \"high fantasy 3D character\" + 种族/身份词开头，例如：\"high fantasy 3D character elven warrior, pointed ears, ethereal otherworldly beauty, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"immortal mountain cloud sea realm, glowing spiritual aura effects purple gold, volumetric cloud atmosphere layers, divine realm epic scale environment, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D Chinese xianxia fantasy render / immortal cultivation divine realm 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：3D PBR silk material / magical particle glow / volumetric cloud / deity ornament detail。",
+      "scriptDialogueGuide": "【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待\"意外笑点\"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性",
+      "shotStyleGuide": "masterShotPlan镜头语言：仙侠场景必须有bird_eye展示仙境宏大，法术释放用wide_shot+特效overlay，飞行场景用追镜（tracking），角色对峙用dramatic low_angle，云海场景必须有大范围orbital运镜"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1769,7 +1868,7 @@
         "particles",
         "masterpiece",
         "best quality",
-        "8K",
+        "",
         "highly detailed"
       ],
       "negativeKeywords": [
@@ -1801,7 +1900,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_3d_fantasy.png"
   },
   {
     "styleKey": "3d_british",
@@ -1825,7 +1925,10 @@
       "referenceStyle": "《了不起的狐狸爸爸》，《克里斯麦奇历险记》，皮克斯/ILM制作标准",
       "styleReferencePrompt": "3D Victorian British style render, Pixar quality animation masterpiece, warm brown aged leather texture, brass copper steampunk details, foggy London atmosphere, Victorian gentleman aesthetic, soft warm candlelight lighting, best quality, highly detailed Victorian 3D animation, masterpiece",
       "characterStylePrompt": "3D Victorian British animation character, Pixar quality render, Victorian era costume with leather and brass details, warm candlelight on face, refined gentleman or lady expression, masterpiece quality 3D British animation, best quality highly detailed",
-      "facePromptRule": "本剧为【3D英式复古 / 维多利亚风格】。faceReferencePrompt 必须以 \"3D Pixar-style Victorian character\" 或 \"3D animated Victorian British character\" 开头，五官描述圆润精致，例如：\"3D Pixar-style Victorian British gentleman, distinguished face with kind eyes, well-groomed mustache, warm candlelight on face, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【3D英式复古 / 维多利亚风格】。faceReferencePrompt 必须以 \"3D Pixar-style Victorian character\" 或 \"3D animated Victorian British character\" 开头，五官描述圆润精致，例如：\"3D Pixar-style Victorian British gentleman, distinguished face with kind eyes, well-groomed mustache, warm candlelight on face, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"foggy London study room interior, warm candlelight atmosphere, aged leather armchair and mahogany desk, brass lamp details, cozy Victorian ambiance, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D Victorian British style render / Pixar quality animation masterpiece 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：aged leather PBR / brass metal / fog atmosphere / warm candle light SSS。",
+      "scriptDialogueGuide": "【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待\"意外笑点\"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好动态跟镜+丰富景别切换，允许夸张喜剧动作，3D环境可使用大范围运镜（orbit/tracking），情感场景用精细表情特写配合丰富光线变化"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1871,7 +1974,8 @@
       "bilibili",
       "douyin",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_3d_british.png"
   },
   {
     "styleKey": "3d_chibi",
@@ -1895,7 +1999,10 @@
       "referenceStyle": "《Pokemon》3D，《动物之森》，Nintendo Switch游戏美术，《Splatoon》风格",
       "styleReferencePrompt": "3D chibi Q-version cute render, big head small body kawaii character, candy pastel colors, Nintendo Switch game aesthetic quality, adorable rounded cartoon render, super deformed proportions, cheerful expression, masterpiece 3D chibi quality, best quality, highly detailed kawaii 3D animation",
       "characterStylePrompt": "3D chibi Q-version character, large round head tiny body proportion, big shiny 3D eyes with multiple highlights, smooth rounded features, candy color palette, Nintendo quality 3D render, kawaii aesthetic, masterpiece chibi quality, best quality",
-      "facePromptRule": "本剧为【3D Q版 / Chibi 风格】。faceReferencePrompt 必须以 \"3D chibi cartoon style\" 或 \"3D Q-version kawaii character\" 开头，例如：\"3D chibi cartoon style cute girl, oversized round head, tiny body, big 3D shiny dot eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【3D Q版 / Chibi 风格】。faceReferencePrompt 必须以 \"3D chibi cartoon style\" 或 \"3D Q-version kawaii character\" 开头，例如：\"3D chibi cartoon style cute girl, oversized round head, tiny body, big 3D shiny dot eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"cozy kawaii bedroom interior, pastel candy pink and blue colors, round simplified furniture shapes, cheerful bright lighting atmosphere, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（3D chibi Q-version cute render / Nintendo Switch game aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：smooth cel-shading / pastel fill / simplified 3D surface / candy color。",
+      "scriptDialogueGuide": "【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待\"意外笑点\"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好动态跟镜+丰富景别切换，允许夸张喜剧动作，3D环境可使用大范围运镜（orbit/tracking），情感场景用精细表情特写配合丰富光线变化"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -1943,7 +2050,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_3d_chibi.png"
   },
   {
     "styleKey": "3d_voxel",
@@ -1967,7 +2075,10 @@
       "referenceStyle": "Minecraft游戏，Roblox，体素艺术（MagicaVoxel），Crossy Road风格",
       "styleReferencePrompt": "voxel art 3D style render, Minecraft aesthetic blocky cubic world, pixel voxel characters, bright primary saturated colors, low-poly game look, sandbox game environment, cubic block design, masterpiece voxel art quality, best quality, highly detailed voxel render, game quality",
       "characterStylePrompt": "voxel 3D character, cubic blocky design, pixel face texture, simple geometric body, bright primary color palette, Minecraft player skin style, masterpiece voxel art quality, best quality",
-      "facePromptRule": "本剧为【体素 / 像素 3D 风格】。faceReferencePrompt 必须以 \"voxel art 3D character\" 或 \"Minecraft style character\" 开头，例如：\"voxel art 3D character, blocky cubic head, simple pixel 8-bit face, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【体素 / 像素 3D 风格】。faceReferencePrompt 必须以 \"voxel art 3D character\" 或 \"Minecraft style character\" 开头，例如：\"voxel art 3D character, blocky cubic head, simple pixel 8-bit face, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"fantasy mountain landscape, bright saturated primary block colors, cubic block geometry environment, sandbox game feel, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（voxel art 3D style render / Minecraft aesthetic blocky cubic world 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：cubic voxel texture / limited pixel palette / block geometry / game color。",
+      "scriptDialogueGuide": "【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待\"意外笑点\"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好动态跟镜+丰富景别切换，允许夸张喜剧动作，3D环境可使用大范围运镜（orbit/tracking），情感场景用精细表情特写配合丰富光线变化"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2013,7 +2124,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_3d_voxel.png"
   },
   {
     "styleKey": "3d_mobile_game",
@@ -2035,9 +2147,12 @@
       "renderTechnique": "手游级NPR 3D渲染，轮廓描边（outline），赛璐璐着色器，骨骼动画权重精细",
       "textureStyle": "精致卡通材质（手绘质感PBR），金属光泽（metallic sheen），布料飘动（cloth simulation），无写实噪点",
       "referenceStyle": "《原神》《崩坏：星穹铁道》《碧蓝航线》，米哈游/bilibili Games手游美术风格",
-      "styleReferencePrompt": "mobile game 3D style, Genshin Impact anime aesthetic quality, anime game character NPR toon render, vibrant saturated colors, highly detailed fantasy costume design, game-quality character render, Chinese mobile game art standard, beautiful idealized character, masterpiece mobile game render, best quality, 8K highly detailed",
+      "styleReferencePrompt": "mobile game 3D style, Genshin Impact anime aesthetic quality, anime game character NPR toon render, vibrant saturated colors, highly detailed fantasy costume design, game-quality character render, Chinese mobile game art standard, beautiful idealized character, masterpiece mobile game render, best quality",
       "characterStylePrompt": "mobile game 3D character, Genshin Impact quality anime game style, detailed ornate costume with gem and metal details, beautiful idealized face, rim light outline, NPR toon shading, masterpiece mobile game quality, best quality, highly detailed",
-      "facePromptRule": "本剧为【3D手游 / 原神风格】。faceReferencePrompt 必须以 \"mobile game 3D anime character\" 或 \"Genshin Impact style 3D character\" 开头，五官描述美型精致，例如：\"mobile game 3D anime character, beautiful idealized female character, large detailed eyes, refined features, Genshin Impact art style, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【3D手游 / 原神风格】。faceReferencePrompt 必须以 \"mobile game 3D anime character\" 或 \"Genshin Impact style 3D character\" 开头，五官描述美型精致，例如：\"mobile game 3D anime character, beautiful idealized female character, large detailed eyes, refined features, Genshin Impact art style, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"fantasy ancient city street at dusk, vibrant saturated colors, beautiful game environment quality, detailed architecture and lighting, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（mobile game 3D style / Genshin Impact anime aesthetic quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：game quality NPR material / rim light outline / vibrant toon surface / ornate costume texture。",
+      "scriptDialogueGuide": "【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待\"意外笑点\"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好动态跟镜+丰富景别切换，允许夸张喜剧动作，3D环境可使用大范围运镜（orbit/tracking），情感场景用精细表情特写配合丰富光线变化"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2051,7 +2166,7 @@
         "polished",
         "masterpiece",
         "best quality",
-        "8K",
+        "",
         "beautiful"
       ],
       "negativeKeywords": [
@@ -2084,7 +2199,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_3d_mobile_game.png"
   },
   {
     "styleKey": "3d_disney",
@@ -2108,7 +2224,10 @@
       "referenceStyle": "《飞屋环游记》《冰雪奇缘》《寻梦环游记》，皮克斯/迪士尼电影制作最高标准",
       "styleReferencePrompt": "Pixar Disney 3D animation film style, rounded expressive character design, warm cinematic lighting, highly expressive 3D animated character, RenderMan quality render, family friendly heartwarming aesthetic, emotional storytelling visual, masterpiece Pixar quality 3D render, best quality, highly detailed Disney animation",
       "characterStylePrompt": "Pixar Disney 3D animated character, round soft features with large expressive eyes, warm skin SSS subsurface scattering, rich emotional expression, clean stylized design, Pixar quality render, masterpiece Disney animation quality, best quality, highly detailed",
-      "facePromptRule": "本剧为【3D迪士尼/皮克斯风格】。faceReferencePrompt 必须以 \"3D Pixar Disney animated character\" 开头，五官描述圆润富有表情，例如：\"3D Pixar Disney animated young woman, large expressive emotionally rich eyes, soft rounded cheeks, warm skin tones, Pixar quality render, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【3D迪士尼/皮克斯风格】。faceReferencePrompt 必须以 \"3D Pixar Disney animated character\" 开头，五官描述圆润富有表情，例如：\"3D Pixar Disney animated young woman, large expressive emotionally rich eyes, soft rounded cheeks, warm skin tones, Pixar quality render, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"enchanted forest clearing at golden hour, warm sunlight filtering through trees, emotional heartwarming atmosphere, family friendly environment, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Pixar Disney 3D animation film style / RenderMan quality render 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：SSS skin / physically simulated cloth / HDRI soft light / Pixar quality surface。",
+      "scriptDialogueGuide": "【视觉风格：3D动画/CG】\n- 台词表达介于真人和2D动漫之间，情绪明确但不过度夸张\n- 可以使用幽默和戏剧性的反差（3D动画观众期待\"意外笑点\"）\n- 角色表情描写要细腻（挑眉、嘴角微抬、眼神闪烁），配合3D渲染的细节优势\n- 动作可以有适度的夸张，但保持物理合理性",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好动态跟镜+丰富景别切换，允许夸张喜剧动作，3D环境可使用大范围运镜（orbit/tracking），情感场景用精细表情特写配合丰富光线变化"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2155,7 +2274,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_3d_disney.png"
   },
   {
     "styleKey": "chinese_ink",
@@ -2179,7 +2299,10 @@
       "referenceStyle": "齐白石、徐悲鸿国画，《大圣归来》水墨片段，《一人之下》开场，《大鱼海棠》",
       "styleReferencePrompt": "Chinese ink wash painting masterpiece, sumi-e calligraphy brushstroke style, traditional black and white watercolor, rice paper xuan paper texture, ink diffusion bloom effect, minimalist negative space composition, classical Chinese painting grand master quality, highly detailed ink painting, museum quality traditional Chinese ink art, best quality",
       "characterStylePrompt": "Chinese ink wash painting character portrait, elegant calligraphy brushstroke line, ink wash monochrome with subtle ochre accent, rice paper background, calligraphy-quality line work, traditional Chinese painting master level, highly detailed ink illustration, best quality, masterpiece",
-      "facePromptRule": "本剧为【中国水墨画风】。faceReferencePrompt 必须以 \"Chinese ink wash painting style\" 开头，描述水墨线描五官，例如：\"Chinese ink wash painting style ancient scholar, elegant calligraphy brushstroke face, minimalist ink features, white rice paper background, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【中国水墨画风】。faceReferencePrompt 必须以 \"Chinese ink wash painting style\" 开头，描述水墨线描五官，例如：\"Chinese ink wash painting style ancient scholar, elegant calligraphy brushstroke face, minimalist ink features, white rice paper background, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"misty mountain pavilion with ancient pine trees, soft ink wash brushstroke texture, traditional ink black white grey tones, rice paper negative space composition, highly detailed, masterpiece\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Chinese ink wash painting masterpiece / sumi-e calligraphy brushstroke style 等）已由系统自动注入，禁止重复写。\ntextureStyle 必须使用水墨画材质词：ink wash edges / brush stroke texture / rice paper texture / ink diffusion bloom。",
+      "scriptDialogueGuide": "【视觉风格：中国传统艺术/水墨】\n- 台词与设定时代一致，禁止与该时代不符的用语（古代背景不用现代网络用语）\n- 称谓与时代一致（古装用陛下/朕/大人/公子等，民国用先生/小姐/太太等）\n- 情感表达方式符合时代感，可用隐喻与意象\n- 动作描写：服装/礼仪符合设定时代",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好对称构图+诗意空镜，情感场景用长停留中景，水墨/工笔风格偏好大量负空间构图（rule_of_thirds+negative_space），避免快速切换破坏水墨写意感"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2226,7 +2349,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_chinese_ink.png"
   },
   {
     "styleKey": "chinese_style",
@@ -2250,7 +2374,10 @@
       "referenceStyle": "《大话西游》插画，《仙剑》概念艺术，《原神》角色原画，现代国风游戏美术顶级水准",
       "styleReferencePrompt": "Chinese gongbi traditional painting style illustration, vibrant mineral pigment colors, meticulous detailed line art, silk texture background, gold accent ornaments, ancient Chinese aesthetic mythology, fantasy cultivation art style, masterpiece quality Chinese traditional illustration, highly detailed museum quality Chinese art, best quality",
       "characterStylePrompt": "Chinese traditional style character illustration, ancient Chinese beauty in elaborate hanfu, intricate hair ornament, vibrant mineral color palette, silk texture costume, gold detail accents, traditional Chinese illustration quality, masterpiece Chinese art, best quality, highly detailed",
-      "facePromptRule": "本剧为【中国古风插画】。faceReferencePrompt 必须以 \"Chinese traditional gongbi illustration style\" 开头，描述古风插画五官，例如：\"Chinese traditional gongbi illustration style ancient beauty, delicate painted features, silk fabric background, gold ornaments in hair, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【中国古风插画】。faceReferencePrompt 必须以 \"Chinese traditional gongbi illustration style\" 开头，描述古风插画五官，例如：\"Chinese traditional gongbi illustration style ancient beauty, delicate painted features, silk fabric background, gold ornaments in hair, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"red lanterns and palace corridor walls, vibrant mineral pigment atmosphere, gold accent architectural ornaments, silk texture background, soft warm light, highly detailed, masterpiece\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Chinese gongbi traditional painting style / mineral pigments azure crimson 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：mineral pigment / gongbi line art / silk texture / gold leaf accent。",
+      "scriptDialogueGuide": "【视觉风格：中国传统艺术/水墨】\n- 台词与设定时代一致，禁止与该时代不符的用语（古代背景不用现代网络用语）\n- 称谓与时代一致（古装用陛下/朕/大人/公子等，民国用先生/小姐/太太等）\n- 情感表达方式符合时代感，可用隐喻与意象\n- 动作描写：服装/礼仪符合设定时代",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好对称构图+诗意空镜，情感场景用长停留中景，水墨/工笔风格偏好大量负空间构图（rule_of_thirds+negative_space），避免快速切换破坏水墨写意感"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2296,7 +2423,8 @@
       "douyin",
       "bilibili",
       "hongguo"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_chinese_style.png"
   },
   {
     "styleKey": "2d_gongbi",
@@ -2320,7 +2448,10 @@
       "referenceStyle": "唐代仕女图（周昉《簪花仕女图》），宋代院体画，《清明上河图》，现代工笔名家刘大为",
       "styleReferencePrompt": "Chinese gongbi fine brushwork painting masterpiece, meticulous precision line art, vibrant mineral pigments azure crimson ochre gold, silk xuan paper texture background, Tang Song dynasty classical painting aesthetic, traditional Chinese figure painting grand master quality, highly detailed museum quality gongbi illustration, best quality",
       "characterStylePrompt": "Chinese gongbi fine brushwork character, Tang dynasty beauty in court attire, meticulously painted delicate features, mineral pigment vibrant color palette, silk texture embroidery costume, gold hairpin ornament, masterpiece gongbi quality, museum level traditional Chinese art, best quality",
-      "facePromptRule": "本剧为【2D工笔重彩】。faceReferencePrompt 必须以 \"Chinese gongbi fine brushwork painting style\" 开头，描述工笔画五官，例如：\"Chinese gongbi fine brushwork painting style Tang dynasty beauty, meticulously painted delicate features, mineral pigment color palette, silk texture background, gold ornament detail, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【2D工笔重彩】。faceReferencePrompt 必须以 \"Chinese gongbi fine brushwork painting style\" 开头，描述工笔画五官，例如：\"Chinese gongbi fine brushwork painting style Tang dynasty beauty, meticulously painted delicate features, mineral pigment color palette, silk texture background, gold ornament detail, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"ancient courtyard pavilion scene, meticulous line detail, vibrant azure crimson ochre atmosphere, silk weave background texture, Tang dynasty classical ambiance, highly detailed, masterpiece\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Chinese gongbi fine brushwork painting masterpiece 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：gongbi ink line / mineral pigment wash / silk weave texture。",
+      "scriptDialogueGuide": "【视觉风格：中国传统艺术/水墨】\n- 台词与设定时代一致，禁止与该时代不符的用语（古代背景不用现代网络用语）\n- 称谓与时代一致（古装用陛下/朕/大人/公子等，民国用先生/小姐/太太等）\n- 情感表达方式符合时代感，可用隐喻与意象\n- 动作描写：服装/礼仪符合设定时代",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好对称构图+诗意空镜，情感场景用长停留中景，水墨/工笔风格偏好大量负空间构图（rule_of_thirds+negative_space），避免快速切换破坏水墨写意感"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2367,7 +2498,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_gongbi.png"
   },
   {
     "styleKey": "2d_watercolor",
@@ -2391,7 +2523,10 @@
       "referenceStyle": "欧式水彩插画（Erin Hanson），日式水彩少女画风，Studio Ghibli水彩背景，儿童书插画",
       "styleReferencePrompt": "watercolor illustration masterpiece, transparent paint wash technique, soft bleeding colors wet-on-wet, cold press paper texture, delicate artistic brushwork, gentle color gradient, clean sketch ink line with watercolor fill, highly detailed watercolor illustration, best quality, professional watercolor artist level, masterpiece",
       "characterStylePrompt": "watercolor illustration character, soft translucent skin tones gentle washes, delicate watercolor line art, paper texture visible, tender gentle expression, pastel watercolor palette, masterpiece watercolor quality, best quality, professional illustration",
-      "facePromptRule": "本剧为【2D水彩插画】。faceReferencePrompt 必须以 \"watercolor illustration style\" 开头，描述水彩画五官，例如：\"watercolor illustration style young woman, soft translucent skin tones, gentle watercolor wash texture, delicate features, white paper background visible, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【2D水彩插画】。faceReferencePrompt 必须以 \"watercolor illustration style\" 开头，描述水彩画五官，例如：\"watercolor illustration style young woman, soft translucent skin tones, gentle watercolor wash texture, delicate features, white paper background visible, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"soft blooming color wash scene, cold press paper texture visible, hand-painted gentle wet-on-wet technique, transparent color layers, highly detailed, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（watercolor illustration masterpiece / transparent paint wash technique 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：watercolor paper texture / color bloom granulation / brushstroke wash。",
+      "scriptDialogueGuide": "【视觉风格：2D插画/艺术风格】\n- 台词风格需与视觉风格协调，保持整体创作基调统一\n- 根据本剧艺术风格的气质（奇幻/温馨/悬疑/诗意等）调整台词的文学性",
+      "shotStyleGuide": "masterShotPlan镜头语言：根据本风格气质选择构图策略，偏静态插画风格用长停留构图，偏动态漫画风格用景别快切"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2438,7 +2573,8 @@
       "bilibili",
       "douyin",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_watercolor.png"
   },
   {
     "styleKey": "2d_pixel",
@@ -2462,7 +2598,10 @@
       "referenceStyle": "超级马里奥（SNES版）、勇者斗恶龙、洛克人，《铲子骑士》精品像素艺术",
       "styleReferencePrompt": "pixel art 16-bit retro game style, limited color palette, chunky clean pixels, classic JRPG aesthetic, sprite art character design, old school video game look, masterpiece pixel art quality, best quality highly detailed pixel illustration, game quality",
       "characterStylePrompt": "pixel art 16-bit game character sprite, clear pixel block design, limited color palette, expressive pixel dot eyes, classic RPG character design, masterpiece pixel art quality, best quality, highly detailed",
-      "facePromptRule": "本剧为【像素 / 复古游戏风格】。faceReferencePrompt 必须以 \"pixel art 16-bit game character\" 开头，例如：\"pixel art 16-bit game character, blocky simplified features, limited color palette, expressive pixel dot eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【像素 / 复古游戏风格】。faceReferencePrompt 必须以 \"pixel art 16-bit game character\" 开头，例如：\"pixel art 16-bit game character, blocky simplified features, limited color palette, expressive pixel dot eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"retro JRPG game indoor scene, 16-bit style chunky pixel blocks, limited color palette, tile map design, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（pixel art 16-bit retro game style / limited color palette 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：pixel blocks / limited palette / dithering pattern / tile texture。",
+      "scriptDialogueGuide": "【视觉风格：像素/复古游戏】\n- 台词简短有力，模拟游戏对话框风格（单句不超过10个字）\n- 可使用\"...\"省略号表达沉默和犹豫，增强像素游戏叙事感\n- 允许游戏化表达（\"获得了XX\"\"HP-100\"等梗），但不滥用\n- 叙事节奏明快，像游戏剧情推进一样高效",
+      "shotStyleGuide": "masterShotPlan镜头语言：根据本风格气质选择构图策略，偏静态插画风格用长停留构图，偏动态漫画风格用景别快切"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2508,7 +2647,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_pixel.png"
   },
   {
     "styleKey": "2d_simple",
@@ -2532,7 +2672,10 @@
       "referenceStyle": "极简主义插画（Christoph Niemann），《小王子》圣-埃克苏佩里线稿，Bloomberg等商业插图风格",
       "styleReferencePrompt": "minimalist line art illustration masterpiece, simple clean elegant strokes, generous negative space, black and white sparse drawing, editorial magazine illustration style, high-end minimalist aesthetic, best quality, highly detailed minimalist illustration, professional commercial art quality, masterpiece",
       "characterStylePrompt": "minimalist line art character, simple elegant line strokes, minimal detail, generous white space, editorial style composition, high-end minimalist illustration, masterpiece quality minimalist art, best quality",
-      "facePromptRule": "本剧为【极简线条插画风格】。faceReferencePrompt 必须以 \"minimalist line art style character\" 开头，例如：\"minimalist line art style character, simple elegant strokes, few essential lines, white background, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【极简线条插画风格】。faceReferencePrompt 必须以 \"minimalist line art style character\" 开头，例如：\"minimalist line art style character, simple elegant strokes, few essential lines, white background, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"sparse simple stroke composition, generous white negative space, editorial minimalist design, black and white, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（minimalist line art illustration masterpiece / simple clean elegant strokes 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：clean white paper / single line stroke / minimal detail / negative space。",
+      "scriptDialogueGuide": "【视觉风格：2D插画/艺术风格】\n- 台词风格需与视觉风格协调，保持整体创作基调统一\n- 根据本剧艺术风格的气质（奇幻/温馨/悬疑/诗意等）调整台词的文学性",
+      "shotStyleGuide": "masterShotPlan镜头语言：根据本风格气质选择构图策略，偏静态插画风格用长停留构图，偏动态漫画风格用景别快切"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2579,7 +2722,8 @@
       "bilibili",
       "wechat_mini",
       "douyin"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_simple.png"
   },
   {
     "styleKey": "2d_sketch",
@@ -2603,7 +2747,10 @@
       "referenceStyle": "速写插画（Gustav Klimt素描），素描人体，手账风格（Moleskine），Andrew Loomis人体素描",
       "styleReferencePrompt": "pencil sketch illustration masterpiece, hand-drawn graphite style, paper texture overlay, loose gestural drawing strokes, sketchbook art quality, monochrome line work, cross-hatching shading technique, highly detailed pencil illustration, best quality professional sketch art, masterpiece",
       "characterStylePrompt": "pencil sketch character illustration, graphite hand-drawn portrait, paper texture visible, expressive gestural lines, hatching shadow technique, sketchbook aesthetic, masterpiece pencil illustration quality, best quality, highly detailed",
-      "facePromptRule": "本剧为【素描 / 手绘铅笔风格】。faceReferencePrompt 必须以 \"pencil sketch illustration style\" 开头，例如：\"pencil sketch illustration style character, graphite line portrait, paper texture background, hatching shadow detail, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【素描 / 手绘铅笔风格】。faceReferencePrompt 必须以 \"pencil sketch illustration style\" 开头，例如：\"pencil sketch illustration style character, graphite line portrait, paper texture background, hatching shadow detail, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"graphite hand-drawn interior scene, paper texture visible, cross-hatching shadow detail, gestural loose pencil strokes, sketchbook aesthetic, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（pencil sketch illustration masterpiece / hand-drawn graphite style 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：graphite pencil texture / paper fiber / hatching lines / erasure mark。",
+      "scriptDialogueGuide": "【视觉风格：2D插画/艺术风格】\n- 台词风格需与视觉风格协调，保持整体创作基调统一\n- 根据本剧艺术风格的气质（奇幻/温馨/悬疑/诗意等）调整台词的文学性",
+      "shotStyleGuide": "masterShotPlan镜头语言：根据本风格气质选择构图策略，偏静态插画风格用长停留构图，偏动态漫画风格用景别快切"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2648,7 +2795,8 @@
       "bilibili",
       "wechat_mini",
       "douyin"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_sketch.png"
   },
   {
     "styleKey": "2d_british_comic",
@@ -2672,7 +2820,10 @@
       "referenceStyle": "漫威《蜘蛛侠》漫画原版，DC《蝙蝠侠》，Andy Warhol波普艺术，Jack Kirby画风",
       "styleReferencePrompt": "comic book illustration masterpiece, bold thick black outline, pop art Ben-Day halftone dots, vibrant primary colors, Marvel DC western comic aesthetic, dynamic action composition, speech bubble comic panel, best quality, highly detailed comic book art, masterpiece",
       "characterStylePrompt": "western comic book character, bold thick outline, flat pop art colors, Ben-Day dot texture, heroic dynamic pose, Marvel Jack Kirby style illustration, masterpiece comic art quality, best quality, highly detailed",
-      "facePromptRule": "本剧为【英美漫画 / 波普漫画风格】。faceReferencePrompt 必须以 \"western comic book style\" 或 \"Marvel DC comic book style\" 开头，例如：\"western comic book style hero, square jaw, bold feature lines, heroic determined expression, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【英美漫画 / 波普漫画风格】。faceReferencePrompt 必须以 \"western comic book style\" 或 \"Marvel DC comic book style\" 开头，例如：\"western comic book style hero, square jaw, bold feature lines, heroic determined expression, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"bold thick black outline comic panel composition, Ben-Day halftone dots shadow, vibrant primary pop art colors, dynamic action scene, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（comic book illustration masterpiece / Marvel DC western comic aesthetic 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：Ben-Day dots / bold ink outline / flat primary color / halftone shadow。",
+      "scriptDialogueGuide": "【视觉风格：2D插画/艺术风格】\n- 台词风格需与视觉风格协调，保持整体创作基调统一\n- 根据本剧艺术风格的气质（奇幻/温馨/悬疑/诗意等）调整台词的文学性",
+      "shotStyleGuide": "masterShotPlan镜头语言：根据本风格气质选择构图策略，偏静态插画风格用长停留构图，偏动态漫画风格用景别快切"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2718,7 +2869,8 @@
       "douyin",
       "bilibili",
       "kuaishou"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_british_comic.png"
   },
   {
     "styleKey": "2d_rubber_hose",
@@ -2742,7 +2894,10 @@
       "referenceStyle": "费利克斯猫，早期迪士尼蒸汽船威利，贝蒂布普，《Cuphead》游戏风格（最高参考标准）",
       "styleReferencePrompt": "rubber hose animation style masterpiece, 1930s vintage cartoon aesthetic, Cuphead game art quality, bendy rubber limbs, round circle pie-cut eyes, black white film grain texture, vintage cartoon retro feel, cheerful bouncy character design, best quality, highly detailed vintage cartoon illustration, masterpiece",
       "characterStylePrompt": "rubber hose vintage cartoon character, Cuphead art style, bendy elastic limbs, large round pie-cut eyes, simple round body, black white sepia palette, film grain texture, masterpiece vintage cartoon quality, best quality",
-      "facePromptRule": "本剧为【橡皮管 / 1930年代复古卡通风格】。faceReferencePrompt 必须以 \"rubber hose vintage cartoon style\" 或 \"Cuphead art style character\" 开头，例如：\"rubber hose vintage cartoon style character, round head, pie-cut circle eyes, big grin, bendy limbs, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【橡皮管 / 1930年代复古卡通风格】。faceReferencePrompt 必须以 \"rubber hose vintage cartoon style\" 或 \"Cuphead art style character\" 开头，例如：\"rubber hose vintage cartoon style character, round head, pie-cut circle eyes, big grin, bendy limbs, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"1930s jazz club interior, black white film grain texture, simple two-color vintage palette, cheerful retro bouncy feel, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（rubber hose animation style masterpiece / Cuphead game art quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：film grain / halftone vintage / black white sepia / pie-cut eye reflection。",
+      "scriptDialogueGuide": "【视觉风格：2D插画/艺术风格】\n- 台词风格需与视觉风格协调，保持整体创作基调统一\n- 根据本剧艺术风格的气质（奇幻/温馨/悬疑/诗意等）调整台词的文学性",
+      "shotStyleGuide": "masterShotPlan镜头语言：根据本风格气质选择构图策略，偏静态插画风格用长停留构图，偏动态漫画风格用景别快切"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2788,7 +2943,8 @@
       "bilibili",
       "douyin",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_rubber_hose.png"
   },
   {
     "styleKey": "2d_golden",
@@ -2812,7 +2968,10 @@
       "referenceStyle": "古典欧洲宫廷画（克利姆特金色画风）、奢侈品广告视觉、中国皇家龙袍纹样",
       "styleReferencePrompt": "golden luxury aesthetic illustration masterpiece, ornate gold decorations gold leaf texture, warm golden radiant light god rays, baroque royal palace opulence, metallic sheen and gloss, rich elegant color palette, Gustav Klimt golden art style inspiration, highly detailed luxury art, best quality, masterpiece golden illustration, award-winning",
       "characterStylePrompt": "golden luxury aesthetic character illustration, ornate gold costume with precious gem accents, warm golden light glow on skin, metallic gold hair ornament, luxurious elegant design, masterpiece golden art quality, best quality, highly detailed",
-      "facePromptRule": "本剧为【黄金光堂 / 奢华金色风格】。faceReferencePrompt 必须以 \"golden luxury art style character\" 或 \"Gustav Klimt inspired golden aesthetic character\" 开头，例如：\"golden luxury art style character, radiant golden light on face, ornate gold crown and jewelry, aristocratic beauty, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【黄金光堂 / 奢华金色风格】。faceReferencePrompt 必须以 \"golden luxury art style character\" 或 \"Gustav Klimt inspired golden aesthetic character\" 开头，例如：\"golden luxury art style character, radiant golden light on face, ornate gold crown and jewelry, aristocratic beauty, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"baroque royal palace grand hall, warm golden radiant light god rays, gold leaf texture ornament, metallic sheen surfaces, opulent rich atmosphere, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（golden luxury aesthetic illustration masterpiece / Gustav Klimt golden art style 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：gold leaf texture / metallic specular / velvet surface / marble floor。",
+      "scriptDialogueGuide": "【视觉风格：2D插画/艺术风格】\n- 台词风格需与视觉风格协调，保持整体创作基调统一\n- 根据本剧艺术风格的气质（奇幻/温馨/悬疑/诗意等）调整台词的文学性",
+      "shotStyleGuide": "masterShotPlan镜头语言：根据本风格气质选择构图策略，偏静态插画风格用长停留构图，偏动态漫画风格用景别快切"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2858,7 +3017,8 @@
       "douyin",
       "hongguo",
       "bilibili"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_2d_golden.png"
   },
   {
     "styleKey": "western_film",
@@ -2882,7 +3042,10 @@
       "referenceStyle": "漫威MCU（《复仇者联盟4》），克里斯托弗·诺兰（《星际穿越》），迈克尔·贝（《变形金刚》视效）",
       "styleReferencePrompt": "Hollywood blockbuster cinematography, orange teal cinematic color grade, dramatic IMAX quality lighting, high contrast commercial film aesthetic, anamorphic lens flare, photorealistic RAW photo, award-winning blockbuster photography, 4K ultra detailed, professional Hollywood production quality, masterpiece",
       "characterStylePrompt": "Hollywood blockbuster style portrait, photorealistic skin with natural pores, cinematic dramatic lighting, commercial film production quality, 85mm lens compression, 4K ultra-detailed portrait, award-winning cinematography quality, masterpiece",
-      "facePromptRule": "本剧为【西方影视风格 / 好莱坞大片】。\n\n【核心铁律】faceReferencePrompt 必须严格匹配角色的 gender（男/女）和身份，禁止用错性别。男性角色绝对禁止出现 woman/lady/female 等女性词汇；女性角色绝对禁止出现 hero/gentleman 等纯男性词汇（可用 heroine/female agent）。每个角色的 faceReferencePrompt 必须各不相同，严禁多角色共用同一段描述。\n\n【格式要求】必须以 \"cinematic Hollywood-style\" 开头，配合性别匹配的身份词。\n示例（男性）：\"cinematic Hollywood-style American hero, chiseled weathered face, piercing eyes, dramatic lighting, front-facing, looking at camera, ...\"\n示例（男性）：\"cinematic Hollywood-style veteran detective, rugged scarred face, tired but sharp eyes, front-facing, looking at camera, ...\"\n示例（女性）：\"cinematic Hollywood-style female intelligence agent, sharp elegant features, cold calculating gaze, front-facing, looking at camera, ...\"\n\n必须包含 \"front-facing, looking at camera\"。真人风格质量要求：faceReferencePrompt 末尾必须加入 \"eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, no airbrushing, not plastic skin, 4K portrait masterpiece quality\"。"
+      "facePromptRule": "本剧为【西方影视风格 / 好莱坞大片】。\n\n【核心铁律】faceReferencePrompt 必须严格匹配角色的 gender（男/女）和身份，禁止用错性别。男性角色绝对禁止出现 woman/lady/female 等女性词汇；女性角色绝对禁止出现 hero/gentleman 等纯男性词汇（可用 heroine/female agent）。每个角色的 faceReferencePrompt 必须各不相同，严禁多角色共用同一段描述。\n\n【格式要求】必须以 \"cinematic Hollywood-style\" 开头，配合性别匹配的身份词。\n示例（男性）：\"cinematic Hollywood-style American hero, chiseled weathered face, piercing eyes, dramatic lighting, front-facing, looking at camera, ...\"\n示例（男性）：\"cinematic Hollywood-style veteran detective, rugged scarred face, tired but sharp eyes, front-facing, looking at camera, ...\"\n示例（女性）：\"cinematic Hollywood-style female intelligence agent, sharp elegant features, cold calculating gaze, front-facing, looking at camera, ...\"\n\n必须包含 \"front-facing, looking at camera\"。真人风格质量要求：faceReferencePrompt 末尾必须加入 \"eyes sharply in focus, clear iris detail, realistic skin texture with visible pores, no airbrushing, not plastic skin, 4K portrait masterpiece quality\"。",
+      "scenePromptGuidance": "示例：\n\"urban rooftop confrontation at dusk, orange teal shadow color grade, dramatic side lighting, anamorphic lens flare, photorealistic, 4K ultra-detailed, masterpiece\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（Hollywood blockbuster cinematography / IMAX quality lighting 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：lens flare / photorealistic / anamorphic bokeh / realistic concrete。",
+      "scriptDialogueGuide": "【视觉风格：真人影视/写实】\n- 台词克制自然，情绪藏在潜台词里（\"不说\"比\"说\"更有力量）\n- 避免过度戏剧化的宣言式台词，用日常语言承载情感重量\n- 肢体语言胜过言语：沉默、回避、停顿是最强表达\n- 对话要有生活质感，允许不完整的句子和思维跳跃",
+      "shotStyleGuide": "masterShotPlan镜头语言：好莱坞三段式构图（establishing→medium→close_up），动作高潮用快切（2秒以内），英雄登场必须low_angle仰拍，宏大场景用IMAX感wide_shot，爆炸/高潮用slow_motion"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -2931,7 +3094,8 @@
       "douyin",
       "kuaishou",
       "reelshort"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_western_film.png"
   },
   {
     "styleKey": "stop_motion",
@@ -2955,7 +3119,10 @@
       "referenceStyle": "Laika工作室《隐形小英雄》《鬼妈妈》，蒂姆·伯顿定格美学",
       "styleReferencePrompt": "stop motion animation masterpiece, handmade puppet model aesthetic, warm cozy lighting, physical tactile material texture, claymation-feel tilt-shift blur, artisan handcraft miniature world, Laika studio quality stop motion, best quality, highly detailed stop motion photography, masterpiece",
       "characterStylePrompt": "stop motion puppet character, handmade model aesthetic, physical craft texture visible, warm lighting on handmade figure, artisan quality puppetry, stop motion animation masterpiece quality, best quality",
-      "facePromptRule": "本剧为【定格动画 / 实物模型】。faceReferencePrompt 必须以 \"stop motion puppet character\" 或 \"handmade model character\" 开头，例如：\"stop motion puppet character, handmade fabric and wire frame, tactile texture visible, button or glass bead eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【定格动画 / 实物模型】。faceReferencePrompt 必须以 \"stop motion puppet character\" 或 \"handmade model character\" 开头，例如：\"stop motion puppet character, handmade fabric and wire frame, tactile texture visible, button or glass bead eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"handmade miniature world interior, warm soft cozy lighting, physical puppet texture detail, tilt-shift blur background, artisan craftwork quality, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（stop motion animation masterpiece / Laika studio quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：physical puppet material / tilt-shift blur / warm light / handmade tactile surface。",
+      "scriptDialogueGuide": "【视觉风格：定格动画/手工质感】\n- 台词简洁童趣，用短句和拟声词增强手工世界的质感\n- 角色动作描写要配合定格动画的\"一帧一帧\"节奏——不求流畅求生动\n- 允许夸张的肢体表达和拟人化物体，保持温暖治愈的叙事基调\n- 旁白可以更活泼，像在给朋友讲故事",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好中全景展示手工质感，镜头运动缓慢平稳（避免剧烈快切破坏定格感），情感场景用静止长镜凝视，道具特写用 extreme_close_up 展现手工细节"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -3000,7 +3167,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_stop_motion.png"
   },
   {
     "styleKey": "clay_stop",
@@ -3024,7 +3192,10 @@
       "referenceStyle": "《超级无敌掌门狗》《小羊肖恩》Aardman动画，Nick Park创作风格",
       "styleReferencePrompt": "claymation stop motion masterpiece, Aardman animation quality, colorful vibrant clay plasticine texture, rounded expressive figures, handmade fingerprint visible surface texture, cheerful bright colors, charming clay world miniature set, best quality, highly detailed claymation photography, masterpiece",
       "characterStylePrompt": "claymation character, Aardman style colorful clay, round expressive figure, visible clay fingerprint texture, bright saturated plasticine colors, cheerful character design, masterpiece claymation quality, best quality",
-      "facePromptRule": "本剧为【粘土定格动画】。faceReferencePrompt 必须以 \"claymation stop motion character\" 或 \"Aardman clay animation character\" 开头，例如：\"claymation stop motion character, colorful clay skin texture, visible fingerprint marks, round expressive clay face, button nose, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【粘土定格动画】。faceReferencePrompt 必须以 \"claymation stop motion character\" 或 \"Aardman clay animation character\" 开头，例如：\"claymation stop motion character, colorful clay skin texture, visible fingerprint marks, round expressive clay face, button nose, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"cozy kitchen miniature set, warm soft lighting, clay plasticine surface texture, visible fingerprint marks, handmade puppet material detail, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（claymation stop motion masterpiece / Aardman animation quality 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：clay texture / handmade feel / fingerprint marks / matte plasticine surface。",
+      "scriptDialogueGuide": "【视觉风格：定格动画/手工质感】\n- 台词简洁童趣，用短句和拟声词增强手工世界的质感\n- 角色动作描写要配合定格动画的\"一帧一帧\"节奏——不求流畅求生动\n- 允许夸张的肢体表达和拟人化物体，保持温暖治愈的叙事基调\n- 旁白可以更活泼，像在给朋友讲故事",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好中全景展示手工质感，镜头运动缓慢平稳（避免剧烈快切破坏定格感），情感场景用静止长镜凝视，道具特写用 extreme_close_up 展现手工细节"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -3070,7 +3241,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_clay_stop.png"
   },
   {
     "styleKey": "felt_stop",
@@ -3094,7 +3266,10 @@
       "referenceStyle": "《毛线卡比》游戏风格，儿童毛毡教育视频，北欧手工艺美学，Waldorf玩具风格",
       "styleReferencePrompt": "felt stop motion masterpiece, wool fabric textile texture animation, knitted handcraft aesthetic, soft handmade character with visible stitch detail, warm cozy Scandinavian craft colors, artisan fiber art quality, best quality, highly detailed felt craft photography, masterpiece",
       "characterStylePrompt": "felt puppet character, visible wool fiber stitched texture, soft round form, warm muted fabric color palette, handmade craft aesthetic, cozy Scandinavian wool craft quality, masterpiece felt animation, best quality",
-      "facePromptRule": "本剧为【毛毡 / 羊毛定格动画】。faceReferencePrompt 必须以 \"felt puppet character\" 或 \"wool craft stop motion character\" 开头，例如：\"felt puppet character, stitched fabric wool texture face, soft rounded felt features, button eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【毛毡 / 羊毛定格动画】。faceReferencePrompt 必须以 \"felt puppet character\" 或 \"wool craft stop motion character\" 开头，例如：\"felt puppet character, stitched fabric wool texture face, soft rounded felt features, button eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"miniature Scandinavian garden scene, soft fabric material surfaces, handmade wool fiber texture detail, warm cozy natural lighting, visible stitch design, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（felt stop motion masterpiece / wool fabric textile texture animation 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：felt fabric texture / wool fiber / soft matte stitch material。",
+      "scriptDialogueGuide": "【视觉风格：定格动画/手工质感】\n- 台词简洁童趣，用短句和拟声词增强手工世界的质感\n- 角色动作描写要配合定格动画的\"一帧一帧\"节奏——不求流畅求生动\n- 允许夸张的肢体表达和拟人化物体，保持温暖治愈的叙事基调\n- 旁白可以更活泼，像在给朋友讲故事",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好中全景展示手工质感，镜头运动缓慢平稳（避免剧烈快切破坏定格感），情感场景用静止长镜凝视，道具特写用 extreme_close_up 展现手工细节"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -3142,7 +3317,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_felt_stop.png"
   },
   {
     "styleKey": "lego_stop",
@@ -3166,7 +3342,10 @@
       "referenceStyle": "乐高官方电影《乐高大电影》《乐高蝙蝠侠》，乐高官方定格动画频道",
       "styleReferencePrompt": "LEGO stop motion style masterpiece, plastic brick minifigure character, colorful ABS building blocks, toy world miniature aesthetic, blocky character design, LEGO Movie quality render, playful primary colors, best quality, highly detailed LEGO photography, masterpiece",
       "characterStylePrompt": "LEGO minifigure character, ABS plastic cylindrical head, printed face expression, claw hands, square torso, bright primary color costume, LEGO Movie quality, masterpiece LEGO animation, best quality",
-      "facePromptRule": "本剧为【乐高积木定格动画】。faceReferencePrompt 必须以 \"LEGO minifigure style character\" 开头，例如：\"LEGO minifigure style character, ABS plastic cylindrical head, printed face with dot eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【乐高积木定格动画】。faceReferencePrompt 必须以 \"LEGO minifigure style character\" 开头，例如：\"LEGO minifigure style character, ABS plastic cylindrical head, printed face with dot eyes, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"plastic brick miniature city, colorful primary colors ABS blocks, stud detail surfaces visible, toy world scale environment, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（LEGO stop motion style masterpiece / plastic brick minifigure 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：ABS plastic gloss / stud texture / primary color block / toy world lighting。",
+      "scriptDialogueGuide": "【视觉风格：定格动画/手工质感】\n- 台词简洁童趣，用短句和拟声词增强手工世界的质感\n- 角色动作描写要配合定格动画的\"一帧一帧\"节奏——不求流畅求生动\n- 允许夸张的肢体表达和拟人化物体，保持温暖治愈的叙事基调\n- 旁白可以更活泼，像在给朋友讲故事",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好中全景展示手工质感，镜头运动缓慢平稳（避免剧烈快切破坏定格感），情感场景用静止长镜凝视，道具特写用 extreme_close_up 展现手工细节"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -3213,7 +3392,8 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_lego_stop.png"
   },
   {
     "styleKey": "paper_stop",
@@ -3237,7 +3417,10 @@
       "referenceStyle": "中国传统剪纸艺术（民间年画），韩国纸艺动画，《喜羊羊》早期剪纸风，中央美术学院实验动画",
       "styleReferencePrompt": "paper cut stop motion masterpiece, Chinese folk paper art style, layered paper craft depth effect, shadow puppet backlight aesthetic, handmade paper texture cut edge, origami character design, traditional folk art animation quality, best quality, highly detailed paper craft photography, masterpiece",
       "characterStylePrompt": "paper cut folk art character, layered paper silhouette with crisp cut edge detail, traditional Chinese paper art color pattern, shadow depth effect, origami-like construction, masterpiece paper craft animation, best quality",
-      "facePromptRule": "本剧为【纸艺 / 剪纸定格动画】。faceReferencePrompt 必须以 \"paper cut art style character\" 或 \"Chinese folk paper craft character\" 开头，例如：\"paper cut art style character, layered paper silhouette design, traditional folk pattern, crisp paper cut edge, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。"
+      "facePromptRule": "本剧为【纸艺 / 剪纸定格动画】。faceReferencePrompt 必须以 \"paper cut art style character\" 或 \"Chinese folk paper craft character\" 开头，例如：\"paper cut art style character, layered paper silhouette design, traditional folk pattern, crisp paper cut edge, front-facing, looking at camera, ...\"。必须包含 \"front-facing, looking at camera\"。",
+      "scenePromptGuidance": "示例：\n\"Chinese folk paper art silhouette scene, layered cut-out paper depth effect, traditional folk pattern detail, crisp paper cut edge, artisanal hand-cut construction, masterpiece, best quality\"\n⚠️ 场景 visualPrompt 只写场景特有细节，全剧风格词（paper cut stop motion masterpiece / Chinese folk paper art style 等）已由系统自动注入，禁止重复写。\ntextureStyle 使用：paper texture / cut-out edge / layered paper depth / origami crease。",
+      "scriptDialogueGuide": "【视觉风格：定格动画/手工质感】\n- 台词简洁童趣，用短句和拟声词增强手工世界的质感\n- 角色动作描写要配合定格动画的\"一帧一帧\"节奏——不求流畅求生动\n- 允许夸张的肢体表达和拟人化物体，保持温暖治愈的叙事基调\n- 旁白可以更活泼，像在给朋友讲故事",
+      "shotStyleGuide": "masterShotPlan镜头语言：偏好中全景展示手工质感，镜头运动缓慢平稳（避免剧烈快切破坏定格感），情感场景用静止长镜凝视，道具特写用 extreme_close_up 展现手工细节"
     },
     "promptGuidance": {
       "positiveKeywords": [
@@ -3283,6 +3466,7 @@
       "douyin",
       "bilibili",
       "wechat_mini"
-    ]
+    ],
+    "coverUrl": "https://it-snail-qas.oss-cn-shenzhen.aliyuncs.com/inkverse/templates/covers/style_paper_stop.png"
   }
 ]

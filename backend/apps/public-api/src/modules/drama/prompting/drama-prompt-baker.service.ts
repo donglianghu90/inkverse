@@ -38,12 +38,6 @@ export interface BakeContext {
   profile: DramaPromptProfile;
   strategy?: DramaStrategy;
   visualStyle?: VisualStyleGuide;
-  /**
-   * 短剧题材 key（如 'boss' / 'sweet' / 'mythology'）。
-   * Baker 使用此 key 查找 GENRE_TEMPLATES[genreKey].profile.agentSystemPrompts 中
-   * 对应 agent 的题材专属模板（若无则回退到 _custom 基础模板）。
-   */
-  genreKey?: string;
   /** seed.redLines — 不可违反的底线，注入到所有下游 agent system prompt */
   redLines?: string[];
   /** 视觉风格模板的扩展字段（来自 DramaVisualStyleTemplateService），含 shotStyleGuide/scriptDialogueGuide 等 */
@@ -92,7 +86,7 @@ export class DramaPromptBakerService {
    * 为所有 pipeline 节点生成完整的 basePromptSnapshot 并发布。
    */
   async bakeAndPublish(ctx: BakeContext): Promise<void> {
-    const { dramaId, profile, strategy, visualStyle, visualStyleExtras, genreKey } = ctx;
+    const { dramaId, profile, strategy, visualStyle, visualStyleExtras } = ctx;
 
     const soul = resolveScriptwriterSoul(profile);
     const genreRules = soul.genreRules;
@@ -121,7 +115,7 @@ export class DramaPromptBakerService {
         genreArchetype,
         genreRules,
         arcDirectorGuide: profile.arcDirectorGuide,
-      }, genreKey) + this.soulBlock('arcDirector', profile),
+      }, profile.agentSystemPrompts?.['arc-director']) + this.soulBlock('arcDirector', profile),
 
       'episode-director': buildEpisodeDirectorSystemPrompt({
         maxPresentPerEpisode: strategy?.characterBudget?.maxPresentPerEpisode,
@@ -129,51 +123,51 @@ export class DramaPromptBakerService {
         visualStyle: visualStyleWithExtras,
         genreRules,
         episodeDirectorGuide: profile.episodeDirectorGuide,
-      }, genreKey) + this.soulBlock('episodeDirector', profile),
+      }, profile.agentSystemPrompts?.['episode-director']) + this.soulBlock('episodeDirector', profile),
 
       'continuity-guard': buildContinuityGuardSystemPrompt({
         genreSpecificChecks: [
           ...(reviewerCalib?.genreSpecificChecks ?? []),
           ...(profile.soulViews?.continuityGuardChecks ?? []),
         ],
-      }, genreKey),
+      }, profile.agentSystemPrompts?.['continuity-guard']),
 
       'scriptwriter': buildScriptwriterSystemPrompt({
         guide: soul,
         visualStyle: scriptwriterVisualStyle,
         genreArchetype,
-      }, genreKey),
+      }, profile.agentSystemPrompts?.['scriptwriter']),
 
       'dialogue-coach': buildDialogueCoachSystemPrompt({
         dialogueGuide: soul.dialogueGuide,
         adaptationNotes: genreArchetype?.adaptationNotes,
-      }, genreKey),
+      }, profile.agentSystemPrompts?.['dialogue-coach']),
 
       'storyboard-director': buildStoryboardDirectorStaticPrompt({
         camGuide: cameraGuide,
         visualStyle,
         videoModelProfile: ctx.videoModelProfile,
-      }, genreKey),
+      }, profile.agentSystemPrompts?.['storyboard-director']),
 
       'audio-director': buildAudioDirectorStaticPrompt({
         audioGuide: audioGuide,
-      }, genreKey),
+      }, profile.agentSystemPrompts?.['audio-director']),
 
       'script-reviewer': buildScriptReviewerSystemPrompt({
         weights: reviewerCalib?.dimensionWeights as Record<string, number> | undefined,
         genreChecks: reviewerCalib?.genreSpecificChecks,
         dialogueGuide: soul.dialogueGuide,
-      }, genreKey),
+      }, profile.agentSystemPrompts?.['script-reviewer']),
 
       'script-editor': buildScriptEditorSystemPrompt({
         dialogueGuide: soul.dialogueGuide,
-      }, genreKey),
+      }, profile.agentSystemPrompts?.['script-editor']),
 
       'pacing-analyzer': buildPacingAnalyzerSystemPrompt({
         genreArchetype,
         genreRules,
         pacingAnalyzerGuide: profile.pacingAnalyzerGuide,
-      }, genreKey) + this.soulBlock('pacingAnalyzer', profile),
+      }, profile.agentSystemPrompts?.['pacing-analyzer']) + this.soulBlock('pacingAnalyzer', profile),
 
       'hook-crafter': buildHookCrafterStaticPrompt({
         strategy: strategy?.hookCadencePolicy,
@@ -181,12 +175,12 @@ export class DramaPromptBakerService {
         genreArchetype: profile.soulViews?.hookCrafter
           ? { adaptationNotes: profile.soulViews.hookCrafter }
           : genreArchetype,
-      }, genreKey),
+      }, profile.agentSystemPrompts?.['hook-crafter']),
 
       'episode-recorder': buildEpisodeRecorderSystemPrompt({
         genreArchetype,
         genreRules,
-      }, genreKey),
+      }, profile.agentSystemPrompts?.['episode-recorder']),
     };
 
     const currentNodes = await this.pipelineService.getPublishedNodes(dramaId);

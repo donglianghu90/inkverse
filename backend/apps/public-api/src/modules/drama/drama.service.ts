@@ -23,15 +23,15 @@ import { DramaStrategyAgent } from './agents/preparation/drama-strategy.agent';
 import { EpisodeWorkflowService } from './workflow/episode-workflow.service';
 import { MediaOrchestratorService } from './media-pipeline/media-orchestrator.service';
 import { DramaProgressService } from './drama-progress.service';
-import { DramaGenreTemplateService } from './drama-genre-template.service';
-import { DramaVisualStyleTemplateService } from './drama-visual-style-template.service';
+import { DramaGenreTemplateService } from '../template/genre/drama-genre-template.service';
+import { DramaVisualStyleTemplateService } from '../template/visual-style/drama-visual-style-template.service';
 import { VideoProviderRouterService } from './media-pipeline/video-provider-router.service';
 import { DramaTaskService } from './task/task.service';
 import { DramaRunService } from './run/run.service';
 import { DramaAgentPipelineService } from './workflow/drama-agent-pipeline.service';
-import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.service';
+
 import { DramaPromptBakerService, BakeContext } from './prompting/drama-prompt-baker.service';
-import { resolveGenreKey } from './prompting/drama-genre-data';
+import { resolveGenreKey } from './prompting/drama-genre-utils';
 import {
   buildArcDirectorSystemPrompt, buildEpisodeDirectorSystemPrompt,
   buildContinuityGuardSystemPrompt, buildScriptwriterSystemPrompt,
@@ -89,7 +89,6 @@ export class DramaService implements OnModuleInit {
     private readonly dramaTaskService: DramaTaskService,
     private readonly dramaRunService: DramaRunService,
     private readonly pipelineService: DramaAgentPipelineService,
-    private readonly globalPromptSettingService: DramaGlobalPromptSettingService,
     private readonly promptBaker: DramaPromptBakerService,
     private readonly mediaJobService: MediaJobService,
     private readonly localStorage: LocalStorageService,
@@ -216,11 +215,9 @@ export class DramaService implements OnModuleInit {
       const effectiveGenreKey = genreTemplate?.genreKey ?? resolveGenreKey(dto.genre);
       const productionGuidance = (genreTemplate?.profileJson as any)?.productionGuidance ?? undefined;
 
-      // 加载用户的全局 AI 补充指令（仅创建阶段 5 个准备 Agent 使用）
-      const creationUserId = opts.userId ?? 'system';
-      await this.globalPromptSettingService.ensureUserRows(creationUserId);
-      const getGlobalPrompt = (agentType: string) =>
-        this.globalPromptSettingService.getGlobalAdditional(creationUserId, agentType);
+      // Agent system prompts 来自题材模板的 profileJson.agentSystemPrompts
+      const getAgentPrompt = (agentType: string): string | undefined =>
+        (genreTemplate?.profileJson as any)?.agentSystemPrompts?.[agentType] ?? undefined;
 
       if (resumeFrom <= 0) {
         const seedHints = genreTemplate?.seedHints ?? this.genreTemplateService.findBestMatch(dto.genre);
@@ -238,7 +235,7 @@ export class DramaService implements OnModuleInit {
           genreGuidance: productionGuidance,
           dramaId,
           userId: opts.userId,
-        }, getGlobalPrompt('seed-analyzer') || undefined);
+        }, getAgentPrompt('seed-analyzer') || undefined);
         out.seed = seed;
         out.seedHints = seedHints ?? null;
         logDrama('seed_analyze_done', 'ok', '种子分析完成', { seedTitle: seed?.title });
@@ -249,7 +246,7 @@ export class DramaService implements OnModuleInit {
       if (resumeFrom <= 1) {
         logDrama('outline_plan_start', 'ok', '总导演规划全剧大纲');
         emitCreate(1, '总导演规划全剧大纲...');
-        out.outline = await this.seriesDirector.plan(out.seed, dramaId, opts.userId, productionGuidance, getGlobalPrompt('series-director') || undefined);
+        out.outline = await this.seriesDirector.plan(out.seed, dramaId, opts.userId, productionGuidance, getAgentPrompt('series-director') || undefined);
         logDrama('outline_plan_done', 'ok', '全剧大纲完成', { totalEpisodes: out.outline?.totalPlannedEpisodes });
         emitCreate(1, '全剧大纲完成', true);
         await saveCP('outline_planned', { outline: out.outline });
@@ -285,7 +282,7 @@ export class DramaService implements OnModuleInit {
           { protagonistFocus: dto.protagonistFocus, platformTarget: dto.platformTarget, audienceTags: dto.audienceTags },
           visualStyleTemplateGuide as any,
           productionGuidance,
-          getGlobalPrompt('visual-asset-designer') || undefined,
+          getAgentPrompt('visual-asset-designer') || undefined,
         );
         // ── VisualStyle 合并策略 ──────────────────────────────────────────────────
         const T2I_TEMPLATE_AUTHORITATIVE = ['styleReferencePrompt', 'characterStylePrompt'] as const;
@@ -326,10 +323,10 @@ export class DramaService implements OnModuleInit {
           this.profiler.generate(
             out.seed, out.visualStyle, out.outline, dramaId, opts.userId,
             genreTemplate?.profileJson ?? undefined,
-            getGlobalPrompt('drama-profiler') || undefined,
+            getAgentPrompt('drama-profiler') || undefined,
             effectiveGenreKey,
           ),
-          this.strategist.generate(out.seed, out.outline, dramaId, opts.userId, productionGuidance, getGlobalPrompt('drama-strategy') || undefined),
+          this.strategist.generate(out.seed, out.outline, dramaId, opts.userId, productionGuidance, getAgentPrompt('drama-strategy') || undefined),
         ]);
         Object.assign(out, { promptProfile, strategy });
         logDrama('profile_strategy_done', 'ok', '编剧手册完成');
@@ -355,7 +352,6 @@ export class DramaService implements OnModuleInit {
             profile: promptProfile,
             strategy: out.strategy,
             visualStyle: out.visualStyle,
-            genreKey: effectiveGenreKey,
             redLines: out.seed?.redLines,
             visualStyleExtras: bakeVisualStyleExtras,
             videoModelProfile: this.videoRouter.getModelProfile(

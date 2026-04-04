@@ -6,6 +6,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { z } from 'zod';
+import { DramaVisualStyleTemplateEntity, VisualStyleGuide, VisualPromptGuidance } from '../template/entities/drama-visual-style-template.entity';
 import { DramaEntity } from './entities/drama.entity';
 import { VisualAssetEntity } from './entities/visual-asset.entity';
 import { DramaState, PropAsset, SignatureProp } from './schemas/drama-state.schemas';
@@ -309,16 +310,23 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
           // Phase 1 面部定妆照：补充年龄、发型、服饰、体型、背景和朝向 prompt
           // 始终从 age 字段推导（ageToT2IPhrase 取范围最小值），agePrompt 仅作兜底
           const agePhrase = ageToT2IPhrase((ch as any).age) || (ch as any).agePrompt?.trim() || '';
-          // Compile prompt via PromptCompilerService
-          const compiledPrompt = await this.promptCompiler.compile({
-            shotType: 'character',
-            face: ch.faceReferencePrompt,
-            age: agePhrase,
-            hair: ch.hairStylePrompt || ch.hairStyle,
-            costume: ch.defaultCostumePrompt,
-            body: (ch as any).bodyTypePrompt || (ch as any).bodyType,
-            style: charStylePrefix,
-          });
+          // Use pre-compiled referenceImagePrompt if available (skips one LLM call),
+          // otherwise fall back to PromptCompiler for backward compatibility
+          let compiledPrompt: string;
+          if ((ch as any).referenceImagePrompt?.trim()) {
+            compiledPrompt = (ch as any).referenceImagePrompt.trim();
+            this.logger.log(`[Phase1] Using pre-compiled referenceImagePrompt for ${ch.name}`);
+          } else {
+            compiledPrompt = await this.promptCompiler.compile({
+              shotType: 'character',
+              face: ch.faceReferencePrompt,
+              age: agePhrase,
+              hair: ch.hairStylePrompt || ch.hairStyle,
+              costume: ch.defaultCostumePrompt,
+              body: (ch as any).bodyTypePrompt || (ch as any).bodyType,
+              style: charStylePrefix,
+            });
+          }
           const { prompt, negativePrompt } = this.optimizeAssetPrompt(compiledPrompt, 'character', undefined, faceRoute.provider, assetStyleBucket);
           const result = await this.mediaService.generateImage({
             prompt, negativePrompt, size: DramaVisualAssetService.CHAR_IMAGE_SIZE, count: 1,
@@ -348,14 +356,22 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
         if (this.referenceViewFilled(asset, 'establishing')) return;
         try {
           this.logger.log(`[Phase1] establishing: ${loc.name}(${asset.refId})`);
-          const compiledPrompt = await this.promptCompiler.compile({
-            shotType: 'location',
-            view_angle: 'establishing',
-            architecture: loc.visualPrompt,
-            lighting: (loc as any).lightingDefault,
-            color_tone: (loc as any).colorTone,
-            style: sceneStylePrefix,
-          });
+          // Use pre-compiled referenceImagePrompt if available (skips one LLM call),
+          // otherwise fall back to PromptCompiler
+          let compiledPrompt: string;
+          if ((loc as any).referenceImagePrompt?.trim()) {
+            compiledPrompt = (loc as any).referenceImagePrompt.trim();
+            this.logger.log(`[Phase1] Using pre-compiled referenceImagePrompt for ${loc.name}`);
+          } else {
+            compiledPrompt = await this.promptCompiler.compile({
+              shotType: 'location',
+              view_angle: 'establishing',
+              architecture: loc.visualPrompt,
+              lighting: (loc as any).lightingDefault,
+              color_tone: (loc as any).colorTone,
+              style: sceneStylePrefix,
+            });
+          }
           const locRoute = this.imageRouter.routeLocation(DramaVisualAssetService.SCENE_IMAGE_SIZE);
           const { prompt, negativePrompt } = this.optimizeAssetPrompt(compiledPrompt, 'location', undefined, locRoute.provider, assetStyleBucket);
           const result = await this.mediaService.generateImage({
@@ -433,11 +449,19 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
         if (this.referenceViewFilled(asset, 'product_shot')) return;
         try {
           this.logger.log(`[Phase1] prop: ${asset.name}(${asset.refId})`);
-          const propRoute = this.imageRouter.routeLocation(DramaVisualAssetService.PROP_IMAGE_SIZE);
-          const compiledPrompt = await this.promptCompiler.compile({
-            shotType: 'prop',
-            object: rawPrompt,
-          });
+          const propRoute = this.imageRouter.routeProp(DramaVisualAssetService.PROP_IMAGE_SIZE);
+          // Use pre-compiled referenceImagePrompt if available (skips one LLM call)
+          let compiledPrompt: string;
+          const propRefPrompt = (propData as any).referenceImagePrompt?.trim();
+          if (propRefPrompt) {
+            compiledPrompt = propRefPrompt;
+            this.logger.log(`[Phase1] Using pre-compiled referenceImagePrompt for prop ${asset.name}`);
+          } else {
+            compiledPrompt = await this.promptCompiler.compile({
+              shotType: 'prop',
+              object: rawPrompt,
+            });
+          }
           const { prompt, negativePrompt } = this.optimizeAssetPrompt(compiledPrompt, 'prop', undefined, propRoute.provider, assetStyleBucket);
           const result = await this.mediaService.generateImage({
             prompt, negativePrompt, size: DramaVisualAssetService.PROP_IMAGE_SIZE, count: 1,
@@ -576,7 +600,9 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
       return locPrompt || String(data.visualPrompt || '').trim();
     }
     if (asset.assetType === 'prop') {
-      return String(data.visualPrompt || '').trim();
+      // Prefer referenceImagePrompt (full product-photography prompt) for re-generation,
+      // fall back to bare visualPrompt (gene fragment) if not present
+      return String(data.referenceImagePrompt || data.visualPrompt || '').trim();
     }
     return [
       String(data.overallAesthetic ?? ''),
@@ -650,7 +676,7 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
     const vs = state.visualStyle;
     const facePromptRule = (state as any).visualBible?.facePromptRule
       ?? vs?.facePromptRule
-      ?? 'faceReferencePrompt 必须以【渲染风格词 + 角色身份词】开头，先锚定风格，再描述五官，最后必须加上 "front-facing, looking at camera"。';
+      ?? 'faceReferencePrompt 必须以【渲染风格词 + 角色身份词】开头，先锚定风格，再描述五官。只写纯粹的外观基因词（3-5个），不含镜头/背景词。';
 
     const repairSchema = z.object({
       faceReferencePrompt: z.string().min(1),
@@ -769,9 +795,11 @@ faceReferencePrompt 规则：${facePromptRule}
       ? (targetView === 'face_front'
         ? this.imageRouter.routeCharacterFace(size)
         : this.imageRouter.routeCharacterViewAngle(size))
-      : (isLoc || isProp)
-        ? this.imageRouter.routeLocation(size)
-        : {};
+      : (isProp)
+        ? this.imageRouter.routeProp(size)
+        : (isLoc)
+          ? this.imageRouter.routeLocation(size)
+          : {};
     const optimized = this.optimizeAssetPrompt(prompt, isChar ? 'character' : nonCharShotType, undefined, route.provider, regenStyleBucket);
     // 主视角/道具：从零生成，不传参考图
     const isPrimaryView = (isChar && targetView === 'face_front') || (isLoc && targetView === 'establishing') || isProp;

@@ -7,7 +7,7 @@ import { LlmService } from '../../../novel/llm/llm.service';
 import { z } from 'zod';
 import { seriesOutlineSchema, SeriesOutline, DramaSeed, episodeSynopsisSchema } from '../../schemas/drama-state.schemas';
 import { buildSeriesDirectorSystemPrompt } from '../../prompting/drama-playbook';
-import type { GenreProductionGuidance } from '../../entities/drama-genre-template.entity';
+import type { GenreProductionGuidance } from '../../../template/entities/drama-genre-template.entity';
 
 const DETAIL_SEGMENT = 15; // 首段详细规划集数
 

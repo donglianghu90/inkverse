@@ -1,17 +1,17 @@
 import {
   PURPOSE_DIRECTIVE_TEMPLATES,
   PURPOSE_OVERRIDE_FORMAT,
-  SCENE_CONTEXT_CONSTRAINTS,
-  SCENE_CONTEXT_EMOTION_DIRECTION,
   SCENE_CONTEXT_HOOK,
+  SCENE_CONTEXT_EMOTION_DIRECTION,
+  SCENE_CONTEXT_CONSTRAINTS,
   HOOK_CONSTRAINT_TEMPLATE,
   AUDIO_CONTEXT_FOOTER,
   AUDIO_CONTEXT_HEADER,
-} from './genres/shared.prompts';
+} from './shared.prompts';
 import { GenreArchetype } from '../schemas/drama-state.schemas';
-import { GenreProductionGuidance } from '../entities/drama-genre-template.entity';
-import { VisualStyleGuide } from '../entities/drama-visual-style-template.entity';
-import { GENRE_TEMPLATES } from './drama-genre-data';
+import { GenreProductionGuidance } from '../../template/entities/drama-genre-template.entity';
+import { VisualStyleGuide } from '../../template/entities/drama-visual-style-template.entity';
+
 
 export function resolveTemplate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? `{{${key}}}`);
@@ -50,11 +50,6 @@ export function buildUserPromptConstraintsTail(ctx: {
 export const DRAMA_ZH_RULE = '所有输出简体中文。';
 export const DRAMA_LANG_RULE = DRAMA_ZH_RULE;
 
-// ─── 模板查找 ───────────────────────────────────────────────────────────────
-function getTemplate(agentId: string, genreKey?: string): string {
-  if (!genreKey) return '';
-  return GENRE_TEMPLATES[genreKey]?.profile?.agentSystemPrompts?.[agentId] ?? '';
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 创建阶段 Agent
@@ -63,23 +58,23 @@ function getTemplate(agentId: string, genreKey?: string): string {
 export function buildSeedAnalyzerSystemPrompt(ctx: {
   epMin: number; epMax: number; durSec: number; genre?: string;
   genreGuidance?: GenreProductionGuidance;
-}, genreKey?: string): string {
-  return getTemplate('seed-analyzer', genreKey);
+}, basePrompt?: string): string {
+  return basePrompt ?? '';
 }
 
 export function buildSeriesDirectorSystemPrompt(ctx: {
   targetEp: number; epMin: number; epMax: number; durSec: number;
   genre?: string;
   genreGuidance?: GenreProductionGuidance;
-}, genreKey?: string): string {
-  return getTemplate('series-director', genreKey);
+}, basePrompt?: string): string {
+  return basePrompt ?? '';
 }
 
 export function buildVisualAssetDesignerSystemPrompt(
   _visualStyle?: string,
   styleGuide?: Pick<VisualStyleGuide, 'facePromptRule' | 'scenePromptGuidance'>,
   genreGuidance?: Pick<GenreProductionGuidance, 'maleLeadFormula' | 'femaleLeadFormula'>,
-  genreKey?: string,
+  basePrompt?: string,
 ): string {
   const maleFormula = genreGuidance?.maleLeadFormula
     ? `=== 本剧题材主角颜值定向 ===\n短剧有极强的类型视觉语言——观众在开头3秒靠主角外形判断"这是不是我要看的剧"。\n\n**本剧男主颜值要求：** ${genreGuidance.maleLeadFormula}\n\n**本剧女主颜值要求：** ${genreGuidance.femaleLeadFormula ?? ''}\n\n⚠️ 以上是本剧的颜值铁律，角色设计必须精准命中，不可用通用帅气/漂亮模糊处理。`
@@ -91,7 +86,7 @@ export function buildVisualAssetDesignerSystemPrompt(
     ? `=== faceReferencePrompt 规则 ===\n${styleGuide.facePromptRule}\n${faceDedup}\n\n${styleGuide.scenePromptGuidance ? `=== 本剧场景 visualPrompt 写法规范 ===\n${styleGuide.scenePromptGuidance}\n\n` : ''}`
     : '';
 
-  const template = getTemplate('visual-asset-designer', genreKey); 
+  const template = basePrompt ?? ''; 
   return resolveTemplate(template, {
     visualStyleDesc,
     maleFormula,
@@ -100,14 +95,14 @@ export function buildVisualAssetDesignerSystemPrompt(
 }
 
 export function buildProfilerSystemPrompt(
-  genreKey?: string,
+  basePrompt?: string,
   _templateProfile?: Record<string, unknown>,
 ): string {
-  return getTemplate('drama-profiler', genreKey);
+  return basePrompt ?? '';
 }
 
-export function buildStrategySystemPrompt(ctx?: {}, genreKey?: string): string {
-  return getTemplate('drama-strategy', genreKey);
+export function buildStrategySystemPrompt(ctx?: {}, basePrompt?: string): string {
+  return basePrompt ?? '';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -119,16 +114,16 @@ export function buildArcDirectorSystemPrompt(ctx?: {
   genreRules?: string[];
   redLines?: string[];
   arcDirectorGuide?: { genreSegmentPrinciples?: string; characterArcPrinciples?: string; conflictRhythm?: string };
-}, genreKey?: string): string {
-  return getTemplate('arc-director', genreKey);
+}, basePrompt?: string): string {
+  return basePrompt ?? '';
 }
 
 export function buildArcExpansionSystemPrompt(ctx?: {
   genreArchetype?: GenreArchetype;
   genreRules?: string[];
   redLines?: string[];
-}, genreKey?: string): string {
-  return getTemplate('arc-expansion', genreKey);
+}, basePrompt?: string): string {
+  return basePrompt ?? '';
 }
 
 export function buildEpisodeDirectorSystemPrompt(ctx?: {
@@ -138,8 +133,8 @@ export function buildEpisodeDirectorSystemPrompt(ctx?: {
   genreRules?: string[];
   redLines?: string[];
   episodeDirectorGuide?: { emotionBeatExample?: string; tensionCurveNotes?: string; hookPatterns?: string };
-}, genreKey?: string): string {
-  const template = getTemplate('episode-director', genreKey);
+}, basePrompt?: string): string {
+  const template = basePrompt ?? '';
   const shotStyleHint = ctx?.visualStyle?.shotStyleGuide ?? '';
   return resolveTemplate(template, {
     maxChars: String(ctx?.maxPresentPerEpisode ?? 4),
@@ -149,17 +144,17 @@ export function buildEpisodeDirectorSystemPrompt(ctx?: {
 
 export function buildContinuityGuardSystemPrompt(ctx?: {
   genreSpecificChecks?: string[];
-}, genreKey?: string): string {
-  return getTemplate('continuity-guard', genreKey);
+}, basePrompt?: string): string {
+  return basePrompt ?? '';
 }
 
 export function buildScriptwriterSystemPrompt(ctx: {
   guide?: { coreIdentity?: string; genreRules?: string[]; dialogueGuide?: string; pacingGuide?: string; visualNarrativeGuide?: string; forbiddenPatterns?: string[] };
   visualStyle?: { overallAesthetic?: string; colorGrading?: string; lightingStyle?: string; renderTechnique?: string; textureStyle?: string; referenceStyle?: string; scriptDialogueGuide?: string };
   genreArchetype?: GenreArchetype;
-}, genreKey?: string): string {
+}, basePrompt?: string): string {
   const { guide, visualStyle } = ctx;
-  const template = getTemplate('scriptwriter', genreKey);
+  const template = basePrompt ?? '';
   const styleDialogueTone = visualStyle?.scriptDialogueGuide ?? '';
   return resolveTemplate(template, {
     coreIdentity: guide?.coreIdentity ?? '',
@@ -175,8 +170,8 @@ export function buildScriptwriterSystemPrompt(ctx: {
 export function buildDialogueCoachSystemPrompt(ctx?: {
   dialogueGuide?: string;
   adaptationNotes?: string;
-}, genreKey?: string): string {
-  const template = getTemplate('dialogue-coach', genreKey);
+}, basePrompt?: string): string {
+  const template = basePrompt ?? '';
   return resolveTemplate(template, {
     dialogueGuide: ctx?.dialogueGuide?.trim() || '',
     adaptationSection: ctx?.adaptationNotes
@@ -207,8 +202,8 @@ export function buildStoryboardDirectorStaticPrompt(ctx?: {
     strengthHint: string;
     constraintHint: string;
   };
-}, genreKey?: string): string {
-  const template = getTemplate('storyboard-director', genreKey);
+}, basePrompt?: string): string {
+  const template = basePrompt ?? '';
   const cam = ctx?.camGuide;
   const vs = ctx?.visualStyle;
   const vmp = ctx?.videoModelProfile;
@@ -303,8 +298,8 @@ export function buildAudioDirectorStaticPrompt(ctx?: {
     voiceActingStyle?: string;
     genreBrandingDirective?: string | null;
   };
-}, genreKey?: string): string {
-  const template = getTemplate('audio-director', genreKey);
+}, basePrompt?: string): string {
+  const template = basePrompt ?? '';
   const ag = ctx?.audioGuide;
   return resolveTemplate(template, {
     genreBrandingSection: ag?.genreBrandingDirective
@@ -333,8 +328,8 @@ export function buildScriptReviewerSystemPrompt(ctx?: {
   weights?: Record<string, number>;
   genreChecks?: string[];
   dialogueGuide?: string;
-}, genreKey?: string): string {
-  const template = getTemplate('script-reviewer', genreKey);
+}, basePrompt?: string): string {
+  const template = basePrompt ?? '';
   const dw = ctx?.weights;
   return resolveTemplate(template, {
     wt_visualImpact: String(dw?.visualImpact ?? 1.2),
@@ -354,8 +349,8 @@ export function buildScriptReviewerSystemPrompt(ctx?: {
 
 export function buildScriptEditorSystemPrompt(ctx?: {
   dialogueGuide?: string;
-}, genreKey?: string): string {
-  const template = getTemplate('script-editor', genreKey);
+}, basePrompt?: string): string {
+  const template = basePrompt ?? '';
   return resolveTemplate(template, {
     dialogueStyleHint: ctx?.dialogueGuide?.trim()
       ? ctx.dialogueGuide.trim().slice(0, 80)
@@ -367,8 +362,8 @@ export function buildPacingAnalyzerSystemPrompt(ctx?: {
   genreArchetype?: GenreArchetype;
   genreRules?: string[];
   pacingAnalyzerGuide?: { genreRhythmTemplate?: string; paceIndicators?: string };
-}, genreKey?: string): string {
-  return getTemplate('pacing-analyzer', genreKey);
+}, basePrompt?: string): string {
+  return basePrompt ?? '';
 }
 
 export function buildHookCrafterStaticPrompt(ctx?: {
@@ -376,8 +371,8 @@ export function buildHookCrafterStaticPrompt(ctx?: {
   genreRules?: string[];
   genreArchetype?: Pick<GenreArchetype, 'adaptationNotes'>;
   extraHookTypes?: string;
-}, genreKey?: string): string {
-  const template = getTemplate('hook-crafter', genreKey);
+}, basePrompt?: string): string {
+  const template = basePrompt ?? '';
   const strategy = ctx?.strategy;
   return resolveTemplate(template, {
     extraHookTypes: ctx?.extraHookTypes?.trim()
@@ -401,6 +396,6 @@ export function buildHookCharacterConstraint(ctx: {
 export function buildEpisodeRecorderSystemPrompt(ctx?: {
   genreArchetype?: GenreArchetype;
   genreRules?: string[];
-}, genreKey?: string): string {
-  return getTemplate('episode-recorder', genreKey);
+}, basePrompt?: string): string {
+  return basePrompt ?? '';
 }

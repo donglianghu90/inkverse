@@ -214,60 +214,78 @@ export interface GenreFullProfile {
 @Unique('uq_drama_genre_tpl_user_genre', ['userId', 'genreKey'])
 export class DramaGenreTemplateEntity {
   @PrimaryGeneratedColumn('uuid', { name: 'id' })
-  id: string;
+  id!: string;
 
   @Index('idx_drama_genre_tpl_user_id')
   @Column({ name: 'user_id', type: 'varchar', length: 64, nullable: true })
-  userId: string | null; // null = 系统种子模板
+  userId!: string | null; // null = 系统种子模板
 
   @Column({ name: 'genre_key', type: 'varchar', length: 100 })
-  genreKey: string;
+  genreKey!: string;
 
   @Column({ name: 'display_name', type: 'varchar', length: 200 })
-  displayName: string;
+  displayName!: string;
 
   @Column({ name: 'description', type: 'text', default: '' })
-  description: string;
+  description!: string;
 
   @Column({ name: 'genre_keywords', type: 'jsonb', default: '[]' })
-  genreKeywords: string[];
+  genreKeywords!: string[];
 
   @Column({ name: 'profile_json', type: 'jsonb', default: '{}' })
-  profileJson: Record<string, unknown>; // DramaPromptProfile 的种子数据
+  profileJson!: Record<string, unknown>; // DramaPromptProfile 的种子数据
+
+  @Column({ name: 'cover_url', type: 'varchar', length: 500, nullable: true })
+  coverUrl!: string | null;
 
   @Column({ name: 'seed_hints', type: 'jsonb', nullable: true })
-  seedHints: DramaSeedHints | null;
+  seedHints!: DramaSeedHints | null;
 
   @Column({ name: 'audience_tags', type: 'jsonb', default: '[]' })
-  audienceTags: string[];
+  audienceTags!: string[];
 
   @Column({ name: 'protagonist_focus_tags', type: 'jsonb', default: '[]' })
-  protagonistFocusTags: Array<'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'>;
+  protagonistFocusTags!: Array<'female_lead' | 'male_lead' | 'dual_lead' | 'ensemble'>;
 
   @Column({ name: 'tone_tags', type: 'jsonb', default: '[]' })
-  toneTags: string[];
+  toneTags!: string[];
 
   @Column({ name: 'platform_tags', type: 'jsonb', default: '[]' })
-  platformTags: string[]; // douyin/kuaishou/reelshort/dramabox
+  platformTags!: string[]; // douyin/kuaishou/reelshort/dramabox
 
+  /** 是否为系统内置的大盘公共模板（为 true 时 userId 必然为 null） */
   @Column({ name: 'is_system', type: 'boolean', default: false })
-  isSystem: boolean;
+  isSystem!: boolean;
 
+  /** 追溯用户的模板源头：记录是从哪个系统库公共模板拷贝而来（如果是被克隆的，则指向被克隆记录） */
   @Column({ name: 'parent_template_id', type: 'uuid', nullable: true })
-  parentTemplateId: string | null;
+  parentTemplateId!: string | null;
 
+  /**
+   * 系统模板自身的当前版本号。
+   * 每次发布新版本并在后端系统启动时 (seedSystemTemplates) 覆盖入库新数据，就会将此版本号 + 1
+   * （仅 isSystem=true 的记录此字段才有实际升级意义）
+   */
   @Column({ name: 'system_version', type: 'int', default: 1 })
-  systemVersion: number;
+  systemVersion!: number;
 
+  /**
+   * 懒同步水位标记：记录该用户下发/克隆模板时，系统系统模板的版本号。
+   * 如果后续发现系统大盘的 systemVersion 大于此字段，且用户未修改过，则会自动静默升级本条数据。
+   */
   @Column({ name: 'synced_system_version', type: 'int', default: 0 })
-  syncedSystemVersion: number;
+  syncedSystemVersion!: number;
 
+  /**
+   * 用户是否已手动修改过此模板。（脱离同步的断路器）
+   * 只要用户手动编辑保存了该题材模板，即判定为 true。从此以后，尽管系统的大盘模板再升级更新，也不再静默覆盖此用户数据。
+   */
   @Column({ name: 'is_user_modified', type: 'boolean', default: false })
-  isUserModified: boolean;
+  isUserModified!: boolean;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
-  updatedAt: Date;
+  updatedAt!: Date;
 }

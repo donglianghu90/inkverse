@@ -6,13 +6,20 @@ import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../../../llm/llm.service';
 import { z } from 'zod';
 import {
-  shotSchema, episodeStoryboardSchema, EpisodeStoryboard, EpisodeIntent, DramaState, Shot,
+  shotSchema, shotAudioSchema, episodeStoryboardSchema, EpisodeStoryboard, EpisodeIntent, DramaState, Shot,
 } from '../../schemas/drama-state.schemas';
 import { buildAudioDirectorStaticPrompt, buildAudioEpisodeContext } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 
 const MAX_SHOTS_PER_BATCH = 10; // 每批最多处理的 Shot 数
-const batchOutputSchema = z.object({ shots: z.array(shotSchema), bgmSegments: z.array(z.object({ mood: z.string(), startShotIndex: z.number(), endShotIndex: z.number(), intensityCurve: z.array(z.number()).default([]) })).default([]), silencePoints: z.array(z.object({ afterShotIndex: z.number(), durationSec: z.number(), purpose: z.string() })).default([]) });
+
+// 精简输出 Schema：音频导演只需要返回 shotId + audio 字段，其余全部由代码层 merge
+// 避免 LLM 将所有 Shot 字段原样回吐，节省约 60-70% Output Token
+const audioShotPatchSchema = z.object({
+  shotId: z.string(),
+  audio: shotAudioSchema,
+});
+const batchOutputSchema = z.object({ shots: z.array(audioShotPatchSchema), bgmSegments: z.array(z.object({ mood: z.string(), startShotIndex: z.number(), endShotIndex: z.number(), intensityCurve: z.array(z.number()).default([]) })).default([]), silencePoints: z.array(z.object({ afterShotIndex: z.number(), durationSec: z.number(), purpose: z.string() })).default([]) });
 
 @Injectable()
 export class AudioDirectorAgent {

@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Shot, DramaState, CharacterIdentity } from '../schemas/drama-state.schemas';
-import { PromptOptimizerService } from '../../media/prompt-optimizer.service';
 
 export interface AssembleOpts {
   stylePrefix: string;

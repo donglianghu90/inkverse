@@ -16,6 +16,7 @@ import { MarketModule } from "./modules/market/market.module";
 import { MediaModule } from "./modules/media/media.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { UsageModule } from "./modules/usage/usage.module";
+import { TemplateModule } from "./modules/template/template.module";
 
 
 @Module({
@@ -147,6 +148,7 @@ import { UsageModule } from "./modules/usage/usage.module";
     DramaModule,
     MarketModule,
     MediaModule,
+    TemplateModule,
   ],
   controllers: [],
   providers: [GlobalErrorInterceptor, GlobalFilter, UnifiedInterceptor, JwtAuthGuard],

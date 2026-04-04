@@ -430,11 +430,14 @@ export interface DramaGenreTemplate {
   description: string;
   genreKeywords: string[];
   seedHints: Record<string, unknown> | null;
+  profileJson: Record<string, unknown> | null;
   audienceTags: string[];
   protagonistFocusTags: string[];
   toneTags: string[];
   platformTags: string[];
   isSystem: boolean;
+  isUserModified: boolean;
+  parentTemplateId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -669,32 +672,15 @@ export async function cloneDramaVisualStyleTemplate(id: string): Promise<DramaVi
   return request(`${BASE}/visual-style-templates/${id}/clone`, { method: 'POST' });
 }
 
-/* ─── 全局 Agent 提示词设置 ─── */
 
-export interface GlobalPromptSetting {
-  agentType: string;
-  globalAdditionalPrompt: string;
-  description: string;
-  updatedAt: string;
+/** 单独更新题材模板中某个 Agent 的系统提示词 */
+export async function updateDramaAgentPrompt(
+  templateId: string,
+  agentType: string,
+  systemPrompt: string,
+): Promise<DramaGenreTemplate> {
+  return request(`${BASE}/genre-templates/${templateId}/agent-prompts`, {
+    method: 'POST',
+    data: { agentType, systemPrompt },
+  });
 }
-
-export async function getGlobalPromptPreview(nodeId: string): Promise<{ nodeId: string; basePrompt: string }> {
-  return request(`${BASE}/global-prompt-preview/${nodeId}`);
-}
-
-export async function listGlobalPromptSettings(): Promise<GlobalPromptSetting[]> {
-  return request(`${BASE}/global-prompt-settings`);
-}
-
-export async function updateGlobalPromptSetting(agentType: string, globalAdditionalPrompt: string): Promise<GlobalPromptSetting> {
-  return request(`${BASE}/global-prompt-settings/${agentType}`, { method: 'PUT', data: { globalAdditionalPrompt } });
-}
-
-export async function batchUpdateGlobalPromptSettings(items: Array<{ agentType: string; globalAdditionalPrompt: string }>): Promise<GlobalPromptSetting[]> {
-  return request(`${BASE}/global-prompt-settings`, { method: 'PUT', data: { items } });
-}
-
-export async function resetGlobalPromptSetting(agentType: string): Promise<GlobalPromptSetting> {
-  return request(`${BASE}/global-prompt-settings/${agentType}/reset`, { method: 'PUT' });
-}
-

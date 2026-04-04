@@ -77,6 +77,9 @@ export class DramaVisualStyleTemplateEntity {
   @Column({ name: 'visual_guide', type: 'jsonb', default: '{}' })
   visualGuide: VisualStyleGuide;
 
+  @Column({ name: 'cover_url', type: 'varchar', length: 500, nullable: true })
+  coverUrl: string | null;
+
   /** T2I 创作引导 */
   @Column({ name: 'prompt_guidance', type: 'jsonb', nullable: true })
   promptGuidance: VisualPromptGuidance | null;

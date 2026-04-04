@@ -1,7 +1,7 @@
 /** DramaGenreTemplateController — 题材模板 CRUD + AI 生成 */
 import { Controller, Get, Post, Put, Delete, Param, Body, Req } from '@nestjs/common';
 import { DramaGenreTemplateService } from './drama-genre-template.service';
-import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto, AiGenerateDramaGenreTemplateDto } from './dto/drama-genre-template.dto';
+import { CreateDramaGenreTemplateDto, UpdateDramaGenreTemplateDto, AiGenerateDramaGenreTemplateDto } from '../dto/drama-genre-template.dto';
 
 @Controller('drama/genre-templates')
 export class DramaGenreTemplateController {
@@ -47,6 +47,26 @@ export class DramaGenreTemplateController {
   @Put(':id')
   async updateGenreTemplate(@Param('id') id: string, @Body() dto: UpdateDramaGenreTemplateDto, @Req() req: any) {
     return this.genreTemplateService.update(id, req.user?.id ?? 'anonymous', dto);
+  }
+
+  /**
+   * 单独更新题材模板中某个 Agent 的系统提示词。
+   * 前端题材详情页每个 Agent 提示词编辑框保存时调用。
+   * POST /drama/genre-templates/:id/agent-prompts
+   * Body: { agentType: "seed-analyzer", systemPrompt: "..." }
+   */
+  @Post(':id/agent-prompts')
+  async updateAgentPrompt(
+    @Param('id') id: string,
+    @Body() body: { agentType: string; systemPrompt: string },
+    @Req() req: any,
+  ) {
+    return this.genreTemplateService.updateAgentPrompt(
+      id,
+      req.user?.id ?? 'anonymous',
+      body.agentType,
+      body.systemPrompt ?? '',
+    );
   }
 
   @Delete(':id')

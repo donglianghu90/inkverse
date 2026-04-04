@@ -2,25 +2,27 @@
  * 图片 Provider 路由服务 — 为不同生产场景选择最优模型
  *
  * 模型矩阵：
- * ┌─────────────────────┬──────────────────────────────┬───────────────────────────────────────┐
- * │ 模型                 │ 优势                          │ 短剧中的最佳用途                         │
- * ├─────────────────────┼──────────────────────────────┼───────────────────────────────────────┤
- * │ nano-banana-2       │ 14张参考图/最强角色一致性/20000字 │ 所有 T2I 场景（统一主力）                 │
- * │ flux-2-i2i          │ FLUX.2 I2I/最强形变控制         │ 角度变换、服装变体、图片精修              │
- * │ volcengine          │ 中文美学/古装/负提示词           │ 跨 Provider 降级备用                    │
- * └─────────────────────┴──────────────────────────────┴───────────────────────────────────────┘
+ * ┌───────────────────────┬──────────────────────────────┬───────────────────────────────────────┐
+ * │ 模型                   │ 优势                          │ 短剧中的最佳用途                         │
+ * ├───────────────────────┼──────────────────────────────┼───────────────────────────────────────┤
+ * │ nano-banana-2         │ 14张参考图/最强角色一致性/20000字 │ 角色定妆照、分镜关键帧                    │
+ * │ seedream-5-lite       │ 中文美学/古装/速度快/价格低      │ 场景概念图、道具特写图                    │
+ * │ flux-2-i2i            │ FLUX.2 I2I/最强形变控制         │ 角度变换、服装变体、图片精修              │
+ * │ volcengine            │ 中文美学/古装/负提示词           │ 跨 Provider 降级备用                    │
+ * └───────────────────────┴──────────────────────────────┴───────────────────────────────────────┘
  *
  * 路由策略（全部可通过 drama.image.router.* 配置覆盖）：
- *   characterFace       → kieai.nano-banana-2 (角色细节生成质量佳，20000字符无截断)
- *   characterViewAngle  → kieai.flux-2-i2i    (角度变换 I2I，FLUX.2 形变最稳)
- *   characterVariation  → kieai.flux-2-i2i    (服装变体 I2I)
- *   location            → kieai.nano-banana-2 (场景构图，14张参考图支持)
- *   styleGuide          → kieai.nano-banana-2 (风格参考图，长 prompt 描述复杂风格)
- *   shotCloseUp         → kieai.nano-banana-2 (特写/近景，14 张参考图最强一致性)
- *   shotMedium          → kieai.nano-banana-2 (中景，角色+场景均衡)
- *   shotWide            → kieai.nano-banana-2 (全景/远景，长 prompt 保留完整场景描述)
- *   shotGolden          → kieai.nano-banana-2 (golden/preview 关键帧，最高质量)
- *   refinement          → kieai.flux-2-i2i    (精修 I2I)
+ *   characterFace       → kieai.nano-banana-2     (角色一致性不可妥协，14张参考图锁脸)
+ *   characterViewAngle  → kieai.flux-2-i2i        (角度变换 I2I，FLUX.2 形变最稳)
+ *   characterVariation  → kieai.flux-2-i2i        (服装变体 I2I)
+ *   location            → kieai.seedream-5-lite   (场景图，中文/古装美学天然理解，速度快)
+ *   prop                → kieai.seedream-5-lite   (道具特写，轻量任务，产品图风格)
+ *   styleGuide          → kieai.nano-banana-2     (风格参考图，长 prompt 描述复杂风格)
+ *   shotCloseUp         → kieai.nano-banana-2     (特写/近景，14 张参考图最强一致性)
+ *   shotMedium          → kieai.nano-banana-2     (中景，角色+场景均衡)
+ *   shotWide            → kieai.nano-banana-2     (全景/远景，长 prompt 保留完整场景描述)
+ *   shotGolden          → kieai.nano-banana-2     (golden/preview 关键帧，最高质量)
+ *   refinement          → kieai.flux-2-i2i        (精修 I2I)
  */
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@packages/modules';
@@ -49,6 +51,7 @@ const ROUTE_KEYS = [
   'characterViewAngle',
   'characterVariation',
   'location',
+  'prop',
   'styleGuide',
   'shotCloseUp',
   'shotMedium',
@@ -58,12 +61,18 @@ const ROUTE_KEYS = [
 ] as const;
 type RouteKey = typeof ROUTE_KEYS[number];
 
-/** 默认路由策略（可被配置覆盖）— 统一使用 nano-banana-2 作为 T2I 主力（20000字符/14张参考图） */
+/**
+ * 默认路由策略：
+ *   - 角色定妆/分镜 → nano-banana-2（参考图锁脸，长 prompt 不截断）
+ *   - 场景/道具     → seedream-5-lite（中文美学，速度快，成本低）
+ *   - 图生图/精修   → flux-2-i2i（形变控制最稳）
+ */
 const DEFAULT_ROUTES: Record<RouteKey, string> = {
   characterFace:      'kieai.nano-banana-2',
   characterViewAngle: 'kieai.flux-2-i2i',
   characterVariation: 'kieai.flux-2-i2i',
-  location:           'kieai.nano-banana-2',
+  location:           'kieai.seedream-5-lite',
+  prop:               'kieai.seedream-5-lite',
   styleGuide:         'kieai.nano-banana-2',
   shotCloseUp:        'kieai.nano-banana-2',
   shotMedium:         'kieai.nano-banana-2',
@@ -80,6 +89,7 @@ const DEFAULT_ROUTES: Record<RouteKey, string> = {
 const DEFAULT_FALLBACK_ROUTES: Partial<Record<RouteKey, string>> = {
   characterFace: 'volcengine.doubao-seedream',
   location:      'volcengine.doubao-seedream',
+  prop:          'volcengine.doubao-seedream',
   styleGuide:    'volcengine.doubao-seedream',
   shotCloseUp:   'volcengine.doubao-seedream',
   shotMedium:    'volcengine.doubao-seedream',
@@ -156,9 +166,14 @@ export class ImageProviderRouterService {
     return this.buildRoute('characterVariation', size);
   }
 
-  /** 场景/背景参考图 */
+  /** 场景/背景参考图（seedream-5-lite: 中文美学，速度快）*/
   routeLocation(size?: string): ProviderRoute {
     return this.buildRoute('location', size);
+  }
+
+  /** 道具特写图（seedream-5-lite: 轻量任务，产品图风格）*/
+  routeProp(size?: string): ProviderRoute {
+    return this.buildRoute('prop', size);
   }
 
   /** 风格参考图（mood board / style guide）*/

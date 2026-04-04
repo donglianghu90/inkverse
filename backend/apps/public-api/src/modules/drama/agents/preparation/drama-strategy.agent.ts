@@ -7,7 +7,7 @@ import { LlmService } from '../../../novel/llm/llm.service';
 import { z } from 'zod';
 import { dramaStrategySchema, DramaStrategy, DramaSeed, SeriesOutline } from '../../schemas/drama-state.schemas';
 import { buildStrategySystemPrompt } from '../../prompting/drama-playbook';
-import type { GenreProductionGuidance } from '../../entities/drama-genre-template.entity';
+import type { GenreProductionGuidance } from '../../../template/entities/drama-genre-template.entity';
 
 const strategyOutputSchema = z.object({ strategy: dramaStrategySchema });
 

@@ -7,19 +7,17 @@ import { DramaEntity } from './entities/drama.entity';
 import { EpisodeEntity } from './entities/episode.entity';
 import { VisualAssetEntity } from './entities/visual-asset.entity';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
-import { DramaGenreTemplateEntity } from './entities/drama-genre-template.entity';
-import { DramaVisualStyleTemplateEntity } from './entities/drama-visual-style-template.entity';
+
 import { DramaAgentPipelineEntity } from './entities/drama-agent-pipeline.entity';
 import { DramaTaskEntity } from './entities/task.entity';
 import { DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity } from './entities/run.entity';
 import { MediaModule } from '../media/media.module';
 // ── Controllers ──
 import { DramaController } from './drama.controller';
-import { DramaGenreTemplateController } from './drama-genre-template.controller';
-import { DramaVisualStyleTemplateController } from './drama-visual-style-template.controller';
+
 import { DramaPipelineController } from './drama-pipeline.controller';
 import { DramaEpisodeController } from './drama-episode.controller';
-import { DramaGlobalSettingsController } from './drama-global-settings.controller';
+import { DramaPromptPreviewController } from './drama-prompt-preview.controller';
 import { DramaIdeaController } from './drama-idea.controller';
 // ── Core Services ──
 import { DramaService } from './drama.service';
@@ -42,8 +40,7 @@ import {
 } from './media-pipeline';
 // ── 基础服务 ──
 import { DramaProgressService } from './drama-progress.service';
-import { DramaGenreTemplateService } from './drama-genre-template.service';
-import { DramaVisualStyleTemplateService } from './drama-visual-style-template.service';
+
 import { DramaTaskService } from './task/task.service';
 import { TaskSubmitterService } from './task/task-submitter.service';
 import { DramaTextProcessor } from './task/drama-text.processor';
@@ -64,16 +61,15 @@ import { DramaPromptBakerService } from './prompting/drama-prompt-baker.service'
 import { DramaTaskRecoveryService } from './drama-task-recovery.service';
 import { DramaMediaWatchdogService } from './drama-media-watchdog.service';
 import { DRAMA_QUEUE } from './task/types';
-import { DramaGlobalPromptSettingEntity } from './entities/drama-global-prompt-setting.entity';
-import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.service';
+
+import { TemplateModule } from '../template/template.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
-      DramaEntity, EpisodeEntity, VisualAssetEntity, DramaWorkflowExecutionEntity, DramaGenreTemplateEntity, DramaAgentPipelineEntity,
+      DramaEntity, EpisodeEntity, VisualAssetEntity, DramaWorkflowExecutionEntity, DramaAgentPipelineEntity,
       DramaTaskEntity,
       DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity,
-      DramaVisualStyleTemplateEntity, DramaGlobalPromptSettingEntity,
     ]),
     ScheduleModule.forRoot(),
     BullModule.registerQueue(
@@ -81,17 +77,18 @@ import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.s
       { name: DRAMA_QUEUE.VIDEO }, { name: DRAMA_QUEUE.VOICE },
     ),
     MediaModule,
+    TemplateModule,
   ],
   controllers: [
-    DramaController, DramaGenreTemplateController, DramaVisualStyleTemplateController,
-    DramaPipelineController, DramaEpisodeController, DramaGlobalSettingsController,
+    DramaPipelineController, DramaEpisodeController, DramaPromptPreviewController,
     DramaIdeaController,
+    DramaController,
   ],
   providers: [
     DramaService, DramaSseHelper, DramaIdeaService, DramaVisualAssetService, DramaStateStore, EpisodeWorkflowService, DramaWorkflowExecutionService, DramaAgentPipelineService, DramaWorkflowTopologyService,
     MediaOrchestratorService, MediaQualityGateService, ShotCoherenceValidatorService, EmotionMediaMapperService, GenerationPolicyService, ImageProviderRouterService, VideoProviderRouterService,
     ShotProductionOrderService, ShotContextBuilderService, ShotPromptAssemblerService, PromptCompilerService,
-    DramaProgressService, DramaGenreTemplateService, DramaVisualStyleTemplateService,
+    DramaProgressService,
     DramaTaskService, TaskSubmitterService,
     DramaTextProcessor, DramaImageProcessor, DramaVideoProcessor, DramaVoiceProcessor,
     DramaRunService,
@@ -101,7 +98,6 @@ import { DramaGlobalPromptSettingService } from './drama-global-prompt-setting.s
     ScriptReviewerAgent, ScriptEditorAgent, PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent,
     DramaDeterministicCheckerService, DramaPromptTemplateService, DramaPromptBakerService, DramaCalibrationService,
     DramaTaskRecoveryService, DramaMediaWatchdogService,
-    DramaGlobalPromptSettingService,
   ],
   exports: [DramaTaskService, TaskSubmitterService, DramaRunService],
 })

@@ -309,6 +309,13 @@ export const characterIdentitySchema = z.object({
   faceReferencePrompt: z.string().min(1, 'faceReferencePrompt 不能为空'),
   bodyTypePrompt: z.string().default(''),
   hairStylePrompt: z.string().default(''),
+  /**
+   * 角色定妆照最终 T2I 提示词（完整的英文咒语，含摄影术语、背景要求）。
+   * 由 VisualAssetDesigner 在设计阶段直接生成，DramaVisualAssetService 生成定妆照时直接使用，
+   * 无需再经过 PromptCompiler，节省 LLM 调用。
+   * 注意：此字段不可用于分镜合成（含 "neutral plain background"、"looking at camera" 等定妆专用词）。
+   */
+  referenceImagePrompt: z.string().optional().nullable(),
 
   // ─── 灵魂层：行为/心理人设 ───
   soulProfile: z.object({
@@ -374,7 +381,12 @@ export const signaturePropSchema = z.object({
   propId: z.string(),           // 全剧唯一 ID（英文/拼音简写，如 "jade_seal"、"jiu_zun"）
   name: z.string(),             // 中文名称（如"传国玉玺"）
   description: z.string(),      // 中文详细描述（材质、年代风格、外观特征，30-60字）
-  visualPrompt: z.string(),     // 英文 T2I 提示词（产品图风格，白底，单独展示，无人物）
+  visualPrompt: z.string(),     // 英文 T2I 提示词（核心物体描述：材质、形态、细节）— 分镜用基因词
+  /**
+   * 道具商品图最终 T2I 提示词（完整咒语，含微距摄影、产品写真风格词、no people）。
+   * 由 VisualAssetDesigner 生成，DramaVisualAssetService 生成道具参考图时直接使用，跳过 PromptCompiler。
+   */
+  referenceImagePrompt: z.string().optional().nullable(),
   narrativeRole: z.enum([
     'signature',   // 角色标志性随身物（如主角的玉佩、反派的折扇）
     'macguffin',   // 剧情核心驱动物（如密令、解药、传位诏书）
@@ -390,7 +402,12 @@ export const sceneLocationSchema = z.object({
   locationId: z.string(),
   name: z.string(), // 如 "男主总裁办公室"
   description: z.string(), // 详细描述
-  visualPrompt: z.string(), // T2I 场景参考提示词（英文）
+  visualPrompt: z.string(), // T2I 场景核心描述（英文，纯空间结构/材质/光照）— 分镜 Compiler 用基因词
+  /**
+   * 场景概念图最终 T2I 提示词（完整咒语，含透视构图、no people、建筑摄影专业词）。
+   * 由 VisualAssetDesigner 生成，DramaVisualAssetService 生成场景定版图时直接使用，跳过 PromptCompiler。
+   */
+  referenceImagePrompt: z.string().optional().nullable(),
   // lightingDefault 必须为英文（T2I 模型不识别中文），包含中文时自动清空并记录警告
   lightingDefault: z.string().transform((val) =>
     /[\u4e00-\u9fff]/.test(val) ? '' : val
@@ -704,8 +721,8 @@ export const shotAudioSchema = z.object({
   // .nullable() 确保兼容 OpenAI structured outputs（不允许纯 .optional()）
   bgm: z.object({
     mood: z.string(), // 情绪标签（如 tension_building / romantic_sweet / epic_reveal）
-    intensity: z.number().min(0).max(1).default(0.5),
-    action: z.enum(['continue', 'fade_in', 'fade_out', 'cut', 'swell', 'drop_to_silence']).default('continue'),
+    intensity: z.number().min(0).max(1).nullish().transform(v => v ?? 0.5),
+    action: z.enum(['continue', 'fade_in', 'fade_out', 'cut', 'swell', 'drop_to_silence']).nullish().transform(v => v ?? 'continue'),
   }).nullable().optional(),
   sfx: na(z.object({
     trigger: z.string(), // 触发描述（如"摔门""玻璃碎裂"）

@@ -13,7 +13,6 @@ import {
   DramaSeed, SeriesOutline, VisualStyleGuide,
 } from '../../schemas/drama-state.schemas';
 import { buildProfilerSystemPrompt } from '../../prompting/drama-playbook';
-import { GENRE_TEMPLATES } from '../../prompting/drama-genre-data';
 
 /**
  * 从已解析的 profile 派生 soulViews。
@@ -80,7 +79,8 @@ const profilerOutputSchema = z.object({ profile: dramaPromptProfileSchema });
 type TemplateProfileOverride = Partial<Pick<DramaPromptProfile,
   | 'cameraStyleGuide' | 'audioStyleGuide' | 'reviewerCalibration' | 'genreArchetype'
   | 'arcDirectorGuide' | 'episodeDirectorGuide' | 'pacingAnalyzerGuide'
->>;
+  | 'agentSystemPrompts'
+>> & { genreArchetypePreset?: any };
 
 @Injectable()
 export class DramaProfilerAgent {
@@ -134,40 +134,36 @@ ${arcSummary ? `\n全剧结构参考：${arcSummary}` : ''}
     const p = typeof root.profile === 'object' && root.profile ? root.profile : root;
     const llmResult = dramaPromptProfileSchema.parse(p);
 
-    // 优先级：templateProfile（drama 专属）> GENRE_TEMPLATES（题材库默认）> LLM 生成
     const tpl = (templateProfile ?? {}) as TemplateProfileOverride;
-    const genre = genreKey ? GENRE_TEMPLATES[genreKey]?.profile : undefined;
-
-    // genreArchetype：drama 专属覆盖 > 题材库预置（枚举值确定，adaptationNotes 取 LLM 版本若更长）> LLM 生成
-    const genrePreset = genre?.genreArchetypePreset;
+    // genreArchetype：drama 专属覆盖 > LLM 生成（不再需要从硬编码库读，因为 templateProfile 已经包含了数据库中的题材配置）
     let resolvedArchetype: TemplateProfileOverride['genreArchetype'] | undefined = tpl.genreArchetype;
-    if (!resolvedArchetype && genrePreset) {
+    if (!resolvedArchetype && tpl.genreArchetypePreset) {
       const llmNotes = llmResult.genreArchetype?.adaptationNotes ?? '';
-      const presetNotes = genrePreset.adaptationNotes;
+      const presetNotes = (tpl.genreArchetypePreset as any).adaptationNotes ?? '';
       resolvedArchetype = {
-        narrativeArc: genrePreset.narrativeArc,
-        narrationRatio: genrePreset.narrationRatio,
-        factConstraint: genrePreset.factConstraint,
-        hookMechanism: genrePreset.hookMechanism,
-        conflictType: genrePreset.conflictType,
-        characterEvolution: genrePreset.characterEvolution,
-        visualTone: genrePreset.visualTone,
+        narrativeArc: (tpl.genreArchetypePreset as any).narrativeArc,
+        narrationRatio: (tpl.genreArchetypePreset as any).narrationRatio,
+        factConstraint: (tpl.genreArchetypePreset as any).factConstraint,
+        hookMechanism: (tpl.genreArchetypePreset as any).hookMechanism,
+        conflictType: (tpl.genreArchetypePreset as any).conflictType,
+        characterEvolution: (tpl.genreArchetypePreset as any).characterEvolution,
+        visualTone: (tpl.genreArchetypePreset as any).visualTone,
         // 若 LLM 在基线上补充了额外内容，使用 LLM 版本；否则用预置基线
         adaptationNotes: llmNotes.length > presetNotes.length ? llmNotes : presetNotes,
       };
     }
 
-    const resolvedCamera = tpl.cameraStyleGuide ?? (genre?.cameraStyleGuide as Record<string, unknown> | undefined);
-    const resolvedAudio = tpl.audioStyleGuide ?? (genre?.audioStyleGuide as Record<string, unknown> | undefined);
-    const resolvedReviewer = tpl.reviewerCalibration ?? (genre?.reviewerCalibration as TemplateProfileOverride['reviewerCalibration'] | undefined);
-    const resolvedArc = tpl.arcDirectorGuide ?? (genre?.arcDirectorGuide as TemplateProfileOverride['arcDirectorGuide'] | undefined);
-    const resolvedEpisode = tpl.episodeDirectorGuide ?? (genre?.episodeDirectorGuide as TemplateProfileOverride['episodeDirectorGuide'] | undefined);
-    const resolvedPacing = tpl.pacingAnalyzerGuide ?? (genre?.pacingAnalyzerGuide as TemplateProfileOverride['pacingAnalyzerGuide'] | undefined);
+    const resolvedCamera = tpl.cameraStyleGuide;
+    const resolvedAudio = tpl.audioStyleGuide;
+    const resolvedReviewer = tpl.reviewerCalibration;
+    const resolvedArc = tpl.arcDirectorGuide;
+    const resolvedEpisode = tpl.episodeDirectorGuide;
+    const resolvedPacing = tpl.pacingAnalyzerGuide;
 
     let merged: DramaPromptProfile;
 
     if (!resolvedArchetype && !resolvedCamera && !resolvedAudio && !resolvedReviewer && !resolvedArc && !resolvedEpisode && !resolvedPacing) {
-      merged = llmResult;
+      merged = { ...llmResult, agentSystemPrompts: tpl.agentSystemPrompts };
     } else {
       merged = {
         ...llmResult,
@@ -195,6 +191,7 @@ ${arcSummary ? `\n全剧结构参考：${arcSummary}` : ''}
         ...(resolvedArc ? { arcDirectorGuide: { ...llmResult.arcDirectorGuide, ...resolvedArc } } : {}),
         ...(resolvedEpisode ? { episodeDirectorGuide: { ...llmResult.episodeDirectorGuide, ...resolvedEpisode } } : {}),
         ...(resolvedPacing ? { pacingAnalyzerGuide: { ...llmResult.pacingAnalyzerGuide, ...resolvedPacing } } : {}),
+        agentSystemPrompts: tpl.agentSystemPrompts,
       };
     }
 
