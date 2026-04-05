@@ -70,6 +70,18 @@ export class DramaGenreTemplateService implements OnModuleInit {
         }));
       }
     }
+
+    // Cleanup deprecated ghost system templates that are no longer in the seed JSON
+    const validSeedKeys = Object.keys(genreTemplatesData);
+    const allSystemTpls = await this.repo.find({ where: { userId: IsNull(), isSystem: true } });
+    for (const sys of allSystemTpls) {
+      if (!validSeedKeys.includes(sys.genreKey)) {
+        this.logger.log(`Removing deprecated ghost system template: ${sys.genreKey}`);
+        await this.repo.delete({ parentTemplateId: sys.id });
+        await this.repo.remove(sys);
+      }
+    }
+
     this.logger.log(`短剧系统题材模板同步完成（${entries.length} 个）`);
   }
 
@@ -79,11 +91,11 @@ export class DramaGenreTemplateService implements OnModuleInit {
       // 已登录时只返回用户模板（含 sync 产生的副本），不叠加系统模板，避免「同一题材出现两次」的问题
       return this.repo.find({ where: { userId }, order: { displayName: 'ASC' } });
     }
-    return this.repo.find({ where: { isSystem: true }, order: { displayName: 'ASC' } });
+    return this.repo.find({ where: { userId: IsNull(), isSystem: true }, order: { displayName: 'ASC' } });
   }
 
   private async syncSystemTemplates(userId: string): Promise<void> {
-    const systemTpls = await this.repo.find({ where: { isSystem: true } });
+    const systemTpls = await this.repo.find({ where: { userId: IsNull(), isSystem: true } });
     const userTpls = await this.repo.find({ where: { userId } });
     const userByGenre = new Map(userTpls.map(t => [t.genreKey, t]));
     for (const sys of systemTpls) {
@@ -97,8 +109,9 @@ export class DramaGenreTemplateService implements OnModuleInit {
           audienceTags: sys.audienceTags, protagonistFocusTags: sys.protagonistFocusTags,
           toneTags: sys.toneTags, platformTags: sys.platformTags,
           parentTemplateId: sys.id, syncedSystemVersion: sys.systemVersion,
+          isSystem: true,
         }));
-      } else if (!user.isUserModified && user.syncedSystemVersion < sys.systemVersion) {
+      } else if (!user.isUserModified && (user.syncedSystemVersion < sys.systemVersion || !user.isSystem)) {
         Object.assign(user, {
           displayName: sys.displayName, description: sys.description,
           genreKeywords: sys.genreKeywords, seedHints: sys.seedHints,
@@ -107,10 +120,13 @@ export class DramaGenreTemplateService implements OnModuleInit {
           audienceTags: sys.audienceTags, protagonistFocusTags: sys.protagonistFocusTags,
           toneTags: sys.toneTags, platformTags: sys.platformTags,
           syncedSystemVersion: sys.systemVersion,
+          isSystem: true,
         });
         await this.repo.save(user);
       }
     }
+
+
   }
 
   async getById(id: string): Promise<DramaGenreTemplateEntity> {

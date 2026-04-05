@@ -151,7 +151,32 @@ export class DramaService implements OnModuleInit {
       userId: opts.userId ?? 'anonymous',
       title: dto.titleHint || `${dto.genre}短剧`,
       genre: dto.genre,
-      state: { _status: 'creating' } as Record<string, unknown>,
+      state: {
+        _status: 'creating',
+        // ── 用户原始配置，提前落盘（便于前端展示、断点恢复、问题排查）──
+        mainIdea: dto.mainIdea,
+        targetAudience: dto.targetAudience,
+        audienceDirective: {
+          audienceTags: dto.audienceTags ?? [],
+          protagonistFocus: dto.protagonistFocus ?? 'female_lead',
+          tonePreference: dto.tonePreference ?? '',
+          platformTarget: dto.platformTarget ?? 'generic',
+          aspectRatio: dto.aspectRatio ?? '9:16',
+          hardConstraints: [],
+          softPreferences: [],
+        },
+        mainStoryGoal: dto.mainStoryGoal ?? '',
+        visualStyleHint: dto.visualStyleHint ?? '',
+        suggestedVisualStyle: dto.suggestedVisualStyle ?? '',
+        imageResolution: dto.imageResolution ?? '2k',
+        videoResolution: dto.videoResolution ?? '720p',
+        targetEpisodeDurationSec: dto.targetEpisodeDurationSec ?? 180,
+        plannedMinEpisodes: dto.plannedMinEpisodes,
+        plannedMaxEpisodes: dto.plannedMaxEpisodes,
+        ...(dto.genreTemplateId ? { genreTemplateId: dto.genreTemplateId } : {}),
+        ...(dto.visualStyleTemplateId ? { visualStyleTemplateId: dto.visualStyleTemplateId } : {}),
+        ...(dto.videoProvider ? { videoProvider: dto.videoProvider } : {}),
+      } as Record<string, unknown>,
       episodesGenerated: 0,
     });
     const saved = await this.dramaRepo.save(entity);

@@ -1306,6 +1306,17 @@ export class GenreProfileTemplateService implements OnModuleInit {
       this.logger.log(`[seed] ${profilePending.length} 个题材 Profile 为空，后台 AI 补充生成...`);
       this.aiRefreshEmptyProfiles(profilePending).catch((err) => this.logger.error(`[seed] AI 补充 Profile 异常: ${err.message}`));
     }
+
+    // Cleanup deprecated ghost system templates that are no longer in the seed list
+    const validSeedKeys = SYSTEM_SEEDS.map((s) => s.genreKey);
+    const allSystemTpls = await this.repo.find({ where: { userId: IsNull() as any, isSystem: true } });
+    for (const sys of allSystemTpls) {
+      if (!validSeedKeys.includes(sys.genreKey)) {
+        this.logger.log(`[seed] Removing deprecated ghost system template: ${sys.genreKey}`);
+        await this.repo.delete({ parentTemplateId: sys.id });
+        await this.repo.remove(sys);
+      }
+    }
   }
 
   static buildDefaultAgentSections(ruleAtoms?: RuleAtom[], genreKey?: string): CachedAgentSections {
@@ -1408,14 +1419,14 @@ export class GenreProfileTemplateService implements OnModuleInit {
           relationshipDensity: sys.relationshipDensity ?? 'medium',
           hardConstraints: [...(sys.hardConstraints ?? [])],
           softPreferences: [...(sys.softPreferences ?? [])],
-          isSystem: false, parentTemplateId: sys.id,
+          isSystem: true, parentTemplateId: sys.id,
           systemVersion: 1, syncedSystemVersion: sys.systemVersion, isUserModified: false,
         }));
         continue;
       }
       const versionBehind = sys.systemVersion > existing.syncedSystemVersion;
       const agentOutdated = !isSameJson(existing.cachedAgentSections ?? null, sys.cachedAgentSections ?? null);
-      if ((versionBehind || agentOutdated) && !existing.isUserModified) {
+      if ((versionBehind || agentOutdated || !existing.isSystem) && !existing.isUserModified) {
         existing.displayName = sys.displayName; existing.description = sys.description;
         existing.genreKeywords = [...sys.genreKeywords];
         existing.profileJson = JSON.parse(JSON.stringify(sys.profileJson));
@@ -1429,6 +1440,7 @@ export class GenreProfileTemplateService implements OnModuleInit {
         existing.hardConstraints = [...(sys.hardConstraints ?? [])];
         existing.softPreferences = [...(sys.softPreferences ?? [])];
         existing.syncedSystemVersion = sys.systemVersion;
+        existing.isSystem = true;
         await this.repo.save(existing);
       }
     }

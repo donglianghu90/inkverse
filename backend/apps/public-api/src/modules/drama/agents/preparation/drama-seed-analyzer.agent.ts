@@ -1,6 +1,5 @@
 /**
  * 短剧种子分析 — 从用户创意中提取短剧种子 + 全剧策略方向。
- * 与小说 SeedAnalyzer 的核心差异：聚焦视觉冲突、打脸节奏、付费卡点、情绪密度。
  */
 import { Injectable } from '@nestjs/common';
 import { LlmService } from '../../../novel/llm/llm.service';
@@ -32,7 +31,7 @@ type DramaSeedOutput = z.infer<typeof seedOutputSchema>;
 
 @Injectable()
 export class DramaSeedAnalyzerAgent {
-  constructor(private readonly llm: LlmService) {}
+  constructor(private readonly llm: LlmService) { }
 
   async analyze(input: DramaSeedInput, additionalSystemPrompt?: string): Promise<DramaSeedOutput> {
     const epMin = input.plannedTotalEpisodes?.min ?? 60;
