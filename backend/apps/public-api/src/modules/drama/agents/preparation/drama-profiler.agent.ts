@@ -13,6 +13,8 @@ import {
   DramaSeed, SeriesOutline, VisualStyleGuide,
 } from '../../schemas/drama-state.schemas';
 import { buildProfilerSystemPrompt } from '../../prompting/drama-playbook';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 /**
  * 从已解析的 profile 派生 soulViews。
@@ -106,11 +108,10 @@ export class DramaProfilerAgent {
         })()
       : '';
 
-    let sysPrompt = buildProfilerSystemPrompt(genreKey, templateProfile);
-    if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
+    let sysPrompt = buildProfilerSystemPrompt(additionalSystemPrompt?.trim() || undefined, templateProfile);
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-profiler',
+      taskName: DRAMA_AGENT_REGISTRY.PROFILER.key,
       schema: profilerOutputSchema,
       systemPrompt: sysPrompt,
       metadata: { dramaId, userId },

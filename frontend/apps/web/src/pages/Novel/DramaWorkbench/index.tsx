@@ -26,7 +26,7 @@ import {
   getGenerationStatus, pauseEpisodeGeneration, type DbRunningItem,
   getDramaUsage, updateShot, listDramaExecutions, resetProblemShots,
   getDramaPipeline, saveDramaPipelineDraft, publishDramaPipeline, saveDramaWorkflowParams, getDramaNodePreview,
-  updateDramaVisualStyle, type VisualStyleGuideUpdate,
+  updateDramaVisualStyle, type VisualStyleGuideUpdate, listDramaSystemAgents,
   type EpisodeListItem, type ShotPatch, type DramaUsageSummary, type DramaSseEvent, type DramaExecutionListItem, type VisualAssetItem,
   type VisualAssetRefineStrength, type VisualAssetRefineSyncScope,
   type ResetFixTarget, type DramaPipeline, type DramaAgentNodeConfig, type DramaWorkflowParams,
@@ -285,6 +285,8 @@ const STEP_LABELS: Record<string, string> = {
   character_image: '角色图生成',
   location_image: '场景图生成',
   character_variation: '角色变体图',
+  // Agent translations injected dynamically
+
 };
 
 const EPISODE_STEP_KEY_LABELS: Record<string, string> = {
@@ -2700,6 +2702,18 @@ const WorkshopTab: React.FC<WorkshopTabProps> = ({
                   </div>
                 </label>
               ))}
+              <label className="flex items-center gap-2 cursor-pointer rounded-lg border px-3 py-2 border-amber-200 bg-amber-50/30 hover:bg-amber-100/50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={workflowParams.pauseAfterScript ?? false}
+                  onChange={(e) => setWorkflowParams((p) => ({ ...p, pauseAfterScript: e.target.checked }))}
+                  className="h-3.5 w-3.5 accent-amber-600"
+                />
+                <div>
+                  <p className="text-xs font-medium text-amber-800">剧本审阅</p>
+                  <p className="text-[10px] text-amber-700/80">生成剧本后暂停可干预</p>
+                </div>
+              </label>
             </div>
             <div className="flex justify-end pt-1">
               <Button size="sm" className="h-7 text-xs" onClick={handleSaveParams} disabled={paramsSaving}>
@@ -2976,6 +2990,17 @@ const DramaWorkbench: React.FC = () => {
   const [previewEp, setPreviewEp] = useState<Record<string, unknown> | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [mediaGenEp, setMediaGenEp] = useState<number | null>(null);
+
+  useEffect(() => {
+    listDramaSystemAgents().then(categories => {
+      categories.forEach(cat => {
+        cat.agents.forEach(agent => {
+          STEP_LABELS[agent.taskKey] = agent.name;
+          STEP_LABELS[agent.key] = agent.name;
+        });
+      });
+    }).catch(console.error);
+  }, []);
   const [mediaGenProgress, setMediaGenProgress] = useState(0);
   const [problemResetEp, setProblemResetEp] = useState<number | null>(null);
   const [problemResetMode, setProblemResetMode] = useState<'all' | 'high' | QcFixTarget | null>(null);
@@ -3000,6 +3025,61 @@ const DramaWorkbench: React.FC = () => {
   const [pipeline, setPipeline] = useState<DramaPipeline | null>(null);
   const [draftNodes, setDraftNodes] = useState<DramaAgentNodeConfig[]>([]);
   const [workflowParams, setWorkflowParams] = useState<DramaWorkflowParams>({});
+
+  // ── 剧本审阅 Modal ──
+  const [reviewScriptRunId, setReviewScriptRunId] = useState<string | null>(null);
+  const [reviewScriptContent, setReviewScriptContent] = useState<string>('');
+  const [reviewScriptLoading, setReviewScriptLoading] = useState(false);
+  const [reviewScriptSaving, setReviewScriptSaving] = useState(false);
+  const [isReviewScriptOpen, setIsReviewScriptOpen] = useState(false);
+  const [reviewScriptStep, setReviewScriptStep] = useState<string>('script_drafted'); // 记录是从哪个节点拉取的
+
+  const openScriptReview = async (runId: string) => {
+    setReviewScriptRunId(runId);
+    setIsReviewScriptOpen(true);
+    setReviewScriptLoading(true);
+    try {
+      const { getRunStepOutputs } = await import('@/services/drama');
+      const res = await getRunStepOutputs(dramaId!, runId);
+      // Backend prioritizes dialogue_polished, then script_drafted
+      let outConfig = null;
+      let targetStep = 'script_drafted';
+      if (res.stepOutputs?.['dialogue_polished']) {
+        outConfig = res.stepOutputs['dialogue_polished'];
+        targetStep = 'dialogue_polished';
+      } else if (res.stepOutputs?.['script_drafted']) {
+        outConfig = res.stepOutputs['script_drafted'];
+      }
+      setReviewScriptStep(targetStep);
+      const scriptObj = (outConfig as any)?.script || outConfig;
+      const txt = scriptObj ? JSON.stringify(scriptObj, null, 2) : '{}';
+      setReviewScriptContent(txt);
+    } catch (e: any) {
+      message.error(e.message || '获取剧本失败');
+      setReviewScriptContent('{}');
+    } finally {
+      setReviewScriptLoading(false);
+    }
+  };
+
+  const saveScriptReview = async () => {
+    if (!reviewScriptRunId) return;
+    setReviewScriptSaving(true);
+    try {
+      const parsed = JSON.parse(reviewScriptContent);
+      const { patchRunStepOutput } = await import('@/services/drama');
+      // Patch the exact step where it was retrieved from so backend successfully picks it up
+      await patchRunStepOutput(dramaId!, reviewScriptRunId, reviewScriptStep, { script: parsed });
+      message.success('剧本修改已保存');
+      setIsReviewScriptOpen(false);
+      handleGenerate();
+    } catch (e: any) {
+      message.error(e.message || 'JSON 格式有误或保存失败');
+    } finally {
+      setReviewScriptSaving(false);
+    }
+  };
+
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [nodeAdditional, setNodeAdditional] = useState(''); // 当前编辑中的 additionalSystemPrompt
   const [nodeAdditionalSaved, setNodeAdditionalSaved] = useState(''); // 已保存的值，用于 dirty 判断
@@ -3517,6 +3597,10 @@ const DramaWorkbench: React.FC = () => {
     return count;
   }, [locationsForHooks, assetViewImages]);
 
+  const shotMediaMap = useMemo(() => {
+    return Object.fromEntries(((previewEp as any)?.shotMedia ?? []).map((m: any) => [m.shotId, m])) as Record<string, any>;
+  }, [previewEp]);
+
   if (loading) return (
     <div className="flex h-[60vh] items-center justify-center">
       <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -3577,7 +3661,6 @@ const DramaWorkbench: React.FC = () => {
   const missingAssetCount = missingCharacterImageCount + missingLocationImageCount + missingVariationImageCount + missingPropImageCount;
 
   const shots = ((previewEp as any)?.storyboard?.shots as Shot[]) ?? [];
-  const shotMediaMap = ((previewEp as any)?.shotMediaMap as Record<string, ShotMedia>) ?? {};
   const generatedShotCount = Object.keys(shotMediaMap).filter(k => shotMediaMap[k]?.imageUrl).length;
   const reviewConsistencyRiskIds = new Set(
     ((((previewEp as any)?.review?.consistencyRiskShots as Array<{ shotId?: string }> | undefined) ?? [])
@@ -3902,14 +3985,26 @@ const DramaWorkbench: React.FC = () => {
                         <p className="text-xs text-amber-700 dark:text-amber-300">
                           上次进度：{r.stepLabel}
                         </p>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-6 text-xs px-2 border-amber-300 hover:bg-amber-100"
-                          onClick={() => handleGenerate()}
-                        >
-                          {isFailed ? '从断点重试' : '从断点继续'}
-                        </Button>
+                        <div className="flex gap-2">
+                          {!isFailed && (['script_drafted', 'dialogue_polished', 'continuity_checked'].includes(r.lastCheckpoint) || r.stepLabel?.includes('剧本')) && r.runId && (
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="h-6 text-xs px-2 bg-amber-600 hover:bg-amber-700 text-white border-0"
+                              onClick={() => openScriptReview(r.runId)}
+                            >
+                              审阅并修改剧本
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-xs px-2 border-amber-300 hover:bg-amber-100"
+                            onClick={() => handleGenerate()}
+                          >
+                            {isFailed ? '从断点重试' : '从断点继续'}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -4345,8 +4440,19 @@ const DramaWorkbench: React.FC = () => {
                 )}
 
                 {(previewEp as any).videoUrl && (
-                  <div className="rounded-lg overflow-hidden bg-black">
-                    <video src={(previewEp as any).videoUrl} controls className="w-full max-h-56" />
+                  <div className="rounded-lg overflow-hidden bg-black relative">
+                    {/\.(png|jpe?g|webp|gif)(\?.*)?$/i.test((previewEp as any).videoUrl) ? (
+                      <>
+                        <img src={(previewEp as any).videoUrl} alt="Preview" className="w-full max-h-56 object-contain" />
+                        <div className="absolute top-2 right-2 z-10">
+                          <Badge className="bg-black/60 text-white border border-white/20 text-[9px] px-1.5 py-0 shadow-sm pointer-events-none">
+                            降级静态
+                          </Badge>
+                        </div>
+                      </>
+                    ) : (
+                      <video src={(previewEp as any).videoUrl} controls className="w-full max-h-56" />
+                    )}
                   </div>
                 )}
 
@@ -4590,6 +4696,42 @@ const DramaWorkbench: React.FC = () => {
               </div>
             </ScrollArea>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── 剧本审阅 Modal ── */}
+      <Dialog open={isReviewScriptOpen} onOpenChange={setIsReviewScriptOpen}>
+        <DialogContent className="max-w-4xl p-0 overflow-hidden flex flex-col h-[80vh]">
+          <DialogHeader className="px-4 py-3 border-b shrink-0 flex-row justify-between items-center bg-violet-50/50 dark:bg-violet-900/10">
+            <div>
+              <DialogTitle className="text-sm font-semibold flex items-center gap-1.5">
+                <Pencil className="w-4 h-4 text-violet-600" />
+                人工审阅并修改剧本
+              </DialogTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">可直接修改返回的 JSON 结构，修改完毕后点击保存继续工作流</p>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setIsReviewScriptOpen(false)}>取消</Button>
+              <Button size="sm" className="h-8 text-xs gap-1.5" onClick={saveScriptReview} disabled={reviewScriptSaving || reviewScriptLoading}>
+                {reviewScriptSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                保存并继续生成
+              </Button>
+            </div>
+          </DialogHeader>
+          <div className="flex-1 min-h-0 bg-muted/30 p-4">
+            {reviewScriptLoading ? (
+              <div className="flex items-center justify-center h-full text-muted-foreground gap-2">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span className="text-sm">加载剧本中...</span>
+              </div>
+            ) : (
+              <Textarea
+                className="w-full h-full font-mono text-xs resize-none p-4 rounded-xl border border-muted-foreground/20 focus-visible:ring-1 focus-visible:ring-violet-500"
+                value={reviewScriptContent}
+                onChange={(e) => setReviewScriptContent(e.target.value)}
+              />
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

@@ -13,6 +13,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { resolveGenreKey } from "../../prompting/drama-genre-utils";
 import { LlmService } from "../../../novel/llm/llm.service";
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
 import { z } from "zod";
 import {
   characterIdentitySchema,
@@ -363,17 +364,15 @@ export class VisualAssetDesignerAgent {
       this.logger.log(`[VisualDesigner] 风格覆盖${styleOverrideNote}`);
     }
 
-    let sysPrompt = buildVisualAssetDesignerSystemPrompt(
+    const sysPrompt = buildVisualAssetDesignerSystemPrompt(
       effectiveVisualStyle,
       styleGuide,
       genreGuidance,
-      seed.genre,
+      additionalSystemPrompt?.trim() || undefined,
     );
-    if (additionalSystemPrompt?.trim())
-      sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
 
     const raw = await this.llm.generateStructured({
-      taskName: "drama-visual-asset-designer",
+      taskName: DRAMA_AGENT_REGISTRY.VISUAL_ASSET_DESIGNER.key,
       schema: visualStyleOnlySchema,
       systemPrompt: sysPrompt,
       metadata: { dramaId, userId },
@@ -498,7 +497,7 @@ ${visualStyleHint
     }
 
     const raw = await this.llm.generateStructured({
-      taskName: "drama-new-character-designer",
+      taskName: DRAMA_AGENT_REGISTRY.CHARACTER_DESIGNER.key,
       schema: newCharactersOutputSchema,
       metadata: { dramaId: state.dramaId, userId: state.userId },
       systemPrompt,
@@ -750,7 +749,7 @@ ${charRequests}
 10. locationId 输出时保持输入值不变。`;
 
     const raw = await this.llm.generateStructured({
-      taskName: "drama-new-location-designer",
+      taskName: DRAMA_AGENT_REGISTRY.LOCATION_DESIGNER.key,
       schema: newLocationsOutputSchema,
       metadata: { dramaId: state.dramaId, userId: state.userId },
       systemPrompt: systemPromptTextLocation,

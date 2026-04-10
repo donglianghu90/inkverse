@@ -2,7 +2,6 @@
 import { request } from '@umijs/max';
 import { getToken } from '@/services/auth';
 
-const BASE = '/api/drama';
 
 export interface CreateDramaParams {
   mainIdea: string;
@@ -117,20 +116,20 @@ export interface DramaUsageSummary {
 }
 
 export async function createDrama(data: CreateDramaParams): Promise<{ dramaId: string }> {
-  return request(BASE, { method: 'POST', data });
+  return request('/drama', { method: 'POST', data });
 }
 
 /** 重试失败的创建流程，从上次 checkpoint 继续 */
 export async function retryCreateDrama(dramaId: string): Promise<{ dramaId: string }> {
-  return request(`${BASE}/${dramaId}/retry-create`, { method: 'POST' });
+  return request(`/drama/${dramaId}/retry-create`, { method: 'POST' });
 }
 
 export async function enhanceDramaIdea(idea: string, genre?: string): Promise<{ enhanced: string; highlights: string[] }> {
-  return request(`${BASE}/idea/enhance`, { method: 'POST', data: { idea, genre } });
+  return request(`/drama/idea/enhance`, { method: 'POST', data: { idea, genre } });
 }
 
 export async function generateDramaGoal(mainIdea: string, genre: string, targetAudience: string): Promise<{ goal: string; alternatives: string[] }> {
-  return request(`${BASE}/idea/generate-goal`, { method: 'POST', data: { mainIdea, genre, targetAudience } });
+  return request(`/drama/idea/generate-goal`, { method: 'POST', data: { mainIdea, genre, targetAudience } });
 }
 
 export async function recommendGenreAndAudience(mainIdea: string): Promise<{
@@ -139,19 +138,19 @@ export async function recommendGenreAndAudience(mainIdea: string): Promise<{
   targetEpisodeDurationSec?: number; plannedEpisodes?: { min: number; max: number };
   reason?: string;
 }> {
-  return request(`${BASE}/idea/recommend-genre-audience`, { method: 'POST', data: { mainIdea } });
+  return request(`/drama/idea/recommend-genre-audience`, { method: 'POST', data: { mainIdea } });
 }
 
 export async function listDramas(): Promise<{ dramas: DramaListItem[] }> {
-  return request(BASE);
+  return request('/drama');
 }
 
 export async function deleteDrama(dramaId: string): Promise<{ success: boolean }> {
-  return request(`${BASE}/${dramaId}`, { method: 'DELETE' });
+  return request(`/drama/${dramaId}`, { method: 'DELETE' });
 }
 
 export async function getDrama(dramaId: string): Promise<Record<string, unknown>> {
-  return request(`${BASE}/${dramaId}`);
+  return request(`/drama/${dramaId}`);
 }
 
 export interface VisualStyleGuideUpdate {
@@ -169,14 +168,15 @@ export async function updateDramaVisualStyle(
   dramaId: string,
   visualStyle: VisualStyleGuideUpdate,
 ): Promise<{ success: boolean }> {
-  return request(`${BASE}/${dramaId}/visual-style`, { method: 'PATCH', data: { visualStyle } });
+  return request(`/drama/${dramaId}/visual-style`, { method: 'PATCH', data: { visualStyle } });
 }
 
 export async function getDramaUsage(dramaId: string): Promise<DramaUsageSummary> {
-  return request(`${BASE}/${dramaId}/usage`);
+  return request(`/drama/${dramaId}/usage`);
 }
 
 export interface DbRunningItem {
+  runId: string;
   episodeNumber: number;
   lastCheckpoint: string;
   isActive: boolean;       // true = 心跳在 60s 内，服务器仍在运行
@@ -214,7 +214,7 @@ export interface DramaExecutionListItem {
 }
 
 export async function getGenerationStatus(dramaId: string): Promise<GenerationStatus> {
-  return request(`${BASE}/${dramaId}/generation-status`);
+  return request(`/drama/${dramaId}/generation-status`);
 }
 
 export async function listDramaExecutions(
@@ -229,31 +229,39 @@ export async function listDramaExecutions(
     limit: String(limit),
     includeCreation: String(includeCreation),
   });
-  return request(`${BASE}/${dramaId}/executions?${params.toString()}`);
+  return request(`/drama/${dramaId}/executions?${params.toString()}`);
+}
+
+export async function getRunStepOutputs(dramaId: string, runId: string): Promise<{ stepOutputs: Record<string, unknown> }> {
+  return request(`/drama/${dramaId}/executions/${runId}/step-outputs`);
+}
+
+export async function patchRunStepOutput(dramaId: string, runId: string, stepName: string, body: Record<string, unknown>): Promise<{ success: boolean }> {
+  return request(`/drama/${dramaId}/executions/${runId}/step-outputs/${stepName}`, { method: 'PATCH', data: body });
 }
 
 export async function generateEpisodes(dramaId: string): Promise<{ message: string }> {
-  return request(`${BASE}/${dramaId}/episodes/generate`, { method: 'POST' });
+  return request(`/drama/${dramaId}/episodes/generate`, { method: 'POST' });
 }
 
 export async function pauseEpisodeGeneration(dramaId: string): Promise<{ paused: boolean; message: string }> {
-  return request(`${BASE}/${dramaId}/episodes/pause`, { method: 'POST' });
+  return request(`/drama/${dramaId}/episodes/pause`, { method: 'POST' });
 }
 
 export async function resumeEpisodeGeneration(dramaId: string): Promise<{ message: string }> {
-  return request(`${BASE}/${dramaId}/episodes/resume`, { method: 'POST' });
+  return request(`/drama/${dramaId}/episodes/resume`, { method: 'POST' });
 }
 
 export async function listEpisodes(dramaId: string): Promise<{ episodes: EpisodeListItem[] }> {
-  return request(`${BASE}/${dramaId}/episodes`);
+  return request(`/drama/${dramaId}/episodes`);
 }
 
-export async function getEpisode(dramaId: string, episodeNumber: number): Promise<Record<string, unknown>> {
-  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}`);
+export async function getEpisode(dramaId: string, episodeNumber: number): Promise<Record<string, unknown> & { shotMedia?: any[] }> {
+  return request(`/drama/${dramaId}/episodes/${episodeNumber}`);
 }
 
 export async function getVisualAssets(dramaId: string): Promise<{ assets: VisualAssetItem[] }> {
-  return request(`${BASE}/${dramaId}/visual-assets`);
+  return request(`/drama/${dramaId}/visual-assets`);
 }
 
 export async function regenerateVisualAssetImage(
@@ -261,7 +269,7 @@ export async function regenerateVisualAssetImage(
   assetId: string,
   opts?: { viewAngle?: string },
 ): Promise<VisualAssetItem> {
-  return request(`${BASE}/${dramaId}/visual-assets/${assetId}/regenerate`, {
+  return request(`/drama/${dramaId}/visual-assets/${assetId}/regenerate`, {
     method: 'POST',
     data: opts?.viewAngle ? { viewAngle: opts.viewAngle } : undefined,
   });
@@ -272,7 +280,7 @@ export async function regenerateVariationImage(
   assetId: string,
   variationId: string,
 ): Promise<VisualAssetItem> {
-  return request(`${BASE}/${dramaId}/visual-assets/${assetId}/variation/${variationId}/regenerate`, {
+  return request(`/drama/${dramaId}/visual-assets/${assetId}/variation/${variationId}/regenerate`, {
     method: 'POST',
   });
 }
@@ -282,7 +290,7 @@ export async function refineVisualAssetImage(
   assetId: string,
   data: RefineVisualAssetParams,
 ): Promise<RefineVisualAssetResult> {
-  return request(`${BASE}/${dramaId}/visual-assets/${assetId}/refine-image`, {
+  return request(`/drama/${dramaId}/visual-assets/${assetId}/refine-image`, {
     method: 'POST',
     data,
   });
@@ -319,21 +327,21 @@ export interface DramaSseEvent {
 
 export function getCreateDramaSseUrl(dramaId: string): string {
   const token = getToken();
-  return `${BASE}/${dramaId}/create-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return `/api/drama/${dramaId}/create-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 export function getGenerateEpisodeSseUrl(dramaId: string): string {
   const token = getToken();
-  return `${BASE}/${dramaId}/episode-generate-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return `/api/drama/${dramaId}/episode-generate-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 export function getGenerateAllAssetsSseUrl(dramaId: string): string {
   const token = getToken();
-  return `${BASE}/${dramaId}/visual-assets/generate-all-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return `/api/drama/${dramaId}/visual-assets/generate-all-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 export async function generateAllVisualAssets(dramaId: string): Promise<void> {
-  return request(`${BASE}/${dramaId}/visual-assets/generate-all`, { method: 'POST' });
+  return request(`/drama/${dramaId}/visual-assets/generate-all`, { method: 'POST' });
 }
 
 export interface ShotPatch {
@@ -361,11 +369,11 @@ export async function updateShot(
   shotId: string,
   patch: ShotPatch,
 ): Promise<{ shotId: string; isHumanEdited: true }> {
-  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/shots/${shotId}`, { method: 'PATCH', data: patch });
+  return request(`/drama/${dramaId}/episodes/${episodeNumber}/shots/${shotId}`, { method: 'PATCH', data: patch });
 }
 
 export async function generateEpisodeMedia(dramaId: string, episodeNumber: number): Promise<{ mediaStatus: string; videoUrl?: string }> {
-  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/generate-media`, { method: 'POST' });
+  return request(`/drama/${dramaId}/episodes/${episodeNumber}/generate-media`, { method: 'POST' });
 }
 
 export interface ResetProblemShotsResult {
@@ -387,37 +395,37 @@ export async function resetProblemShots(
   if (opts?.onlyHighPriority !== undefined) params.set('onlyHighPriority', String(opts.onlyHighPriority));
   if (opts?.fixTarget !== undefined) params.set('fixTarget', String(opts.fixTarget));
   const qs = params.toString();
-  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/reset-problem-shots${qs ? `?${qs}` : ''}`, { method: 'POST' });
+  return request(`/drama/${dramaId}/episodes/${episodeNumber}/reset-problem-shots${qs ? `?${qs}` : ''}`, { method: 'POST' });
 }
 
-export async function getEpisodeMediaStatus(dramaId: string, episodeNumber: number): Promise<{ mediaStatus: string; videoUrl?: string; shotMediaMap?: Record<string, unknown> }> {
-  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/media-status`);
+export async function getEpisodeMediaStatus(dramaId: string, episodeNumber: number): Promise<{ mediaStatus: string; videoUrl?: string; shotMedia?: any[] }> {
+  return request(`/drama/${dramaId}/episodes/${episodeNumber}/media-status`);
 }
 
 export function getGenerateMediaSseUrl(dramaId: string, episodeNumber: number): string {
   const token = getToken();
-  return `${BASE}/${dramaId}/episodes/${episodeNumber}/generate-media-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return `/api/drama/${dramaId}/episodes/${episodeNumber}/generate-media-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 /** 批量生成单集全部分镜图（仅 T2I Phase 0，不生成视频），SSE 流式推送进度 */
 export function getGenerateImagesSseUrl(dramaId: string, episodeNumber: number): string {
   const token = getToken();
-  return `${BASE}/${dramaId}/episodes/${episodeNumber}/generate-images-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return `/api/drama/${dramaId}/episodes/${episodeNumber}/generate-images-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 /** 单镜图片生成（同步 HTTP，适合制作台逐 Shot 手动触发） */
 export async function generateShotImage(dramaId: string, episodeNumber: number, shotId: string): Promise<{ imageUrl: string }> {
-  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/generate-image`, { method: 'POST' });
+  return request(`/drama/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/generate-image`, { method: 'POST' });
 }
 
 /** 单镜视频生成（同步 HTTP，适合制作台逐 Shot 手动触发） */
 export async function generateShotVideo(dramaId: string, episodeNumber: number, shotId: string): Promise<{ videoUrl: string; status: string }> {
-  return request(`${BASE}/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/generate-video`, { method: 'POST' });
+  return request(`/drama/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/generate-video`, { method: 'POST' });
 }
 
 export function getEpisodeProgressSseUrl(dramaId: string): string {
   const token = getToken();
-  return `${BASE}/${dramaId}/episode-progress-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return `/api/drama/${dramaId}/episode-progress-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 /* ─── 题材模板 ─── */
@@ -453,7 +461,7 @@ export interface GenreAnalytics {
 }
 
 export async function getGenreAnalytics(): Promise<GenreAnalytics[]> {
-  return request(`${BASE}/genre-templates/analytics`);
+  return request(`/drama/genre-templates/analytics`);
 }
 
 /* ─── 市场数据（爬虫） ─── */
@@ -487,7 +495,7 @@ export interface MarketSnapshot {
 
 export async function getMarketSnapshot(date?: string): Promise<MarketSnapshot> {
   const params = date ? `?date=${date}` : '';
-  return request(`${BASE}/market/snapshot${params}`);
+  return request(`/drama/market/snapshot${params}`);
 }
 
 export async function getMarketRecommendedGenres(): Promise<Array<{
@@ -497,7 +505,7 @@ export async function getMarketRecommendedGenres(): Promise<Array<{
   topTitles: string[];
   platforms: string[];
 }>> {
-  return request(`${BASE}/market/recommended-genres`);
+  return request(`/drama/market/recommended-genres`);
 }
 
 export interface CreationRecommendations {
@@ -510,35 +518,35 @@ export interface CreationRecommendations {
 }
 
 export async function getCreationRecommendations(): Promise<CreationRecommendations> {
-  return request(`${BASE}/market/creation-recommendations`);
+  return request(`/drama/market/creation-recommendations`);
 }
 
 export async function triggerMarketCrawl(): Promise<{ inserted: number; updated: number; errors: string[] }> {
-  return request(`${BASE}/market/crawl`, { method: 'POST' });
+  return request(`/drama/market/crawl`, { method: 'POST' });
 }
 
 export async function listDramaGenreTemplates(): Promise<DramaGenreTemplate[]> {
-  return request(`${BASE}/genre-templates/list`);
+  return request(`/drama/genre-templates/list`);
 }
 
 export async function getDramaGenreTemplate(id: string): Promise<DramaGenreTemplate> {
-  return request(`${BASE}/genre-templates/${id}`);
+  return request(`/drama/genre-templates/${id}`);
 }
 
 export async function createDramaGenreTemplate(data: Partial<DramaGenreTemplate>): Promise<DramaGenreTemplate> {
-  return request(`${BASE}/genre-templates`, { method: 'POST', data });
+  return request(`/drama/genre-templates`, { method: 'POST', data });
 }
 
 export async function updateDramaGenreTemplate(id: string, data: Partial<DramaGenreTemplate>): Promise<DramaGenreTemplate> {
-  return request(`${BASE}/genre-templates/${id}`, { method: 'PUT', data });
+  return request(`/drama/genre-templates/${id}`, { method: 'PUT', data });
 }
 
 export async function deleteDramaGenreTemplate(id: string): Promise<{ success: boolean }> {
-  return request(`${BASE}/genre-templates/${id}`, { method: 'DELETE' });
+  return request(`/drama/genre-templates/${id}`, { method: 'DELETE' });
 }
 
 export async function cloneDramaGenreTemplate(id: string): Promise<DramaGenreTemplate> {
-  return request(`${BASE}/genre-templates/${id}/clone`, { method: 'POST' });
+  return request(`/drama/genre-templates/${id}/clone`, { method: 'POST' });
 }
 
 // ─── Pipeline / 提示词工坊 ────────────────────────────────────────────────────
@@ -565,6 +573,8 @@ export interface DramaWorkflowParams {
   enableDialogueCoach?: boolean;
   enablePacingAnalyzer?: boolean;
   enableHookCrafter?: boolean;
+  pauseAfterScript?: boolean;
+  pauseAfterStoryboard?: boolean;
 }
 
 export interface DramaPipeline {
@@ -577,23 +587,23 @@ export interface DramaPipeline {
 }
 
 export async function getDramaPipeline(dramaId: string): Promise<DramaPipeline> {
-  return request(`${BASE}/${dramaId}/pipeline`);
+  return request(`/drama/${dramaId}/pipeline`);
 }
 
 export async function saveDramaPipelineDraft(dramaId: string, nodes: DramaAgentNodeConfig[]): Promise<DramaPipeline> {
-  return request(`${BASE}/${dramaId}/pipeline/draft`, { method: 'PUT', data: { nodes } });
+  return request(`/drama/${dramaId}/pipeline/draft`, { method: 'PUT', data: { nodes } });
 }
 
 export async function publishDramaPipeline(dramaId: string): Promise<DramaPipeline> {
-  return request(`${BASE}/${dramaId}/pipeline/publish`, { method: 'POST' });
+  return request(`/drama/${dramaId}/pipeline/publish`, { method: 'POST' });
 }
 
 export async function saveDramaWorkflowParams(dramaId: string, params: Partial<DramaWorkflowParams>): Promise<DramaPipeline> {
-  return request(`${BASE}/${dramaId}/pipeline/params`, { method: 'PUT', data: params });
+  return request(`/drama/${dramaId}/pipeline/params`, { method: 'PUT', data: params });
 }
 
 export async function getDramaNodePreview(dramaId: string, nodeId: string): Promise<{ nodeId: string; basePrompt: string }> {
-  return request(`${BASE}/${dramaId}/pipeline/node-preview/${nodeId}`);
+  return request(`/drama/${dramaId}/pipeline/node-preview/${nodeId}`);
 }
 
 export interface AiGenerateDramaTemplateParams {
@@ -605,7 +615,7 @@ export interface AiGenerateDramaTemplateParams {
 }
 
 export async function aiGenerateDramaTemplate(data: AiGenerateDramaTemplateParams): Promise<DramaGenreTemplate> {
-  return request(`${BASE}/genre-templates/ai-generate`, { method: 'POST', data });
+  return request(`/drama/genre-templates/ai-generate`, { method: 'POST', data });
 }
 
 /* ─── 视觉风格模板 ─── */
@@ -651,27 +661,27 @@ export interface DramaVisualStyleTemplate {
 }
 
 export async function listDramaVisualStyleTemplates(): Promise<DramaVisualStyleTemplate[]> {
-  return request(`${BASE}/visual-style-templates/list`);
+  return request(`/drama/visual-style-templates/list`);
 }
 
 export async function getDramaVisualStyleTemplate(id: string): Promise<DramaVisualStyleTemplate> {
-  return request(`${BASE}/visual-style-templates/${id}`);
+  return request(`/drama/visual-style-templates/${id}`);
 }
 
 export async function createDramaVisualStyleTemplate(data: Partial<DramaVisualStyleTemplate>): Promise<DramaVisualStyleTemplate> {
-  return request(`${BASE}/visual-style-templates`, { method: 'POST', data });
+  return request(`/drama/visual-style-templates`, { method: 'POST', data });
 }
 
 export async function updateDramaVisualStyleTemplate(id: string, data: Partial<DramaVisualStyleTemplate>): Promise<DramaVisualStyleTemplate> {
-  return request(`${BASE}/visual-style-templates/${id}`, { method: 'PUT', data });
+  return request(`/drama/visual-style-templates/${id}`, { method: 'PUT', data });
 }
 
 export async function deleteDramaVisualStyleTemplate(id: string): Promise<{ success: boolean }> {
-  return request(`${BASE}/visual-style-templates/${id}`, { method: 'DELETE' });
+  return request(`/drama/visual-style-templates/${id}`, { method: 'DELETE' });
 }
 
 export async function cloneDramaVisualStyleTemplate(id: string): Promise<DramaVisualStyleTemplate> {
-  return request(`${BASE}/visual-style-templates/${id}/clone`, { method: 'POST' });
+  return request(`/drama/visual-style-templates/${id}/clone`, { method: 'POST' });
 }
 
 
@@ -681,8 +691,27 @@ export async function updateDramaAgentPrompt(
   agentType: string,
   systemPrompt: string,
 ): Promise<DramaGenreTemplate> {
-  return request(`${BASE}/genre-templates/${templateId}/agent-prompts`, {
+  return request(`/drama/genre-templates/${templateId}/agent-prompts`, {
     method: 'POST',
     data: { agentType, systemPrompt },
   });
+}
+
+/**
+ * 重新 bake 已有短剧的逐集阶段 pipeline 提示词快照。
+ * 适用场景：用户修改了题材模板的 agentSystemPrompts 后，希望让更改对某部已创建的短剧生效。
+ * 此操作会重新解析 profile/strategy/visualStyle 等上下文并覆盖 publishedNodes 的 basePromptSnapshot。
+ */
+export async function rebakeDramaPrompts(dramaId: string): Promise<{ success: boolean; message: string }> {
+  return request(`/drama/${dramaId}/pipeline/rebake`, { method: 'POST' });
+}
+
+// ── System Config ──
+export async function listDramaSystemAgents() {
+  return request<{
+    id: string;
+    label: string;
+    desc: string;
+    agents: { key: string; taskKey: string; name: string; desc: string }[];
+  }[]>('/drama/system/agents', { method: 'GET' });
 }

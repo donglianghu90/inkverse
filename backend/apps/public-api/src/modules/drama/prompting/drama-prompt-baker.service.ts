@@ -16,6 +16,7 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import type { DramaPromptProfile, DramaStrategy, VisualStyleGuide } from '../schemas/drama-state.schemas';
+import { DRAMA_AGENT_REGISTRY } from '../agents/drama-agent.registry';
 import { DramaAgentPipelineService } from '../workflow/drama-agent-pipeline.service';
 import type { DramaAgentNodeConfig } from '../interfaces';
 import {
@@ -111,76 +112,76 @@ export class DramaPromptBakerService {
     // _custom 题材：所有 agent 使用 BASE 模板，build* 函数在此处完整解析所有变量。
     const snapshots: Record<string, string> = {
 
-      'arc-director': buildArcDirectorSystemPrompt({
+      [DRAMA_AGENT_REGISTRY.ARC_DIRECTOR.promptKey]: buildArcDirectorSystemPrompt({
         genreArchetype,
         genreRules,
         arcDirectorGuide: profile.arcDirectorGuide,
-      }, profile.agentSystemPrompts?.['arc-director']) + this.soulBlock('arcDirector', profile),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.ARC_DIRECTOR.promptKey]) + this.soulBlock('arcDirector', profile),
 
-      'episode-director': buildEpisodeDirectorSystemPrompt({
+      [DRAMA_AGENT_REGISTRY.EPISODE_DIRECTOR.promptKey]: buildEpisodeDirectorSystemPrompt({
         maxPresentPerEpisode: strategy?.characterBudget?.maxPresentPerEpisode,
         genreArchetype,
         visualStyle: visualStyleWithExtras,
         genreRules,
         episodeDirectorGuide: profile.episodeDirectorGuide,
-      }, profile.agentSystemPrompts?.['episode-director']) + this.soulBlock('episodeDirector', profile),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.EPISODE_DIRECTOR.promptKey]) + this.soulBlock('episodeDirector', profile),
 
-      'continuity-guard': buildContinuityGuardSystemPrompt({
+      [DRAMA_AGENT_REGISTRY.CONTINUITY_GUARD.promptKey]: buildContinuityGuardSystemPrompt({
         genreSpecificChecks: [
           ...(reviewerCalib?.genreSpecificChecks ?? []),
           ...(profile.soulViews?.continuityGuardChecks ?? []),
         ],
-      }, profile.agentSystemPrompts?.['continuity-guard']),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.CONTINUITY_GUARD.promptKey]),
 
-      'scriptwriter': buildScriptwriterSystemPrompt({
+      [DRAMA_AGENT_REGISTRY.SCRIPTWRITER.promptKey]: buildScriptwriterSystemPrompt({
         guide: soul,
         visualStyle: scriptwriterVisualStyle,
         genreArchetype,
-      }, profile.agentSystemPrompts?.['scriptwriter']),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.SCRIPTWRITER.promptKey]),
 
-      'dialogue-coach': buildDialogueCoachSystemPrompt({
+      [DRAMA_AGENT_REGISTRY.DIALOGUE_COACH.promptKey]: buildDialogueCoachSystemPrompt({
         dialogueGuide: soul.dialogueGuide,
         adaptationNotes: genreArchetype?.adaptationNotes,
-      }, profile.agentSystemPrompts?.['dialogue-coach']),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.DIALOGUE_COACH.promptKey]),
 
-      'storyboard-director': buildStoryboardDirectorStaticPrompt({
+      [DRAMA_AGENT_REGISTRY.STORYBOARD_DIRECTOR.promptKey]: buildStoryboardDirectorStaticPrompt({
         camGuide: cameraGuide,
         visualStyle,
         videoModelProfile: ctx.videoModelProfile,
-      }, profile.agentSystemPrompts?.['storyboard-director']),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.STORYBOARD_DIRECTOR.promptKey]),
 
-      'audio-director': buildAudioDirectorStaticPrompt({
+      [DRAMA_AGENT_REGISTRY.AUDIO_DIRECTOR.promptKey]: buildAudioDirectorStaticPrompt({
         audioGuide: audioGuide,
-      }, profile.agentSystemPrompts?.['audio-director']),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.AUDIO_DIRECTOR.promptKey]),
 
-      'script-reviewer': buildScriptReviewerSystemPrompt({
+      [DRAMA_AGENT_REGISTRY.SCRIPT_REVIEWER.promptKey]: buildScriptReviewerSystemPrompt({
         weights: reviewerCalib?.dimensionWeights as Record<string, number> | undefined,
         genreChecks: reviewerCalib?.genreSpecificChecks,
         dialogueGuide: soul.dialogueGuide,
-      }, profile.agentSystemPrompts?.['script-reviewer']),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.SCRIPT_REVIEWER.promptKey]),
 
-      'script-editor': buildScriptEditorSystemPrompt({
+      [DRAMA_AGENT_REGISTRY.SCRIPT_EDITOR.promptKey]: buildScriptEditorSystemPrompt({
         dialogueGuide: soul.dialogueGuide,
-      }, profile.agentSystemPrompts?.['script-editor']),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.SCRIPT_EDITOR.promptKey]),
 
-      'pacing-analyzer': buildPacingAnalyzerSystemPrompt({
+      [DRAMA_AGENT_REGISTRY.PACING_ANALYZER.promptKey]: buildPacingAnalyzerSystemPrompt({
         genreArchetype,
         genreRules,
         pacingAnalyzerGuide: profile.pacingAnalyzerGuide,
-      }, profile.agentSystemPrompts?.['pacing-analyzer']) + this.soulBlock('pacingAnalyzer', profile),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.PACING_ANALYZER.promptKey]) + this.soulBlock('pacingAnalyzer', profile),
 
-      'hook-crafter': buildHookCrafterStaticPrompt({
+      [DRAMA_AGENT_REGISTRY.HOOK_CRAFTER.promptKey]: buildHookCrafterStaticPrompt({
         strategy: strategy?.hookCadencePolicy,
         genreRules,
         genreArchetype: profile.soulViews?.hookCrafter
           ? { adaptationNotes: profile.soulViews.hookCrafter }
           : genreArchetype,
-      }, profile.agentSystemPrompts?.['hook-crafter']),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.HOOK_CRAFTER.promptKey]),
 
-      'episode-recorder': buildEpisodeRecorderSystemPrompt({
+      [DRAMA_AGENT_REGISTRY.EPISODE_RECORDER.promptKey]: buildEpisodeRecorderSystemPrompt({
         genreArchetype,
         genreRules,
-      }, profile.agentSystemPrompts?.['episode-recorder']),
+      }, profile.agentSystemPrompts?.[DRAMA_AGENT_REGISTRY.EPISODE_RECORDER.promptKey]),
     };
 
     const currentNodes = await this.pipelineService.getPublishedNodes(dramaId);

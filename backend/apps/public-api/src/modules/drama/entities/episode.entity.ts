@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, OneToMany } from 'typeorm';
+import { ShotMediaEntity } from './shot-media.entity';
 
 export type EpisodeMediaStatus = 'not_started' | 'generating_first_frames' | 'generating_images' | 'generating_videos' | 'compositing' | 'completed' | 'failed';
 
@@ -46,27 +47,8 @@ export class EpisodeEntity {
   @Column({ type: 'text', default: '' })
   videoUrl: string; // 合成后的完整集视频
 
-  @Column({ type: 'jsonb', nullable: true })
-  shotMediaMap: Record<string, {
-    videoUrl?: string;
-    videoJobId?: string;
-    videoProvider?: string;
-    ttsUrl?: string;
-    imageUrl?: string;
-    lastFrameImageUrl?: string;
-    status?: string;
-    qc?: {
-      identityScore?: number;
-      styleScore?: number;
-      readabilityScore?: number;
-      score?: number;
-      passed?: boolean;
-      attempts?: number;
-      issues?: string[];
-      failReasons?: Array<'identity' | 'style' | 'camera' | 'motion'>;
-      recommendedFix?: 'identity' | 'style' | 'camera' | 'motion';
-    };
-  }> | null;
+  @OneToMany(() => ShotMediaEntity, (sm) => sm.episodeId)
+  shotMediaList: ShotMediaEntity[];
 
   @Column({ type: 'text', default: '' })
   mediaError: string;

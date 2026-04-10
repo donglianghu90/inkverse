@@ -95,6 +95,47 @@ const ANGLE_PERSPECTIVE_HINTS: Record<string, string> = {
   back_of_head:  'back of head view, following shot, mysterious trailing perspective',
 };
 
+/**
+ * 构图规则提示词表（按 camera.composition 注入构图关键词）。
+ * 帮助 T2I 模型在生成时遵守特定的构图规则。
+ */
+const COMPOSITION_HINTS: Record<string, string> = {
+  center:              'centered subject composition, deadpan symmetrical framing',
+  rule_of_thirds_left: 'rule of thirds composition, subject positioned at left power point',
+  rule_of_thirds_right:'rule of thirds composition, subject positioned at right power point',
+  symmetrical:         'symmetrical balanced composition, centered framing',
+  leading_space:       'leading space composition, open space in the direction subject faces',
+  negative_space:      'negative space composition, minimalist framing, breathing room',
+  frame_within_frame:  'frame within frame composition, natural framing through doorway or arch',
+};
+
+/**
+ * 景深 (Depth of Field) 提示词表。
+ * 景深直接影响视觉焦点和层次感。
+ */
+const DEPTH_OF_FIELD_HINTS: Record<string, string> = {
+  shallow:        'shallow depth of field, strong background bokeh, sharp subject isolation',
+  medium:         'moderate depth of field, balanced focus, natural perspective',
+  deep:           'deep depth of field, everything in focus, sharp foreground to background',
+  split_diopter:  'split diopter effect, dual focus plane, foreground and background both sharp',
+  rack_focus:     'rack focus transition, shifting focal plane',
+};
+
+/**
+ * 特殊拍摄技法的静帧视觉暗示表。
+ * 将运动技巧转化为 T2I 静帧中可感知的视觉特征。
+ */
+const STATIC_TECHNIQUE_HINTS: Record<string, string> = {
+  slow_motion:  'frozen moment in time, suspended motion, crystallized action instant',
+  bullet_time:  'bullet time freeze frame, frozen mid-action, Matrix-style suspended moment',
+  time_lapse:   'time-compressed moment, dynamic environmental change, long exposure streaks',
+  dolly_zoom:   'vertigo perspective distortion, background scale shift, Hitchcock zoom effect',
+  fpv:          'immersive first-person perspective, close proximity to ground, dynamic angle',
+  macro:        'extreme macro detail, magnified surface texture, ultra-close material study',
+  fast_push:    'dramatic forward momentum composition, converging perspective lines',
+  fast_pull:    'receding wide reveal composition, expanding field of view',
+};
+
 const BASE_NEGATIVE = [
   'blurry', 'low quality', 'watermark', 'text', 'logo',
 ];
@@ -312,21 +353,49 @@ export class PromptOptimizerService implements OnModuleInit {
       }
     }
 
-    // 注入景别提示词（按 shotSize 注入构图/裁切关键词）
+    // 注入景别提示词（按 shotSize 注入构图/裁切关键词）— 前置到 prompt 开头
+    // CLIP/T5 对 prompt 前段 token 赋予更高注意力权重，景别决定画面主体比例，必须优先感知
     if (opts.shotSize) {
       const framingHint = FRAMING_SCALE_HINTS[opts.shotSize];
       if (framingHint && !prompt.toLowerCase().includes(framingHint.split(',')[0].toLowerCase())) {
-        prompt = `${prompt}, ${framingHint}`;
+        prompt = `${framingHint}, ${prompt}`;
         added.push(framingHint);
       }
     }
 
-    // 注入角度透视提示词（按 cameraAngle 注入透视关键词，与景别叠加）
+    // 注入角度透视提示词（按 cameraAngle 注入透视关键词，与景别叠加）— 前置到景别之后
     if (opts.cameraAngle) {
       const anglePerspective = ANGLE_PERSPECTIVE_HINTS[opts.cameraAngle];
       if (anglePerspective && !prompt.toLowerCase().includes(anglePerspective.split(',')[0].toLowerCase())) {
-        prompt = `${prompt}, ${anglePerspective}`;
+        prompt = `${anglePerspective}, ${prompt}`;
         added.push(anglePerspective);
+      }
+    }
+
+    // 注入构图规则提示词（按 composition 注入构图规则关键词）
+    if (opts.composition) {
+      const compHint = COMPOSITION_HINTS[opts.composition];
+      if (compHint && !prompt.toLowerCase().includes(compHint.split(',')[0].toLowerCase())) {
+        prompt = `${prompt}, ${compHint}`;
+        added.push(compHint);
+      }
+    }
+
+    // 注入景深提示词（按 depthOfField 注入景深关键词）
+    if (opts.depthOfField) {
+      const dofHint = DEPTH_OF_FIELD_HINTS[opts.depthOfField];
+      if (dofHint && !prompt.toLowerCase().includes(dofHint.split(',')[0].toLowerCase())) {
+        prompt = `${prompt}, ${dofHint}`;
+        added.push(dofHint);
+      }
+    }
+
+    // 注入特殊技法的静帧视觉暗示（将运动技巧转化为 T2I 可感知的视觉特征）
+    if (opts.specialTechnique) {
+      const techHint = STATIC_TECHNIQUE_HINTS[opts.specialTechnique];
+      if (techHint && !prompt.toLowerCase().includes(techHint.split(',')[0].toLowerCase())) {
+        prompt = `${prompt}, ${techHint}`;
+        added.push(techHint);
       }
     }
 

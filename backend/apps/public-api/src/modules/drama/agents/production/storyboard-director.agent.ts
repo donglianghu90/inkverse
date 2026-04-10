@@ -4,13 +4,12 @@ import { LlmService } from '../../../llm/llm.service';
 import { z } from 'zod';
 import {
   shotSchema, episodeStoryboardSchema, EpisodeStoryboard, EpisodeScript, EpisodeIntent,
-  DramaState, ScriptScene, CharacterIdentity,
+  DramaState, ScriptScene, CharacterIdentity, shotCharacterSchema, shotDialogueSchema
 } from '../../schemas/drama-state.schemas';
 import { buildStoryboardDirectorStaticPrompt, buildStoryboardSceneContext, buildUserPromptConstraintsTail } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 import { VideoProviderRouterService } from '../../media-pipeline/video-provider-router.service';
-
-const sceneShotsOutputSchema = z.object({ shots: z.array(shotSchema) });
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
 
 // 黄金场景类型：需要更密集的镜头和专属摄影语言
 const GOLDEN_PURPOSES = new Set(['climax', 'confrontation', 'revelation', 'cliffhanger']);
@@ -26,7 +25,7 @@ export class StoryboardDirectorAgent {
     private readonly videoRouter: VideoProviderRouterService,
   ) {}
 
-  async direct(state: DramaState, script: EpisodeScript, intent?: EpisodeIntent, continuityWarnings?: string[]): Promise<EpisodeStoryboard> {
+  async direct(state: DramaState, script: EpisodeScript, intent?: EpisodeIntent, continuityWarnings?: string[], rebakeLessons?: string[]): Promise<EpisodeStoryboard> {
     const scenes = script?.scenes ?? [];
     if (!scenes.length) throw new Error('剧本场景为空，无法生成分镜');
     const allShots: z.infer<typeof shotSchema>[] = [];
@@ -38,7 +37,7 @@ export class StoryboardDirectorAgent {
       const isLastScene = si === scenes.length - 1;
       if (si > 0) await new Promise(r => setTimeout(r, 800));
       this.logger.log(`E${script?.episodeNumber ?? 1} 场景 ${si + 1}/${scenes.length} [${scene?.purpose ?? ''}]: ${scene?.sceneHeading ?? ''}`);
-      const shots = await this.directScene(state, script, scene, globalIdx, isLastScene, intent, prevSceneLastShots, continuityWarnings);
+      const shots = await this.directScene(state, script, scene, globalIdx, isLastScene, intent, prevSceneLastShots, continuityWarnings, rebakeLessons);
       allShots.push(...shots);
       globalIdx += shots.length;
       // 保留最后 2 个 shot 作为下一场景的视觉衔接锚点
@@ -59,6 +58,7 @@ export class StoryboardDirectorAgent {
     startIdx: number, isLastScene: boolean, intent?: EpisodeIntent,
     prevSceneLastShots: z.infer<typeof shotSchema>[] = [],
     continuityWarnings?: string[],
+    rebakeLessons?: string[],
   ) {
     const profile = state.promptProfile;
     const camGuide = profile?.cameraStyleGuide;
@@ -115,9 +115,28 @@ export class StoryboardDirectorAgent {
       ? `\n📷 导演规划的主镜头（至少为每个属于本场景的主镜生成 1 个对应 Shot，设 isMasterShot=true）：\n${intent.masterShotPlan.map(m => `- ${m.beatId}: ${m.visualGoal} | ${m.emotionGoal} (${m.actionVerb}, ${m.minDurSec}-${m.maxDurSec}s)`).join('\n')}\n`
       : '';
 
+    // 动态构建 Schema，彻底消除 AI 实体引用的幻觉
+    const validCharIds = state.characters.map((c) => c.characterId) as [string, ...string[]];
+    const characterIdField = validCharIds.length > 0 ? z.enum(validCharIds) : z.string();
+    const dynamicShotCharacterSchema = shotCharacterSchema.extend({
+      characterId: characterIdField,
+    });
+    const dynamicShotDialogueSchema = shotDialogueSchema.extend({
+      characterId: characterIdField,
+    });
+    const dynamicShotSchema = shotSchema.extend({
+      sceneId: z.literal(scene.sceneId),
+      characters: z.array(dynamicShotCharacterSchema).nullish().transform(v => v ?? []),
+      dialogue: dynamicShotDialogueSchema.nullish(),
+    });
+    const dynamicSceneShotsOutputSchema = z.object({
+      _thoughtProcess: z.string().describe('Write your detailed visual planning thoughts here before defining the shots.'),
+      shots: z.array(dynamicShotSchema),
+    });
+
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-storyboard-director',
-      schema: sceneShotsOutputSchema,
+      taskName: DRAMA_AGENT_REGISTRY.STORYBOARD_DIRECTOR.key,
+      schema: dynamicSceneShotsOutputSchema,
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: epNum },
       systemPrompt: await this.promptService.buildPrompt(
         state.dramaId,
@@ -166,6 +185,8 @@ ${locDesc}
 ${masterShotCtx}${sigPropsCtx}
 要求：shots数组，每个Shot必须包含firstFramePrompt、lastFramePrompt 和 qualityTier。visualPrompt、firstFramePrompt 和 lastFramePrompt 必须纯粹描写"画面里有什么"，专注动作、姿态、光影氛围与场景布置。
 **重要准则**：禁止在 prompt 中出现诸如 "close_up", "medium shot", "looking at camera", 角色发型、衣服、脸部细节的描述！这些描述会在后期管线中自动根据 budget 拼接，如果在 prompt 中出现会导致 token 重复叠加污染画面！
+【强化要求】请先在 _thoughtProcess 中一步一步写下你的全场景机位调度考量、节奏分析以及防犯错策略，思考清楚后再输出 shots 数组！
+${rebakeLessons?.length ? `\n🔥 回炉教训（上一版分镜之所以不合格的原因，这一版你必须绝对避免）：\n${rebakeLessons.map(l => `- ${l}`).join('\n')}` : ''}
 ${flashbackCtx}
 ${continuityWarnings?.length ? `\n⚠️ 连续性警告（分镜创作时必须遵守以下修正建议）：\n${continuityWarnings.join('\n')}` : ''}${buildUserPromptConstraintsTail({ redLines: state.seed?.redLines })}`,
       temperature: 0.5,

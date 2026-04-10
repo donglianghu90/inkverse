@@ -71,9 +71,9 @@ const MODEL_PROFILES: Record<string, VideoModelProfile> = {
     minDurationSec: 3,
     maxDurationSec: 15,
     sweetSpotSec: 5,
-    promptStyleHint: '自然语言描述，侧重"动作+运动"描述，避免静态风格前缀。多镜头组内每段prompt独立描述本段动作。',
-    strengthHint: '时长灵活(3-15s)，1080P，支持首尾帧控制和 kling_elements 角色一致性锁定。支持原生多镜头(multi_shots)：连续Shot组合为一次请求，各段精确时长，无裁剪浪费，视觉风格完全统一。',
-    constraintHint: '普通Shot建议3-8秒；高潮动作镜头可到10-12秒。多镜头组最多5段，每段1-12s，合计≤15s。不满足组合条件的Shot独立生成。',
+    promptStyleHint: '自然语言描述，侧重"动作+运动"描述，避免静态风格前缀。',
+    strengthHint: '时长灵活(3-15s)，1080P，支持首尾帧控制和 kling_elements 角色一致性锁定。',
+    constraintHint: '普通Shot建议3-8秒；高潮动作镜头可到10-12秒。',
   },
   hailuo: {
     provider: 'hailuo',
@@ -112,12 +112,11 @@ const MODEL_PROFILES: Record<string, VideoModelProfile> = {
     maxDurationSec: 15,
     sweetSpotSec: 10,
     promptStyleHint: '自然语言描述，注重场景连贯性和叙事节奏。支持风格和比例控制。',
-    strengthHint: '图生视频（需首帧），叙事与物理一致性较好，适合中长镜头。shotGroupId 组合时使用 [Segment N] 前缀拼接prompt，输出10/15s后按groupOffsetSec裁剪。',
+    strengthHint: '图生视频（需首帧），叙事与物理一致性较好，适合中长镜头。',
     constraintHint: '必须提供首帧图。' +
       '时长只有 10s 或 15s 两档（离散，非连续）：estimatedDurationSec 必须写 10 或 15，' +
       '写其他值（如 5、7、12）会导致 Sora 按较大档生成后再截断，浪费生成成本且运动被截断。' +
-      '判断原则：标准镜头写 10，需要延展连续运动的长镜头写 15。' +
-      'shotGroup 组合短镜时合计时长需 ≥ 8s。',
+      '判断原则：标准镜头写 10，需要延展连续运动的长镜头写 15。',
   },
 };
 
@@ -173,34 +172,15 @@ export class VideoProviderRouterService {
     styleBucket?: string;
     userChoice?: string;
   }): string {
-    const { genre, styleBucket, userChoice } = opts;
+    const { userChoice } = opts;
 
     if (userChoice && userChoice !== 'auto') {
       this.logger.debug(`用户指定 Provider→${userChoice}`);
       return userChoice;
     }
 
-    // 优先按视觉风格选（2D 动漫等风格差异最大）
-    if (styleBucket) {
-      const byStyle = STYLE_PRIMARY_MODEL[styleBucket];
-      if (byStyle) {
-        this.logger.debug(`按视觉风格选定 Provider→${byStyle}: style=${styleBucket}`);
-        return byStyle;
-      }
-    }
-
-    // 其次按题材选
-    if (genre) {
-      const key = genre.toLowerCase();
-      const byGenre = GENRE_PRIMARY_MODEL[key] ?? GENRE_PRIMARY_MODEL[genre];
-      if (byGenre) {
-        this.logger.debug(`按题材选定 Provider→${byGenre}: genre=${genre}`);
-        return byGenre;
-      }
-    }
-
-    this.logger.debug(`使用默认 Provider→${this.defaultProvider}`);
-    return this.defaultProvider;
+    this.logger.debug(`强制使用 Provider→kling`);
+    return 'kling';
   }
 
   /**
@@ -219,9 +199,11 @@ export class VideoProviderRouterService {
     /** 已确定的主 Provider（来自 DramaState.videoProvider） */
     overrideProvider?: string;
   }): VideoProviderRoute {
-    const provider = (opts.overrideProvider && opts.overrideProvider !== 'auto')
-      ? opts.overrideProvider
-      : this.defaultProvider;
+    // 将历史的 hailuo / veo / volcengine 状态统一映射到 kling，确保历史短剧也全部使用 kling
+    let provider = opts.overrideProvider || 'kling';
+    if (['auto', 'hailuo', 'veo', 'volcengine'].includes(provider)) {
+      provider = 'kling';
+    }
 
     return {
       provider,

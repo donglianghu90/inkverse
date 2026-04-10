@@ -15,6 +15,7 @@ export async function getInitialState(): Promise<{ currentUser?: UserInfo }> {
 }
 
 export const request: RequestConfig = {
+  baseURL: '/api',
   errorConfig: {
     errorHandler: (error: any) => {
       const { response } = error;

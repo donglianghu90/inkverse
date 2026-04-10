@@ -10,6 +10,8 @@ import {
 } from '../../schemas/drama-state.schemas';
 import { buildArcDirectorSystemPrompt, buildArcExpansionSystemPrompt, buildUserPromptConstraintsTail } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 const arcOutputSchema = z.object({ segment: arcSegmentSchema });
 const expansionOutputSchema = z.object({ episodes: z.array(episodeSynopsisSchema) });
@@ -37,7 +39,7 @@ export class ArcDirectorAgent {
       : '';
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-arc-director',
+      taskName: DRAMA_AGENT_REGISTRY.ARC_DIRECTOR.key,
       schema: arcOutputSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcDirectorSystemPrompt({ genreArchetype: state.promptProfile?.genreArchetype, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules, redLines: state.seed.redLines, arcDirectorGuide: state.promptProfile?.arcDirectorGuide ?? undefined })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber },
@@ -76,7 +78,7 @@ ${state.storySoFar ? `全局剧情概要：\n${state.storySoFar.slice(0, 800)}` 
     const paywallSet = new Set(state.seriesOutline?.paywallEpisodes ?? []);
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-arc-director',
+      taskName: DRAMA_AGENT_REGISTRY.ARC_DIRECTOR.key,
       schema: expansionOutputSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'arc-director', buildArcExpansionSystemPrompt({ genreArchetype: state.promptProfile?.genreArchetype, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules, redLines: state.seed.redLines })),
       metadata: { dramaId: state.dramaId, userId: state.userId },

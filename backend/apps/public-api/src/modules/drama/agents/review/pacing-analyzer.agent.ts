@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { EpisodeStoryboard, DramaState } from '../../schemas/drama-state.schemas';
 import { buildPacingAnalyzerSystemPrompt } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 const pacingResultSchema = z.object({
   overallPacing: z.enum(['too_slow', 'slightly_slow', 'good', 'slightly_fast', 'too_fast']),
@@ -35,7 +37,7 @@ export class PacingAnalyzerAgent {
     ).join('\n');
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-pacing-analyzer',
+      taskName: DRAMA_AGENT_REGISTRY.PACING_ANALYZER.key,
       schema: pacingResultSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'pacing-analyzer', buildPacingAnalyzerSystemPrompt({
         genreArchetype: state.promptProfile?.genreArchetype,

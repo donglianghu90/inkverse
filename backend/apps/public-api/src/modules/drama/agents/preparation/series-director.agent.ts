@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { seriesOutlineSchema, SeriesOutline, DramaSeed, episodeSynopsisSchema } from '../../schemas/drama-state.schemas';
 import { buildSeriesDirectorSystemPrompt } from '../../prompting/drama-playbook';
 import type { GenreProductionGuidance } from '../../../template/entities/drama-genre-template.entity';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 const DETAIL_SEGMENT = 15; // 首段详细规划集数
 
@@ -24,17 +26,16 @@ export class SeriesDirectorAgent {
   private readonly logger = new Logger(SeriesDirectorAgent.name);
   constructor(private readonly llm: LlmService) {}
 
-  async plan(seed: DramaSeed, dramaId?: string, userId?: string, genreGuidance?: GenreProductionGuidance, additionalSystemPrompt?: string): Promise<SeriesOutline> {
+  async plan(seed: DramaSeed, dramaId?: string, userId?: string, genreGuidance?: GenreProductionGuidance, seedHints?: import('../../../template/entities/drama-genre-template.entity').DramaSeedHints, additionalSystemPrompt?: string): Promise<SeriesOutline> {
     const epMin = seed.plannedTotalEpisodes.min;
     const epMax = seed.plannedTotalEpisodes.max;
     const targetEp = Math.round((epMin + epMax) / 2);
     const durSec = seed.targetEpisodeDurationSec;
 
-    let sysPrompt = buildSeriesDirectorSystemPrompt({ targetEp, epMin, epMax, durSec, genre: seed.genre, genreGuidance }, seed.genre);
-    if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
+    let sysPrompt = buildSeriesDirectorSystemPrompt({ targetEp, epMin, epMax, durSec, genre: seed.genre, genreGuidance }, additionalSystemPrompt?.trim() || undefined);
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-series-director',
+      taskName: DRAMA_AGENT_REGISTRY.SERIES_DIRECTOR.key,
       schema: segmentedOutputSchema,
       systemPrompt: sysPrompt,
       metadata: { dramaId, userId },
@@ -59,10 +60,10 @@ ${seed.antagonistConcept ? `对手：${seed.antagonistConcept.name} — ${seed.a
       temperature: 0.5,
     });
 
-    return this.normalize(raw as Record<string, unknown>, seed, targetEp);
+    return this.normalize(raw as Record<string, unknown>, seed, targetEp, seedHints);
   }
 
-  private normalize(raw: Record<string, unknown>, seed: DramaSeed, targetEp: number): SeriesOutline {
+  private normalize(raw: Record<string, unknown>, seed: DramaSeed, targetEp: number, seedHints?: import('../../../template/entities/drama-genre-template.entity').DramaSeedHints): SeriesOutline {
     const root = this.obj(raw);
     const detailed = (Array.isArray(root.detailedEpisodes) ? root.detailedEpisodes : Array.isArray(root.episodes) ? root.episodes : []) as any[];
     const arcOverview = (Array.isArray(root.arcOverview) ? root.arcOverview : []) as any[];
@@ -115,7 +116,7 @@ ${seed.antagonistConcept ? `对手：${seed.antagonistConcept.name} — ${seed.a
     return seriesOutlineSchema.parse({
       totalPlannedEpisodes: targetEp,
       mainStoryGoal: this.str(root.mainStoryGoal) || seed.coreConflict,
-      endingDirection: this.str(root.endingDirection) || '主角完成逆袭，真相大白',
+      endingDirection: this.str(root.endingDirection) || seedHints?.catharsisPresets?.[0] || '目标达成与命运转折',
       episodes, paywallEpisodes: [...new Set(paywallEpisodes)],
     });
   }

@@ -6,6 +6,7 @@ import { createHash } from 'crypto';
 import { z } from 'zod';
 import { EpisodeEntity } from '../entities/episode.entity';
 import { DramaEntity } from '../entities/drama.entity';
+import { ShotMediaEntity } from '../entities/shot-media.entity';
 import { DramaState, Shot, EpisodeStoryboard } from '../schemas/drama-state.schemas';
 import { LlmService } from '../../llm/llm.service';
 import type { ShotMediaEntry } from '../interfaces';
@@ -35,6 +36,7 @@ export class ShotCoherenceValidatorService {
 
   constructor(
     @InjectRepository(EpisodeEntity) private readonly episodeRepo: Repository<EpisodeEntity>,
+    @InjectRepository(ShotMediaEntity) private readonly shotMediaRepo: Repository<ShotMediaEntity>,
     @InjectRepository(DramaEntity) private readonly dramaRepo: Repository<DramaEntity>,
     @Optional() private readonly llm?: LlmService,
   ) {}
@@ -56,7 +58,8 @@ export class ShotCoherenceValidatorService {
     const state = drama.state as unknown as DramaState;
     const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
     const shots = storyboard?.shots ?? [];
-    const mediaMap = (episode.shotMediaMap ?? {}) as Record<string, ShotMediaEntry>;
+    const mediaList = await this.shotMediaRepo.find({ where: { episodeId: episode.id } });
+    const mediaMap = Object.fromEntries(mediaList.map(m => [m.shotId, m])) as Record<string, ShotMediaEntry>;
 
     if (shots.length < 2) return this.emptyReport();
 

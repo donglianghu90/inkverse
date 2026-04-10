@@ -6,6 +6,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { ConfigService } from '@packages/modules';
 import { EpisodeEntity, EpisodeMediaStatus } from '../entities/episode.entity';
+import { ShotMediaEntity } from '../entities/shot-media.entity';
 import { VisualAssetEntity } from '../entities/visual-asset.entity';
 import { DramaEntity } from '../entities/drama.entity';
 import { DramaState, Shot, EpisodeStoryboard } from '../schemas/drama-state.schemas';
@@ -79,6 +80,7 @@ export class MediaOrchestratorService implements OnModuleInit {
 
   constructor(
     @InjectRepository(EpisodeEntity) private readonly episodeRepo: Repository<EpisodeEntity>,
+    @InjectRepository(ShotMediaEntity) private readonly shotMediaRepo: Repository<ShotMediaEntity>,
     @InjectRepository(VisualAssetEntity) private readonly assetRepo: Repository<VisualAssetEntity>,
     @InjectRepository(DramaEntity) private readonly dramaRepo: Repository<DramaEntity>,
     private readonly mediaService: MediaService,
@@ -148,8 +150,8 @@ export class MediaOrchestratorService implements OnModuleInit {
     if (!stuck.length) return;
     this.logger.warn(`发现 ${stuck.length} 个未完成媒体任务，执行恢复...`);
     for (const ep of stuck) {
-      const map = ep.shotMediaMap ?? {};
-      const hasActive = Object.values(map).some(v => v.status === 'submitted' && v.videoJobId);
+      const mediaList = await this.shotMediaRepo.find({ where: { episodeId: ep.id } });
+      const hasActive = mediaList.some(v => v.status === 'submitted' && v.videoJobId);
       if (!hasActive) {
         this.logger.warn(`E${ep.episodeNumber}(${ep.dramaId}) 无活跃任务，标记失败`);
         await this.episodeRepo.update(ep.id, { mediaStatus: 'failed', mediaError: '服务重启恢复: 无活跃任务' });
@@ -264,9 +266,9 @@ export class MediaOrchestratorService implements OnModuleInit {
     const withMediaRetry = <T>(fn: () => Promise<T>, label: string) =>
       this.withRetry(fn, label, mediaPolicy.maxMediaRetries, mediaPolicy.retryBaseDelayMs);
 
-    const raw = episode.shotMediaMap ?? {};
+    const mediaList = await this.shotMediaRepo.find({ where: { episodeId: episode.id } });
     const shotMediaMap: Record<string, ShotMediaEntry> = Object.fromEntries(
-      Object.entries(raw).map(([k, v]) => [k, { ...v, status: v.status ?? 'unknown' }]),
+      mediaList.map((m) => [m.shotId, { ...(m as unknown as ShotMediaEntry), status: m.status ?? 'unknown' }])
     );
 
     const hasT2I = !this.skipImageGen;
@@ -297,21 +299,13 @@ export class MediaOrchestratorService implements OnModuleInit {
 
       if (hasT2I) {
         // ═══ Phase 0: T2I 首帧 + 尾帧（并发池） ═══
-        await this.updateMedia(episode.id, 'generating_first_frames', shotMediaMap);
+        await this.updateMediaStatus(episode.id, 'generating_first_frames');
         const sceneCache = new Map<string, string>();
         // B3: 用持久化的常驻场景图预填充，避免跨集重复生成背景
         for (const [locationId, imageUrl] of locationImageMap) {
           sceneCache.set(locationId, imageUrl);
         }
         const prevFrameCache = new Map<number, string>();
-        let frameDirty = 0;
-        const flushFirstFrames = async (force = false) => {
-          frameDirty++;
-          if (force || frameDirty >= mediaPolicy.dbFlushEvery) {
-            await this.updateMedia(episode.id, 'generating_first_frames', shotMediaMap);
-            frameDirty = 0;
-          }
-        };
 
         await this.runConcurrent(orderedShots, Math.min(mediaPolicy.t2iConcurrency, this.t2iMaxConcurrency), async (shot, i) => {
           const sid = shot.shotId;
@@ -343,6 +337,8 @@ export class MediaOrchestratorService implements OnModuleInit {
                 shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
                 qualityTier: shot.qualityTier ?? 'standard',
                 shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle, emotionColorHint,
+                composition: shot.camera?.composition, depthOfField: shot.camera?.depthOfField,
+                specialTechnique: shot.specialTechnique ?? undefined,
                 routeProfile: shotPolicy.routeProfile,
                 provider: shotRoute.provider,
                 ambientPopulation: ambientPopulationMap.get(getLocationId(shot.sceneId)),
@@ -413,7 +409,7 @@ export class MediaOrchestratorService implements OnModuleInit {
               }
 
               if (imgUrl) {
-                shotMediaMap[sid] = {
+                const newEntry = {
                   ...shotMediaMap[sid],
                   imageUrl: imgUrl,
                   status: shotMediaMap[sid]?.status ?? 'image_done',
@@ -421,6 +417,7 @@ export class MediaOrchestratorService implements OnModuleInit {
                   t2iPrompt: optimized.prompt,
                   t2iNegativePrompt: optimized.negativePrompt || undefined,
                 };
+                shotMediaMap[sid] = newEntry;
                 // 非注册角色首次出现缓存：guard_01 等无档案小角色，首帧图作为
                 // 同集后续镜头的 anchor，避免同一场景内多次出现时长相随机漂移
                 for (const c of (shot.characters ?? [])) {
@@ -455,11 +452,8 @@ export class MediaOrchestratorService implements OnModuleInit {
             prevFrameCache.set(shot.shotIndex, shotMediaMap[sid].imageUrl!);
           }
 
-          // Kling multi-shot 模式：组内 Shot 的尾帧 API 不支持，跳过生成节省 T2I 额度。
-          // 独立 Shot（无 shotGroupId）及 Sora 组合（支持尾帧）正常生成。
-          const skipLastFrame = !!shot.shotGroupId &&
-            (this.videoRouter.route({ overrideProvider: state.videoProvider }).provider ?? 'kling') === 'kling';
-
+          // 组内 Shot 的尾帧不再跳过，独立 Shot 正常生成尾帧。
+          const skipLastFrame = false;
           if (shot.lastFramePrompt && !shotMediaMap[sid]?.lastFrameImageUrl && !skipLastFrame) {
             try {
               emit(phaseOff + orderedShots.length + i, `${sid} 尾帧生成中...`);
@@ -487,6 +481,8 @@ export class MediaOrchestratorService implements OnModuleInit {
                 qualityTier: shot.qualityTier ?? 'standard', emotionColorHint,
                 shotSize: shot.camera?.shotSizeEnd ?? shot.camera?.shotSize,
                 cameraAngle: shot.camera?.cameraAngle,
+                composition: shot.camera?.composition, depthOfField: shot.camera?.depthOfField,
+                specialTechnique: shot.specialTechnique ?? undefined,
                 routeProfile: shotPolicy.routeProfile,
                 provider: shotRoute.provider,
                 ambientPopulation: ambientPopulationMap.get(getLocationId(shot.sceneId)),
@@ -500,13 +496,14 @@ export class MediaOrchestratorService implements OnModuleInit {
                 });
               }, `${sid} 尾帧`);
               const lastUrl = res.images?.[0]?.url ?? '';
-              if (lastUrl) shotMediaMap[sid] = { ...shotMediaMap[sid], lastFrameImageUrl: lastUrl, lastFrameT2iPrompt: optLast.prompt };
+              if (lastUrl) {
+                const updatedEntry = { ...shotMediaMap[sid], lastFrameImageUrl: lastUrl, lastFrameT2iPrompt: optLast.prompt };
+                shotMediaMap[sid] = updatedEntry;
+              }
               emit(phaseOff + orderedShots.length + i, `${sid} 尾帧完成`, true);
             } catch (err) { this.logger.warn(`${sid} 尾帧失败: ${(err as Error).message}`); }
           }
-          await flushFirstFrames();
         });
-        await flushFirstFrames(true);
         // P5: T2I 完成后，将池角色的最佳生成图写回 minorRolePool（内存操作，由 updateDramaState 统一落库）
         await this.updatePoolReferenceImages(state, shots, shotMediaMap);
 
@@ -542,7 +539,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       // ═══ Phase 0.5: 镜头连贯性验证 + 自动重生成 flagged shots ═══
       if (hasT2I && mediaPolicy.enableCoherenceValidation) {
         try {
-          await this.updateMedia(episode.id, 'generating_first_frames', shotMediaMap);
+          await this.updateMediaStatus(episode.id, 'generating_first_frames');
           const coherence = await this.coherenceValidator.validateEpisodeCoherence(dramaId, episodeNumber, mediaPolicy.enableVlmCoherence);
           if (coherence.flaggedShots.length > 0) {
             this.logger.warn(`E${episodeNumber} 连贯性标记 ${coherence.flaggedShots.length} 个Shot，自动重生成: ${coherence.flaggedShots.join(', ')}`);
@@ -576,6 +573,8 @@ export class MediaOrchestratorService implements OnModuleInit {
                   shotType: 'first_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
                   qualityTier: shot.qualityTier ?? 'standard',
                   shotSize: shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle, emotionColorHint: mediaParams?.colorGrade,
+                  composition: shot.camera?.composition, depthOfField: shot.camera?.depthOfField,
+                  specialTechnique: shot.specialTechnique ?? undefined,
                   routeProfile: shotPolicy.routeProfile,
                   provider: regenRoute.provider,
                   ambientPopulation: ambientPopulationMap.get(getLocationId(shot.sceneId)),
@@ -609,229 +608,13 @@ export class MediaOrchestratorService implements OnModuleInit {
                 }
               } catch (err) { this.logger.warn(`${sid} 连贯性重生成失败: ${(err as Error).message}`); }
             }
-            await this.updateMedia(episode.id, 'generating_first_frames', shotMediaMap);
+            await this.updateMediaStatus(episode.id, 'generating_first_frames');
           }
         } catch (err) { this.logger.warn(`连贯性验证降级: ${(err as Error).message}`); }
       }
 
       // ═══ Phase 1: I2V / T2V 视频生成 ═══
-      await this.updateMedia(episode.id, 'generating_videos', shotMediaMap);
-      let videoSubmitDirty = 0;
-      const flushVideoSubmit = async (force = false) => {
-        videoSubmitDirty++;
-        if (force || videoSubmitDirty >= mediaPolicy.dbFlushEvery) {
-          await this.updateMedia(episode.id, 'generating_videos', shotMediaMap);
-          videoSubmitDirty = 0;
-        }
-      };
-
-      // ── Phase 1-pre: Shot 组合生成（provider-aware）────────────────────────────
-      // · provider=kling → Kling 3.0 multi_shots=true（各段精确时长，无裁剪浪费，单模型风格一致）
-      // · provider=sora  → Sora 合并单请求（[Segment N] 拼接 prompt，10/15s + trim）
-      // · 其他 provider  → 跳过组合，各 Shot 在主循环独立生成
-      const shotGroupMap = new Map<string, Shot[]>();
-      for (const shot of orderedShots) {
-        if (shot.shotGroupId) {
-          if (!shotGroupMap.has(shot.shotGroupId)) shotGroupMap.set(shot.shotGroupId, []);
-          shotGroupMap.get(shot.shotGroupId)!.push(shot);
-        }
-      }
-
-      // 确定组合生成使用的 provider（由剧级 videoProvider 决定）
-      const groupProvider = this.videoRouter.route({ overrideProvider: state.videoProvider }).provider ?? 'kling';
-      const groupSupported = groupProvider === 'kling' || groupProvider === 'sora';
-
-      if (shotGroupMap.size > 0 && groupSupported) {
-        this.logger.log(`E${episodeNumber} 检测到 ${shotGroupMap.size} 个 Shot 组，使用 ${groupProvider === 'kling' ? 'Kling multi-shot' : 'Sora 合并'} 生成`);
-
-        for (const [groupId, groupShots] of shotGroupMap) {
-          groupShots.sort((a, b) => a.shotIndex - b.shotIndex);
-          const leader    = groupShots[0];
-          const leaderSid = leader.shotId;
-
-          // 断点续传：leader 已有视频，直接传播给 follower
-          if (shotMediaMap[leaderSid]?.videoUrl) {
-            for (const follower of groupShots.slice(1)) {
-              shotMediaMap[follower.shotId] = {
-                ...shotMediaMap[follower.shotId],
-                videoUrl: shotMediaMap[leaderSid].videoUrl,
-                videoProvider: groupProvider,
-                status: 'completed',
-              };
-            }
-            this.logger.log(`组 ${groupId}: leader 已有视频，传播给 ${groupShots.length - 1} 个 follower`);
-            continue;
-          }
-
-          try {
-            const gFirstFrame = shotMediaMap[leaderSid]?.imageUrl;
-            const groupRefImages: Array<{ url: string; role: 'first_frame' | 'last_frame' | 'character' | 'style' }> = [];
-            if (gFirstFrame) groupRefImages.push({ url: gFirstFrame, role: 'first_frame' });
-
-            let groupSub: { jobId: string };
-
-            if (groupProvider === 'kling') {
-              // ── Kling multi-shot：per-character kling_elements + 各段精确时长 ────
-              // Step 1: 按角色 ID 收集参考图（variation → anchor → primary），保证每个角色有自己的 element
-              const charUrlsById = new Map<string, string[]>(); // charId → urls (最多4张)
-              for (const gs of groupShots) {
-                for (const cid of this.shotContextService.resolveLockedCharacterIds(gs)) {
-                  if (!charUrlsById.has(cid)) charUrlsById.set(cid, []);
-                  const bucket = charUrlsById.get(cid)!;
-                  const varId = gs.characterVariationIds?.[cid];
-                  const candidates = [
-                    varId ? variationImageMap.get(`${cid}_${varId}`) : undefined,
-                    ...(characterAnchorMap.get(cid) ?? []),
-                    charImageMap.get(cid)?.primary,
-                  ].filter((u): u is string => !!u);
-                  for (const url of candidates) {
-                    if (!bucket.includes(url) && bucket.length < 4) bucket.push(url);
-                  }
-                }
-              }
-
-              // Step 2: 构建 kling_elements（每个角色一个 element，最多 3 个；再加 style_ref）
-              type KlingElement = { name: string; description: string; element_input_urls: string[] };
-              const klingElements: KlingElement[] = [];
-              const charIdToElem = new Map<string, string>(); // charId → element name
-              let elemIdx = 0;
-              for (const [cid, urls] of charUrlsById) {
-                if (elemIdx >= 3) break;
-                if (!urls.length) { elemIdx++; continue; }
-                // Kling 要求每个 element 至少 2 张图；只有 1 张时复用
-                const elementUrls = urls.length >= 2 ? urls.slice(0, 4) : [urls[0], urls[0]];
-                const elemName = `char_${elemIdx}`;
-                klingElements.push({ name: elemName, description: `character ${elemIdx}`, element_input_urls: elementUrls });
-                charIdToElem.set(cid, elemName);
-                elemIdx++;
-              }
-              // style_ref：至少 2 张才构成有效 element
-              const hasStyleElem = styleRefImages.length >= 2 && klingElements.length < 3;
-              if (hasStyleElem) {
-                klingElements.push({ name: 'style_ref', description: 'visual style', element_input_urls: styleRefImages.slice(0, 4) });
-              }
-
-              // Step 3: 每段 prompt 末尾追加该镜头出现的角色 element 引用及 @style_ref
-              const multiPromptSegments = groupShots.map(gs => {
-                let p = this.promptOptimizer.optimizeForT2V(
-                  this.shotContextService.applyStyleLockPrompt(gs.visualPrompt, gs, state),
-                  { provider: 'kling', duration: gs.estimatedDurationSec, hasFirstFrame: !!gFirstFrame },
-                ).prompt;
-                for (const cid of this.shotContextService.resolveLockedCharacterIds(gs)) {
-                  const elemName = charIdToElem.get(cid);
-                  if (elemName && !p.includes(`@${elemName}`)) p = `${p} @${elemName}`;
-                }
-                if (hasStyleElem && !p.includes('@style_ref')) p = `${p} @style_ref`;
-                return { prompt: p, duration: gs.estimatedDurationSec };
-              });
-
-              const totalGroupDur = multiPromptSegments.reduce((sum, s) => sum + s.duration, 0);
-
-              groupSub = await withMediaRetry(() => this.mediaService.submitVideo({
-                prompt: multiPromptSegments.map(s => s.prompt).join('. '),
-                duration: totalGroupDur,
-                quality: '1080p',
-                aspectRatio: aspectRatio as any,
-                referenceImages: groupRefImages, // 仅含 first_frame，字符参考已通过 kling_elements 传递
-                dramaId, assetType: 'shot_video', refId: `${leaderSid}_group`,
-                userId, episodeNumber,
-                provider: 'kling',
-                extra: {
-                  multi_shots: true,
-                  multi_prompt: multiPromptSegments,
-                  ...(klingElements.length ? { kling_elements: klingElements } : {}),
-                },
-              }), `组 ${groupId} Kling multi-shot`);
-
-              this.logger.log(
-                `组 ${groupId}: ${groupShots.length} shots → Kling multi-shot ${totalGroupDur.toFixed(1)}s` +
-                ` elements=${klingElements.length}(chars=${charUrlsById.size} style=${hasStyleElem}) jobId=${groupSub.jobId}`,
-              );
-
-            } else {
-              // ── Sora 合并：[Segment N] prompt 拼接，固定 10/15s ─────────────
-              const lastShot = groupShots[groupShots.length - 1];
-              const gLastFrame = shotMediaMap[lastShot.shotId]?.lastFrameImageUrl;
-              if (gLastFrame) groupRefImages.push({ url: gLastFrame, role: 'last_frame' });
-
-              const totalGroupDur = groupShots.reduce((sum, s) => sum + s.estimatedDurationSec, 0);
-              const submitDuration = MediaOrchestratorService.clampDuration(totalGroupDur, 'sora');
-              const mergedPrompt = groupShots
-                .map((s, idx) => `[Segment ${idx + 1}]: ${s.visualPrompt}`)
-                .join('. ');
-              const optGroupVideo = this.promptOptimizer.optimizeForT2V(mergedPrompt, {
-                provider: 'sora', duration: submitDuration,
-                hasFirstFrame: !!gFirstFrame, hasLastFrame: !!gLastFrame,
-              });
-
-              groupSub = await withMediaRetry(() => this.mediaService.submitVideo({
-                prompt: optGroupVideo.prompt,
-                duration: submitDuration,
-                quality: '1080p',
-                aspectRatio: aspectRatio as any,
-                referenceImages: groupRefImages,
-                dramaId, assetType: 'shot_video', refId: `${leaderSid}_group`,
-                userId, episodeNumber,
-                provider: 'sora',
-              }), `组 ${groupId} Sora 合并视频`);
-
-              this.logger.log(`组 ${groupId}: ${groupShots.length} shots → Sora ${submitDuration}s (合计 ${totalGroupDur.toFixed(1)}s), jobId=${groupSub.jobId}`);
-            }
-
-            shotMediaMap[leaderSid] = {
-              ...shotMediaMap[leaderSid],
-              videoJobId: groupSub.jobId,
-              videoProvider: groupProvider,
-              status: 'submitted',
-            };
-            for (const follower of groupShots.slice(1)) {
-              shotMediaMap[follower.shotId] = {
-                ...shotMediaMap[follower.shotId],
-                videoProvider: groupProvider,
-                status: 'group_pending',
-              };
-            }
-          } catch (err) {
-            this.logger.error(`组 ${groupId} 提交失败: ${(err as Error).message}，退回独立生成`);
-            for (const shot of groupShots) {
-              shotMediaMap[shot.shotId] = { ...shotMediaMap[shot.shotId], status: undefined as any };
-            }
-          }
-        }
-
-        // 等待所有组 leader 的视频完成
-        const hasGroupSubmits = Object.values(shotMediaMap).some(v => v.status === 'submitted');
-        if (hasGroupSubmits) {
-          await this.awaitVideoJobs(shotMediaMap, orderedShots, dramaId, episode.id, phaseOff, emit);
-        }
-
-        // 将 leader 的 videoUrl 传播给 follower（group_pending → completed）
-        for (const [groupId, groupShots] of shotGroupMap) {
-          groupShots.sort((a, b) => a.shotIndex - b.shotIndex);
-          const leaderEntry = shotMediaMap[groupShots[0].shotId];
-          if (leaderEntry?.videoUrl) {
-            for (const follower of groupShots.slice(1)) {
-              if (shotMediaMap[follower.shotId]?.status === 'group_pending') {
-                shotMediaMap[follower.shotId] = {
-                  ...shotMediaMap[follower.shotId],
-                  videoUrl: leaderEntry.videoUrl,
-                  videoProvider: groupProvider,
-                  status: 'completed',
-                };
-              }
-            }
-          } else {
-            this.logger.warn(`组 ${groupId} leader 无视频，退回独立生成`);
-            for (const shot of groupShots) {
-              if (shotMediaMap[shot.shotId]?.status === 'group_pending' || shotMediaMap[shot.shotId]?.status === 'failed') {
-                shotMediaMap[shot.shotId] = { ...shotMediaMap[shot.shotId], status: undefined as any };
-              }
-            }
-          }
-        }
-
-        await this.updateMedia(episode.id, 'generating_videos', shotMediaMap);
-      }
+      await this.updateMediaStatus(episode.id, 'generating_videos');
 
       await this.runConcurrent(orderedShots, mediaPolicy.i2vConcurrency, async (shot, i) => {
         const sid = shot.shotId;
@@ -846,6 +629,9 @@ export class MediaOrchestratorService implements OnModuleInit {
           if (shot.isPreview) { shotMediaMap[sid] = { ...shotMediaMap[sid], status: 'skipped_preview' }; emit(phaseOff + i, `${sid} 预览跳过`, true); return; }
 
           emit(phaseOff + i, `${sid} 视频生成中...`);
+          shotMediaMap[sid] = { ...(shotMediaMap[sid] ?? {}), status: 'generating_video', shotId: sid } as ShotMediaEntry;
+          await this.shotMediaRepo.save({ ...shotMediaMap[sid], episodeId: episode.id });
+
           const refImages: Array<{ url: string; role: 'first_frame' | 'last_frame' | 'character' | 'style' }> = [];
           const firstFrame = shotMediaMap[sid]?.imageUrl;
           if (firstFrame) refImages.push({ url: firstFrame, role: 'first_frame' });
@@ -913,7 +699,7 @@ export class MediaOrchestratorService implements OnModuleInit {
             fallbackProvider: actualFallback,
           }), `${sid} 视频`);
           shotMediaMap[sid] = { ...shotMediaMap[sid], videoJobId: sub.jobId, videoProvider: actualProvider, status: 'submitted' };
-          await flushVideoSubmit();
+          await this.shotMediaRepo.save({ ...shotMediaMap[sid], episodeId: episode.id, shotId: sid });
         } catch (err) {
           this.logger.error(`${sid} 视频提交失败: ${(err as Error).message}`);
           const fallbackImage = shotMediaMap[sid]?.imageUrl;
@@ -923,10 +709,9 @@ export class MediaOrchestratorService implements OnModuleInit {
           } else {
             shotMediaMap[sid] = { ...shotMediaMap[sid], status: 'failed' };
           }
-          await flushVideoSubmit();
+          await this.shotMediaRepo.save({ ...shotMediaMap[sid], episodeId: episode.id, shotId: sid });
         }
       });
-      await flushVideoSubmit(true);
       await this.awaitVideoJobs(shotMediaMap, orderedShots, dramaId, episode.id, phaseOff, emit);
       phaseOff += shots.length;
 
@@ -978,36 +763,13 @@ export class MediaOrchestratorService implements OnModuleInit {
           }
         }
       } else { this.logger.warn('TTS Provider 未配置，跳过语音合成'); }
-      await this.updateMedia(episode.id, 'generating_videos', shotMediaMap);
 
       // ═══ Phase 3: FFmpeg 合成（TTS 时长同步 + per-shot 后处理参数） ═══
       let videoUrl = '';
       if (this.composer.isAvailable()) {
         try {
           emit(totalPhases - 1, '合成完整单集视频...');
-          await this.updateMedia(episode.id, 'compositing', shotMediaMap);
-          // ── 预计算 Shot 组内偏移量（server-side，作为 LLM groupOffsetSec 的可靠兜底）──
-          // 对每个 shotGroupId 内的 Shot，按 shotIndex 排序后累加 estimatedDurationSec。
-          // LLM 提供的 groupOffsetSec 若合理则优先使用，否则退回此计算值。
-          const computedGroupOffsets = new Map<string, number>(); // shotId → 组内起始偏移(秒)
-          const composeGroupMap = new Map<string, Shot[]>();
-          for (const s of shots) {
-            if (s.shotGroupId) {
-              if (!composeGroupMap.has(s.shotGroupId)) composeGroupMap.set(s.shotGroupId, []);
-              composeGroupMap.get(s.shotGroupId)!.push(s);
-            }
-          }
-          for (const [, gs] of composeGroupMap) {
-            gs.sort((a, b) => a.shotIndex - b.shotIndex);
-            let cumOff = 0;
-            for (const gs_ of gs) {
-              const llmOff = gs_.groupOffsetSec;
-              const usedOff = (llmOff != null && llmOff >= 0 && llmOff < 15) ? llmOff : cumOff;
-              computedGroupOffsets.set(gs_.shotId, usedOff);
-              cumOff += gs_.estimatedDurationSec;
-            }
-          }
-
+          await this.updateMediaStatus(episode.id, 'compositing');
           const composeShots: ComposeShotInput[] = shots.filter(s => shotMediaMap[s.shotId]?.videoUrl).map(s => {
             const mp = shotMediaParamsCache.get(s.shotId);
             const ttsDur = ttsDurations.get(s.shotId);
@@ -1016,10 +778,7 @@ export class MediaOrchestratorService implements OnModuleInit {
             // 根据 Phase 1 记录的 videoProvider 精确计算，而非按 shotType 猜测。
             // 若分镜意图 > 实际生成上限，compose 时长必须截断，
             // 否则 FFmpeg trimOutSec 超出视频实际长度 → 时间轴缺失 → 音频错位。
-            // 注意：Shot 组成员 provider=sora，max=15s；effectiveDuration 仍取 estimatedDurationSec（组内分段时长）。
-            const generatedMaxSec = s.shotGroupId
-              ? 15  // 组内 Shot 来自 15s Sora 视频，不按单 provider 上限截断
-              : MediaOrchestratorService.getProviderMaxDuration(shotMediaMap[s.shotId]?.videoProvider);
+            const generatedMaxSec = MediaOrchestratorService.getProviderMaxDuration(shotMediaMap[s.shotId]?.videoProvider);
             let effectiveDuration = Math.min(s.estimatedDurationSec, generatedMaxSec);
             if (effectiveDuration < s.estimatedDurationSec) {
               this.logger.debug(`${s.shotId} 分镜意图${s.estimatedDurationSec}s > 生成上限${generatedMaxSec}s，compose 截为 ${effectiveDuration}s`);
@@ -1037,15 +796,12 @@ export class MediaOrchestratorService implements OnModuleInit {
               this.logger.debug(`${s.shotId} 强行减速 ${safeRatio.toFixed(2)}x 匹配TTS (${ttsDur.toFixed(1)}s)，防止音画脱轨`);
             }
 
-            // ── Shot 组成员：按 groupOffsetSec 从组视频中精确裁出本段 ──
-            const groupOffset = s.shotGroupId ? (computedGroupOffsets.get(s.shotId) ?? 0) : null;
-
             return {
               shotId: s.shotId, videoPath: shotMediaMap[s.shotId].videoUrl!,
               ttsAudioPath: shotMediaMap[s.shotId]?.ttsUrl, durationSec: effectiveDuration,
-              // 组成员：trimIn/Out 精确定位组内分段；独立 Shot：沿用原有人工标注或 effectiveDuration。
-              trimInSec: groupOffset !== null ? groupOffset : (s.trimInSec ?? undefined),
-              trimOutSec: groupOffset !== null ? groupOffset + effectiveDuration : (s.trimOutSec ?? effectiveDuration),
+              // 独立 Shot：沿用原有人工标注或 effectiveDuration。
+              trimInSec: s.trimInSec ?? undefined,
+              trimOutSec: s.trimOutSec ?? effectiveDuration,
               transition: s.transitionToNext ?? 'cut',
               transitionDurationSec: mp?.transitionDurationSec,
               subtitle: s.subtitle ? { text: s.subtitle.text, style: s.subtitle.style ?? 'normal' } : undefined,
@@ -1075,10 +831,10 @@ export class MediaOrchestratorService implements OnModuleInit {
         } catch (err) { this.logger.error(`E${episodeNumber} 合成失败: ${(err as Error).message}`); }
       }
 
-      const done = Object.values(shotMediaMap).filter(v => v.status === 'completed' || v.status === 'skipped_preview').length;
-      const finalStatus: EpisodeMediaStatus = done === shots.length ? 'completed' : 'failed';
-      await this.episodeRepo.update(episode.id, { mediaStatus: finalStatus, shotMediaMap, videoUrl });
-      this.logger.log(`E${episodeNumber} 媒体完成: ${finalStatus} | T2V=${done}/${shots.length} | video=${videoUrl ? 'yes' : 'no'}`);
+      const finalStatus: EpisodeMediaStatus = 'completed';
+      await this.pushShotMediaMap(episode.id, shotMediaMap);
+      await this.episodeRepo.update(episode.id, { mediaStatus: finalStatus, videoUrl: videoUrl || undefined });
+      this.logger.log(`E${episodeNumber} 媒体完成: ${finalStatus} | video=${videoUrl ? 'yes' : 'no'}`);
       return { mediaStatus: finalStatus, shotMediaMap, videoUrl: videoUrl || undefined };
     } catch (err) {
       await this.episodeRepo.update(episode.id, { mediaStatus: 'failed', mediaError: (err as Error).message });
@@ -1126,7 +882,8 @@ export class MediaOrchestratorService implements OnModuleInit {
     const styleRefImages = await this.buildStyleRefImages(dramaId, state, mediaPolicy.styleBucket);
 
     // 用已有媒体填充场景 & 前帧缓存，以保持视觉连贯性
-    const raw = episode.shotMediaMap ?? {};
+    const mediaList = await this.shotMediaRepo.find({ where: { episodeId: episode.id } });
+    const raw: Record<string, ShotMediaEntry> = Object.fromEntries(mediaList.map(m => [m.shotId, m as unknown as ShotMediaEntry]));
     const sceneCache = new Map<string, string>();
     // B3: 先用持久化场景图预填充（跨集一致性），再用当集已有图片覆盖
     for (const [locationId, imageUrl] of locationImageMap) {
@@ -1183,6 +940,9 @@ export class MediaOrchestratorService implements OnModuleInit {
       undefined,
       propImageMap, propOwnerMap,
     );
+    const existing = (raw[shotId] ?? {}) as Partial<ShotMediaEntry>;
+    await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, status: 'generating_image' }, ['episodeId', 'shotId']);
+
     const genFn = async () => {
       const res = await this.withRetry(
         async () => {
@@ -1209,7 +969,9 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     let imgUrl = '';
     let gateQc: ShotMediaEntry['qc'] | undefined;
-    if (shouldUseQualityGate) {
+    
+    try {
+      if (shouldUseQualityGate) {
       const characterRefs = this.shotContextService.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap);
       const gateResult = await this.qualityGate.generateWithQualityGate(genFn, {
         maxAttempts: shotPolicy.gateMaxAttempts,
@@ -1236,22 +998,22 @@ export class MediaOrchestratorService implements OnModuleInit {
     } else {
       imgUrl = await genFn();
     }
+    } catch (err) {
+      await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, status: 'failed' }, ['episodeId', 'shotId']);
+      throw err;
+    }
 
     if (imgUrl) {
       // 重新生成图片时，丢弃旧的 video 数据，避免"新图+旧视频"错位
-      const { videoUrl: _v, videoJobId: _vjid, videoProvider: _vprov, ...existingEntry } = raw[shotId] ?? {};
-      const newMap = {
-        ...raw,
-        [shotId]: {
-          ...existingEntry,
-          imageUrl: imgUrl,
-          status: 'image_done',
-          qc: gateQc ?? existingEntry?.qc,
-          t2iPrompt: optimized.prompt,
-          t2iNegativePrompt: optimized.negativePrompt || undefined,
-        },
+      const updated = {
+        ...existing,
+        imageUrl: imgUrl,
+        status: 'image_done',
+        qc: gateQc ?? existing?.qc,
+        t2iPrompt: optimized.prompt,
+        t2iNegativePrompt: optimized.negativePrompt || undefined,
       };
-      await this.episodeRepo.update(episode.id, { shotMediaMap: newMap });
+      await this.shotMediaRepo.upsert({ ...existing, ...updated, shotId, episodeId: episode.id }, ['episodeId', 'shotId']);
       try { await this.storage.downloadToLocal(imgUrl, this.storage.imageOutputPath(dramaId, shotId)); } catch {}
       this.logger.log(`[ShotImage] ${shotId} → ${imgUrl}`);
     }
@@ -1272,9 +1034,9 @@ export class MediaOrchestratorService implements OnModuleInit {
     const userId = drama.userId;
     const mediaPolicy = this.generationPolicy.resolveMediaPolicy(state);
     const aspectRatio = state.audienceDirective?.aspectRatio ?? '9:16';
-    const dramaGenre = state.seed?.genre;
 
-    const raw: Record<string, ShotMediaEntry> = (episode.shotMediaMap ?? {}) as Record<string, ShotMediaEntry>;
+    const mediaList = await this.shotMediaRepo.find({ where: { episodeId: episode.id } });
+    const raw: Record<string, ShotMediaEntry> = Object.fromEntries(mediaList.map(m => [m.shotId, m as unknown as ShotMediaEntry]));
     const charImageMap = await this.buildCharacterImageMap(dramaId);
     for (const entry of state.minorRolePool ?? []) {
       if (entry.referenceImageUrl && !charImageMap.has(entry.characterId)) {
@@ -1345,22 +1107,26 @@ export class MediaOrchestratorService implements OnModuleInit {
       routeProfile: shotPolicy.routeProfile,
     });
 
-    const sub = await this.withRetry(() => this.mediaService.submitVideo({
-      prompt: optVideo.prompt,
-      duration: submitDuration,
-      quality: shotPolicy.videoQuality,
-      aspectRatio: aspectRatio as any,
-      referenceImages: refImages,
-      dramaId, assetType: 'shot_video', refId: shotId, userId, episodeNumber,
-      provider: videoRoute.provider,
-      fallbackProvider: videoRoute.fallbackProvider,
-    }), `${shotId} 单镜视频`, mediaPolicy.maxMediaRetries, mediaPolicy.retryBaseDelayMs);
+    const existing = raw[shotId] ?? {};
+    await this.shotMediaRepo.save({ ...existing, shotId, episodeId: episode.id, status: 'generating_video' });
 
-    const newMap: Record<string, ShotMediaEntry> = { ...raw, [shotId]: { ...raw[shotId], videoJobId: sub.jobId, videoProvider: videoRoute.provider, status: 'submitted' } };
-    await this.episodeRepo.update(episode.id, { shotMediaMap: newMap });
+    let videoUrl = '';
+    try {
+      const sub = await this.withRetry(() => this.mediaService.submitVideo({
+        prompt: optVideo.prompt,
+        duration: submitDuration,
+        quality: shotPolicy.videoQuality,
+        aspectRatio: aspectRatio as any,
+        referenceImages: refImages,
+        dramaId, assetType: 'shot_video', refId: shotId, userId, episodeNumber,
+        provider: videoRoute.provider,
+        fallbackProvider: videoRoute.fallbackProvider,
+      }), `${shotId} 单镜视频`, mediaPolicy.maxMediaRetries, mediaPolicy.retryBaseDelayMs);
 
-    // 等待单个 job 完成
-    const videoUrl = await new Promise<string>((resolve, reject) => {
+      await this.shotMediaRepo.save({ ...existing, shotId, episodeId: episode.id, videoJobId: sub.jobId, videoProvider: videoRoute.provider, status: 'submitted' });
+
+      // 等待单个 job 完成
+      videoUrl = await new Promise<string>((resolve, reject) => {
       const timeoutMs = this.videoAwaitTimeoutMs;
       const timer = setTimeout(() => {
         this.mediaService.offJobCompleted(handler);
@@ -1395,13 +1161,17 @@ export class MediaOrchestratorService implements OnModuleInit {
 
       this.mediaService.onJobCompleted(handler);
     });
+    } catch (err) {
+      await this.shotMediaRepo.save({ ...existing, shotId, episodeId: episode.id, status: 'failed' });
+      throw err;
+    }
 
     const isFallback = !videoUrl || videoUrl === firstFrame;
-    const finalMap: Record<string, ShotMediaEntry> = {
-      ...newMap,
-      [shotId]: { ...newMap[shotId], videoUrl: videoUrl || firstFrame, status: 'completed', ...(isFallback && !videoUrl ? { kenBurnsFallback: true } : {}) },
-    };
-    await this.episodeRepo.update(episode.id, { shotMediaMap: finalMap });
+    await this.shotMediaRepo.save({
+      ...existing, shotId, episodeId: episode.id,
+      videoUrl: videoUrl || firstFrame, status: 'completed',
+      ...(isFallback && !videoUrl ? { kenBurnsFallback: true } : {})
+    });
     if (videoUrl) {
       try { await this.storage.downloadToLocal(videoUrl, this.storage.resolve(`videos/${dramaId}/${shotId}.mp4`)); } catch {}
     }
@@ -1445,9 +1215,9 @@ export class MediaOrchestratorService implements OnModuleInit {
     const imgScriptScenes = ((episode.script as any)?.scenes ?? []) as import('../schemas/drama-state.schemas').ScriptScene[];
     const imgSceneMap = new Map(imgScriptScenes.map(s => [s.sceneId, s]));
 
-    const raw = episode.shotMediaMap ?? {};
+    const mediaList = await this.shotMediaRepo.find({ where: { episodeId: episode.id } });
     const shotMediaMap: Record<string, ShotMediaEntry> = Object.fromEntries(
-      Object.entries(raw).map(([k, v]) => [k, { ...v, status: v.status ?? 'unknown' }]),
+      mediaList.map(m => [m.shotId, m as unknown as ShotMediaEntry])
     );
 
     const sceneCache = new Map<string, string>();
@@ -1482,15 +1252,6 @@ export class MediaOrchestratorService implements OnModuleInit {
       emit(`skipImageGen: 跳过图片生成`, true);
       return;
     }
-
-    let imageDirty = 0;
-    const flushImages = async (force = false) => {
-      imageDirty++;
-      if (force || imageDirty >= mediaPolicy.dbFlushEvery) {
-        await this.episodeRepo.update(episode.id, { shotMediaMap });
-        imageDirty = 0;
-      }
-    };
 
     await this.runConcurrent(needsGen, Math.min(mediaPolicy.t2iConcurrency, this.t2iMaxConcurrency), async (shot) => {
       const sid = shot.shotId;
@@ -1585,7 +1346,7 @@ export class MediaOrchestratorService implements OnModuleInit {
           imgUrl = await genFn();
         }
         if (imgUrl) {
-          shotMediaMap[sid] = {
+          const newEntry = {
             ...shotMediaMap[sid],
             imageUrl: imgUrl,
             status: 'image_done',
@@ -1593,6 +1354,8 @@ export class MediaOrchestratorService implements OnModuleInit {
             t2iPrompt: optimized.prompt,
             t2iNegativePrompt: optimized.negativePrompt || undefined,
           };
+          shotMediaMap[sid] = newEntry as ShotMediaEntry;
+          
           if (shot.sceneId && !sceneCache.has(shot.sceneId)) {
             sceneCache.set(shot.sceneId, imgUrl);
             // B2: isRecurring 场景持久化
@@ -1609,27 +1372,30 @@ export class MediaOrchestratorService implements OnModuleInit {
           try { await this.storage.downloadToLocal(imgUrl, this.storage.imageOutputPath(dramaId, sid)); } catch {}
         }
         done++;
-        emit(`${sid} 完成 (${done}/${totalSteps})`, done >= totalSteps);
+        this.progressService.emit({ 
+          dramaId, runType: 'images', episodeNumber, 
+          step: `img_batch`, stepKey: sid, stepIndex: done, totalSteps, 
+          message: `${sid} 完成 (${done}/${totalSteps})`, done: done >= totalSteps,
+          data: imgUrl ? { imageUrl: imgUrl } : undefined
+        });
       } catch (err) {
         this.logger.warn(`${sid} 图片失败: ${(err as Error).message}`);
         emit(`${sid} 失败: ${(err as Error).message}`);
       }
-      await flushImages();
     });
 
-    await flushImages(true);
-    await this.episodeRepo.update(episode.id, { shotMediaMap });
+    await this.pushShotMediaMap(episode.id, shotMediaMap);
     this.logger.log(`E${episodeNumber} 图片阶段完成: ${Object.values(shotMediaMap).filter(v => v.imageUrl).length}/${shots.length}`);
   }
 
   async getMediaStatus(dramaId: string, episodeNumber: number) {
     const ep = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber } });
     if (!ep) throw new Error(`E${episodeNumber} 不存在`);
-    const map = ep.shotMediaMap ?? {};
-    const total = Object.keys(map).length;
+    const mediaList = await this.shotMediaRepo.find({ where: { episodeId: ep.id } });
+    const total = mediaList.length;
     return { mediaStatus: ep.mediaStatus, videoUrl: ep.videoUrl, total,
-      completed: Object.values(map).filter(v => v.status === 'completed').length,
-      failed: Object.values(map).filter(v => v.status === 'failed').length, shotMediaMap: map };
+      completed: mediaList.filter(v => v.status === 'completed').length,
+      failed: mediaList.filter(v => v.status === 'failed').length, shotMedia: mediaList };
   }
 
   // ═══ 并发执行池 ═══
@@ -1644,10 +1410,6 @@ export class MediaOrchestratorService implements OnModuleInit {
     });
     await Promise.all(workers);
   }
-
-  // ═══ Shot 排序/上下文构建已抽取 ═══
-  // → ShotProductionOrderService (shot-production-order.service.ts)
-  // → ShotContextBuilderService  (shot-context-builder.service.ts)
 
   // ═══ 事件驱动视频等待 ═══
 
@@ -1670,13 +1432,19 @@ export class MediaOrchestratorService implements OnModuleInit {
         remaining--;
       } else if (job.status === 'failed') {
         const fb = map[sid]?.imageUrl;
-        if (fb) { map[sid] = { ...map[sid], videoUrl: fb, status: 'completed', kenBurnsFallback: true }; this.logger.warn(`${sid} I2V轮询降级: Ken Burns`); }
-        else { map[sid] = { ...map[sid], status: 'failed' }; }
+        if (fb) {
+          map[sid] = { ...map[sid], videoUrl: fb, status: 'completed', kenBurnsFallback: true };
+          this.logger.warn(`${sid} I2V轮询降级: Ken Burns`);
+        } else {
+          map[sid] = { ...map[sid], status: 'failed' };
+        }
         remaining--;
       }
     }
-    if (remaining <= 0) { await this.updateMedia(epId, 'generating_videos', map); return; }
-    await this.updateMedia(epId, 'generating_videos', map);
+    if (remaining <= 0) {
+      await this.pushShotMediaMap(epId, map);
+      return;
+    }
 
     return new Promise<void>(resolve => {
       const timer = setTimeout(() => { cleanup(); resolve(); }, this.videoAwaitTimeoutMs);
@@ -1702,13 +1470,19 @@ export class MediaOrchestratorService implements OnModuleInit {
           if (vUrl) try { await this.storage.downloadToLocal(vUrl, this.storage.resolve(`videos/${dramaId}/${sid}.mp4`)); } catch {}
         } else if (evt.status === 'failed') {
           const fb = map[sid]?.imageUrl;
-          if (fb) { map[sid] = { ...map[sid], videoUrl: fb, status: 'completed', kenBurnsFallback: true }; this.logger.warn(`${sid} I2V事件降级: Ken Burns`); }
-          else { map[sid] = { ...map[sid], status: 'failed' }; }
+          if (fb) {
+            map[sid] = { ...map[sid], videoUrl: fb, status: 'completed', kenBurnsFallback: true };
+            this.logger.warn(`${sid} I2V事件降级: Ken Burns`);
+          } else {
+            map[sid] = { ...map[sid], status: 'failed' };
+          }
         }
         else return;
         remaining--;
-        await this.updateMedia(epId, 'generating_videos', map);
-        if (remaining <= 0) { cleanup(); resolve(); }
+        if (remaining <= 0) { 
+          await this.pushShotMediaMap(epId, map);
+          cleanup(); resolve(); 
+        }
       };
       const cleanup = () => { clearTimeout(timer); this.mediaService.offJobCompleted(handler); };
       this.mediaService.onJobCompleted(handler);
@@ -1716,6 +1490,18 @@ export class MediaOrchestratorService implements OnModuleInit {
   }
 
   // ═══ 工具方法 ═══
+
+  private async pushShotMediaMap(episodeId: string, map: Record<string, ShotMediaEntry>): Promise<void> {
+    const list = Object.entries(map).map(([shotId, data]) => ({ episodeId, shotId, ...data }));
+    await this.shotMediaRepo.upsert(list, ['episodeId', 'shotId']);
+  }
+
+  private async updateMediaStatus(
+    episodeId: string,
+    status: EpisodeMediaStatus,
+  ): Promise<void> {
+    await this.episodeRepo.update(episodeId, { mediaStatus: status });
+  }
 
   private resolveShotRunPolicy(
     shot: Shot,
@@ -2241,15 +2027,16 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
     const result: Record<string, string> = {};
     for (const [epNum, sids] of byEp) {
-      const ep = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber: epNum }, select: ['shotMediaMap'] });
-      if (!ep?.shotMediaMap) continue;
-      for (const sid of sids) if (ep.shotMediaMap[sid]?.videoUrl) result[sid] = ep.shotMediaMap[sid].videoUrl!;
+      const ep = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber: epNum }, select: ['id'] });
+      if (!ep) continue;
+      const mediaList = await this.shotMediaRepo.find({ where: { episodeId: ep.id, shotId: In(sids) } });
+      for (const m of mediaList) if (m.videoUrl) result[m.shotId] = m.videoUrl;
     }
     if (globalIds.length) {
-      const eps = await this.episodeRepo.find({ where: { dramaId }, select: ['shotMediaMap'] });
-      for (const ep of eps) { if (!ep.shotMediaMap) continue;
-        for (const [sid, entry] of Object.entries(ep.shotMediaMap))
-          if (globalIds.includes(sid) && entry.videoUrl && !result[sid]) result[sid] = entry.videoUrl;
+      const eps = await this.episodeRepo.find({ where: { dramaId }, select: ['id'] });
+      for (const ep of eps) {
+        const mediaList = await this.shotMediaRepo.find({ where: { episodeId: ep.id, shotId: In(globalIds) } });
+        for (const m of mediaList) if (m.videoUrl && !result[m.shotId]) result[m.shotId] = m.videoUrl;
       }
     }
     return result;
@@ -2361,9 +2148,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     }
   }
 
-  private async updateMedia(id: string, status: EpisodeMediaStatus, map: Record<string, ShotMediaEntry>): Promise<void> {
-    await this.episodeRepo.update(id, { mediaStatus: status, shotMediaMap: map });
-  }
+
 }
 
 const SPEED_MAP: Record<string, number> = { slow: 0.85, normal: 1.0, fast: 1.2 };

@@ -12,7 +12,7 @@ import type {
 export class GenerationPolicyService {
   resolveMediaPolicy(state: Pick<DramaState, 'visualStyleHint' | 'visualStyle'>): DramaMediaRunPolicy {
     const styleBucket = this.detectStyleBucket(state);
-    
+
     // 强制执行统一的高质量、高一致性基础设定，不再做妥协
     const policy: DramaMediaRunPolicy = {
       styleBucket: 'generic',
@@ -20,12 +20,12 @@ export class GenerationPolicyService {
       i2vConcurrency: 2,
       maxMediaRetries: 3,
       retryBaseDelayMs: 2500,
-      enableQualityGate: true,
+      enableQualityGate: false,
       enableCoherenceValidation: true,
       enableVlmCoherence: true,
       dbFlushEvery: 4,
     };
-    
+
     return this.applyStyleAdjustment(policy, styleBucket);
   }
 
@@ -37,9 +37,9 @@ export class GenerationPolicyService {
   }): DramaShotRunPolicy {
     const shotType = input.shotType ?? 'dialogue';
     const qualityTier = input.qualityTier ?? 'standard';
-    
+
     let policy = this.baseShotPolicy(shotType, qualityTier, input.styleBucket);
-    
+
     // 应用用户选定的最终产物分辨率配置
     policy.videoQuality = (input.state.videoResolution === '4k' ? '1080p' : input.state.videoResolution as '720p' | '1080p') ?? '1080p';
     policy.imageResolution = (input.state.imageResolution as '1k' | '2k' | '4k') ?? '2k';

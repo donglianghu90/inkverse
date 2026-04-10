@@ -13,7 +13,7 @@ export class DramaWorkflowExecutionEntity {
   episodeNumber: number;
 
   @Column({ name: 'status', type: 'varchar', length: 20, default: 'running' })
-  status: 'running' | 'completed' | 'failed' | 'interrupted';
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | 'suspended';
 
   @Column({ name: 'owner_instance_id', type: 'varchar', length: 120, default: '' })
   ownerInstanceId: string;

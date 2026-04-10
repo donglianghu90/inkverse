@@ -787,9 +787,11 @@ faceReferencePrompt 规则：${facePromptRule}
       : isProp
         ? DramaVisualAssetService.PROP_IMAGE_SIZE
         : DramaVisualAssetService.SCENE_IMAGE_SIZE;
-    const nonCharShotType = asset.assetType === 'style_guide' ? 'style_guide' : 'location';
+    const nonCharShotType = asset.assetType === 'style_guide' ? 'style_guide' : (asset.assetType === 'prop' ? 'prop' : 'location');
     const drama = await this.dramaRepo.findOne({ where: { id: dramaId } });
-    const regenStyleBucket = this.detectStyleBucket((drama?.state as any)?.visualStyle);
+    const vs = (drama?.state as any)?.visualStyle;
+    const regenStyleBucket = this.detectStyleBucket(vs);
+    const stylePrefix = isProp ? undefined : this.buildAssetStylePrefix(vs, isChar ? 'character' : (nonCharShotType as any));
     // 按资产类型选择最优模型路由
     const route = isChar
       ? (targetView === 'face_front'
@@ -800,7 +802,7 @@ faceReferencePrompt 规则：${facePromptRule}
         : (isLoc)
           ? this.imageRouter.routeLocation(size)
           : {};
-    const optimized = this.optimizeAssetPrompt(prompt, isChar ? 'character' : nonCharShotType, undefined, route.provider, regenStyleBucket);
+    const optimized = this.optimizeAssetPrompt(prompt, isChar ? 'character' : nonCharShotType as any, stylePrefix, route.provider, regenStyleBucket);
     // 主视角/道具：从零生成，不传参考图
     const isPrimaryView = (isChar && targetView === 'face_front') || (isLoc && targetView === 'establishing') || isProp;
     const refs = isPrimaryView ? [] : this.collectAssetRefs(asset);

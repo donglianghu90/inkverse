@@ -1,7 +1,6 @@
 import { request } from '@umijs/max';
 import { getToken } from '@/services/auth';
 
-const BASE = '/api/novel';
 
 /* ========== 请求参数 ========== */
 
@@ -271,7 +270,7 @@ export interface AutoSerializationView {
 /* ========== API 调用 ========== */
 
 export async function listBooks(): Promise<{ count: number; books: BookListItem[] }> {
-  return request(`${BASE}/books`);
+  return request(`/novel/books`);
 }
 
 export interface EnhanceIdeaResult {
@@ -280,7 +279,7 @@ export interface EnhanceIdeaResult {
 }
 
 export async function enhanceIdea(idea: string, genre?: string): Promise<EnhanceIdeaResult> {
-  return request(`${BASE}/idea/enhance`, { method: 'POST', data: { idea, genre } });
+  return request(`/novel/idea/enhance`, { method: 'POST', data: { idea, genre } });
 }
 
 export interface GenerateGoalResult {
@@ -305,7 +304,7 @@ export async function generateStoryGoal(
   extra?: Partial<Omit<GenerateStoryGoalParams, 'mainIdea' | 'genre' | 'targetAudience'>>,
 ): Promise<GenerateGoalResult> {
   const data: GenerateStoryGoalParams = { mainIdea, genre, targetAudience, ...extra };
-  return request(`${BASE}/idea/generate-goal`, { method: 'POST', data });
+  return request(`/novel/idea/generate-goal`, { method: 'POST', data });
 }
 
 export interface EnhanceGoalResult { enhanced: string; highlights: string[]; }
@@ -314,18 +313,18 @@ export async function enhanceStoryGoal(
   goal: string, mainIdea: string, genre: string, targetAudience: string,
   extra?: Partial<Omit<GenerateStoryGoalParams, 'mainIdea' | 'genre' | 'targetAudience'>>,
 ): Promise<EnhanceGoalResult> {
-  return request(`${BASE}/idea/enhance-goal`, { method: 'POST', data: { goal, mainIdea, genre, targetAudience, ...extra } });
+  return request(`/novel/idea/enhance-goal`, { method: 'POST', data: { goal, mainIdea, genre, targetAudience, ...extra } });
 }
 
 export async function createBook(data: CreateBookParams): Promise<CreateBookResult> {
-  return request(`${BASE}/books`, { method: 'POST', data });
+  return request(`/novel/books`, { method: 'POST', data });
 }
 
 export async function createBookSession(
   data: CreateBookParams,
   idempotencyKey?: string,
 ): Promise<CreateBookSessionResult> {
-  return request(`${BASE}/books/create-session`, {
+  return request(`/novel/books/create-session`, {
     method: 'POST',
     data: {
       ...data,
@@ -335,33 +334,33 @@ export async function createBookSession(
 }
 
 export async function deleteBook(bookId: string): Promise<{ deleted: true; bookId: string }> {
-  return request(`${BASE}/books/${bookId}`, { method: 'DELETE' });
+  return request(`/novel/books/${bookId}`, { method: 'DELETE' });
 }
 
 export async function getBook(bookId: string): Promise<BookInfo> {
-  return request(`${BASE}/books/${bookId}`);
+  return request(`/novel/books/${bookId}`);
 }
 
 export async function generateChapter(bookId: string): Promise<ChapterGenerateResult> {
-  return request(`${BASE}/books/${bookId}/chapters/generate`, { method: 'POST' });
+  return request(`/novel/books/${bookId}/chapters/generate`, { method: 'POST' });
 }
 
 export async function generateChaptersBatch(
   bookId: string,
   data: BatchGenerateParams,
 ): Promise<BatchGenerateResult> {
-  return request(`${BASE}/books/${bookId}/chapters/generate-batch`, { method: 'POST', data });
+  return request(`/novel/books/${bookId}/chapters/generate-batch`, { method: 'POST', data });
 }
 
 export async function listChapters(
   bookId: string,
   limit = 50,
 ): Promise<{ bookId: string; count: number; chapters: ChapterItem[] }> {
-  return request(`${BASE}/books/${bookId}/chapters`, { params: { limit } });
+  return request(`/novel/books/${bookId}/chapters`, { params: { limit } });
 }
 
 export async function getChapter(bookId: string, chapterNumber: number): Promise<ChapterItem> {
-  return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}`);
+  return request(`/novel/books/${bookId}/chapters/${chapterNumber}`);
 }
 
 export async function getChapterArtifacts(
@@ -373,7 +372,7 @@ export async function getChapterArtifacts(
     names && names.length > 0
       ? { names: names.join(',') }
       : undefined;
-  return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}/artifacts`, { params });
+  return request(`/novel/books/${bookId}/chapters/${chapterNumber}/artifacts`, { params });
 }
 
 export async function updateChapter(
@@ -381,39 +380,39 @@ export async function updateChapter(
   chapterNumber: number,
   data: { title?: string; content?: string },
 ): Promise<ChapterItem> {
-  return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}`, {
+  return request(`/novel/books/${bookId}/chapters/${chapterNumber}`, {
     method: 'PUT',
     data,
   });
 }
 
 export async function deleteChapter(bookId: string, chapterNumber: number): Promise<{ deleted: true; bookId: string; chapterNumber: number }> {
-  return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}`, { method: 'DELETE' });
+  return request(`/novel/books/${bookId}/chapters/${chapterNumber}`, { method: 'DELETE' });
 }
 
 export async function configureAutoSerialization(
   bookId: string,
   data: AutoSerializationConfig,
 ): Promise<AutoSerializationView> {
-  return request(`${BASE}/books/${bookId}/auto-serialization`, { method: 'PUT', data });
+  return request(`/novel/books/${bookId}/auto-serialization`, { method: 'PUT', data });
 }
 
 export async function getAutoSerialization(bookId: string): Promise<AutoSerializationView | null> {
-  return request(`${BASE}/books/${bookId}/auto-serialization`);
+  return request(`/novel/books/${bookId}/auto-serialization`);
 }
 
 export async function enableAutoSerialization(bookId: string): Promise<AutoSerializationView> {
-  return request(`${BASE}/books/${bookId}/auto-serialization/enable`, { method: 'POST' });
+  return request(`/novel/books/${bookId}/auto-serialization/enable`, { method: 'POST' });
 }
 
 export async function disableAutoSerialization(bookId: string): Promise<AutoSerializationView> {
-  return request(`${BASE}/books/${bookId}/auto-serialization/disable`, { method: 'POST' });
+  return request(`/novel/books/${bookId}/auto-serialization/disable`, { method: 'POST' });
 }
 
 export async function runAutoSerializationNow(
   bookId: string,
 ): Promise<{ bookId: string; trigger: string; accepted: boolean; jobId: string }> {
-  return request(`${BASE}/books/${bookId}/auto-serialization/run-now`, { method: 'POST' });
+  return request(`/novel/books/${bookId}/auto-serialization/run-now`, { method: 'POST' });
 }
 
 /* ========== 世界观类型 ========== */
@@ -529,18 +528,18 @@ export interface BookTokenUsage {
 }
 
 export async function getBookTokenUsage(bookId: string): Promise<BookTokenUsage> {
-  return request(`${BASE}/books/${bookId}/token-usage`);
+  return request(`/novel/books/${bookId}/token-usage`);
 }
 
 export async function getBookProfile(bookId: string): Promise<BookPromptProfile> {
-  return request(`${BASE}/books/${bookId}/profile`);
+  return request(`/novel/books/${bookId}/profile`);
 }
 
 export async function updateBookProfile(
   bookId: string,
   profile: BookPromptProfile,
 ): Promise<BookPromptProfile> {
-  return request(`${BASE}/books/${bookId}/profile`, { method: 'PUT', data: profile });
+  return request(`/novel/books/${bookId}/profile`, { method: 'PUT', data: profile });
 }
 
 export interface AudienceDirective {
@@ -553,18 +552,18 @@ export interface AudienceDirective {
 }
 
 export async function getBookAudience(bookId: string): Promise<AudienceDirective> {
-  return request(`${BASE}/books/${bookId}/audience`);
+  return request(`/novel/books/${bookId}/audience`);
 }
 
 export async function updateBookAudience(
   bookId: string,
   audience: AudienceDirective,
 ): Promise<AudienceDirective> {
-  return request(`${BASE}/books/${bookId}/audience`, { method: 'PUT', data: audience });
+  return request(`/novel/books/${bookId}/audience`, { method: 'PUT', data: audience });
 }
 
 export async function getWorld(bookId: string): Promise<WorldData> {
-  return request(`${BASE}/books/${bookId}/world`);
+  return request(`/novel/books/${bookId}/world`);
 }
 
 /* ========== SSE 类型 ========== */
@@ -623,17 +622,17 @@ export interface WorkflowExecution {
 export interface GenerationStatus { generating: boolean; startedAt: number | null; lastStep: string | null; progress: number; }
 
 export async function getGenerationStatus(bookId: string): Promise<GenerationStatus> {
-  return request(`${BASE}/books/${bookId}/generation-status`);
+  return request(`/novel/books/${bookId}/generation-status`);
 }
 
 export function getGenerateSSEUrl(bookId: string): string {
   const token = getToken();
-  return `${BASE}/books/${bookId}/chapters/generate-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return `/api/novel/books/${bookId}/chapters/generate-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 export function getProgressSSEUrl(bookId: string): string {
   const token = getToken();
-  return `${BASE}/books/${bookId}/chapters/progress-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return `/api/novel/books/${bookId}/chapters/progress-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
 
 /* ========== Pipeline ========== */
@@ -743,28 +742,28 @@ export interface WorkflowTopology {
 }
 
 export async function getPipeline(bookId: string): Promise<PipelineView> {
-  return request(`${BASE}/books/${bookId}/pipeline`);
+  return request(`/novel/books/${bookId}/pipeline`);
 }
 
 export async function savePipelineDraft(bookId: string, nodes: AgentNodeConfig[]): Promise<PipelineView> {
-  return request(`${BASE}/books/${bookId}/pipeline/draft`, { method: 'PUT', data: { nodes } });
+  return request(`/novel/books/${bookId}/pipeline/draft`, { method: 'PUT', data: { nodes } });
 }
 
 export async function publishPipeline(bookId: string): Promise<PipelineView> {
-  return request(`${BASE}/books/${bookId}/pipeline/publish`, { method: 'POST' });
+  return request(`/novel/books/${bookId}/pipeline/publish`, { method: 'POST' });
 }
 
 export async function getTopology(bookId: string): Promise<WorkflowTopology> {
-  return request(`${BASE}/books/${bookId}/pipeline/topology`);
+  return request(`/novel/books/${bookId}/pipeline/topology`);
 }
 
 export async function saveWorkflowParams(bookId: string, params: Partial<WorkflowParams>): Promise<PipelineView> {
-  return request(`${BASE}/books/${bookId}/pipeline/workflow-params`, { method: 'PUT', data: params });
+  return request(`/novel/books/${bookId}/pipeline/workflow-params`, { method: 'PUT', data: params });
 }
 
 export function createBookSseUrl(progressChannel: string): string {
   const params = new URLSearchParams({ progressChannel });
-  return `${BASE}/books/create-sse?${params.toString()}`;
+  return `/api/novel/books/create-sse?${params.toString()}`;
 }
 
 // ── Prompt Templates ──────────────────────────────────────────────────────
@@ -792,33 +791,33 @@ export interface PromptTemplateView {
 }
 
 export async function getPromptTemplates(bookId: string): Promise<PromptTemplateView> {
-  return request(`${BASE}/books/${bookId}/prompt-templates`);
+  return request(`/novel/books/${bookId}/prompt-templates`);
 }
 
 export async function updateRuleAtom(bookId: string, atomId: string, patch: Partial<RuleAtom>): Promise<PromptTemplateView> {
-  return request(`${BASE}/books/${bookId}/prompt-templates/rule-atoms/${atomId}`, { method: 'PUT', data: patch });
+  return request(`/novel/books/${bookId}/prompt-templates/rule-atoms/${atomId}`, { method: 'PUT', data: patch });
 }
 
 export async function updateAgentSection(bookId: string, agentId: string, sectionKey: string, content: string): Promise<PromptTemplateView> {
-  return request(`${BASE}/books/${bookId}/prompt-templates/agents/${agentId}/sections/${sectionKey}`, { method: 'PUT', data: { content } });
+  return request(`/novel/books/${bookId}/prompt-templates/agents/${agentId}/sections/${sectionKey}`, { method: 'PUT', data: { content } });
 }
 
 export async function revertPromptEdit(bookId: string, historyIndex: number): Promise<PromptTemplateView> {
-  return request(`${BASE}/books/${bookId}/prompt-templates/revert`, { method: 'POST', data: { historyIndex } });
+  return request(`/novel/books/${bookId}/prompt-templates/revert`, { method: 'POST', data: { historyIndex } });
 }
 
 export async function resetPromptTemplates(bookId: string): Promise<PromptTemplateView> {
-  return request(`${BASE}/books/${bookId}/prompt-templates/reset`, { method: 'POST' });
+  return request(`/novel/books/${bookId}/prompt-templates/reset`, { method: 'POST' });
 }
 
 // ── Workflow Executions ───────────────────────────────────────────────────
 
 export async function listExecutions(bookId: string, limit = 20): Promise<WorkflowExecution[]> {
-  return request(`${BASE}/books/${bookId}/executions?limit=${limit}`);
+  return request(`/novel/books/${bookId}/executions?limit=${limit}`);
 }
 
 export async function getChapterExecution(bookId: string, chapterNumber: number): Promise<WorkflowExecution | null> {
-  return request(`${BASE}/books/${bookId}/chapters/${chapterNumber}/execution`);
+  return request(`/novel/books/${bookId}/chapters/${chapterNumber}/execution`);
 }
 
 // =========================================================================
@@ -967,51 +966,51 @@ export interface AiGenerateProfileResult {
 }
 
 export async function listGenreTemplates(): Promise<GenreProfileTemplate[]> {
-  return request(`${BASE}/genre-templates`);
+  return request(`/novel/genre-templates`);
 }
 
 export async function getGenreTemplate(id: string): Promise<GenreProfileTemplate> {
-  return request(`${BASE}/genre-templates/${id}`);
+  return request(`/novel/genre-templates/${id}`);
 }
 
 export async function createGenreTemplate(data: CreateGenreTemplateParams): Promise<GenreProfileTemplate> {
-  return request(`${BASE}/genre-templates`, { method: 'POST', data });
+  return request(`/novel/genre-templates`, { method: 'POST', data });
 }
 
 export async function updateGenreTemplate(id: string, data: UpdateGenreTemplateParams): Promise<GenreProfileTemplate> {
-  return request(`${BASE}/genre-templates/${id}`, { method: 'PUT', data });
+  return request(`/novel/genre-templates/${id}`, { method: 'PUT', data });
 }
 
 export async function deleteGenreTemplate(id: string): Promise<{ success: boolean }> {
-  return request(`${BASE}/genre-templates/${id}`, { method: 'DELETE' });
+  return request(`/novel/genre-templates/${id}`, { method: 'DELETE' });
 }
 
 export async function cloneGenreTemplate(id: string): Promise<GenreProfileTemplate> {
-  return request(`${BASE}/genre-templates/${id}/clone`, { method: 'POST' });
+  return request(`/novel/genre-templates/${id}/clone`, { method: 'POST' });
 }
 
 export async function aiGenerateProfile(data: AiGenerateProfileParams): Promise<AiGenerateProfileResult> {
-  return request(`${BASE}/genre-templates/ai-generate`, { method: 'POST', data });
+  return request(`/novel/genre-templates/ai-generate`, { method: 'POST', data });
 }
 
 export async function getGenreTemplateSystemDiff(id: string): Promise<{ userTemplate: GenreProfileTemplate; systemTemplate: GenreProfileTemplate } | null> {
-  return request(`${BASE}/genre-templates/${id}/system-diff`);
+  return request(`/novel/genre-templates/${id}/system-diff`);
 }
 
 export async function syncGenreTemplateFromSystem(id: string): Promise<GenreProfileTemplate> {
-  return request(`${BASE}/genre-templates/${id}/sync-system`, { method: 'POST' });
+  return request(`/novel/genre-templates/${id}/sync-system`, { method: 'POST' });
 }
 
 // ── Reader Feedback ───────────────────────────────────────────────────────
 
 export async function submitChapterFeedback(bookId: string, payload: SubmitFeedbackPayload): Promise<FeedbackSubmitResult> {
-  return request(`${BASE}/books/${bookId}/feedback`, { method: 'POST', data: payload });
+  return request(`/novel/books/${bookId}/feedback`, { method: 'POST', data: payload });
 }
 
 export async function triggerFeedbackAnalysis(bookId: string): Promise<unknown> {
-  return request(`${BASE}/books/${bookId}/feedback/analyze`, { method: 'POST' });
+  return request(`/novel/books/${bookId}/feedback/analyze`, { method: 'POST' });
 }
 
 export async function getFeedbackState(bookId: string): Promise<unknown> {
-  return request(`${BASE}/books/${bookId}/feedback`);
+  return request(`/novel/books/${bookId}/feedback`);
 }

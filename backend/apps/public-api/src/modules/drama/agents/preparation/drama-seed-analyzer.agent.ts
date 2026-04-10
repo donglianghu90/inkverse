@@ -7,6 +7,8 @@ import { z } from 'zod';
 import { dramaSeedSchema, DramaSeed } from '../../schemas/drama-state.schemas';
 import { buildSeedAnalyzerSystemPrompt } from '../../prompting/drama-playbook';
 import { DramaSeedHints, GenreProductionGuidance } from '../../../template/entities/drama-genre-template.entity';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 export interface DramaSeedInput {
   mainIdea: string;
@@ -40,11 +42,10 @@ export class DramaSeedAnalyzerAgent {
 
     const hintBlock = this.buildSeedHintBlock(input.seedHints);
 
-    let sysPrompt = buildSeedAnalyzerSystemPrompt({ epMin, epMax, durSec, genre: input.genre, genreGuidance: input.genreGuidance }, input.genre);
-    if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
+    let sysPrompt = buildSeedAnalyzerSystemPrompt({ epMin, epMax, durSec, genre: input.genre, genreGuidance: input.genreGuidance }, additionalSystemPrompt?.trim() || undefined);
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-seed-analyzer',
+      taskName: DRAMA_AGENT_REGISTRY.SEED_ANALYZER.key,
       schema: seedOutputSchema,
       systemPrompt: sysPrompt,
       metadata: { dramaId: input.dramaId, userId: input.userId },
@@ -92,18 +93,18 @@ ${hintBlock}
         protagonistConcept: {
           name: this.str(protag.name) || '未命名',
           situation: this.str(protag.situation) || input.mainIdea.slice(0, 80),
-          coreDesire: this.str(protag.coreDesire) || '逆转命运',
-          personality: this.str(protag.personality) || '隐忍但倔强',
+          coreDesire: this.str(protag.coreDesire) || '实现自身核心目标',
+          personality: this.str(protag.personality) || '性格鲜明',
           fatalFlaw: this.str(protag.fatalFlaw) || '',
         },
         antagonistConcept: Object.keys(antag).length > 0 ? {
           name: this.str(antag.name) || '反派',
-          motivation: this.str(antag.motivation) || '维护既得利益',
-          relationship: this.str(antag.relationship) || '与主角有直接利益冲突',
+          motivation: this.str(antag.motivation) || '追求自身利益或信念',
+          relationship: this.str(antag.relationship) || '与主角存在核心矛盾',
         } : undefined,
-        tone: this.str(seedRaw.tone) || input.tonePreference || '紧张、反转、爽快',
-        coreConflict: this.str(seedRaw.coreConflict) || input.mainStoryGoal || '在不公命运中绝地反击',
-        catharsisType: this.str(seedRaw.catharsisType) || '打脸逆袭',
+        tone: this.str(seedRaw.tone) || input.tonePreference || '根据题材自动匹配',
+        coreConflict: this.str(seedRaw.coreConflict) || input.mainStoryGoal || input.seedHints?.conflictPatterns?.[0] || '核心矛盾待根据题材确定',
+        catharsisType: this.str(seedRaw.catharsisType) || input.seedHints?.catharsisPresets?.[0] || '核心体验待根据题材确定',
         redLines: this.strArr(seedRaw.redLines, ['禁止低俗色情', '禁止逻辑硬伤', '禁止角色智商下线']),
         targetEpisodeDurationSec: input.targetEpisodeDurationSec ?? 180,
         plannedTotalEpisodes: {

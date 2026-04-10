@@ -36,6 +36,12 @@ export interface T2IOptimizeOptions {
   shotSize?: string;
   /** 摄影机透视角度，用于注入透视关键词（low_angle/high_angle/dutch_angle 等） */
   cameraAngle?: string;
+  /** 构图规则（rule_of_thirds / symmetrical / negative_space / leading_lines 等） */
+  composition?: string;
+  /** 景深（shallow / deep / split_diopter 等） */
+  depthOfField?: string;
+  /** 特殊拍摄技法（slow_motion / bullet_time / dolly_zoom 等），转化为静帧视觉暗示 */
+  specialTechnique?: string;
   emotionColorHint?: string;
   routeProfile?: string;
   ambientPopulation?: string;

@@ -10,6 +10,8 @@ import {
 } from '../../schemas/drama-state.schemas';
 import { buildContinuityGuardSystemPrompt } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 const checkOutputSchema = z.object({ check: dramaContinuityCheckSchema });
 
@@ -24,7 +26,7 @@ export class ContinuityGuardAgent {
     const recentLore = state.episodeSummaries.slice(-5);
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-continuity-guard',
+      taskName: DRAMA_AGENT_REGISTRY.CONTINUITY_GUARD.key,
       schema: checkOutputSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'continuity-guard', buildContinuityGuardSystemPrompt({ genreSpecificChecks: state.promptProfile?.reviewerCalibration?.genreSpecificChecks })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: intent.episodeNumber },

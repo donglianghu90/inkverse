@@ -10,8 +10,10 @@ import {
 import { buildEpisodeDirectorSystemPrompt, buildUserPromptConstraintsTail } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 import { DramaCalibrationService } from '../../workflow/drama-calibration.service';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
 
-const intentOutputSchema = z.object({ intent: episodeIntentSchema });
+
+const intentOutputSchema = z.object({ _thoughtProcess: z.string().describe('分析出场角色分配、多巴胺爽点调度逻辑、以及如何铺垫即将到来的付费卡点'), intent: episodeIntentSchema });
 
 @Injectable()
 export class EpisodeDirectorAgent {
@@ -71,8 +73,8 @@ export class EpisodeDirectorAgent {
     const dopa = state.dopamineSchedule;
     const dopaHint = dopa ? (() => {
       const lines: string[] = [];
-      if (dopa.episodesSinceMajor >= 4) lines.push(`⚡ 已连续 ${dopa.episodesSinceMajor} 集无重大爽感释放（打脸/反转/高潮），本集必须安排一个 major 级爽点`);
-      else if (dopa.episodesSinceMajor >= 2) lines.push(`注意：距上次重大爽点已 ${dopa.episodesSinceMajor} 集，本集可积累张力，下1-2集需爆发`);
+      if (dopa.episodesSinceMajor >= 4) lines.push(`⚡ 已连续 ${dopa.episodesSinceMajor} 集无重大爽感释放（核心情绪高潮/重大冲突释放），本集必须安排一个 major 级高潮点`);
+      else if (dopa.episodesSinceMajor >= 2) lines.push(`注意：距上次重大高潮点已 ${dopa.episodesSinceMajor} 集，本集可积累张力，下1-2集需爆发`);
       if (dopa.episodesSinceMinor >= 2) lines.push(`⚠ 已连续 ${dopa.episodesSinceMinor} 集无小爽感，本集至少需要 1 个 minor 级满足感`);
       return lines.length ? `\n=== 观众多巴胺状态 ===\n${lines.join('\n')}` : '';
     })() : '';
@@ -91,7 +93,7 @@ export class EpisodeDirectorAgent {
     })();
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-episode-director',
+      taskName: DRAMA_AGENT_REGISTRY.EPISODE_DIRECTOR.key,
       schema: intentOutputSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'episode-director', buildEpisodeDirectorSystemPrompt({ maxPresentPerEpisode: state.strategy?.characterBudget?.maxPresentPerEpisode, genreArchetype: state.promptProfile?.genreArchetype, visualStyle: state.visualStyle ?? undefined, genreRules: state.promptProfile?.scriptwriterGuide?.genreRules, episodeDirectorGuide: state.promptProfile?.episodeDirectorGuide ?? undefined })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: epNum },
@@ -117,7 +119,7 @@ ${this.calibration.buildCalibrationHint(state)}
 可用场景：${state.locations.map(l => `${l.locationId}(${l.name})`).join('、')}
 ${contextInjections?.length ? `\n连续性约束（必须遵守）：\n${contextInjections.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : ''}
 ${prePaywallHint}
-请生成本集的详细意图。
+请先在 _thoughtProcess 中反思本集的受众多巴胺预期、即将到来的付费卡点铺垫节奏、以及角色的出场调度，再生成本集的详细意图 intent。
 
 === activeCharacters 选角规则 ===
 activeCharacters 包含本集所有出场角色，来源分三类：

@@ -13,28 +13,15 @@ import { z } from 'zod';
 import {
   shotSchema, episodeStoryboardSchema, episodeScriptSchema,
   EpisodeStoryboard, EpisodeScript, EpisodeReview, DramaState, Shot,
+  shotCharacterSchema, shotDialogueSchema, scriptSceneSchema
 } from '../../schemas/drama-state.schemas';
 import { buildScriptEditorSystemPrompt } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 const MAX_SHOTS_PER_BATCH = 8; // 每批最多处理的 Shot 数（含 context shots）
 const CONTEXT_RADIUS = 1;       // 前后各取 N 个 context shot
-
-const batchEditorOutputSchema = z.object({
-  shots: z.array(shotSchema),
-  scriptPatches: z.array(z.object({
-    sceneId: z.string(),
-    dialogueIndex: z.number().int().nonnegative().nullish(),
-    newText: z.string().nullish(),
-    newParenthetical: z.string().nullish(),
-  })).default([]),
-});
-
-// 全量回退模式使用的精简 schema
-const fullEditorOutputSchema = z.object({
-  storyboard: episodeStoryboardSchema,
-  script: episodeScriptSchema.optional().nullable(),
-});
 
 export interface ScriptEditorResult {
   storyboard: EpisodeStoryboard;
@@ -47,6 +34,58 @@ type IssueItem = { category?: string; severity?: string; description?: string; s
 export class ScriptEditorAgent {
   private readonly logger = new Logger(ScriptEditorAgent.name);
   constructor(private readonly llm: LlmService, private readonly promptService: DramaPromptTemplateService) {}
+
+  private buildDynamicSchemas(state: DramaState) {
+    const validCharIds = state.characters.map((c) => c.characterId) as [string, ...string[]];
+    const characterIdField = validCharIds.length > 0 ? z.enum([...validCharIds, 'narrator', '']) : z.string();
+
+    const dynamicShotCharacterSchema = shotCharacterSchema.extend({ characterId: characterIdField });
+    const dynamicShotDialogueSchema = shotDialogueSchema.extend({ characterId: characterIdField });
+    const dynamicShotSchema = shotSchema.extend({
+      characters: z.array(dynamicShotCharacterSchema).nullish().transform(v => v ?? []),
+      dialogue: dynamicShotDialogueSchema.nullish(),
+    });
+
+    const dynamicScriptSceneSchema = scriptSceneSchema.extend({
+      presentCharacterIds: z.array(characterIdField).nullish().transform(v => v ?? []),
+      dialogues: z.array(z.object({
+        characterId: characterIdField.nullish().transform(v => v ?? ''),
+        text: z.string(),
+        parenthetical: z.string().nullish().transform(v => v ?? ''),
+      })).nullish().transform(v => v ?? []),
+      actions: z.array(z.object({
+        description: z.string(),
+        characterId: characterIdField.nullish().transform(v => v ?? ''),
+      })).nullish().transform(v => v ?? []),
+    });
+
+    const dynamicEpisodeScriptSchema = episodeScriptSchema.extend({
+      scenes: z.array(dynamicScriptSceneSchema).min(1).max(8),
+    });
+
+    const dynamicEpisodeStoryboardSchema = episodeStoryboardSchema.extend({
+      shots: z.array(dynamicShotSchema).min(1),
+    });
+
+    const batchSchema = z.object({
+      _thoughtProcess: z.string().describe('Write your detailed reasoning for how to exactly fix each issue step-by-step.'),
+      shots: z.array(dynamicShotSchema),
+      scriptPatches: z.array(z.object({
+        sceneId: z.string(),
+        dialogueIndex: z.number().int().nonnegative().nullish(),
+        newText: z.string().nullish(),
+        newParenthetical: z.string().nullish(),
+      })).default([]),
+    });
+
+    const fullSchema = z.object({
+      _thoughtProcess: z.string().describe('Write your detailed reasoning for how to exactly fix each issue step-by-step.'),
+      storyboard: dynamicEpisodeStoryboardSchema,
+      script: dynamicEpisodeScriptSchema.optional().nullable(),
+    });
+
+    return { batchSchema, fullSchema };
+  }
 
   async fix(
     state: DramaState, storyboard: EpisodeStoryboard, review: EpisodeReview,
@@ -123,9 +162,10 @@ export class ScriptEditorAgent {
       this.logger.log(`E${storyboard.episodeNumber} 精修批次 ${bi + 1}/${batches.length} (shots: ${batch.indices.join(',')}，issues: ${batchIssues.length})`);
 
       try {
+        const { batchSchema } = this.buildDynamicSchemas(state);
         const raw = await this.llm.generateStructured({
-          taskName: 'drama-script-editor',
-          schema: batchEditorOutputSchema,
+          taskName: DRAMA_AGENT_REGISTRY.SCRIPT_EDITOR.key,
+          schema: batchSchema,
           systemPrompt: sysPrompt,
           metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: storyboard.episodeNumber },
           userPrompt: `修复第 ${storyboard.episodeNumber} 集分镜板（批次 ${bi + 1}/${batches.length}，Shot ${batch.indices[0]}-${batch.indices[batch.indices.length - 1]}）：
@@ -141,7 +181,8 @@ ${scriptCtx}
 1. 只返回这 ${batchShots.length} 个 shot 的修复版本（保持 shotIndex/shotId 不变）
 2. 不要新增或删除 shot，只修改需要修复的字段
 3. 如果修改了台词，在 scriptPatches 中返回对应的剧本修改
-4. 未涉及的 shot 原样返回`,
+4. 未涉及的 shot 原样返回
+5. 【强化要求】先在 _thoughtProcess 中逐步写下你对于每个问题打算怎么拆解修复的思路，想清楚后再下笔！`,
           temperature: 0.4,
         });
 
@@ -211,9 +252,10 @@ ${scriptCtx}
 
     const scriptCtx = script ? `\n=== 当前剧本（如修改了分镜中的台词/场景，请同步修改剧本并在 script 字段返回） ===\n${JSON.stringify(script, null, 0)}` : '';
 
+    const { fullSchema } = this.buildDynamicSchemas(state);
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-script-editor',
-      schema: fullEditorOutputSchema,
+      taskName: DRAMA_AGENT_REGISTRY.SCRIPT_EDITOR.key,
+      schema: fullSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'script-editor', buildScriptEditorSystemPrompt({ dialogueGuide: state.promptProfile?.scriptwriterGuide?.dialogueGuide })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: storyboard.episodeNumber },
       userPrompt: `修复第 ${storyboard.episodeNumber} 集分镜板：
@@ -225,7 +267,8 @@ ${issues}
 ${JSON.stringify(slimStoryboard, null, 0)}
 ${scriptCtx}
 
-请返回修复后的完整分镜板。如果修改涉及台词或场景结构，请同时返回同步后的 script。`,
+请返回修复后的完整分镜板。如果修改涉及台词或场景结构，请同时返回同步后的 script。
+【强化要求】请先在 _thoughtProcess 中逐步写出针对所有缺陷的综合修复策略和思路！`,
       temperature: 0.4,
     });
 

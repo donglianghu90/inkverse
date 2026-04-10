@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { shotSchema, Shot, DramaState, EpisodeStoryboard } from '../../schemas/drama-state.schemas';
 import { buildHookCrafterStaticPrompt, buildHookCharacterConstraint } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 const hookOutputSchema = z.object({
   cliffhangerSummary: z.string().default(''),
@@ -52,7 +54,7 @@ export class HookCrafterAgent {
     const validCharacterIds = [...new Set([...permanentIds, ...poolIds])];
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-hook-crafter',
+      taskName: DRAMA_AGENT_REGISTRY.HOOK_CRAFTER.key,
       schema: hookOutputSchema,
       systemPrompt: await this.promptService.buildPrompt(
         state.dramaId,

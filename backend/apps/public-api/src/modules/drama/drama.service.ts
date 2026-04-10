@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { DramaEntity } from './entities/drama.entity';
 import { EpisodeEntity } from './entities/episode.entity';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
+import { ShotMediaEntity } from './entities/shot-media.entity';
 import { VisualAssetEntity } from './entities/visual-asset.entity';
 import { CreateDramaDto } from './dto/create-drama.dto';
 import { DramaState, ContentMode, EpisodeStoryboard, Shot, PropAsset, SignatureProp } from './schemas/drama-state.schemas';
@@ -72,6 +73,7 @@ export class DramaService implements OnModuleInit {
   constructor(
     @InjectRepository(DramaEntity) private readonly dramaRepo: Repository<DramaEntity>,
     @InjectRepository(EpisodeEntity) private readonly episodeRepo: Repository<EpisodeEntity>,
+    @InjectRepository(ShotMediaEntity) private readonly shotMediaRepo: Repository<ShotMediaEntity>,
     @InjectRepository(VisualAssetEntity) private readonly visualAssetRepo: Repository<VisualAssetEntity>,
     @InjectRepository(DramaWorkflowExecutionEntity) private readonly wfExecRepo: Repository<DramaWorkflowExecutionEntity>,
     private readonly seedAnalyzer: DramaSeedAnalyzerAgent,
@@ -271,7 +273,7 @@ export class DramaService implements OnModuleInit {
       if (resumeFrom <= 1) {
         logDrama('outline_plan_start', 'ok', '总导演规划全剧大纲');
         emitCreate(1, '总导演规划全剧大纲...');
-        out.outline = await this.seriesDirector.plan(out.seed, dramaId, opts.userId, productionGuidance, getAgentPrompt('series-director') || undefined);
+        out.outline = await this.seriesDirector.plan(out.seed, dramaId, opts.userId, productionGuidance, out.seedHints ?? undefined, getAgentPrompt('series-director') || undefined);
         logDrama('outline_plan_done', 'ok', '全剧大纲完成', { totalEpisodes: out.outline?.totalPlannedEpisodes });
         emitCreate(1, '全剧大纲完成', true);
         await saveCP('outline_planned', { outline: out.outline });
@@ -789,12 +791,12 @@ export class DramaService implements OnModuleInit {
   }
 
   /** 逐集生成并等待完成（供 SSE 使用，可推送进度） */
-  async generateEpisodesAndWait(dramaId: string): Promise<{ message: string; startEp: number; endEp: number; paused: boolean }> {
+  async generateEpisodesAndWait(dramaId: string): Promise<{ message: string; startEp: number; endEp: number; paused: boolean; suspended: boolean }> {
     await this.stateStore.resume(dramaId);
     const { startEp, endEp } = await this.prepareGenerateEpisodes(dramaId);
     try {
-      const wasPaused = await this.runEpisodePipeline(dramaId, startEp, endEp);
-      return { message: wasPaused ? '已暂停' : `E${startEp}-E${endEp} 全部完成`, startEp, endEp, paused: wasPaused };
+      const { wasPaused, wasSuspended } = await this.runEpisodePipeline(dramaId, startEp, endEp);
+      return { message: wasPaused ? '已暂停' : wasSuspended ? '由于开启断点已安全挂起' : `E${startEp}-E${endEp} 全部完成`, startEp, endEp, paused: wasPaused, suspended: wasSuspended };
     } finally {
       await this.stateStore.stopGenerating(dramaId);
     }
@@ -815,9 +817,10 @@ export class DramaService implements OnModuleInit {
     return { startEp, endEp };
   }
 
-  /** 后台逐集串行执行（确保上下文正确传递），返回 true 表示被暂停 */
-  private async runEpisodePipeline(dramaId: string, startEp: number, endEp: number): Promise<boolean> {
+  /** 后台逐集串行执行（确保上下文正确传递），返回 true 表示被暂停或挂起 */
+  private async runEpisodePipeline(dramaId: string, startEp: number, endEp: number): Promise<{ wasPaused: boolean; wasSuspended: boolean }> {
     try {
+      let isSuspended = false;
       for (let ep = startEp; ep <= endEp; ep++) {
         if (await this.stateStore.isPaused(dramaId)) {
           this.logger.log(`生成已暂停 dramaId=${dramaId}，停在 E${ep} 之前`);
@@ -836,22 +839,47 @@ export class DramaService implements OnModuleInit {
           const st = drama.state as any;
           st.episodeCursor = ep;
           await this.dramaRepo.update(dramaId, { state: st });
-          return true;
+          return { wasPaused: true, wasSuspended: false };
         }
-        await this.episodeWorkflow.generateEpisode(dramaId, ep);
+        
+        const res = await this.episodeWorkflow.generateEpisode(dramaId, ep);
+        if (res?.suspended) {
+          isSuspended = true;
+          this.logger.log(`生成已挂起(Suspended by Workflow Endpoint) dramaId=${dramaId}，停在 E${ep}`);
+          this.progressService.emit({
+            dramaId,
+            runType: 'episode',
+            step: 'suspended',
+            stepIndex: 0,
+            totalSteps: 1,
+            message: `此集触发人机共创断点，已挂起等待确认`,
+            done: true,
+            terminal: true,
+            terminalStatus: 'paused',
+          });
+          const drama = await this.getDrama(dramaId);
+          const st = drama.state as any;
+          st.episodeCursor = ep; // Same episode cursor since it needs to resume from this EP!
+          await this.dramaRepo.update(dramaId, { state: st });
+          break; // Stop generating next episodes
+        }
       }
-      this.progressService.emit({
-        dramaId,
-        runType: 'episode',
-        step: 'all_done',
-        stepIndex: 0,
-        totalSteps: 1,
-        message: `E${startEp}-E${endEp} 全部完成`,
-        done: true,
-        terminal: true,
-        terminalStatus: 'success',
-      });
-      return false;
+      
+      if (!isSuspended) {
+        this.progressService.emit({
+          dramaId,
+          runType: 'episode',
+          step: 'all_done',
+          stepIndex: 0,
+          totalSteps: 1,
+          message: `E${startEp}-E${endEp} 全部完成`,
+          done: true,
+          terminal: true,
+          terminalStatus: 'success',
+        });
+      }
+      
+      return { wasPaused: false, wasSuspended: isSuspended };
     } catch (err: any) {
       this.progressService.emit({
         dramaId,
@@ -893,10 +921,11 @@ export class DramaService implements OnModuleInit {
     return { episodes };
   }
 
-  async getEpisode(dramaId: string, episodeNumber: number): Promise<EpisodeEntity> {
+  async getEpisode(dramaId: string, episodeNumber: number): Promise<EpisodeEntity & { shotMedia: any[] }> {
     const episode = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber } });
     if (!episode) throw new NotFoundException(`短剧 ${dramaId} 第 ${episodeNumber} 集不存在`);
-    return episode;
+    const mediaList = await this.shotMediaRepo.find({ where: { episodeId: episode.id } });
+    return { ...episode, shotMedia: mediaList } as any;
   }
 
   /**
@@ -979,16 +1008,8 @@ export class DramaService implements OnModuleInit {
 
     const storyboard = (episode.storyboard as EpisodeStoryboard | null) ?? null;
     const shots = storyboard?.shots ?? [];
-    const rawMap = (episode.shotMediaMap ?? {}) as Record<string, {
-      status?: string;
-      videoUrl?: string;
-      qc?: {
-        passed?: boolean;
-        readabilityScore?: number;
-        failReasons?: Array<'identity' | 'style' | 'camera' | 'motion'>;
-        recommendedFix?: 'identity' | 'style' | 'camera' | 'motion';
-      };
-    }>;
+    const mediaList = await this.shotMediaRepo.find({ where: { episodeId: episode.id } });
+    const rawMap = Object.fromEntries(mediaList.map(m => [m.shotId, m])) as Record<string, any>;
     const reviewRiskSets = includeReviewRisks
       ? this.extractReviewRiskShotIds(episode.review)
       : { all: new Set<string>(), consistency: new Set<string>(), camera: new Set<string>() };
@@ -1008,16 +1029,30 @@ export class DramaService implements OnModuleInit {
       return { episodeNumber, totalShots: shots.length, problemShotIds: [], resetCount: 0 };
     }
 
-    const resetMap: Record<string, Record<string, unknown>> = { ...rawMap };
-    for (const sid of problemShotIds) {
-      resetMap[sid] = { status: 'not_started' };
-    }
-
-    await this.episodeRepo.update(episode.id, {
-      shotMediaMap: resetMap,
-      mediaStatus: 'not_started',
-      mediaError: '',
-      videoUrl: '',
+    await this.episodeRepo.manager.transaction(async em => {
+      // 1. 设置 episode 级别状态
+      await em.update(EpisodeEntity, episode.id, {
+        mediaStatus: 'not_started',
+        mediaError: '',
+        videoUrl: '',
+      });
+      // 2. 将有问题的 shot 全部重置
+      if (problemShotIds.length > 0) {
+        await em.update(ShotMediaEntity, { episodeId: episode.id, shotId: In(problemShotIds) }, {
+          status: 'not_started',
+          videoJobId: '',
+          videoProvider: '',
+          videoUrl: '',
+          imageUrl: '',
+          lastFrameImageUrl: '',
+          t2iPrompt: '',
+          t2iNegativePrompt: '',
+          lastFrameT2iPrompt: '',
+          qc: null,
+          videoQcIssues: null,
+          kenBurnsFallback: false,
+        });
+      }
     });
 
     this.logger.log(
@@ -1164,5 +1199,9 @@ export class DramaService implements OnModuleInit {
 
   async generateStoryGoal(input: { mainIdea: string; genre: string; targetAudience: string }, userId?: string) {
     return this.ideaService.generateStoryGoal(input, userId);
+  }
+
+  async rebakePrompts(dramaId: string): Promise<void> {
+    this.logger.warn(`rebakePrompts is currently unimplemented, skipping for dramaId=${dramaId}`);
   }
 }

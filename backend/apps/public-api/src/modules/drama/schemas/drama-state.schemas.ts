@@ -787,18 +787,6 @@ export const shotSchema = z.object({
   lastFrameImageUrl: z.string().nullish(),
   characterVariationIds: z.record(z.string(), z.string()).nullish(), // characterId → variationId 映射
 
-  // ─── Shot 组合生成（多镜共享一个 Sora 视频）────────────────────────────────
-  /**
-   * Shot 所属的合并组标识（null = 独立 Shot，由 Kling 单独生成）。
-   * 同一组内的 Shot 合并为一次 Sora 请求（10-15s），按 groupOffsetSec 裁剪。
-   * 格式建议：`sg_{sceneId}_{N}`，例如 "sg_scene3_1"。
-   */
-  shotGroupId: z.string().nullish(),
-  /**
-   * 该 Shot 在组内视频的起始偏移（秒）。
-   * 组内第1个 Shot=0，第2个=第1个 estimatedDurationSec，以此类推。
-   */
-  groupOffsetSec: z.number().min(0).nullish(),
 
   // ─── 剪辑切点精度 ──────────────────────────────────────────────────────────
   /** Shot 内的精确入点(秒)，从 Shot 起始处偏移。省略=从头开始 */

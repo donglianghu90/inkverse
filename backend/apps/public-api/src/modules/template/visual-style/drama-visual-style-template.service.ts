@@ -42,7 +42,7 @@ export class DramaVisualStyleTemplateService implements OnModuleInit {
   }
 
   /** 当前系统模板版本号；每次需要更新存量模板时递增 */
-  private static readonly SYSTEM_VERSION = 9;
+  private static readonly SYSTEM_VERSION = 10;
 
   private async seedSystemTemplates() {
     const VER = DramaVisualStyleTemplateService.SYSTEM_VERSION;

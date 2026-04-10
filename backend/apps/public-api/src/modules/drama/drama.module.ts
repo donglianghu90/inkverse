@@ -7,6 +7,8 @@ import { DramaEntity } from './entities/drama.entity';
 import { EpisodeEntity } from './entities/episode.entity';
 import { VisualAssetEntity } from './entities/visual-asset.entity';
 import { DramaWorkflowExecutionEntity } from './entities/drama-workflow-execution.entity';
+import { PromptOptimizationProposalEntity } from './entities/prompt-optimization-proposal.entity';
+import { ShotMediaEntity } from './entities/shot-media.entity';
 
 import { DramaAgentPipelineEntity } from './entities/drama-agent-pipeline.entity';
 import { DramaTaskEntity } from './entities/task.entity';
@@ -19,6 +21,7 @@ import { DramaPipelineController } from './drama-pipeline.controller';
 import { DramaEpisodeController } from './drama-episode.controller';
 import { DramaPromptPreviewController } from './drama-prompt-preview.controller';
 import { DramaIdeaController } from './drama-idea.controller';
+import { PromptOptimizationController } from './prompt-optimization/prompt-optimization.controller';
 // ── Core Services ──
 import { DramaService } from './drama.service';
 import { DramaSseHelper } from './drama-sse.helper';
@@ -55,11 +58,13 @@ import {
 import { ArcDirectorAgent, EpisodeDirectorAgent, ContinuityGuardAgent, ScriptwriterAgent, DialogueCoachAgent } from './agents/scripting';
 import { StoryboardDirectorAgent, AudioDirectorAgent } from './agents/production';
 import { ScriptReviewerAgent, ScriptEditorAgent, PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent } from './agents/review';
+import { SystemPromptOptimizerAgent } from './agents/review/system-prompt-optimizer.agent';
 // ── Prompt & 任务恢复 ──
 import { DramaPromptTemplateService } from './prompting/drama-prompt-template.service';
 import { DramaPromptBakerService } from './prompting/drama-prompt-baker.service';
 import { DramaTaskRecoveryService } from './drama-task-recovery.service';
 import { DramaMediaWatchdogService } from './drama-media-watchdog.service';
+import { PromptOptimizationService } from './prompt-optimization/prompt-optimization.service';
 import { DRAMA_QUEUE } from './task/types';
 
 import { TemplateModule } from '../template/template.module';
@@ -68,8 +73,8 @@ import { TemplateModule } from '../template/template.module';
   imports: [
     TypeOrmModule.forFeature([
       DramaEntity, EpisodeEntity, VisualAssetEntity, DramaWorkflowExecutionEntity, DramaAgentPipelineEntity,
-      DramaTaskEntity,
-      DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity,
+      DramaTaskEntity, PromptOptimizationProposalEntity,
+      DramaGraphRunEntity, DramaGraphStepEntity, DramaGraphEventEntity, ShotMediaEntity
     ]),
     ScheduleModule.forRoot(),
     BullModule.registerQueue(
@@ -82,6 +87,7 @@ import { TemplateModule } from '../template/template.module';
   controllers: [
     DramaPipelineController, DramaEpisodeController, DramaPromptPreviewController,
     DramaIdeaController,
+    PromptOptimizationController,
     DramaController,
   ],
   providers: [
@@ -95,9 +101,9 @@ import { TemplateModule } from '../template/template.module';
     DramaSeedAnalyzerAgent, SeriesDirectorAgent, VisualAssetDesignerAgent, DramaProfilerAgent, DramaStrategyAgent,
     ArcDirectorAgent, EpisodeDirectorAgent, ContinuityGuardAgent, ScriptwriterAgent, DialogueCoachAgent,
     StoryboardDirectorAgent, AudioDirectorAgent,
-    ScriptReviewerAgent, ScriptEditorAgent, PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent,
+    ScriptReviewerAgent, ScriptEditorAgent, PacingAnalyzerAgent, HookCrafterAgent, EpisodeRecorderAgent, SystemPromptOptimizerAgent,
     DramaDeterministicCheckerService, DramaPromptTemplateService, DramaPromptBakerService, DramaCalibrationService,
-    DramaTaskRecoveryService, DramaMediaWatchdogService,
+    DramaTaskRecoveryService, DramaMediaWatchdogService, PromptOptimizationService,
   ],
   exports: [DramaTaskService, TaskSubmitterService, DramaRunService],
 })

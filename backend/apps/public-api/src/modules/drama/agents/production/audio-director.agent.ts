@@ -10,6 +10,8 @@ import {
 } from '../../schemas/drama-state.schemas';
 import { buildAudioDirectorStaticPrompt, buildAudioEpisodeContext } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 const MAX_SHOTS_PER_BATCH = 10; // 每批最多处理的 Shot 数
 
@@ -60,14 +62,12 @@ export class AudioDirectorAgent {
         estimatedDurationSec: s.estimatedDurationSec,
         visualPrompt: s.visualPrompt,
         dialogue: s.dialogue,
-        subtitle: s.subtitle,
         characters: s.characters.map(c => ({ characterId: c.characterId, action: c.action, emotion: c.emotion })),
-        camera: { shotSize: s.camera?.shotSize, cameraAngle: s.camera?.cameraAngle, movement: s.camera?.movement },
         audio: s.audio,
       }));
 
       const raw = await this.llm.generateStructured({
-        taskName: 'drama-audio-director',
+        taskName: DRAMA_AGENT_REGISTRY.AUDIO_DIRECTOR.key,
         schema: batchOutputSchema,
         systemPrompt: sysPrompt,
         metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: storyboard.episodeNumber },

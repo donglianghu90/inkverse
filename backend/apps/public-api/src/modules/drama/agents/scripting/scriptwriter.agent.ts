@@ -5,13 +5,12 @@ import { Injectable } from '@nestjs/common';
 import { LlmService } from '../../../llm/llm.service';
 import { z } from 'zod';
 import {
-  episodeScriptSchema, EpisodeScript, DramaState, EpisodeIntent, DramaContinuityCheck,
+  episodeScriptSchema, EpisodeScript, DramaState, EpisodeIntent, DramaContinuityCheck, scriptSceneSchema
 } from '../../schemas/drama-state.schemas';
 import { buildScriptwriterSystemPrompt, buildUserPromptConstraintsTail } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 import { DramaCalibrationService } from '../../workflow/drama-calibration.service';
-
-const scriptOutputSchema = z.object({ script: episodeScriptSchema });
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
 
 @Injectable()
 export class ScriptwriterAgent {
@@ -52,9 +51,36 @@ export class ScriptwriterAgent {
     const recentKpi = state.kpiHistory.slice(-3);
     const weakDims = this.calibration.extractWeakDimensionFeedback(recentKpi, 'label');
 
+    // 动态构建 Schema，彻底消除 AI 实体引用的幻觉
+    const validCharIds = [...new Set([...intent.activeCharacters.map(a => a.characterId), ...(intent.proposedNewCharacters ?? []).map(p => p.characterId)])] as [string, ...string[]];
+    // 允许空字符串（环境音/动作）或 narrator（旁白）
+    const characterIdField = validCharIds.length > 0 ? z.enum([...validCharIds, 'narrator', '']) : z.string();
+
+    const dynamicScriptSceneSchema = scriptSceneSchema.extend({
+      presentCharacterIds: z.array(characterIdField).nullish().transform(v => v ?? []),
+      dialogues: z.array(z.object({
+        characterId: characterIdField.nullish().transform(v => v ?? ''),
+        text: z.string(),
+        parenthetical: z.string().nullish().transform(v => v ?? ''),
+      })).nullish().transform(v => v ?? []),
+      actions: z.array(z.object({
+        description: z.string(),
+        characterId: characterIdField.nullish().transform(v => v ?? ''),
+      })).nullish().transform(v => v ?? []),
+    });
+
+    const dynamicEpisodeScriptSchema = episodeScriptSchema.extend({
+      scenes: z.array(dynamicScriptSceneSchema).min(1).max(8),
+    });
+
+    const dynamicScriptOutputSchema = z.object({
+      _thoughtProcess: z.string().describe('Write your detailed reasoning here before generating the script.'),
+      script: dynamicEpisodeScriptSchema
+    });
+
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-scriptwriter',
-      schema: scriptOutputSchema,
+      taskName: DRAMA_AGENT_REGISTRY.SCRIPTWRITER.key,
+      schema: dynamicScriptOutputSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'scriptwriter', buildScriptwriterSystemPrompt({ guide, visualStyle: state.visualStyle, genreArchetype: state.promptProfile?.genreArchetype })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: epNum },
       userPrompt: `第 ${epNum} 集剧本创作：
@@ -117,7 +143,8 @@ dialogues[].characterId 和 actions[].characterId【只能】使用以下已注�
 5. sceneId 格式：ep${epNum}_sc1, ep${epNum}_sc2...
 6. 场景信息密度：estimatedDurationSec 超过 50 秒的场景，内部必须包含 ≥2 个转折点（turningPoint 只写最关键的那个，但 dialogues/actions 中必须体现至少 2 次情绪/信息转折）
 7. 全集所有场景的 estimatedDurationSec 总和必须达到目标时长（${intent.durationTargetSec}秒）的 80%-110%
-8. 每个场景的 objective 中标注本场覆盖的 emotionBeat ID（如"覆盖 eb_3, eb_4"），确保高强度节拍无遗漏${buildUserPromptConstraintsTail({ redLines: state.seed?.redLines })}`,
+8. 每个场景的 objective 中标注本场覆盖的 emotionBeat ID（如"覆盖 eb_3, eb_4"），确保高强度节拍无遗漏
+9. 【强化要求】先在 _thoughtProcess 中一步步写下你的思考过程（分析目标、反思弱项、设计人物高光动作和台词），想清楚之后再编写 script 字段。${buildUserPromptConstraintsTail({ redLines: state.seed?.redLines })}`,
       temperature: 0.65,
     });
 

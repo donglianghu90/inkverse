@@ -33,6 +33,8 @@ export interface DramaWorkflowParams {
   enableDialogueCoach: boolean;
   enablePacingAnalyzer: boolean;
   enableHookCrafter: boolean;
+  pauseAfterScript?: boolean;
+  pauseAfterStoryboard?: boolean;
 }
 
 export interface DramaPipelineView {

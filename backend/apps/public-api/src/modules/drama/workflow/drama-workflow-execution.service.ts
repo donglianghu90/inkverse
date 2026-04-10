@@ -80,6 +80,26 @@ export class DramaWorkflowExecutionService {
     return (r.affected ?? 0) > 0;
   }
 
+  async getStepOutputs(runId: string): Promise<Record<string, unknown> | null> {
+    const run = await this.repo.findOne({ where: { id: runId }, select: ['id', 'stepOutputs'] });
+    return run?.stepOutputs ?? null;
+  }
+
+  async patchStepOutput(runId: string, stepName: string, patch: Record<string, unknown>): Promise<boolean> {
+    const run = await this.repo.findOne({ where: { id: runId }, select: ['id', 'stepOutputs'] });
+    if (!run || !run.stepOutputs) return false;
+    run.stepOutputs = {
+      ...run.stepOutputs,
+      [stepName]: {
+        ...(run.stepOutputs[stepName] as Record<string, unknown> ?? {}),
+        ...patch,
+      }
+    };
+    await this.repo.update(run.id, { stepOutputs: run.stepOutputs });
+    this.logger.log(`PATCH stepOutputs / runId=${runId} stepName=${stepName}`);
+    return true;
+  }
+
   private isStale(run: DramaWorkflowExecutionEntity, now: number): boolean {
     return now - (run.heartbeatAt ?? run.createdAt).getTime() >= STALE_THRESHOLD_MS;
   }
@@ -88,7 +108,7 @@ export class DramaWorkflowExecutionService {
     const runs = await this.repo.createQueryBuilder('e')
       .where('e.dramaId = :dramaId', { dramaId })
       .andWhere('e.episodeNumber = :ep', { ep: episodeNumber })
-      .andWhere('e.status IN (:...ss)', { ss: ['interrupted', 'running', 'failed'] })
+      .andWhere('e.status IN (:...ss)', { ss: ['interrupted', 'running', 'failed', 'suspended'] })
       .orderBy('e.createdAt', 'DESC').take(100).getMany();
     const now = Date.now();
     for (const run of runs) {
@@ -99,12 +119,12 @@ export class DramaWorkflowExecutionService {
     return null;
   }
 
-  async reopenRun(runId: string): Promise<boolean> { // 原子恢复运行（interrupted/failed/stale→running）
+  async reopenRun(runId: string): Promise<boolean> { // 原子恢复运行（interrupted/failed/suspended/stale→running）
     const cutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
     const r = await this.repo.createQueryBuilder().update()
       .set({ status: 'running' as DramaExecStatus, ownerInstanceId: this.instanceId, heartbeatAt: new Date(), errorMessage: '' })
       .where('id = :id', { id: runId })
-      .andWhere(`(status IN (:...rec) OR (status = :run AND ${HB_SQL} < :cut))`, { rec: ['interrupted', 'failed'], run: 'running', cut: cutoff })
+      .andWhere(`(status IN (:...rec) OR (status = :run AND ${HB_SQL} < :cut))`, { rec: ['interrupted', 'failed', 'suspended'], run: 'running', cut: cutoff })
       .execute();
     return (r.affected ?? 0) > 0;
   }
@@ -112,6 +132,16 @@ export class DramaWorkflowExecutionService {
   async completeRun(runId: string, summary: DramaExecutionSummary): Promise<boolean> { // 标记完成
     const r = await this.repo.createQueryBuilder().update()
       .set({ summary: summary as unknown as Record<string, unknown>, status: 'completed' as DramaExecStatus, heartbeatAt: new Date() })
+      .where('id = :id', { id: runId })
+      .andWhere('status = :s', { s: 'running' as DramaExecStatus })
+      .andWhere('owner_instance_id = :o', { o: this.instanceId })
+      .execute();
+    return (r.affected ?? 0) > 0;
+  }
+
+  async suspendRun(runId: string, stopReason = ''): Promise<boolean> { // 人工检修/挂起
+    const r = await this.repo.createQueryBuilder().update()
+      .set({ status: 'suspended' as DramaExecStatus, errorMessage: stopReason.slice(0, 2000), heartbeatAt: new Date() })
       .where('id = :id', { id: runId })
       .andWhere('status = :s', { s: 'running' as DramaExecStatus })
       .andWhere('owner_instance_id = :o', { o: this.instanceId })
@@ -179,6 +209,7 @@ export class DramaWorkflowExecutionService {
         { dramaId, status: 'running' as DramaExecStatus },
         { dramaId, status: 'interrupted' as DramaExecStatus },
         { dramaId, status: 'failed' as DramaExecStatus },
+        { dramaId, status: 'suspended' as DramaExecStatus },
       ],
       order: { createdAt: 'DESC' },
       take: 20,
@@ -200,6 +231,7 @@ export class DramaWorkflowExecutionService {
         const cp = r.lastCheckpoint ?? '';
         const { pct, label } = checkpointToProgress(cp);
         return {
+          runId: r.id,
           episodeNumber: r.episodeNumber,
           lastCheckpoint: cp,
           isActive: r.status === 'running' && (now - hbTime < STALE_THRESHOLD_MS),

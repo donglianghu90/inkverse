@@ -1,6 +1,5 @@
 import { request } from '@umijs/max';
 
-const AUTH_BASE = '/api/auth';
 
 export interface LoginParams {
   username: string;
@@ -22,25 +21,25 @@ export interface LoginResult {
 }
 
 export async function login(data: LoginParams): Promise<LoginResult> {
-  const res = await request(`${AUTH_BASE}/login`, { method: 'POST', data });
+  const res = await request(`/auth/login`, { method: 'POST', data });
   if (res?.data) return res.data;
   return res;
 }
 
 export async function register(data: LoginParams): Promise<LoginResult> {
-  const res = await request(`${AUTH_BASE}/register`, { method: 'POST', data });
+  const res = await request(`/auth/register`, { method: 'POST', data });
   if (res?.data) return res.data;
   return res;
 }
 
 export async function getProfile(): Promise<UserInfo> {
-  const res = await request(`${AUTH_BASE}/profile`);
+  const res = await request(`/auth/profile`);
   if (res?.data) return res.data;
   return res;
 }
 
 export async function logout(): Promise<void> {
-  await request(`${AUTH_BASE}/logout`, { method: 'POST' });
+  await request(`/auth/logout`, { method: 'POST' });
 }
 
 const TOKEN_KEY = 'token';

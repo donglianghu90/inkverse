@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { dramaStrategySchema, DramaStrategy, DramaSeed, SeriesOutline } from '../../schemas/drama-state.schemas';
 import { buildStrategySystemPrompt } from '../../prompting/drama-playbook';
 import type { GenreProductionGuidance } from '../../../template/entities/drama-genre-template.entity';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 const strategyOutputSchema = z.object({ strategy: dramaStrategySchema });
 
@@ -17,11 +19,10 @@ export class DramaStrategyAgent {
 
   async generate(seed: DramaSeed, outline: SeriesOutline, dramaId?: string, userId?: string, genreGuidance?: GenreProductionGuidance, additionalSystemPrompt?: string): Promise<DramaStrategy> {
 
-    let sysPrompt = buildStrategySystemPrompt({ genreGuidance }, seed.genre);
-    if (additionalSystemPrompt?.trim()) sysPrompt += `\n\n=== 补充指令 ===\n${additionalSystemPrompt.trim()}`;
+    const sysPrompt = buildStrategySystemPrompt({ genreGuidance }, additionalSystemPrompt?.trim() || undefined);
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-strategy',
+      taskName: DRAMA_AGENT_REGISTRY.STRATEGY.key,
       schema: strategyOutputSchema,
       systemPrompt: sysPrompt,
       metadata: { dramaId, userId },

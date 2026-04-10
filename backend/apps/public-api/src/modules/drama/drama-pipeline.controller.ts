@@ -45,4 +45,17 @@ export class DramaPipelineController {
   async getNodePreview(@Param('dramaId') dramaId: string, @Param('nodeId') nodeId: string) {
     return this.dramaService.buildNodePreview(dramaId, nodeId);
   }
+
+  /**
+   * 重新 bake 短剧的逐集阶段 Pipeline 提示词快照。
+   * 当用户修改题材模板的 Agent 提示词后，可对已有短剧调用此接口，
+   * 让新的 agentSystemPrompts 生效到 drama_agent_pipelines 节点的 basePromptSnapshot。
+   * POST /drama/:dramaId/pipeline/rebake
+   */
+  @Post(':dramaId/pipeline/rebake')
+  async rebakePipelinePrompts(@Param('dramaId') dramaId: string) {
+    await this.dramaService.rebakePrompts(dramaId);
+    this.promptTemplateService.invalidateCache(dramaId);
+    return { success: true, message: 'Pipeline 提示词已重新 bake 并发布' };
+  }
 }

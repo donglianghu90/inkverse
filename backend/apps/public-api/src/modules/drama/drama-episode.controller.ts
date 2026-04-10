@@ -114,6 +114,25 @@ export class DramaEpisodeController {
     return { executions: filtered.map((r) => this.toExecutionPayload(r)) };
   }
 
+  @Get(':dramaId/executions/:runId/step-outputs')
+  async getRunStepOutputs(@Param('dramaId') dramaId: string, @Param('runId') runId: string) {
+    const outputs = await this.executionService.getStepOutputs(runId);
+    if (!outputs) throw new NotFoundException('Execution run not found');
+    return { stepOutputs: outputs };
+  }
+
+  @Patch(':dramaId/executions/:runId/step-outputs/:stepName')
+  async patchRunStepOutput(
+    @Param('dramaId') dramaId: string,
+    @Param('runId') runId: string,
+    @Param('stepName') stepName: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const ok = await this.executionService.patchStepOutput(runId, stepName, body);
+    if (!ok) throw new NotFoundException('Execution run not found or patch failed');
+    return { success: true };
+  }
+
   /* ─── 生成状态查询（用于页面重进时判断是否需要重连 SSE）─── */
 
   @Get(':dramaId/generation-status')

@@ -3,13 +3,14 @@ import { Controller, Post, Get, Patch, Delete, Param, Body, Req } from '@nestjs/
 import { DramaService } from './drama.service';
 import { CreateDramaDto } from './dto/create-drama.dto';
 import { UsageLedgerService } from '../usage/usage-ledger.service';
+import { getDramaSystemAgents } from './agents/drama-agent.registry';
 
 @Controller('drama')
 export class DramaController {
   constructor(
     private readonly dramaService: DramaService,
     private readonly usageLedger: UsageLedgerService,
-  ) {}
+  ) { }
 
   @Post()
   async createDrama(@Body() dto: CreateDramaDto, @Req() req: any) {
@@ -19,6 +20,12 @@ export class DramaController {
   @Get()
   async listDramas(@Req() req: any) {
     return this.dramaService.listDramas(req.user?.id);
+  }
+
+
+  @Get('system/agents')
+  getSystemAgents() {
+    return getDramaSystemAgents();
   }
 
   @Get(':dramaId')
@@ -46,4 +53,6 @@ export class DramaController {
     await this.dramaService.assertDramaOwnership(dramaId, userId);
     return this.usageLedger.resourceDetailForDrama('drama', dramaId);
   }
+
+
 }

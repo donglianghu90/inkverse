@@ -11,6 +11,8 @@ import {
 import { buildScriptReviewerSystemPrompt } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
 import { DramaCalibrationService } from '../../workflow/drama-calibration.service';
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
+
 
 const reviewOutputSchema = z.object({ review: episodeReviewSchema });
 
@@ -34,7 +36,7 @@ export class ScriptReviewerAgent {
     const shotDetail = this.buildShotDetail(storyboard);
 
     const raw = await this.llm.generateStructured({
-      taskName: 'drama-script-reviewer',
+      taskName: DRAMA_AGENT_REGISTRY.SCRIPT_REVIEWER.key,
       schema: reviewOutputSchema,
       systemPrompt: await this.promptService.buildPrompt(state.dramaId, 'script-reviewer', buildScriptReviewerSystemPrompt({ weights, genreChecks, dialogueGuide: state.promptProfile?.scriptwriterGuide?.dialogueGuide })),
       metadata: { dramaId: state.dramaId, userId: state.userId, episodeNumber: script.episodeNumber },

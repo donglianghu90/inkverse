@@ -4,7 +4,7 @@
  * 工作流：分镜脚本(只读) → 图片制作(T2I逐Shot/批量) → 视频制作(I2V逐Shot/批量)
  * 每一步都支持手动触发 + AI生成 + 审核，符合"人工干预→全自动"渐进架构。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { useParams, history } from '@umijs/max';
 import { message } from 'antd';
 import {
@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils';
 import {
   getDrama, getEpisode, listEpisodes,
   generateShotImage, generateShotVideo, getGenerateImagesSseUrl, getGenerateMediaSseUrl, resetProblemShots,
-  getVisualAssets, regenerateVisualAssetImage,
+  getVisualAssets, regenerateVisualAssetImage, getEpisodeMediaStatus,
   type VisualAssetItem, type EpisodeListItem, type DramaSseEvent, type ResetFixTarget,
 } from '@/services/drama';
 import { getToken } from '@/services/auth';
@@ -43,10 +43,7 @@ interface Shot {
   specialTechnique?: string | null;
   isHumanEdited?: boolean;
   qualityTier?: 'golden' | 'standard' | 'filler';
-  /** Shot 所属的多镜头合并组标识（null = 独立 Shot） */
-  shotGroupId?: string | null;
-  /** 该 Shot 在组内视频的起始偏移（秒） */
-  groupOffsetSec?: number | null;
+
 }
 type QcFixTarget = Exclude<ResetFixTarget, 'all'>;
 interface ShotMediaEntry {
@@ -118,8 +115,14 @@ function ShotImageStatus({ entry, generating }: { entry?: ShotMediaEntry; genera
 }
 
 function ShotVideoStatus({ entry }: { entry?: ShotMediaEntry }) {
-  if (entry?.videoUrl) return <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />已生成</span>;
-  if (entry?.status === 'group_pending') return <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />随组生成中…</span>;
+  if (entry?.videoUrl) {
+    const isFallbackImage = /\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(entry.videoUrl);
+    if (isFallbackImage) {
+      return <span className="text-xs text-amber-600 flex items-center gap-1"><AlertCircle className="w-3 h-3" />降级静态</span>;
+    }
+    return <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />已生成</span>;
+  }
+
   if (entry?.videoJobId && entry?.status === 'submitted') return <span className="text-xs text-amber-600 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />生成中…</span>;
   if (entry?.status === 'failed') return <span className="text-xs text-red-600 flex items-center gap-1"><AlertCircle className="w-3 h-3" />视频生成失败</span>;
   if (entry?.imageUrl) return <span className="text-xs text-blue-600 flex items-center gap-1"><Play className="w-3 h-3" />可生成视频</span>;
@@ -371,9 +374,11 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
   busy = false,
   onGenerate,
 }) => {
-  const hasVideo = !!media?.videoUrl;
+  const hasVideoUrl = !!media?.videoUrl;
+  const isFallbackImage = hasVideoUrl && /\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(media.videoUrl!);
+  const hasVideo = hasVideoUrl && !isFallbackImage;
   const hasImage = !!media?.imageUrl;
-  const isSubmitted = media?.status === 'submitted' || media?.status === 'group_pending';
+  const isSubmitted = media?.status === 'submitted';
 
   const containerClass = aspectRatio === '9:16'
     ? 'aspect-[9/16] w-full max-w-[140px] mx-auto'
@@ -383,7 +388,7 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
     <div className={cn(
       'rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden flex flex-col',
       shot.qualityTier === 'golden' ? 'border-amber-300 dark:border-amber-700 ring-1 ring-amber-200 dark:ring-amber-800' : '',
-      hasVideo && shot.qualityTier !== 'golden' ? 'border-emerald-200 dark:border-emerald-800' : '',
+      hasVideoUrl && shot.qualityTier !== 'golden' ? 'border-emerald-200 dark:border-emerald-800' : '',
     )}>
       {/* Shot header */}
       <div className="px-3 pt-3 pb-1 flex items-center justify-between gap-1">
@@ -408,14 +413,25 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
       {/* Video / image area */}
       <div className="px-3 py-1">
         <div className={cn(containerClass, 'relative bg-muted rounded-lg overflow-hidden')}>
-          {hasVideo ? (
-            <video
-              src={media!.videoUrl!}
-              className="absolute inset-0 w-full h-full object-cover"
-              controls
-              playsInline
-              preload="metadata"
-            />
+          {hasVideoUrl ? (
+            isFallbackImage ? (
+              <div className="absolute inset-0">
+                <img src={media!.videoUrl!} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                <div className="absolute top-2 right-2 z-10">
+                  <Badge className="bg-black/60 text-white border border-white/20 text-[9px] px-1.5 py-0 shadow-sm pointer-events-none">
+                    降级静态
+                  </Badge>
+                </div>
+              </div>
+            ) : (
+              <video
+                src={media!.videoUrl!}
+                className="absolute inset-0 w-full h-full object-cover"
+                controls
+                playsInline
+                preload="metadata"
+              />
+            )
           ) : isSubmitted ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-amber-50 dark:bg-amber-950/40">
               <Loader2 className="w-8 h-8 text-amber-500 animate-spin" />
@@ -461,7 +477,7 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
           >
             {generating || isSubmitted ? (
               <><Loader2 className="w-3 h-3 animate-spin" />生成中…</>
-            ) : hasVideo ? (
+            ) : hasVideoUrl ? (
               <><RefreshCw className="w-3 h-3" />重新生成</>
             ) : (
               <><Video className="w-3 h-3" />生成视频</>
@@ -704,6 +720,19 @@ const EpisodeProductionBoard: React.FC = () => {
     ]).finally(() => setLoading(false));
   }, [dramaId, episodeNumber]);
 
+  // ── Probe backend for ongoing generation on mount ──────────────────────────
+  useEffect(() => {
+    if (!dramaId) return;
+    getEpisodeMediaStatus(dramaId, episodeNumber).then(status => {
+      if (status.mediaStatus === 'generating_images' || status.mediaStatus === 'generating_first_frames') {
+        setIsGeneratingImages(true);
+      }
+      if (status.mediaStatus === 'generating_videos') {
+        setIsGeneratingVideos(true);
+      }
+    }).catch(() => {});
+  }, [dramaId, episodeNumber]);
+
   // Clean up SSE on unmount
   useEffect(() => () => {
     imagesSseRef.current?.abort();
@@ -715,7 +744,9 @@ const EpisodeProductionBoard: React.FC = () => {
 
   const storyOrderedShots: Shot[] = [...(episode?.storyboard?.shots ?? [])].sort((a, b) => a.shotIndex - b.shotIndex);
   const displayShots: Shot[] = sortMode === 'priority' ? sortShotsByPriority(storyOrderedShots) : storyOrderedShots;
-  const shotMediaMap: Record<string, ShotMediaEntry> = (episode?.shotMediaMap ?? {}) as Record<string, ShotMediaEntry>;
+  const shotMediaMap = useMemo(() => {
+    return Object.fromEntries(((episode as any)?.shotMedia ?? []).map((m: any) => [m.shotId, m])) as Record<string, ShotMediaEntry>;
+  }, [episode]);
   const consistencyRiskSet = new Set((episode?.review?.consistencyRiskShots ?? []).map((r) => r.shotId));
   const cameraRiskSet = new Set((episode?.review?.cameraReadabilityRiskShots ?? []).map((r) => r.shotId));
   const reviewRiskShotSet = new Set<string>([...consistencyRiskSet, ...cameraRiskSet]);
@@ -723,8 +754,26 @@ const EpisodeProductionBoard: React.FC = () => {
   const aspectRatio: '9:16' | '16:9' = ((drama as any)?.state?.audienceDirective?.aspectRatio ?? '9:16') as '9:16' | '16:9';
   const videoProvider: string = ((drama as any)?.state?.videoProvider ?? '') as string;
 
+  const patchShotMedia = useCallback((shotId: string, patch: any) => {
+    setEpisode(prev => {
+      if (!prev) return prev;
+      const mediaArr = (prev as any).shotMedia ?? [];
+      const idx = mediaArr.findIndex((m: any) => m.shotId === shotId);
+      const newArr = [...mediaArr];
+      if (idx >= 0) {
+        newArr[idx] = { ...newArr[idx], ...patch, qc: patch.qc ?? newArr[idx].qc };
+      } else {
+        newArr.push({ shotId, ...patch });
+      }
+      return { ...prev, shotMedia: newArr } as any;
+    });
+  }, []);
+
   const imageCount = storyOrderedShots.filter(s => shotMediaMap[s.shotId]?.imageUrl).length;
-  const videoCount = storyOrderedShots.filter(s => shotMediaMap[s.shotId]?.videoUrl).length;
+  const videoCount = storyOrderedShots.filter(s => {
+    const url = shotMediaMap[s.shotId]?.videoUrl;
+    return url && !/\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(url);
+  }).length;
   const totalShots = storyOrderedShots.length;
   const problemShotIds = storyOrderedShots
     .filter((shot) => isProblemShotMediaEntry(shot, shotMediaMap[shot.shotId], episode?.mediaStatus) || reviewRiskShotSet.has(shot.shotId))
@@ -752,18 +801,7 @@ const EpisodeProductionBoard: React.FC = () => {
     try {
       const result = await generateShotImage(dramaId, episodeNumber, shotId);
       if (result.imageUrl) {
-        setEpisode(prev => prev ? {
-          ...prev,
-          shotMediaMap: {
-            ...prev.shotMediaMap,
-            [shotId]: {
-              // 重新生成图片：保留 qc 字段，清除旧视频数据，避免"新图+旧视频"错位
-              qc: prev.shotMediaMap?.[shotId]?.qc,
-              imageUrl: result.imageUrl,
-              status: 'image_done',
-            },
-          },
-        } : prev);
+        patchShotMedia(shotId, { imageUrl: result.imageUrl, status: 'image_done' });
         message.success('图片生成成功');
       } else {
         message.warning('图片未生成，请检查配置');
@@ -783,13 +821,7 @@ const EpisodeProductionBoard: React.FC = () => {
     try {
       const result = await generateShotVideo(dramaId, episodeNumber, shotId);
       if (result.videoUrl) {
-        setEpisode(prev => prev ? {
-          ...prev,
-          shotMediaMap: {
-            ...prev.shotMediaMap,
-            [shotId]: { ...(prev.shotMediaMap?.[shotId] ?? {}), videoUrl: result.videoUrl, status: 'completed' },
-          },
-        } : prev);
+        patchShotMedia(shotId, { videoUrl: result.videoUrl, status: 'completed' });
         message.success('视频生成成功');
       } else {
         message.warning('视频未生成，请检查配置');
@@ -850,6 +882,9 @@ const EpisodeProductionBoard: React.FC = () => {
                 total: data.totalSteps ?? needsGen.length,
                 message: data.message ?? '',
               });
+              if (data.data?.imageUrl && data.stepKey) {
+                patchShotMedia(data.stepKey, { imageUrl: data.data.imageUrl, status: 'image_done' });
+              }
               continue;
             }
             if (data._type === 'result') {
@@ -947,6 +982,9 @@ const EpisodeProductionBoard: React.FC = () => {
                 total: data.totalSteps ?? totalShots,
                 message: data.message ?? '',
               });
+              if (data.data?.videoUrl && data.stepKey) {
+                patchShotMedia(data.stepKey, { videoUrl: data.data.videoUrl, status: 'completed' });
+              }
               continue;
             }
             if (data._type === 'result') {
@@ -1045,36 +1083,8 @@ const EpisodeProductionBoard: React.FC = () => {
     );
   }
 
-  // ── 视频 Tab 分组布局：按 shotGroupId 聚合，仅在剧情顺序模式下分组渲染 ─────
-  type VideoRenderItem =
-    | { type: 'shot'; shot: Shot }
-    | { type: 'group'; groupId: string; shots: Shot[] };
-
-  const buildVideoRenderItems = (shots: Shot[]): VideoRenderItem[] => {
-    if (sortMode !== 'story') return shots.map(s => ({ type: 'shot' as const, shot: s }));
-    const items: VideoRenderItem[] = [];
-    const addedGroups = new Set<string>();
-    const groupMap = new Map<string, Shot[]>();
-    for (const s of shots) {
-      if (s.shotGroupId) {
-        if (!groupMap.has(s.shotGroupId)) groupMap.set(s.shotGroupId, []);
-        groupMap.get(s.shotGroupId)!.push(s);
-      }
-    }
-    for (const s of shots) {
-      if (s.shotGroupId) {
-        if (!addedGroups.has(s.shotGroupId)) {
-          addedGroups.add(s.shotGroupId);
-          items.push({ type: 'group', groupId: s.shotGroupId, shots: (groupMap.get(s.shotGroupId) ?? [s]).sort((a, b) => a.shotIndex - b.shotIndex) });
-        }
-      } else {
-        items.push({ type: 'shot', shot: s });
-      }
-    }
-    return items;
-  };
-
-  const videoRenderItems = buildVideoRenderItems(displayShots);
+  // ── 视频 Tab：每个 Shot 独立渲染 ─────
+  const videoRenderItems = displayShots;
   const shotGridClass = aspectRatio === '9:16'
     ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'
     : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4';
@@ -1331,7 +1341,7 @@ const EpisodeProductionBoard: React.FC = () => {
             <div className={cn('p-4 grid gap-3', shotGridClass)}>
               {(() => {
                 // 图片 Tab 也支持 Shot Group 分组（与视频 Tab 一致）
-                const imageRenderItems = buildVideoRenderItems(displayShots);
+                const imageRenderItems = displayShots.map(shot => ({ type: 'shot' as const, shot }));
                 return imageRenderItems.map(item => {
                   if (item.type === 'shot') {
                     const shot = item.shot;
@@ -1383,7 +1393,7 @@ const EpisodeProductionBoard: React.FC = () => {
                             shot={shot}
                             media={shotMediaMap[shot.shotId]}
                             aspectRatio={aspectRatio}
-                            generating={generatingImageShots.has(shot.shotId)}
+                            generating={generatingImageShots.has(shot.shotId) || shotMediaMap[shot.shotId]?.status === 'generating_image'}
                             busy={isGeneratingImages || isGeneratingVideos || problemResetMode !== null}
                             consistencyRisk={consistencyRiskSet.has(shot.shotId)}
                             cameraRisk={cameraRiskSet.has(shot.shotId)}
@@ -1454,54 +1464,19 @@ const EpisodeProductionBoard: React.FC = () => {
 
           <ScrollArea className="flex-1">
             <div className={cn('p-4 grid gap-3', shotGridClass)}>
-              {videoRenderItems.map(item => {
-                if (item.type === 'shot') {
-                  return (
-                    <ShotVideoCard
-                      key={item.shot.shotId}
-                      shot={item.shot}
-                      media={shotMediaMap[item.shot.shotId]}
-                      aspectRatio={aspectRatio}
-                      consistencyRisk={consistencyRiskSet.has(item.shot.shotId)}
-                      cameraRisk={cameraRiskSet.has(item.shot.shotId)}
-                      generating={generatingVideoShots.has(item.shot.shotId)}
-                      busy={isGeneratingVideos || isGeneratingImages}
-                      onGenerate={() => handleGenerateShotVideo(item.shot.shotId)}
-                    />
-                  );
-                }
-                // Shot 组：col-span-full 包裹，内部使用同款 grid
-                const groupTotalSec = item.shots.reduce((s, sh) => s + (sh.estimatedDurationSec ?? 0), 0);
-                return (
-                  <div
-                    key={item.groupId}
-                    className="col-span-full rounded-xl border-2 border-blue-200 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-950/20 p-3 space-y-2"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
-                        <Video className="w-3 h-3" />
-                        Kling 多镜头组 · {item.shots.length} Shot · {groupTotalSec.toFixed(1)}s
-                      </span>
-                      <span className="text-[10px] text-muted-foreground">一次请求生成，视觉风格统一</span>
-                    </div>
-                    <div className={cn('grid gap-2', shotGridClass)}>
-                      {item.shots.map(shot => (
-                        <ShotVideoCard
-                          key={shot.shotId}
-                          shot={shot}
-                          media={shotMediaMap[shot.shotId]}
-                          aspectRatio={aspectRatio}
-                          consistencyRisk={consistencyRiskSet.has(shot.shotId)}
-                          cameraRisk={cameraRiskSet.has(shot.shotId)}
-                          generating={generatingVideoShots.has(shot.shotId)}
-                          busy={isGeneratingVideos || isGeneratingImages}
-                          onGenerate={() => handleGenerateShotVideo(shot.shotId)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
+              {videoRenderItems.map(shot => (
+                <ShotVideoCard
+                  key={shot.shotId}
+                  shot={shot}
+                  media={shotMediaMap[shot.shotId]}
+                  aspectRatio={aspectRatio}
+                  consistencyRisk={consistencyRiskSet.has(shot.shotId)}
+                  cameraRisk={cameraRiskSet.has(shot.shotId)}
+                  generating={generatingVideoShots.has(shot.shotId)}
+                  busy={isGeneratingVideos || isGeneratingImages}
+                  onGenerate={() => handleGenerateShotVideo(shot.shotId)}
+                />
+              ))}
             </div>
           </ScrollArea>
         </TabsContent>
@@ -1509,17 +1484,76 @@ const EpisodeProductionBoard: React.FC = () => {
         {/* ─── Assets Tab ────────────────────────────────────────────────────────── */}
         <TabsContent value="assets" className="flex-1 flex flex-col mt-0">
           {(() => {
-            // 本集涉及的角色 ID 和场景 ID（从分镜提取）
+            // 本集涉及的角色 ID 和场景 ID（从分镜及剧本中提取并映射）
             const usedCharIds = new Set<string>();
-            const usedSceneIds = new Set<string>();
+            const usedLocationIds = new Set<string>();
+            const sceneMap = new Map<string, string>();
+            const scriptScenes = ((episode as any)?.script?.scenes ?? []) as Array<{ sceneId: string; locationId?: string }>;
+            for (const s of scriptScenes) {
+              if (s.sceneId && s.locationId) sceneMap.set(s.sceneId, s.locationId);
+            }
+
             for (const shot of storyOrderedShots) {
               for (const c of shot.characters ?? []) usedCharIds.add(c.characterId);
-              if (shot.sceneId) usedSceneIds.add(shot.sceneId);
+              if (shot.sceneId) {
+                const locId = sceneMap.get(shot.sceneId) || shot.sceneId;
+                usedLocationIds.add(locId);
+              }
             }
 
             const charAssets = visualAssets.filter(a => a.assetType === 'character' && usedCharIds.has(a.refId));
-            const locAssets  = visualAssets.filter(a => a.assetType === 'location'  && usedSceneIds.has(a.refId));
-            const allEpisodeAssets = [...charAssets, ...locAssets];
+            const locAssets  = visualAssets.filter(a => a.assetType === 'location'  && usedLocationIds.has(a.refId));
+            
+            // 筛选本集出现的签名道具：如果它的拥有者在本集出场，或者它出现的场景在本集用到
+            const propAssets = visualAssets.filter(a => {
+              if (a.assetType !== 'prop') return false;
+              const d = a.data as any;
+              
+              // 匹配角色拥有者（AI 可能生成的是 characterId 也可能是中文名）
+              if (d?.characterOwner) {
+                if (usedCharIds.has(d.characterOwner)) return true;
+                if (charAssets.some(c => (c.name || '').includes(d.characterOwner) || (c.refId || '').includes(d.characterOwner))) return true;
+              }
+              
+              // 匹配出场场景
+              if (d?.appearsInScenes?.some((sceneNameOrLocId: string) => 
+                usedLocationIds.has(sceneNameOrLocId) || 
+                locAssets.some(l => l.name === sceneNameOrLocId || l.refId === sceneNameOrLocId)
+              )) {
+                return true;
+              }
+              
+              // 兜底：如果该道具的 propId 或 name 在本集的任何分镜 visualPrompt 或动作描写中被提及，也算作本集资产
+              const propIdStr = (d.propId || a.refId || '').toLowerCase();
+              const propNameStr = (a.name || d.name || '').toLowerCase();
+              if (propIdStr || propNameStr) {
+                for (const shot of storyOrderedShots) {
+                  const vp = (shot.visualPrompt || '').toLowerCase();
+                  if (propIdStr && vp.includes(propIdStr)) return true;
+                  if (propNameStr && vp.includes(propNameStr)) return true;
+                  
+                  for (const char of shot.characters ?? []) {
+                    const action = (char.action || '').toLowerCase();
+                    if (propIdStr && action.includes(propIdStr)) return true;
+                    if (propNameStr && action.includes(propNameStr)) return true;
+                  }
+                }
+                
+                // 也找一下剧本阶段
+                for (const scene of scriptScenes as any[]) {
+                  for (const action of scene.actions ?? []) {
+                    const desc = (action.description || '').toLowerCase();
+                    if (propIdStr && desc.includes(propIdStr)) return true;
+                    if (propNameStr && desc.includes(propNameStr)) return true;
+                  }
+                }
+              }
+
+              return false;
+            });
+
+
+            const allEpisodeAssets = [...charAssets, ...locAssets, ...propAssets];
             const missingAssets = allEpisodeAssets.filter(a => !a.referenceImageUrl && !(a.referenceImages?.[0]?.imageUrl));
             const missingCount = missingAssets.length;
             const missingAssetIds = missingAssets.map(a => a.id);
@@ -1600,7 +1634,12 @@ const EpisodeProductionBoard: React.FC = () => {
                   {/* 信息区域 */}
                   <div className="p-2.5 flex flex-col gap-1.5 flex-1">
                     <div className="flex items-center justify-between gap-1">
-                      <p className="text-xs font-semibold truncate">{asset.name || asset.refId}</p>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <Badge variant={asset.assetType === 'character' ? 'default' : asset.assetType === 'prop' ? 'outline' : 'secondary'} className="text-[10px] px-1.5 py-0">
+                          {asset.assetType === 'character' ? '角色' : asset.assetType === 'prop' ? '道具' : '场景'}
+                        </Badge>
+                        <p className="text-xs font-semibold truncate max-w-[100px]">{asset.name || asset.refId}</p>
+                      </div>
                       <div className="flex items-center gap-1 shrink-0">
                         {!!d.role && (
                           <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-950/40 dark:text-blue-400 dark:border-blue-800">
@@ -1742,6 +1781,17 @@ const EpisodeProductionBoard: React.FC = () => {
                           </h3>
                           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                             {locAssets.map(a => <AssetCard key={a.id} asset={a} />)}
+                          </div>
+                        </section>
+                      )}
+                      {propAssets.length > 0 && (
+                        <section>
+                          <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
+                            <Sparkles className="w-4 h-4" />本集道具
+                            <span className="text-muted-foreground font-normal text-xs">({propAssets.length})</span>
+                          </h3>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                            {propAssets.map(a => <AssetCard key={a.id} asset={a} />)}
                           </div>
                         </section>
                       )}

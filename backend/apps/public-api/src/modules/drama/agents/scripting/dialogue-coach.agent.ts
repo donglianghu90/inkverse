@@ -9,8 +9,7 @@ import {
 } from '../../schemas/drama-state.schemas';
 import { buildDialogueCoachSystemPrompt } from '../../prompting/drama-playbook';
 import { DramaPromptTemplateService } from '../../prompting/drama-prompt-template.service';
-
-const sceneCoachOutputSchema = z.object({ scene: scriptSceneSchema });
+import { DRAMA_AGENT_REGISTRY } from '../drama-agent.registry';
 
 @Injectable()
 export class DialogueCoachAgent {
@@ -53,10 +52,33 @@ export class DialogueCoachAgent {
       // 只传本场出场角色的配音档案，过滤无关角色减少 Token 消耗和 LLM 混淆
       const sceneCharVoices = [...sceneCharIds].map(id => charVoiceMap.get(id ?? '')).filter(Boolean).join('\n') || '（无配音档案）';
 
+      // 动态构建 Schema，彻底消除 AI 实体引用的幻觉
+      // 以防止 LLM 在重写台词时捏造出不存在的角色 ID
+      const validCharIds = characters.map((c) => c.characterId) as [string, ...string[]];
+      const characterIdField = validCharIds.length > 0 ? z.enum([...validCharIds, 'narrator', '']) : z.string();
+
+      const dynamicScriptSceneSchema = scriptSceneSchema.extend({
+        presentCharacterIds: z.array(characterIdField).nullish().transform(v => v ?? []),
+        dialogues: z.array(z.object({
+          characterId: characterIdField.nullish().transform(v => v ?? ''),
+          text: z.string(),
+          parenthetical: z.string().nullish().transform(v => v ?? ''),
+        })).nullish().transform(v => v ?? []),
+        actions: z.array(z.object({
+          description: z.string(),
+          characterId: characterIdField.nullish().transform(v => v ?? ''),
+        })).nullish().transform(v => v ?? []),
+      });
+
+      const dynamicSceneCoachOutputSchema = z.object({
+        _thoughtProcess: z.string().describe('根据提供的秘密上下文和角色弱点，思考台词的潜台词和话中有话的暗示'),
+        scene: dynamicScriptSceneSchema,
+      });
+
       try {
         const raw = await this.llm.generateStructured({
-          taskName: 'drama-dialogue-coach',
-          schema: sceneCoachOutputSchema,
+          taskName: DRAMA_AGENT_REGISTRY.DIALOGUE_COACH.key,
+          schema: dynamicSceneCoachOutputSchema,
           systemPrompt: sysPrompt,
           metadata: { dramaId, userId: state?.userId, episodeNumber: script.episodeNumber },
           userPrompt: `润色第 ${script.episodeNumber} 集场景 ${i + 1}（${scene.purpose}）的台词：
@@ -72,7 +94,8 @@ ${JSON.stringify(scene, null, 0)}
 2. 每句台词不超过15个中文字（关键独白例外，但也不超过25字）
 3. 知情者说话要有"话中有话"的暗示，不知情者要自然天真
 4. parenthetical 必须包含语气动作指示（如：冷笑、故作轻松、攥紧拳头）
-5. 短剧节奏：禁止寒暄废话，每句话都要推进剧情或加深情感张力`,
+5. 短剧节奏：禁止寒暄废话，每句话都要推进剧情或加深情感张力
+6. 思维链约束：先在 _thoughtProcess 中思考角色的心理弱点和在场的秘密博弈，然后再输出 scene 的最终结构。`,
           temperature: 0.5,
         });
         const root = typeof raw === 'object' && raw ? raw as Record<string, unknown> : {};

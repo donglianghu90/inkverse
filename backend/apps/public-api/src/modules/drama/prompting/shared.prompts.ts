@@ -4,7 +4,7 @@ export const PURPOSE_DIRECTIVE_TEMPLATES: Record<string, string> = {
   climax: `【高潮场景通用规则】
 - 镜头节奏：密集切换（每Shot 1.5-3秒），最高情绪点用 slow_motion 特写
 - 必须有至少1个 shotSize=extreme_close_up 捕捉人物表情崩溃/爆发瞬间
-- 打脸/反杀 moment 四步法：wide+bird_eye → medium+low_angle+slow_push_in → close_up+front+fast_push → extreme_close_up+slow_motion 反应脸
+- 高光/情绪反转 moment 四步法：wide+bird_eye → medium+low_angle+slow_push_in → close_up+front+fast_push → extreme_close_up+slow_motion 反应脸
 - 最后一个Shot必须有强烈的情绪落点（胜利/崩溃），不能停在动作中间
 - qualityTier: "golden"`,
 

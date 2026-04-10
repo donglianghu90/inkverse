@@ -24,10 +24,11 @@ import {
   listDramaGenreTemplates, getDramaGenreTemplate, updateDramaGenreTemplate,
   deleteDramaGenreTemplate, cloneDramaGenreTemplate, aiGenerateDramaTemplate,
   listDramaVisualStyleTemplates, getDramaVisualStyleTemplate, updateDramaVisualStyleTemplate,
-  deleteDramaVisualStyleTemplate, cloneDramaVisualStyleTemplate, updateDramaAgentPrompt,
+  deleteDramaVisualStyleTemplate, cloneDramaVisualStyleTemplate, updateDramaAgentPrompt, listDramaSystemAgents,
   type DramaGenreTemplate, type AiGenerateDramaTemplateParams,
   type DramaVisualStyleTemplate, type VisualStyleCategory,
 } from '@/services/drama';
+import { AgentFlowChart } from './AgentFlowChart';
 
 type ContentTab = 'novel' | 'drama' | 'visual_style';
 
@@ -1002,37 +1003,48 @@ const DramaTemplateCard: React.FC<{
 }> = ({ tpl, onEdit, onClone, onDelete }) => {
   const gradient = DRAMA_GENRE_COLORS[tpl.genreKey] ?? 'from-violet-500 to-fuchsia-600';
   return (
-    <Card className="group cursor-pointer hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 overflow-hidden relative" onClick={() => onEdit(tpl)}>
-      {tpl.coverUrl ? (
-        <div className="h-24 w-full relative">
-          <img src={tpl.coverUrl} alt={tpl.displayName} className="w-full h-full object-cover" />
-          <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent" />
+    <Card 
+      className="group cursor-pointer hover:shadow-xl transition-all duration-300 hover:-translate-y-1 overflow-hidden flex flex-col border border-border/50 hover:border-primary/30 bg-card" 
+      onClick={() => onEdit(tpl)}
+    >
+      <div className="relative h-36 w-full overflow-hidden bg-muted shrink-0">
+        {tpl.coverUrl ? (
+          <img src={tpl.coverUrl} alt={tpl.displayName} className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+        ) : (
+          <div className={cn('absolute inset-0 bg-gradient-to-br', gradient)} />
+        )}
+        
+        <div className="absolute top-2.5 left-2.5 flex flex-wrap gap-1.5">
+          {(tpl.platformTags ?? []).slice(0, 2).map((p) => (
+            <Badge key={p} className="text-[10px] px-2 py-0 bg-black/60 text-white border-0 backdrop-blur-md">{PLATFORM_LABELS[p] ?? p}</Badge>
+          ))}
         </div>
-      ) : (
-        <div className={cn('h-2 bg-gradient-to-r', gradient)} />
-      )}
-      <CardContent className={cn("space-y-3 relative z-10", tpl.coverUrl ? "p-4 pt-0" : "p-4")}>
+        <div className="absolute top-2.5 right-2.5">
+          {tpl.isSystem && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-background/90 text-foreground shadow-sm backdrop-blur-md"><Shield className="w-3 h-3 mr-0.5" />预置</Badge>}
+        </div>
+      </div>
+      
+      <CardContent className="flex-1 p-4 flex flex-col gap-3">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <div className="flex items-baseline gap-2">
-              <h3 className="font-semibold text-sm truncate">{tpl.displayName}</h3>
-              {tpl.isSystem && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0"><Shield className="w-3 h-3 mr-0.5" />预置</Badge>}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{tpl.description || '暂无描述'}</p>
+            <h3 className="font-semibold text-base leading-tight truncate text-foreground group-hover:text-primary transition-colors">{tpl.displayName}</h3>
+            <p className="text-[11px] text-muted-foreground mt-1 line-clamp-2">{tpl.description || '暂无描述'}</p>
           </div>
-          <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
         </div>
+        
         <div className="flex flex-wrap gap-1">
-          {tpl.genreKeywords.slice(0, 4).map((kw) => <Badge key={kw} variant="outline" className="text-[10px] px-1.5 py-0">{kw}</Badge>)}
-          {(tpl.platformTags ?? []).slice(0, 3).map((p) => <Badge key={p} className="text-[10px] px-1.5 py-0 bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300">{PLATFORM_LABELS[p] ?? p}</Badge>)}
+          {tpl.genreKeywords.slice(0, 4).map((kw) => (
+            <Badge key={kw} variant="secondary" className="text-[10px] font-normal px-2 py-0 bg-muted text-muted-foreground hover:bg-muted">{kw}</Badge>
+          ))}
         </div>
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <div className="flex gap-1.5">
+        
+        <div className="mt-auto pt-3 flex items-center justify-between border-t border-border/40 text-[11px] text-muted-foreground">
+          <div className="flex gap-2 font-medium">
             {tpl.audienceTags?.slice(0, 2).map((t) => <span key={t}>{t}</span>)}
           </div>
           <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onClone(tpl.id)} title="克隆"><Copy className="w-3.5 h-3.5" /></Button>
-            {!tpl.isSystem && <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(tpl)} title="删除"><Trash2 className="w-3.5 h-3.5" /></Button>}
+            <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-muted" onClick={() => onClone(tpl.id)} title="克隆"><Copy className="w-3 h-3" /></Button>
+            {!tpl.isSystem && <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:bg-destructive/10" onClick={() => onDelete(tpl)} title="删除"><Trash2 className="w-3 h-3" /></Button>}
           </div>
         </div>
       </CardContent>
@@ -1054,62 +1066,22 @@ const DramaEditPanel: React.FC<{ tplId: string; onBack: () => void; onSaved: () 
   const [platformTags, setPlatformTags] = useState<string[]>([]);
   const [seedHints, setSeedHints] = useState<Record<string, any>>({});
   const [agentPrompts, setAgentPrompts] = useState<Record<string, string>>({});
+  const [originalAgentPrompts, setOriginalAgentPrompts] = useState<Record<string, string>>({});
   const [savingAgent, setSavingAgent] = useState<string | null>(null);
-
-  type AgentCategory = 'preparation' | 'scripting' | 'production';
-
-  const DRAMA_AGENT_CATEGORIES: { id: AgentCategory; label: string; desc: string; agents: { key: string; name: string; desc: string }[] }[] = [
-    {
-      id: 'preparation',
-      label: '建剧筹备群',
-      desc: '在创建短剧的准备阶段运行',
-      agents: [
-        { key: 'seed-analyzer', name: '编剧手册', desc: '分析标签、爽点，输出初始小传' },
-        { key: 'drama-strategy', name: '短剧策略师', desc: '定义核心动力、节奏和高光策略' },
-        { key: 'drama-profiler', name: '创意分析师', desc: '建立全局世界观、人物关系、评审标准' },
-        { key: 'series-director', name: '总导演', desc: '规划全剧大纲、剧情脉络' },
-        { key: 'visual-asset-designer', name: '全局视觉资产', desc: '为主配角和场景设计总体视觉属性' },
-        { key: 'character-designer', name: '角色细化设计', desc: '补充新角色的面部、服装与体态视觉设定' },
-        { key: 'location-designer', name: '场景细化设计', desc: '为具体场景设计光影与建筑风格详情' },
-      ]
-    },
-    {
-      id: 'scripting',
-      label: '分集编剧群',
-      desc: '负责具体集数的故事研发和台词打磨',
-      agents: [
-        { key: 'arc-director', name: '段落导演', desc: '把控几个集数的整体情绪与起承转合' },
-        { key: 'scriptwriter', name: '主笔编剧', desc: '扩写单集剧本，创作具体场景行为' },
-        { key: 'dialogue-coach', name: '台词教练', desc: '优化角色的对白与气口' },
-        { key: 'continuity-guard', name: '连贯性守卫', desc: '审查剧情漏洞与人设崩塌' },
-        { key: 'hook-crafter', name: '悬念工匠', desc: '设计钩子与集末高潮点' },
-        { key: 'pacing-analyzer', name: '节奏分析师', desc: '监控剧情节奏和爽点分布' },
-        { key: 'script-reviewer', name: '剧本审评员', desc: '进行剧本验收并打分' },
-        { key: 'script-editor', name: '剧本润色员', desc: '最后修正不合理的地方' }
-      ]
-    },
-    {
-      id: 'production',
-      label: '生产制作群',
-      desc: '负责将剧本转换为分镜和最终视频',
-      agents: [
-        { key: 'episode-director', name: '分集执行导演', desc: '分配镜头、规划具体画面构成' },
-        { key: 'storyboard-director', name: '分镜导演', desc: '撰写视觉提示词，给生图大模型下指令' },
-        { key: 'audio-director', name: '音频导演', desc: '选择背景音乐、音效和配音角色' },
-        { key: 'episode-recorder', name: '记录员', desc: '归档每集的资产与消耗记录' }
-      ]
-    }
-  ];
+  const [agentView, setAgentView] = useState<'list' | 'flow'>('flow');
+  const [systemAgents, setSystemAgents] = useState<{ id: string; label: string; desc: string; agents: { key: string; taskKey: string; name: string; desc: string }[] }[]>([]);
 
   useEffect(() => {
     setLoading(true);
-    getDramaGenreTemplate(tplId).then((data) => {
+    Promise.all([getDramaGenreTemplate(tplId), listDramaSystemAgents()]).then(([data, agents]) => {
+      setSystemAgents(agents);
       setTpl(data); setDisplayName(data.displayName); setDescription(data.description);
       setKeywords(data.genreKeywords.join('、'));
       setAudienceTags(data.audienceTags ?? []); setProtagonistFocusTags(data.protagonistFocusTags ?? []);
       setToneTags(data.toneTags ?? []); setPlatformTags(data.platformTags ?? []);
       setSeedHints(data.seedHints ?? {});
       setAgentPrompts((data.profileJson as any)?.agentSystemPrompts ?? {});
+      setOriginalAgentPrompts((data.profileJson as any)?.agentSystemPrompts ?? {});
     }).catch(() => message.error('加载短剧模板详情失败')).finally(() => setLoading(false));
   }, [tplId]);
 
@@ -1217,15 +1189,34 @@ const DramaEditPanel: React.FC<{ tplId: string; onBack: () => void; onSaved: () 
         </TabsContent>
 
         {/* Agent 系统提示词编辑 */}
-        <TabsContent value="agents" className="space-y-6 pt-4">
-          <div className="rounded-lg border bg-muted/30 px-4 py-3 text-xs text-muted-foreground leading-relaxed">
-            此处展示由 <strong>{tpl?.displayName}</strong> 题材独立配置的所有 AI Agent 系统提示词。<br/>
-            修改后仅影响<strong>使用了您保存的题材</strong>的短剧，不会影响系统默认大盘。<br/>
-            <span className="text-amber-500 font-medium">注意：如果不填写，对应 Agent 将自动回退使用系统内建的默认提示词结构。</span>
+        <TabsContent value="agents" className="space-y-4 pt-4">
+          {/* 视图切换 */}
+          <div className="flex items-center justify-between">
+            <div className="flex gap-1.5">
+              <Button size="sm" variant={agentView === 'flow' ? 'default' : 'outline'} className="h-7 text-xs gap-1"
+                onClick={() => setAgentView('flow')}>🗂 流程图</Button>
+              <Button size="sm" variant={agentView === 'list' ? 'default' : 'outline'} className="h-7 text-xs gap-1"
+                onClick={() => setAgentView('list')}>☰ 列表</Button>
+            </div>
+            <span className="text-[11px] text-muted-foreground">修改后仅影响使用此题材创建的新短剧</span>
           </div>
-          
-          <div className="space-y-8">
-            {DRAMA_AGENT_CATEGORIES.map((cat) => (
+
+          {/* 流程图视图 */}
+          {agentView === 'flow' && (
+            <AgentFlowChart
+              tplId={tplId}
+              agentPrompts={agentPrompts}
+              originalAgentPrompts={originalAgentPrompts}
+              onPromptsChanged={(newP, newO) => {
+                setAgentPrompts(newP);
+                if (newO) setOriginalAgentPrompts(newO);
+              }}
+            />
+          )}
+
+          {/* 列表视图 */}
+          {agentView === 'list' && <div className="space-y-8">
+            {systemAgents.map((cat) => (
               <div key={cat.id} className="space-y-4">
                 <div>
                   <h3 className="text-sm font-semibold flex items-center gap-2">
@@ -1237,7 +1228,7 @@ const DramaEditPanel: React.FC<{ tplId: string; onBack: () => void; onSaved: () 
                 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 ml-3">
                   {cat.agents.map(({ key, name, desc }) => {
-                    const isDirty = (agentPrompts[key] ?? '') !== '';
+                  const isDirty = (agentPrompts[key] ?? '') !== (originalAgentPrompts[key] ?? '');
                     return (
                       <div key={key} className={cn('border rounded-lg p-3 space-y-3 transition-colors', isDirty ? 'border-violet-200 bg-violet-50/30' : 'bg-card')}>
                         <div className="flex items-start justify-between gap-3">
@@ -1272,11 +1263,19 @@ const DramaEditPanel: React.FC<{ tplId: string; onBack: () => void; onSaved: () 
                               size="sm"
                               variant="ghost"
                               className="text-[11px] text-muted-foreground h-5 px-1.5 hover:text-destructive"
-                              onClick={() => {
-                                setAgentPrompts(p => { const n = { ...p }; delete n[key]; return n; });
+                              onClick={async () => {
+                                const original = originalAgentPrompts[key] ?? '';
+                                setAgentPrompts(p => ({ ...p, [key]: original }));
+                                // 同步保存到后端，恢复系统默认
+                                setSavingAgent(key);
+                                try {
+                                  const updated = await updateDramaAgentPrompt(tplId, key, original);
+                                  setAgentPrompts((updated.profileJson as any)?.agentSystemPrompts ?? {});
+                                  setOriginalAgentPrompts((updated.profileJson as any)?.agentSystemPrompts ?? {});
+                                } catch { /* ignore */ } finally { setSavingAgent(null); }
                               }}
                             >
-                              <RotateCcw className="w-2.5 h-2.5 mr-1" />清除并使用系统默认
+                              <RotateCcw className="w-2.5 h-2.5 mr-1" />恢复系统默认
                             </Button>
                           </div>
                         )}
@@ -1286,7 +1285,7 @@ const DramaEditPanel: React.FC<{ tplId: string; onBack: () => void; onSaved: () 
                 </div>
               </div>
             ))}
-          </div>
+          </div>}
         </TabsContent>
       </Tabs>
     </div>
@@ -1303,44 +1302,58 @@ const VisualStyleTemplateCard: React.FC<{
   const gradient = VISUAL_STYLE_KEY_COLORS[tpl.styleKey] ?? (VISUAL_STYLE_CATEGORY_META[tpl.styleCategory]?.gradient ?? 'from-violet-500 to-fuchsia-600');
   const catMeta = VISUAL_STYLE_CATEGORY_META[tpl.styleCategory];
   return (
-    <Card className="group cursor-pointer hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 overflow-hidden relative" onClick={() => onEdit(tpl)}>
-      {tpl.coverUrl ? (
-        <div className="h-24 w-full relative">
-          <img src={tpl.coverUrl} alt={tpl.displayName} className="w-full h-full object-cover" />
-          <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent" />
+    <Card 
+      className="group cursor-pointer hover:shadow-xl transition-all duration-300 hover:-translate-y-1 overflow-hidden flex flex-col border border-border/50 hover:border-primary/30 bg-card" 
+      onClick={() => onEdit(tpl)}
+    >
+      <div className="relative aspect-video w-full overflow-hidden bg-muted shrink-0">
+        {tpl.coverUrl ? (
+          <img src={tpl.coverUrl} alt={tpl.displayName} className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+        ) : (
+          <div className={cn('absolute inset-0 bg-gradient-to-br', gradient)} />
+        )}
+        
+        <div className="absolute top-2.5 left-2.5">
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-white/20 text-white bg-black/50 backdrop-blur-md">
+            {catMeta?.label ?? tpl.styleCategory}
+          </Badge>
         </div>
-      ) : (
-        <div className={cn('h-2 bg-gradient-to-r', gradient)} />
-      )}
-      <CardContent className={cn("space-y-3 relative z-10", tpl.coverUrl ? "p-4 pt-0" : "p-4")}>
+        <div className="absolute top-2.5 right-2.5">
+          {tpl.isSystem && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-background/90 text-foreground shadow-sm backdrop-blur-md"><Shield className="w-3 h-3 mr-0.5" />预置</Badge>}
+        </div>
+      </div>
+      
+      <CardContent className="flex-1 p-4 flex flex-col gap-3">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <div className="flex items-baseline gap-2">
-              <span className="text-base leading-none">{catMeta?.icon}</span>
-              <h3 className="font-semibold text-sm truncate">{tpl.displayName}</h3>
-              {tpl.isSystem && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0"><Shield className="w-3 h-3 mr-0.5" />预置</Badge>}
+            <div className="flex items-center gap-1.5">
+              <span className="text-base leading-none text-muted-foreground">{catMeta?.icon}</span>
+              <h3 className="font-semibold text-base leading-tight truncate text-foreground group-hover:text-primary transition-colors">{tpl.displayName}</h3>
             </div>
-            <Badge variant="outline" className="text-[10px] px-1.5 py-0 mt-1">{catMeta?.label ?? tpl.styleCategory}</Badge>
-            <p className="text-xs text-muted-foreground mt-1.5 line-clamp-2">{tpl.description || '暂无描述'}</p>
+            <p className="text-[11px] text-muted-foreground mt-1.5 line-clamp-2">{tpl.description || '暂无描述'}</p>
           </div>
-          <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
         </div>
-        <div className="flex flex-wrap gap-1">
-          {tpl.tags.slice(0, 4).map((tag) => <Badge key={tag} variant="outline" className="text-[10px] px-1.5 py-0">{tag}</Badge>)}
+        
+        <div className="flex flex-wrap gap-1 items-center">
+          {tpl.tags.slice(0, 4).map((tag) => (
+            <Badge key={tag} variant="secondary" className="text-[10px] font-normal px-2 py-0 bg-muted text-muted-foreground hover:bg-muted">{tag}</Badge>
+          ))}
         </div>
+        
         {tpl.visualGuide && (
-          <div className="text-[10px] text-muted-foreground space-y-0.5 border rounded p-2 bg-muted/30">
-            <div className="truncate"><span className="font-medium">美学：</span>{tpl.visualGuide.overallAesthetic}</div>
-            <div className="truncate"><span className="font-medium">调色：</span>{tpl.visualGuide.colorGrading}</div>
+          <div className="text-[10px] text-muted-foreground space-y-1 bg-muted/40 rounded-md p-2 mt-1">
+            <div className="truncate"><span className="font-medium text-foreground/80">美学：</span>{tpl.visualGuide.overallAesthetic}</div>
+            <div className="truncate"><span className="font-medium text-foreground/80">调色：</span>{tpl.visualGuide.colorGrading}</div>
           </div>
         )}
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <div className="flex gap-1.5">
+        
+        <div className="mt-auto pt-3 flex items-center justify-between border-t border-border/40 text-[11px] text-muted-foreground">
+          <div className="flex gap-2 font-medium">
             {tpl.genreCompatibility.slice(0, 2).map((g) => <span key={g}>{g}</span>)}
           </div>
           <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onClone(tpl.id)} title="克隆"><Copy className="w-3.5 h-3.5" /></Button>
-            {!tpl.isSystem && <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(tpl)} title="删除"><Trash2 className="w-3.5 h-3.5" /></Button>}
+            <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-muted" onClick={() => onClone(tpl.id)} title="克隆"><Copy className="w-3 h-3" /></Button>
+            {!tpl.isSystem && <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:bg-destructive/10" onClick={() => onDelete(tpl)} title="删除"><Trash2 className="w-3 h-3" /></Button>}
           </div>
         </div>
       </CardContent>

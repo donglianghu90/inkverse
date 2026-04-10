@@ -94,13 +94,13 @@ export class EpisodeWorkflowService {
     private readonly stateStore: DramaStateStore,
   ) {}
 
-  async generateEpisode(dramaId: string, episodeNumber: number): Promise<void> {
+  async generateEpisode(dramaId: string, episodeNumber: number): Promise<{ suspended: boolean }> {
     const acquired = await this.stateStore.startEpisodeGen(dramaId, episodeNumber);
     if (!acquired) throw new Error(`E${episodeNumber} 正在生成中（分布式锁），请勿重复提交`);
-    try { await this._generateEpisodeImpl(dramaId, episodeNumber); } finally { await this.stateStore.stopEpisodeGen(dramaId, episodeNumber); }
+    try { return await this._generateEpisodeImpl(dramaId, episodeNumber); } finally { await this.stateStore.stopEpisodeGen(dramaId, episodeNumber); }
   }
 
-  private async _generateEpisodeImpl(dramaId: string, episodeNumber: number): Promise<void> {
+  private async _generateEpisodeImpl(dramaId: string, episodeNumber: number): Promise<{ suspended: boolean }> {
     const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
     const state = drama.state as unknown as DramaState;
     if (!state.userId) state.userId = drama.userId ?? '';
@@ -469,6 +469,14 @@ export class EpisodeWorkflowService {
             skipReason: dialogueDegraded ? 'runtime_error' : wp.enableDialogueCoach ? 'pipeline_disabled' : 'workflow_param_disabled',
           } : undefined,
         );
+
+        if (wp.pauseAfterScript) {
+          this.logger.log(`[E${episodeNumber}] 触发断点: pauseAfterScript，当前运行已安全挂起`);
+          logDrama('suspend_after_script', 'ok', '等待人工审核剧本');
+          emitEp(4, '等待人工审核剧本...', false, { skipped: true, skipReason: 'suspended_by_user' });
+          await this.executionService.suspendRun(runId, '等待人工审核剧本');
+          return { suspended: true };
+        }
       }
 
       if (resumeFrom < 5) { // Step 5: 分镜生成（按场景分步，传入 intent 以注入情绪地图）
@@ -479,6 +487,14 @@ export class EpisodeWorkflowService {
         await saveStep('storyboard_drafted', { storyboard }); await checkpoint('storyboard_drafted');
         logDrama('storyboard_done', 'ok', '分镜生成完成', { shotCount: storyboard?.shots?.length });
         emitEp(5, '分镜生成完成', true);
+
+        if (wp.pauseAfterStoryboard) {
+          this.logger.log(`[E${episodeNumber}] 触发断点: pauseAfterStoryboard，当前运行已安全挂起`);
+          logDrama('suspend_after_storyboard', 'ok', '等待人工审核分镜');
+          emitEp(5, '等待人工审核分镜...', false, { skipped: true, skipReason: 'suspended_by_user' });
+          await this.executionService.suspendRun(runId, '等待人工审核分镜');
+          return { suspended: true };
+        }
       }
 
       if (resumeFrom < 6) { // Step 6: 音频设计
@@ -930,6 +946,8 @@ export class EpisodeWorkflowService {
         emitEp(12, `E${episodeNumber} 生成完成`, true);
         this.logger.log(`E${episodeNumber} 完成 — 评分:${review.overallScore} Shot:${sbShots.length} 时长:${storyboard?.totalEstimatedDurationSec}s 精修轮数:${editRoundsUsed}`);
       }
+
+      return { suspended: false };
     } catch (err) {
       logDrama('episode_failed', 'error', (err as Error).message, { error: (err as Error).message });
       if (runId) {

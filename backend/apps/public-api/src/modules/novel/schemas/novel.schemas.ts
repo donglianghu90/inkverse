@@ -179,12 +179,12 @@ export const characterCommitmentSchema = z.object({
     'prophecy',
   ]),
   content: z.string(),
-  targetCharacterId: z.string().optional(),
-  deadline: z.string().optional(),
-  deadlineChapter: z.number().int().min(1).optional(),
+  targetCharacterId: z.string().nullable().optional(),
+  deadline: z.string().nullable().optional(),
+  deadlineChapter: z.number().int().min(1).nullable().optional(),
   status: z.enum(['active', 'fulfilled', 'broken', 'expired', 'forgotten']).default('active'),
   seededAtChapter: z.number().int().min(1),
-  resolvedAtChapter: z.number().int().min(1).optional(),
+  resolvedAtChapter: z.number().int().min(1).nullable().optional(),
   urgency: z.enum(['background', 'active', 'imminent', 'overdue']).default('background'),
 });
 
