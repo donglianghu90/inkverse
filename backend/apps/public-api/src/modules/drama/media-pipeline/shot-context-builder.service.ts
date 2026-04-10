@@ -127,6 +127,11 @@ export class ShotContextBuilderService {
     const sceneWeight = isCloseUp ? 0.2 : 0.4;
     const styleWeight = isCloseUp ? 0.1 : 0.2;
 
+    // insert 道具镜头：prompt 要求 "no people, no hands"，
+    // 如果参考图中混入人脸定妆照，T2I 模型会在"画道具"和"画人脸"之间严重困惑。
+    // 仅保留 scene/style/prev_frame 参考图，跳过所有 character_face。
+    const isInsert = shot.shotType === 'insert';
+
     const candidates: RefImageCandidate[] = [];
     const seenUrls = new Set<string>();
     const pushCandidate = (url: string | undefined, weight: number, role: RefImageCandidate['role']) => {
@@ -140,40 +145,43 @@ export class ShotContextBuilderService {
       pushCandidate(sceneCache.get(shot.sceneId), sceneWeight, 'scene');
     }
 
-    const lockedIds = this.resolveLockedCharacterIds(shot);
-    for (const cid of lockedIds) {
-      const varId = shot.characterVariationIds?.[cid];
-      const varUrl = varId ? varMap.get(`${cid}_${varId}`) : undefined;
-      if (varUrl) {
-        pushCandidate(varUrl, lockCharWeight, 'character_face');
-      }
-      const anchorUrls = anchorMap.get(cid) ?? [];
-      for (const anchorUrl of anchorUrls) {
-        pushCandidate(anchorUrl, lockCharWeight, 'character_face');
-      }
-      const imageSet = charMap.get(cid);
-      if (imageSet?.primary) {
-        pushCandidate(imageSet.primary, lockCharWeight, 'character_face');
-      }
-    }
-
-    (shot.characters ?? []).forEach(c => {
-      const varId = shot.characterVariationIds?.[c.characterId];
-      const varUrl = varId ? varMap.get(`${c.characterId}_${varId}`) : undefined;
-      if (varUrl) {
-        pushCandidate(varUrl, charWeight, 'character_face');
-      } else {
-        const imageSet = charMap.get(c.characterId);
-        if (imageSet) {
-          const availableViews = Object.keys(imageSet.views) as CharacterViewAngle[];
-          const bestView = selectBestCharacterView(availableViews, shot.camera?.shotSize, c.position, shot.camera?.cameraAngle, c.emotion);
-          const url = imageSet.views[bestView] || imageSet.primary;
-          pushCandidate(url, charWeight, 'character_face');
-        } else if (tempCharCache?.has(c.characterId)) {
-          pushCandidate(tempCharCache.get(c.characterId), charWeight * 0.9, 'character_face');
+    // insert 镜头跳过角色参考图（避免人脸照与 "no people" prompt 冲突）
+    if (!isInsert) {
+      const lockedIds = this.resolveLockedCharacterIds(shot);
+      for (const cid of lockedIds) {
+        const varId = shot.characterVariationIds?.[cid];
+        const varUrl = varId ? varMap.get(`${cid}_${varId}`) : undefined;
+        if (varUrl) {
+          pushCandidate(varUrl, lockCharWeight, 'character_face');
+        }
+        const anchorUrls = anchorMap.get(cid) ?? [];
+        for (const anchorUrl of anchorUrls) {
+          pushCandidate(anchorUrl, lockCharWeight, 'character_face');
+        }
+        const imageSet = charMap.get(cid);
+        if (imageSet?.primary) {
+          pushCandidate(imageSet.primary, lockCharWeight, 'character_face');
         }
       }
-    });
+
+      (shot.characters ?? []).forEach(c => {
+        const varId = shot.characterVariationIds?.[c.characterId];
+        const varUrl = varId ? varMap.get(`${c.characterId}_${varId}`) : undefined;
+        if (varUrl) {
+          pushCandidate(varUrl, charWeight, 'character_face');
+        } else {
+          const imageSet = charMap.get(c.characterId);
+          if (imageSet) {
+            const availableViews = Object.keys(imageSet.views) as CharacterViewAngle[];
+            const bestView = selectBestCharacterView(availableViews, shot.camera?.shotSize, c.position, shot.camera?.cameraAngle, c.emotion);
+            const url = imageSet.views[bestView] || imageSet.primary;
+            pushCandidate(url, charWeight, 'character_face');
+          } else if (tempCharCache?.has(c.characterId)) {
+            pushCandidate(tempCharCache.get(c.characterId), charWeight * 0.9, 'character_face');
+          }
+        }
+      });
+    }
     if (frameType === 'first' && shot.shotIndex > 0 && prevFrameCache.has(shot.shotIndex - 1)) {
       pushCandidate(prevFrameCache.get(shot.shotIndex - 1), 0.15, 'prev_frame');
     }
@@ -184,7 +192,7 @@ export class ShotContextBuilderService {
     // 签名道具参考图注入：medium+ 景别（wide/extreme_wide 道具不可见，不注入）
     const isWide = ['wide', 'extreme_wide'].includes(shot.camera?.shotSize ?? '');
     if (!isWide && propImageMap && propOwnerMap) {
-      const charIds = this.resolveLockedCharacterIds(shot);
+      const charIds = isInsert ? [] : this.resolveLockedCharacterIds(shot);
       const allCharIds = [...charIds, ...(shot.characters ?? []).map(c => c.characterId)];
       const seenProps = new Set<string>();
       for (const cid of allCharIds) {

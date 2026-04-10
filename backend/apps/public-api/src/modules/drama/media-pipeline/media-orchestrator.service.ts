@@ -630,7 +630,7 @@ export class MediaOrchestratorService implements OnModuleInit {
 
           emit(phaseOff + i, `${sid} 视频生成中...`);
           shotMediaMap[sid] = { ...(shotMediaMap[sid] ?? {}), status: 'generating_video', shotId: sid } as ShotMediaEntry;
-          await this.shotMediaRepo.save({ ...shotMediaMap[sid], episodeId: episode.id });
+          await this.shotMediaRepo.upsert({ ...shotMediaMap[sid], episodeId: episode.id, shotId: sid }, ['episodeId', 'shotId']);
 
           const refImages: Array<{ url: string; role: 'first_frame' | 'last_frame' | 'character' | 'style' }> = [];
           const firstFrame = shotMediaMap[sid]?.imageUrl;
@@ -699,7 +699,7 @@ export class MediaOrchestratorService implements OnModuleInit {
             fallbackProvider: actualFallback,
           }), `${sid} 视频`);
           shotMediaMap[sid] = { ...shotMediaMap[sid], videoJobId: sub.jobId, videoProvider: actualProvider, status: 'submitted' };
-          await this.shotMediaRepo.save({ ...shotMediaMap[sid], episodeId: episode.id, shotId: sid });
+          await this.shotMediaRepo.upsert({ ...shotMediaMap[sid], episodeId: episode.id, shotId: sid }, ['episodeId', 'shotId']);
         } catch (err) {
           this.logger.error(`${sid} 视频提交失败: ${(err as Error).message}`);
           const fallbackImage = shotMediaMap[sid]?.imageUrl;
@@ -709,7 +709,7 @@ export class MediaOrchestratorService implements OnModuleInit {
           } else {
             shotMediaMap[sid] = { ...shotMediaMap[sid], status: 'failed' };
           }
-          await this.shotMediaRepo.save({ ...shotMediaMap[sid], episodeId: episode.id, shotId: sid });
+          await this.shotMediaRepo.upsert({ ...shotMediaMap[sid], episodeId: episode.id, shotId: sid }, ['episodeId', 'shotId']);
         }
       });
       await this.awaitVideoJobs(shotMediaMap, orderedShots, dramaId, episode.id, phaseOff, emit);
@@ -1108,7 +1108,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     });
 
     const existing = raw[shotId] ?? {};
-    await this.shotMediaRepo.save({ ...existing, shotId, episodeId: episode.id, status: 'generating_video' });
+    await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, status: 'generating_video' }, ['episodeId', 'shotId']);
 
     let videoUrl = '';
     try {
@@ -1123,7 +1123,7 @@ export class MediaOrchestratorService implements OnModuleInit {
         fallbackProvider: videoRoute.fallbackProvider,
       }), `${shotId} 单镜视频`, mediaPolicy.maxMediaRetries, mediaPolicy.retryBaseDelayMs);
 
-      await this.shotMediaRepo.save({ ...existing, shotId, episodeId: episode.id, videoJobId: sub.jobId, videoProvider: videoRoute.provider, status: 'submitted' });
+      await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, videoJobId: sub.jobId, videoProvider: videoRoute.provider, status: 'submitted' }, ['episodeId', 'shotId']);
 
       // 等待单个 job 完成
       videoUrl = await new Promise<string>((resolve, reject) => {
@@ -1162,16 +1162,16 @@ export class MediaOrchestratorService implements OnModuleInit {
       this.mediaService.onJobCompleted(handler);
     });
     } catch (err) {
-      await this.shotMediaRepo.save({ ...existing, shotId, episodeId: episode.id, status: 'failed' });
+      await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, status: 'failed' }, ['episodeId', 'shotId']);
       throw err;
     }
 
     const isFallback = !videoUrl || videoUrl === firstFrame;
-    await this.shotMediaRepo.save({
+    await this.shotMediaRepo.upsert({
       ...existing, shotId, episodeId: episode.id,
       videoUrl: videoUrl || firstFrame, status: 'completed',
       ...(isFallback && !videoUrl ? { kenBurnsFallback: true } : {})
-    });
+    }, ['episodeId', 'shotId']);
     if (videoUrl) {
       try { await this.storage.downloadToLocal(videoUrl, this.storage.resolve(`videos/${dramaId}/${shotId}.mp4`)); } catch {}
     }

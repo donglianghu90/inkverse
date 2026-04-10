@@ -234,7 +234,13 @@ ${continuityWarnings?.length ? `\n⚠️ 连续性警告（分镜创作时必须
 
     // 景别决定基础类型
     if (['extreme_wide', 'wide', 'medium_wide'].includes(shotSize) || cameraAngle === 'bird_eye') return 'wide';
-    if (shotSize === 'extreme_close_up') return 'insert';
+
+    // extreme_close_up：有角色 → portrait（人脸大特写），无角色 → insert（道具/细节微距）
+    // 之前无条件返回 insert 导致人脸特写被送入 INSERT_PROP 编译器（强制 "no people"），
+    // LLM 凭空捏造道具描述，与人脸参考图严重冲突。
+    if (shotSize === 'extreme_close_up') {
+      return charCount > 0 ? 'portrait' : 'insert';
+    }
 
     const actionTokens = ['run', 'chase', 'fight', 'hit', 'strike', 'kick', 'jump', 'grab', 'throw', 'punch', '冲', '打', '追', '跑', '跳', '砸', '挥', '扑'];
     const movingCamera = ['tracking', 'crane_up', 'crane_down', 'whip_pan', 'orbit', 'handheld', 'dolly_zoom'].includes(movement);
@@ -244,7 +250,8 @@ ${continuityWarnings?.length ? `\n⚠️ 连续性警告（分镜创作时必须
     // close_up 系列 + 单角色 = portrait（人物情绪特写）
     if (charCount <= 1 && ['close_up', 'medium_close_up'].includes(shotSize)) return 'portrait';
     if (hasDialogue) return 'dialogue';
-    if (charCount === 0) return 'insert';
+    // 无角色 + 无对白 = 纯道具/环境细节镜头
+    if (charCount === 0 && !hasDialogue) return 'insert';
     return 'portrait';
   }
 

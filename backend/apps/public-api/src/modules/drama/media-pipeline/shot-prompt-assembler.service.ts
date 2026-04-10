@@ -51,12 +51,24 @@ export class ShotPromptAssemblerService {
     const shotType = shot.shotType || 'character';
     const shotSize = shot.camera?.shotSize ?? '';
     const cameraAngle = shot.camera?.cameraAngle ?? '';
-    const isInsert = shotType === 'insert';
+    const hasCharacters = (shot.characters ?? []).length > 0;
+
+    // 安全降级：如果 shotType 被 LLM 标记为 insert 但实际上有角色出场，
+    // 说明分镜导演误判了镜头类型（如人脸特写被当作道具特写）。
+    // 强制走 CHARACTER_DOMINANT 路径，避免 INSERT_PROP 编译器产生 "no people" 幻觉。
+    const isInsert = shotType === 'insert' && !hasCharacters;
+    if (shotType === 'insert' && hasCharacters) {
+      this.logger.warn(
+        `[SafetyGuard] Shot ${shot.shotId} shotType=insert 但 characters=[${(shot.characters ?? []).map(c => c.characterId).join(',')}]，` +
+        `降级为 CHARACTER_DOMINANT 避免 INSERT_PROP 幻觉`,
+      );
+    }
+
     const isWide = WIDE_SHOTS.has(shotSize) || cameraAngle === 'bird_eye';
 
     // Compile the prompt via LLM structure builder
     const compiledPrompt = await this.promptCompiler.compile({
-      shotType,
+      shotType: isInsert ? shotType : (isWide ? 'wide' : shotType),
       shotSize,
       cameraAngle,
       identity_frozen: isInsert || isWide ? undefined : identityBlock,

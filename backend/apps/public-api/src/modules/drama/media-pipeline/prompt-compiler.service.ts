@@ -278,7 +278,15 @@ export class PromptCompilerService {
     if (input.atmosphere) lines.push(`ATMOSPHERE: "${input.atmosphere}"`);
     if (input.view_angle) lines.push(`VIEW_ANGLE: "${input.view_angle}"`);
     if (input.style) lines.push(`STYLE: "${input.style}"`);
-    lines.push(`WORD_BUDGET: ${input.word_budget || 80}`);
+
+    // 动态 WORD_BUDGET：IDENTITY_FROZEN 块可能超过 150 词（含面部、发型、服装描述），
+    // 固定 80 词预算会导致编译器在"保留完整 identity"和"遵守预算"之间矛盾。
+    // 计算方式：identity 词数 + 50 词余量(用于环境/光影/风格)，最低保底 80 词。
+    const identityWords = (input.identity_frozen ?? '').split(/\s+/).filter(Boolean).length;
+    const faceWords = (input.face ?? '').split(/\s+/).filter(Boolean).length;
+    const frozenWords = Math.max(identityWords, faceWords);
+    const dynamicBudget = Math.max(80, frozenWords + 50);
+    lines.push(`WORD_BUDGET: ${input.word_budget || dynamicBudget}`);
     return lines.join('\n');
   }
 
