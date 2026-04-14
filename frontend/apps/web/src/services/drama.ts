@@ -423,6 +423,11 @@ export async function generateShotVideo(dramaId: string, episodeNumber: number, 
   return request(`/drama/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/generate-video`, { method: 'POST' });
 }
 
+/** 单镜音效生成（同步 HTTP） */
+export async function generateShotSfx(dramaId: string, episodeNumber: number, shotId: string): Promise<{ sfxUrl: string; status: string }> {
+  return request(`/drama/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/generate-sfx`, { method: 'POST' });
+}
+
 export function getEpisodeProgressSseUrl(dramaId: string): string {
   const token = getToken();
   return `/api/drama/${dramaId}/episode-progress-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;

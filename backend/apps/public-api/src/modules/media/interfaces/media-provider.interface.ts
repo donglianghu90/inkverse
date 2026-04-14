@@ -95,9 +95,48 @@ export interface TtsProvider {
   synthesizeToFile?(req: TtsRequest, outputPath: string): Promise<TtsResult>; // 写入本地文件，供 FFmpeg 合成
 }
 
+// ═══ Audio (SFX / T2A / V2A) ═══
+
+export type AudioCapability = 't2a' | 'v2a';
+
+export interface AudioGenerationRequest {
+  prompt: string;
+  duration?: number; // Optional duration constraint
+  referenceVideoUrl?: string; // For V2A
+  extra?: Record<string, unknown>;
+}
+
+export interface AudioSubmitResult {
+  providerTaskId: string;
+  provider: string;
+  model: string;
+}
+
+export type AudioTaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+
+export interface AudioTaskResult {
+  providerTaskId: string;
+  status: AudioTaskStatus;
+  audioUrl?: string;
+  durationSeconds?: number;
+  error?: string;
+  provider: string;
+  model: string;
+  raw?: unknown;
+}
+
+export interface AudioProvider {
+  readonly name: string;
+  readonly capabilities: ReadonlySet<AudioCapability>;
+  submit(req: AudioGenerationRequest): Promise<AudioSubmitResult>;
+  query(providerTaskId: string): Promise<AudioTaskResult>;
+  cancel(providerTaskId: string): Promise<void>;
+  generateSync?(req: AudioGenerationRequest): Promise<AudioTaskResult>; // For fast models taking < 30s
+}
+
 // ═══ 统一 Provider 类型标识 ═══
 
-export type MediaProviderType = 'image' | 'video' | 'tts';
+export type MediaProviderType = 'image' | 'video' | 'tts' | 'audio';
 
 export interface MediaProviderMeta {
   type: MediaProviderType;

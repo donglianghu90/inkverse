@@ -31,6 +31,18 @@ export class ShotMediaEntity {
   @Column({ default: '' })
   ttsUrl: string;
 
+  @Column({ default: '' })
+  sfxUrl: string;
+
+  @Column({ default: '' })
+  sfxJobId: string;
+
+  @Column({ type: 'varchar', length: 32, default: 'not_started' })
+  sfxStatus: string;
+
+  @Column({ type: 'text', default: '' })
+  sfxPrompt: string;
+
   @Column({ type: 'text', default: '' })
   t2iPrompt: string;
 

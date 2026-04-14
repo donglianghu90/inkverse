@@ -40,6 +40,12 @@ import {
   buildAssetStylePrefix as buildAssetStylePrefixUtil,
   upsertReferenceByView as upsertReferenceByViewUtil,
 } from '../utils/asset-prompt.utils';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const execFileAsync = promisify(execFile);
 
 @Injectable()
 export class MediaOrchestratorService implements OnModuleInit {
@@ -808,7 +814,10 @@ export class MediaOrchestratorService implements OnModuleInit {
               bgmPath: s.audio?.bgm?.mood ? (this.audioResource.resolveBgm(s.audio.bgm.mood) ?? undefined) : undefined,
               bgmIntensity: (s.audio?.bgm?.intensity ?? 0.3) * (mp?.bgmVolumeMultiplier ?? 1.0),
               bgmAction: s.audio?.bgm?.action,
-              sfxPaths: s.audio?.sfx?.map(fx => this.audioResource.resolveSfx(fx.sound)).filter(Boolean) as string[],
+              sfxPaths: [
+                ...(shotMediaMap[s.shotId]?.sfxUrl ? [shotMediaMap[s.shotId].sfxUrl] : []),
+                ...(s.audio?.sfx?.map(fx => this.audioResource.resolveSfx(fx.sound)).filter(Boolean) as string[] || [])
+              ],
               ambiencePath: s.audio?.ambience ? (this.audioResource.resolveAmbience(s.audio.ambience) ?? undefined) : undefined,
               postProcess: mp ? {
                 colorGrade: mp.colorGrade,
@@ -1178,6 +1187,88 @@ export class MediaOrchestratorService implements OnModuleInit {
     this.logger.log(`[ShotVideo] ${shotId} → ${videoUrl || '(降级首帧)'}`);
     return { videoUrl: videoUrl || firstFrame || '', status: 'completed' };
   }
+
+  /** 单镜音效生成 (T2A/V2A) */
+  async generateShotSfx(dramaId: string, episodeNumber: number, shotId: string): Promise<{ sfxUrl: string; status: string }> {
+    const episode = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber } });
+    if (!episode?.storyboard) throw new Error(`E${episodeNumber} 无分镜数据`);
+
+    const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
+    const shot = storyboard.shots?.find((s: Shot) => s.shotId === shotId);
+    if (!shot) throw new Error(`Shot ${shotId} 不存在`);
+
+    const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
+    const mediaList = await this.shotMediaRepo.find({ where: { episodeId: episode.id } });
+    const raw: Record<string, ShotMediaEntry> = Object.fromEntries(mediaList.map(m => [m.shotId, m as unknown as ShotMediaEntry]));
+    const existing = raw[shotId] ?? {};
+    
+    const prompt = shot.sfxPrompt || shot.visualPrompt; // Use sfxPrompt if exists, else fallback to visualPrompt
+    const videoUrl = existing.videoUrl;
+
+    await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, sfxStatus: 'generating' }, ['episodeId', 'shotId']);
+
+    let sfxUrl = '';
+    try {
+      const sub = await this.withRetry(() => this.mediaService.submitAudio({
+        prompt: prompt,
+        duration: shot.estimatedDurationSec,
+        referenceVideoUrl: videoUrl,
+        dramaId, assetType: 'shot_sfx', refId: shotId, userId: drama.userId, episodeNumber,
+        provider: 'volcengine', // Use default volcengine or map from state.audioProvider if added later
+      }), `${shotId} 单镜音效`, 2, 2000);
+
+      await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, sfxJobId: sub.jobId, sfxStatus: 'submitted' }, ['episodeId', 'shotId']);
+
+      sfxUrl = await new Promise<string>((resolve, reject) => {
+        const timeoutMs = 60000; // 60s timeout for audio
+        const timer = setTimeout(() => {
+          this.mediaService.offJobCompleted(handler);
+          reject(new Error(`Shot ${shotId} 音效生成超时`));
+        }, timeoutMs);
+
+        const handler = async (evt: { jobId: string; status: string; result?: Record<string, unknown> }) => {
+          if (evt.jobId !== sub.jobId) return;
+          clearTimeout(timer);
+          this.mediaService.offJobCompleted(handler);
+          if (evt.status === 'completed') {
+            resolve((evt.result as any)?.audioUrl ?? '');
+          } else {
+            reject(new Error('音效生成失败'));
+          }
+        };
+
+        this.mediaService.findJob(sub.jobId).then(job => {
+          if (!job) return;
+          if (job.status === 'completed') {
+            clearTimeout(timer);
+            this.mediaService.offJobCompleted(handler);
+            resolve((job.result as any)?.audioUrl ?? '');
+          } else if (job.status === 'failed') {
+            clearTimeout(timer);
+            this.mediaService.offJobCompleted(handler);
+            reject(new Error(job.error || '音效生成失败'));
+          }
+        }).catch(() => {});
+
+        this.mediaService.onJobCompleted(handler);
+      });
+    } catch (err) {
+      await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, sfxStatus: 'failed' }, ['episodeId', 'shotId']);
+      throw err;
+    }
+
+    await this.shotMediaRepo.upsert({
+      ...existing, shotId, episodeId: episode.id,
+      sfxUrl: sfxUrl, sfxStatus: 'completed'
+    }, ['episodeId', 'shotId']);
+    
+    if (sfxUrl) {
+      try { await this.storage.downloadToLocal(sfxUrl, this.storage.resolve(`videos/${dramaId}/${shotId}_sfx.mp3`)); } catch {}
+    }
+    this.logger.log(`[ShotSfx] ${shotId} → ${sfxUrl}`);
+    return { sfxUrl, status: 'completed' };
+  }
+
 
   /**
    * 批量图片生成（仅 Phase 0: T2I 首帧）— 不生成视频，用于制作台"批量生成全部图片"。

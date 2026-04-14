@@ -72,29 +72,36 @@ export class MediaJobService implements OnModuleInit, OnModuleDestroy {
     this.polling = true;
     try {
       const pending = await this.repo.find({
-        where: { jobType: 'video' as MediaJobType, status: In(['pending', 'processing'] as VideoTaskStatus[]) },
+        where: { jobType: In(['video', 'audio'] as MediaJobType[]), status: In(['pending', 'processing'] as VideoTaskStatus[]) },
         order: { createdAt: 'ASC' }, take: 50,
       });
       if (!pending.length) { this.polling = false; return; }
-      this.logger.debug(`轮询 ${pending.length} 个待完成视频任务`);
+      this.logger.debug(`轮询 ${pending.length} 个待完成视频/音频任务`);
       for (const job of pending) {
         try {
-          const provider = this.registry.getVideoProvider(job.provider);
+          const provider = job.jobType === 'audio' 
+            ? this.registry.getAudioProvider(job.provider)
+            : this.registry.getVideoProvider(job.provider);
+          
           const result = await provider.query(job.providerTaskId);
           if (result.status === 'completed') {
-            const res = { videoUrl: result.videoUrl, coverUrl: result.coverUrl, durationSeconds: result.durationSeconds };
+            const res = job.jobType === 'audio'
+              ? { audioUrl: (result as any).audioUrl, durationSeconds: result.durationSeconds }
+              : { videoUrl: (result as any).videoUrl, coverUrl: (result as any).coverUrl, durationSeconds: result.durationSeconds };
+            
             const wallMs = Date.now() - job.createdAt.getTime();
             await this.markCompleted(job.id, res as Record<string, unknown>, wallMs);
             const clip =
               result.durationSeconds != null && Number.isFinite(result.durationSeconds)
                 ? `成片时长 ${result.durationSeconds}s，`
                 : '';
+            const url = job.jobType === 'audio' ? (result as any).audioUrl : (result as any).videoUrl;
             this.logger.log(
-              `视频任务完成: ${job.id} (${clip}自任务创建至完成 ${wallMs}ms) → ${result.videoUrl?.slice(0, 80)}`,
+              `${job.jobType} 任务完成: ${job.id} (${clip}耗时 ${wallMs}ms) → ${url?.slice(0, 80)}`,
             );
           } else if (result.status === 'failed') {
             await this.markFailed(job.id, result.error ?? '未知错误');
-            this.logger.warn(`视频任务失败: ${job.id} → ${result.error}`);
+            this.logger.warn(`${job.jobType} 任务失败: ${job.id} → ${result.error}`);
           } else {
             if (job.status !== result.status) await this.repo.update(job.id, { status: result.status });
           }

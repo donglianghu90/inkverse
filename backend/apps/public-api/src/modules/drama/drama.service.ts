@@ -1088,6 +1088,10 @@ export class DramaService implements OnModuleInit {
     return this.mediaOrchestrator.generateShotVideo(dramaId, episodeNumber, shotId);
   }
 
+  async generateShotSfx(dramaId: string, episodeNumber: number, shotId: string): Promise<{ sfxUrl: string; status: string }> {
+    return this.mediaOrchestrator.generateShotSfx(dramaId, episodeNumber, shotId);
+  }
+
   async getEpisodeMediaStatus(dramaId: string, episodeNumber: number) {
     return this.mediaOrchestrator.getMediaStatus(dramaId, episodeNumber);
   }

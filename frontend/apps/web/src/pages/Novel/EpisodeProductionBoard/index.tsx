@@ -10,7 +10,7 @@ import { message } from 'antd';
 import {
   ArrowLeft, ImageIcon, Video, Film, Loader2, RefreshCw,
   CheckCircle2, Clock, AlertCircle, Sparkles, Play, ChevronDown, ChevronUp,
-  Users,
+  Users, Music,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,7 +20,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import {
   getDrama, getEpisode, listEpisodes,
-  generateShotImage, generateShotVideo, getGenerateImagesSseUrl, getGenerateMediaSseUrl, resetProblemShots,
+  generateShotImage, generateShotVideo, generateShotSfx, getGenerateImagesSseUrl, getGenerateMediaSseUrl, resetProblemShots,
   getVisualAssets, regenerateVisualAssetImage, getEpisodeMediaStatus,
   type VisualAssetItem, type EpisodeListItem, type DramaSseEvent, type ResetFixTarget,
 } from '@/services/drama';
@@ -50,6 +50,9 @@ interface ShotMediaEntry {
   imageUrl?: string;
   videoUrl?: string;
   videoJobId?: string;
+  sfxUrl?: string;
+  sfxJobId?: string;
+  sfxStatus?: string;
   status?: string;
   qc?: {
     identityScore?: number;
@@ -362,6 +365,7 @@ interface ShotVideoCardProps {
   generating?: boolean;
   busy?: boolean;
   onGenerate?: () => void;
+  onGenerateSfx?: () => void;
 }
 
 const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
@@ -373,12 +377,15 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
   generating = false,
   busy = false,
   onGenerate,
+  onGenerateSfx,
 }) => {
   const hasVideoUrl = !!media?.videoUrl;
   const isFallbackImage = hasVideoUrl && /\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(media.videoUrl!);
   const hasVideo = hasVideoUrl && !isFallbackImage;
   const hasImage = !!media?.imageUrl;
   const isSubmitted = media?.status === 'submitted';
+  const hasSfx = !!media?.sfxUrl;
+  const isSfxGenerating = media?.sfxStatus === 'generating' || media?.sfxStatus === 'submitted';
 
   const containerClass = aspectRatio === '9:16'
     ? 'aspect-[9/16] w-full max-w-[140px] mx-auto'
@@ -468,21 +475,56 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
         ) : null}
         <p className="text-xs text-muted-foreground">{shot.estimatedDurationSec}s</p>
         {onGenerate && !shot.isFlashback && !shot.isPreview && (
-          <Button
-            size="sm"
-            variant={hasVideo ? 'outline' : 'default'}
-            className="w-full h-7 text-xs gap-1 mt-1"
-            disabled={busy || generating || !hasImage || isSubmitted}
-            onClick={onGenerate}
-          >
-            {generating || isSubmitted ? (
-              <><Loader2 className="w-3 h-3 animate-spin" />生成中…</>
-            ) : hasVideoUrl ? (
-              <><RefreshCw className="w-3 h-3" />重新生成</>
-            ) : (
-              <><Video className="w-3 h-3" />生成视频</>
+          <div className="flex gap-1 mt-1">
+            <Button
+              size="sm"
+              variant={hasVideo ? 'outline' : 'default'}
+              className="flex-1 h-7 text-xs gap-1"
+              disabled={busy || generating || !hasImage || isSubmitted}
+              onClick={onGenerate}
+            >
+              {generating || isSubmitted ? (
+                <><Loader2 className="w-3 h-3 animate-spin" />生成中…</>
+              ) : hasVideoUrl ? (
+                <><RefreshCw className="w-3 h-3" />重新生成</>
+              ) : (
+                <><Video className="w-3 h-3" />生成视频</>
+              )}
+            </Button>
+            {onGenerateSfx && (
+              <Button
+                size="sm"
+                variant={hasSfx ? 'outline' : 'secondary'}
+                className="px-2 h-7"
+                title={hasSfx ? '重新生成音效' : '生成音效'}
+                disabled={busy || isSfxGenerating || !hasVideo}
+                onClick={onGenerateSfx}
+              >
+                {isSfxGenerating ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Music className="w-3 h-3" />
+                )}
+              </Button>
             )}
-          </Button>
+            {hasSfx && (
+              <audio src={media.sfxUrl} controls className="hidden" id={`audio-${shot.shotId}`} />
+            )}
+            {hasSfx && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="px-2 h-7"
+                title="播放音效"
+                onClick={() => {
+                  const audio = document.getElementById(`audio-${shot.shotId}`) as HTMLAudioElement;
+                  if (audio) audio.play();
+                }}
+              >
+                <Play className="w-3 h-3 text-emerald-600" />
+              </Button>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -676,6 +718,7 @@ const EpisodeProductionBoard: React.FC = () => {
   // Per-shot generation state
   const [generatingImageShots, setGeneratingImageShots] = useState<Set<string>>(new Set());
   const [generatingVideoShots, setGeneratingVideoShots] = useState<Set<string>>(new Set());
+  const [generatingSfxShots, setGeneratingSfxShots] = useState<Set<string>>(new Set());
 
   // Batch image generation state (SSE)
   const [isGeneratingImages, setIsGeneratingImages] = useState(false);
@@ -830,6 +873,26 @@ const EpisodeProductionBoard: React.FC = () => {
       message.error(`视频生成失败: ${err?.message ?? '未知错误'}`);
     } finally {
       setGeneratingVideoShots(prev => { const s = new Set(prev); s.delete(shotId); return s; });
+    }
+  }, [dramaId, episodeNumber]);
+
+  // ── Per-shot sfx generation ─────────────────────────────────────────────────
+
+  const handleGenerateShotSfx = useCallback(async (shotId: string) => {
+    if (!dramaId) return;
+    setGeneratingSfxShots(prev => new Set(prev).add(shotId));
+    try {
+      const result = await generateShotSfx(dramaId, episodeNumber, shotId);
+      if (result.sfxUrl) {
+        patchShotMedia(shotId, { sfxUrl: result.sfxUrl, sfxStatus: 'completed' });
+        message.success('音效生成成功');
+      } else {
+        message.warning('音效未生成，请检查状态');
+      }
+    } catch (err: any) {
+      message.error(`音效生成失败: ${err?.message ?? '未知错误'}`);
+    } finally {
+      setGeneratingSfxShots(prev => { const s = new Set(prev); s.delete(shotId); return s; });
     }
   }, [dramaId, episodeNumber]);
 
@@ -1473,8 +1536,9 @@ const EpisodeProductionBoard: React.FC = () => {
                   consistencyRisk={consistencyRiskSet.has(shot.shotId)}
                   cameraRisk={cameraRiskSet.has(shot.shotId)}
                   generating={generatingVideoShots.has(shot.shotId)}
-                  busy={isGeneratingVideos || isGeneratingImages}
+                  busy={isGeneratingVideos || isGeneratingImages || generatingSfxShots.has(shot.shotId)}
                   onGenerate={() => handleGenerateShotVideo(shot.shotId)}
+                  onGenerateSfx={() => handleGenerateShotSfx(shot.shotId)}
                 />
               ))}
             </div>

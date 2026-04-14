@@ -6,6 +6,10 @@ export interface ShotMediaEntry {
   /** 实际使用的视频 Provider（用于合成阶段计算时长约束） */
   videoProvider?: string;
   ttsUrl?: string;
+  sfxUrl?: string;
+  sfxJobId?: string;
+  sfxStatus?: string;
+  sfxPrompt?: string;
   imageUrl?: string;
   lastFrameImageUrl?: string;
   status: string;

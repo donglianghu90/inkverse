@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto';
 import { ProviderRegistryService } from './providers/provider-registry.service';
 import { MediaJobService } from './media-job.service';
 import { MediaTraceLoggerService } from './media-trace-logger.service';
-import { ImageGenerationRequest, ImageGenerationResult, VideoGenerationRequest, VideoTaskResult, TtsRequest, TtsResult, MediaProviderMeta } from './interfaces/media-provider.interface';
+import { ImageGenerationRequest, ImageGenerationResult, VideoGenerationRequest, VideoTaskResult, TtsRequest, TtsResult, AudioGenerationRequest, AudioTaskResult, MediaProviderMeta } from './interfaces/media-provider.interface';
 import { OssService, ConfigService } from '@packages/modules';
 import { UsageLedgerService } from '../usage/usage-ledger.service';
 import { BillingResolverService } from '../usage/billing-resolver.service';
@@ -59,6 +59,19 @@ export interface SynthesizeTtsOptions {
   dramaId?: string;
   bookId?: string;
   module?: string;
+  userId?: string;
+  episodeNumber?: number;
+  chapterNumber?: number;
+}
+
+export interface SubmitAudioOptions extends AudioGenerationRequest {
+  provider?: string;
+  fallbackProvider?: string;
+  dramaId?: string;
+  bookId?: string;
+  module?: string;
+  assetType?: string;
+  refId?: string;
   userId?: string;
   episodeNumber?: number;
   chapterNumber?: number;
@@ -374,6 +387,66 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
     const results: Array<{ jobId: string; providerTaskId: string }> = [];
     for (const req of requests) results.push(await this.submitVideo(req)); // 串行避免并发限流
     return results;
+  }
+
+  // ═══ 音频 (Audio / SFX) 生成 ═══
+
+  async submitAudio(opts: SubmitAudioOptions): Promise<{ jobId: string; providerTaskId: string }> {
+    const provider = this.registry.getAudioProvider(opts.provider);
+    const callId = randomUUID();
+    try {
+      const submitResult = await provider.submit(opts);
+      const job = await this.jobService.createJob({
+        jobType: 'audio', provider: provider.name, providerTaskId: submitResult.providerTaskId,
+        dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId, episodeNumber: opts.episodeNumber,
+        request: { prompt: opts.prompt, duration: opts.duration, referenceVideoUrl: opts.referenceVideoUrl },
+        userId: opts.userId,
+      });
+      this.logger.log(`Audio task submitted: jobId=${job.id} provider=${provider.name} taskId=${submitResult.providerTaskId}`);
+      return { jobId: job.id, providerTaskId: submitResult.providerTaskId };
+    } catch (primaryErr) {
+      if (opts.fallbackProvider) {
+        const fbProvider = this.registry.getAudioProvider(opts.fallbackProvider);
+        this.logger.warn(`Audio Provider ${provider.name} failed, falling back to ${fbProvider.name}: ${(primaryErr as Error).message}`);
+        try {
+          const { provider: _p, fallbackProvider: _fb, dramaId: _d, bookId: _b, module: _m, assetType: _at, refId: _rid, userId: _u, episodeNumber: _ep, chapterNumber: _ch, ...audioReq } = opts;
+          const fbResult = await fbProvider.submit(audioReq);
+          const job = await this.jobService.createJob({
+            jobType: 'audio', provider: fbProvider.name, providerTaskId: fbResult.providerTaskId,
+            dramaId: opts.dramaId, assetType: opts.assetType, refId: opts.refId, episodeNumber: opts.episodeNumber,
+            request: { prompt: opts.prompt, duration: opts.duration },
+            userId: opts.userId,
+          });
+          return { jobId: job.id, providerTaskId: fbResult.providerTaskId };
+        } catch (fbErr) {
+          this.logger.error(`Fallback Audio Provider ${fbProvider.name} failed: ${(fbErr as Error).message}`);
+        }
+      }
+      throw primaryErr;
+    }
+  }
+
+  async queryAudioJob(jobId: string): Promise<AudioTaskResult & { jobId: string }> {
+    const job = await this.jobService.findById(jobId);
+    if (!job) throw new Error(`Media job ${jobId} not found`);
+    if (job.status === 'completed' || job.status === 'failed') {
+      return {
+        jobId: job.id, providerTaskId: job.providerTaskId, status: job.status,
+        audioUrl: (job.result as any)?.audioUrl,
+        durationSeconds: (job.result as any)?.durationSeconds,
+        error: job.error || undefined, provider: job.provider, model: '',
+      };
+    }
+    const provider = this.registry.getAudioProvider(job.provider);
+    return { ...(await provider.query(job.providerTaskId)), jobId: job.id };
+  }
+
+  async cancelAudioJob(jobId: string): Promise<void> {
+    const job = await this.jobService.findById(jobId);
+    if (!job || job.status === 'completed' || job.status === 'failed') return;
+    const provider = this.registry.getAudioProvider(job.provider);
+    await provider.cancel(job.providerTaskId);
+    await this.jobService.markFailed(job.id, 'User cancelled');
   }
 
   // ═══ TTS 语音合成（写入本地文件） ═══

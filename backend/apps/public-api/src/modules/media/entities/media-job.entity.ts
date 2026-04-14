@@ -2,7 +2,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 import { VideoTaskStatus } from '../interfaces/media-provider.interface';
 
-export type MediaJobType = 'image' | 'video' | 'tts';
+export type MediaJobType = 'image' | 'video' | 'tts' | 'audio';
 
 @Entity('media_jobs')
 export class MediaJobEntity {
