@@ -165,13 +165,38 @@ ${epNum === 1 && scene.sceneIndex === 0 ? `
 - 角色首次亮相的Shot要突出"记忆锚点"（标志性外貌+环境对比）
 ` : ''}
 ${prevSceneLastShots.length > 0 ? `
-🎬 上一场景结尾（视觉衔接参考，确保本场景第一个Shot在角色位置/情绪/构图上与此自然衔接）：
-${prevSceneLastShots.map(s => `- shot${s.shotIndex} [${s.camera?.shotSize ?? ''}+${s.camera?.cameraAngle ?? ''}/${s.camera?.movement ?? ''}] chars=[${s.characters.map(c => c.characterId).join(',')}] emotion=${s.characters[0]?.emotion ?? ''} | lastFrame: "${(s.lastFramePrompt ?? '').slice(0, 80)}"`).join('\n')}
+🎬 上一场景结尾（视觉衔接参考，确保本场景第一个Shot在角色位置/情绪/构图/道具状态上与此自然衔接）：
+${prevSceneLastShots.map(s => {
+  // 从 lastFramePrompt 中提取道具持握状态片段，帮助 LLM 理解前一帧道具位置
+  const lastFrame = (s.lastFramePrompt ?? '').slice(0, 160);
+  const charIds = s.characters.map(c => c.characterId).join(',');
+  // 自动摘取 signatureProp 相关片段（sword / knife / 剑 / 刀 / prop 等关键词）
+  const propHints = (state.signatureProps ?? [])
+    .filter(p => p.characterOwner && charIds.includes(p.characterOwner))
+    .map(p => p.name)
+    .join('/');
+  // BUG-06 fix: 追加结构化的角色朝向（facing）信息，让 LLM 正确继承空间关系
+  const facingHints = s.characters
+    .filter(c => c.facing)
+    .map(c => `${c.characterId}:${c.facing}`)
+    .join(',');
+  return `- shot${s.shotIndex} [${s.camera?.shotSize ?? ''}+${s.camera?.cameraAngle ?? ''}/${s.camera?.movement ?? ''}] chars=[${charIds}] emotion=${s.characters[0]?.emotion ?? ''}${propHints ? ` | propStates(${propHints})` : ''}${facingHints ? ` | facing(${facingHints})` : ''} | lastFrame: "${lastFrame}"`;
+}).join('\n')}
 ` : ''}
 ⚠️ 姿态与空间继承铁律（场景内连贯性保障）：
 - 同场景内，每个Shot的 firstFramePrompt 中，角色的姿态、位置、朝向必须与前一个Shot的 lastFramePrompt 自然衔接！
 - 若前一Shot结尾"角色转身走向门口（背对）"，则下一Shot起始不能是"正面直视镜头"。
+- 角色 facing 继承规则：上一Shot中 facing=facing_away，则下一Shot不能直接是 facing_camera——必须有"缓缓转身"的过渡 Shot。facing_left → facing_right 的横向 180° 翻转同理，违反轴线法则。
 - 组装场景时，请脑补角色的物理空间移动，严格保持动作连贯。
+
+⚠️ 道具持握状态继承铁律（防止武器/道具凭空出现）：
+- 签名道具（剑、刀、酒葫芦等）的持握状态在 Shot 之间只能逐步递进，严禁状态跳跃！
+  合法递进链：「挂于腰间」→「手触剑柄」→「缓缓抽出」→「持剑在手」→「指向对方」
+- 若某 Shot 结尾角色的剑/刀/道具仍「挂在腰间」，则下一个 Shot 的 firstFramePrompt 中
+  该道具不得直接出现在「手持」或「拔出」状态——必须先安排一个过渡 Shot 描述取武器的动作。
+- 全景/远景（wide / extreme_wide）中角色无法看清道具，该类 Shot 的道具持握状态应视同前一Shot继承，
+  不可在这类 Shot 之后紧跟「手持武器对峙」的特写，除非中间有明确的过渡 Shot。
+- 在生成每个 Shot 的 firstFramePrompt 前，先在 _thoughtProcess 中明确写出：「当前角色[X]的剑/道具状态是什么？从上一Shot继承的状态是什么？本Shot是否需要状态迁移？」
 
 ⚠️ 合法角色ID白名单（characters数组只能使用这些ID，其他一律视为违规）：
 [${state.characters.map(c => `${c.characterId}(${c.name})`).join(', ')}]

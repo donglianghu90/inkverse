@@ -428,6 +428,11 @@ export async function generateShotSfx(dramaId: string, episodeNumber: number, sh
   return request(`/drama/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/generate-sfx`, { method: 'POST' });
 }
 
+/** 单镜音画合成预览（同步 HTTP） */
+export async function composeShotPreview(dramaId: string, episodeNumber: number, shotId: string): Promise<{ videoUrl: string; status: string }> {
+  return request(`/drama/${dramaId}/episodes/${episodeNumber}/shots/${shotId}/compose-preview`, { method: 'POST' });
+}
+
 export function getEpisodeProgressSseUrl(dramaId: string): string {
   const token = getToken();
   return `/api/drama/${dramaId}/episode-progress-sse${token ? `?token=${encodeURIComponent(token)}` : ''}`;

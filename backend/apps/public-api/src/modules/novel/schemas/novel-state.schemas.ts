@@ -836,15 +836,15 @@ export const addressEntrySchema = z.object({
 
 export const sceneSnapshotSchema = z.object({
   chapterNumber: z.number().int().min(1),
-  locationId: z.string().optional(),
-  locationName: z.string().optional(),
-  timeOfDay: z.string().optional(),
-  weather: z.string().optional(),
+  locationId: z.string().nullish(),
+  locationName: z.string().nullish(),
+  timeOfDay: z.string().nullish(),
+  weather: z.string().nullish(),
   presentCharacterIds: z.array(z.string()).default([]),
-  ongoingAction: z.string().optional(),
-  emotionalTone: z.string().optional(),
-  protagonistMood: z.string().optional(), // 主角此刻的情绪状态（如"愤怒中夹杂着自责"）
-  unresolvedTension: z.string().optional(), // 未解决的张力（如"被背叛的真相尚未揭露"）
+  ongoingAction: z.string().nullish(),
+  emotionalTone: z.string().nullish(),
+  protagonistMood: z.string().nullish(), // 主角此刻的情绪状态（如"愤怒中夹杂着自责"）
+  unresolvedTension: z.string().nullish(), // 未解决的张力（如"被背叛的真相尚未揭露"）
 });
 
 // ---------------------------------------------------------------------------
@@ -1028,48 +1028,48 @@ export const storyStateSchema = z.object({
 
   // Book prompt profile — AI-generated writing guide, genre-adaptive.
   bookPromptProfile: bookPromptProfileSchema,
-  audienceDirective: audienceDirectiveSchema.optional(),
-  bookStrategy: bookStrategySchema.optional(),
+  audienceDirective: audienceDirectiveSchema.nullish(),
+  bookStrategy: bookStrategySchema.nullish(),
 
   // Crystallized assets — grow over time, optional initially.
-  bible: storyBibleSchema.optional(),
-  editorialPlan: editorialPlanSchema.optional(),
-  volumePlan: volumePlanSchema.optional(),
+  bible: storyBibleSchema.nullish(),
+  editorialPlan: editorialPlanSchema.nullish(),
+  volumePlan: volumePlanSchema.nullish(),
 
   // Volume arc (大卷规划) — 章数跨度由 roughOutline.estimatedVolumes 动态决定。
-  currentVolume: volumeArcSchema.optional(),
+  currentVolume: volumeArcSchema.nullish(),
   completedVolumes: z.array(volumeArcSchema).default([]),
 
   // Mini-arc (卷级规划) — planned 5-15 chapters at a time.
-  currentArc: miniArcSchema.optional(),
+  currentArc: miniArcSchema.nullish(),
   completedArcs: z.array(miniArcSchema).default([]),
-  currentArcAcceptance: arcAcceptanceReportSchema.optional(),
+  currentArcAcceptance: arcAcceptanceReportSchema.nullish(),
   completedArcAcceptanceReports: z.array(arcAcceptanceReportSchema).default([]),
 
   // Style anchor — voice consistency across chapters.
-  styleAnchor: styleAnchorSchema.optional(),
+  styleAnchor: styleAnchorSchema.nullish(),
 
   // Reader tension model — tracks what the reader is most curious about.
-  readerTension: readerTensionModelSchema.optional(),
+  readerTension: readerTensionModelSchema.nullish(),
 
   // Information asymmetry — who knows what secrets.
-  informationLedger: informationLedgerSchema.optional(),
+  informationLedger: informationLedgerSchema.nullish(),
 
   // Dopamine schedule — tracks satisfaction event delivery cadence.
-  dopamineSchedule: dopamineScheduleSchema.optional(),
+  dopamineSchedule: dopamineScheduleSchema.nullish(),
 
   // Retroactive foreshadowing — seeds to inject into past chapters.
   pendingForeshadowingSeeds: z.array(foreshadowingSeedSchema).default([]),
   foreshadowingBank: foreshadowingBankSchema.default({ deposits: [], totalPlanted: 0, totalResolved: 0 }),
 
   // Story-internal time.
-  storyClock: storyClockSchema.optional(),
+  storyClock: storyClockSchema.nullish(),
 
   // How characters address each other.
   addressMatrix: z.array(addressEntrySchema).default([]),
 
   // End-of-chapter scene snapshot (last chapter's ending state).
-  lastSceneSnapshot: sceneSnapshotSchema.optional(),
+  lastSceneSnapshot: sceneSnapshotSchema.nullish(),
 
   // Naming conventions for world consistency.
   namingConvention: namingConventionSchema,
@@ -1116,7 +1116,7 @@ export const storyStateSchema = z.object({
   relationGraph: z.array(relationshipEdgeSchema).default([]),
   timelineEvents: z.array(timelineEventSchema).default([]),
   plotThreadLedger: z.array(plotThreadSchema).default([]),
-  characterFactLedger: z.array(characterFactSchema).optional(),
+  characterFactLedger: z.array(characterFactSchema).nullish(),
   lastHook: z.string().default(''),
   recentHookTypes: z.array(z.object({
     chapterNumber: z.number().int().min(1),

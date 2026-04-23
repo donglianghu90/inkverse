@@ -1,10 +1,10 @@
 /** 媒体编排器 — 支持关键帧插值(首尾帧)、并发T2I/I2V、角色变体参考图、渲染配置驱动、质量关卡、连贯性校验 */
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { RedisService } from '@liaoliaots/nestjs-redis';
 import Redis from 'ioredis';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
-import { ConfigService } from '@packages/modules';
+import { ConfigService, OssService } from '@packages/modules';
 import { EpisodeEntity, EpisodeMediaStatus } from '../entities/episode.entity';
 import { ShotMediaEntity } from '../entities/shot-media.entity';
 import { VisualAssetEntity } from '../entities/visual-asset.entity';
@@ -14,6 +14,7 @@ import { MediaService } from '../../media/media.service';
 import { ProviderRegistryService } from '../../media/providers/provider-registry.service';
 import { AudioResourceService } from '../../media/audio-resource.service';
 import { VideoComposerService } from '../../media/video-composer.service';
+import { VideoPostProcessorService } from '../../media/video-post-processor.service';
 import type { ComposeShotInput } from '../../media/interfaces';
 import { LocalStorageService } from '../../media/local-storage.service';
 import { DramaProgressService } from '../drama-progress.service';
@@ -80,9 +81,32 @@ export class MediaOrchestratorService implements OnModuleInit {
     return MediaOrchestratorService.PROVIDER_DURATION[provider ?? '']?.max ?? 10;
   }
   private skipImageGen = false;
+  /** SFX 生成开关，默认 true（关闭）：当前 SFX 模型不可用（elevenlabs/sound-effect-v2 已下线）。
+   * 恢复后在配置里将 media.pipeline.skipSfxGeneration 设为 false 重新开启。 */
+  private skipSfxGen = true;
   private profile!: RenderingProfile;
   /** 视频任务等待超时（ms），默认 40 分钟，可通过 media.pipeline.videoAwaitTimeoutMs 配置 */
   private videoAwaitTimeoutMs = 40 * 60 * 1000;
+
+  /**
+   * Per-episode 串行锁 — 防止前端同时触发同一集内多个 generateShotImage 请求时，
+   * 各请求读到空 DB 快照而导致 refs=0 盲生成。
+   * 锁粒度为 episodeId，不同集可以并行；同集内的请求排队执行。
+   */
+  private readonly episodeLocks = new Map<string, Promise<unknown>>();
+  private async withEpisodeLock<T>(episodeId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.episodeLocks.get(episodeId) ?? Promise.resolve();
+    const current = prev.then(fn, fn); // 不管前任成功失败都继续
+    this.episodeLocks.set(episodeId, current);
+    try {
+      return await current;
+    } finally {
+      // 队列清空时移除 key，避免内存泄漏
+      if (this.episodeLocks.get(episodeId) === current) {
+        this.episodeLocks.delete(episodeId);
+      }
+    }
+  }
 
   constructor(
     @InjectRepository(EpisodeEntity) private readonly episodeRepo: Repository<EpisodeEntity>,
@@ -108,12 +132,16 @@ export class MediaOrchestratorService implements OnModuleInit {
     private readonly shotContextService: ShotContextBuilderService,
     private readonly shotPromptAssembler: ShotPromptAssemblerService,
     private readonly redisService: RedisService,
+    private readonly postProcessor: VideoPostProcessorService,
+    private readonly ossService: OssService,
   ) {}
 
   async onModuleInit() {
     const media = (this.configService.get('media') ?? {}) as Record<string, unknown>;
     const pipeline = (media.pipeline ?? {}) as Record<string, unknown>;
     this.skipImageGen = String(pipeline.skipImageGeneration) === 'true';
+    this.skipSfxGen = String(pipeline.skipSfxGeneration ?? 'true') !== 'false';
+    if (this.skipSfxGen) this.logger.warn('SFX 生成已禁用（skipSfxGen=true），如需开启请在配置中将 media.pipeline.skipSfxGeneration 设为 false');
     if (pipeline.t2iMaxConcurrency) this.t2iMaxConcurrency = Number(pipeline.t2iMaxConcurrency);
     if (pipeline.videoAwaitTimeoutMs) this.videoAwaitTimeoutMs = Number(pipeline.videoAwaitTimeoutMs);
     const t2iIntervalMs = Number(pipeline.t2iIntervalMs) || 3000;
@@ -312,8 +340,14 @@ export class MediaOrchestratorService implements OnModuleInit {
           sceneCache.set(locationId, imageUrl);
         }
         const prevFrameCache = new Map<number, string>();
-
-        await this.runConcurrent(orderedShots, Math.min(mediaPolicy.t2iConcurrency, this.t2iMaxConcurrency), async (shot, i) => {
+        // P-F fix 第一层：Phase 0 开始前，将 shotMediaMap 中已有图片预填充到 prevFrameCache
+        // 解决续跑场景：之前批次已生成的帧在 prevFrameCache 中缺失，导致后续帧无法获取前帧参考图
+        for (const shot of shots) {
+          const existingUrl = shotMediaMap[shot.shotId]?.imageUrl;
+          if (existingUrl) prevFrameCache.set(shot.shotIndex, existingUrl);
+        }
+        // 强制使用串行生成 (并发控制为 1)，彻底解决并发导致的帧序列缺失与样式漂移 (Deadlock Paradox)
+        await this.runConcurrent(orderedShots, 1, async (shot, i) => {
           const sid = shot.shotId;
           if (shot.isFlashback || shot.isPreview) { emit(phaseOff + i, `${sid} 跳过T2I`, true); return; }
 
@@ -349,6 +383,13 @@ export class MediaOrchestratorService implements OnModuleInit {
                 provider: shotRoute.provider,
                 ambientPopulation: ambientPopulationMap.get(getLocationId(shot.sceneId)),
               });
+              // P-F fix 第二层：并发池中，生成首帧前尝试从 shotMediaMap 回填前一帧
+              // 处理「前一帧已被并发 worker 生成完毕写入 shotMediaMap，但 prevFrameCache 还没来得及 set」的窗口期
+              if (!prevFrameCache.has(shot.shotIndex - 1) && shot.shotIndex > 0) {
+                const prevShot = shots.find(s => s.shotIndex === shot.shotIndex - 1);
+                const prevUrl = prevShot ? shotMediaMap[prevShot.shotId]?.imageUrl : undefined;
+                if (prevUrl) prevFrameCache.set(shot.shotIndex - 1, prevUrl);
+              }
               const refs = this.shotContextService.buildRefImages(
                 shot,
                 charImageMap,
@@ -451,7 +492,18 @@ export class MediaOrchestratorService implements OnModuleInit {
                 try { await this.storage.downloadToLocal(imgUrl, this.storage.imageOutputPath(dramaId, sid)); } catch {}
               }
               emit(phaseOff + i, `${sid} 首帧完成`, true);
-            } catch (err) { this.logger.warn(`${sid} 首帧失败: ${(err as Error).message}`); }
+            } catch (err) {
+              const errMsg = (err as Error).message;
+              this.logger.warn(`${sid} 首帧失败: ${errMsg}`);
+              shotMediaMap[sid] = {
+                ...shotMediaMap[sid],
+                shotId: sid,
+                status: 'image_failed',
+                imageError: errMsg.slice(0, 500),
+              } as ShotMediaEntry;
+              await this.shotMediaRepo.upsert({ ...shotMediaMap[sid], episodeId: episode.id, shotId: sid }, ['episodeId', 'shotId']).catch(() => {});
+              emit(phaseOff + i, `${sid} 首帧生成失败`, true);
+            }
           } else {
             const isCloseUpResumed = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.shotSize ?? '');
             if (shot.sceneId && !sceneCache.has(shot.sceneId) && !isCloseUpResumed) sceneCache.set(shot.sceneId, shotMediaMap[sid].imageUrl!);
@@ -507,11 +559,25 @@ export class MediaOrchestratorService implements OnModuleInit {
                 shotMediaMap[sid] = updatedEntry;
               }
               emit(phaseOff + orderedShots.length + i, `${sid} 尾帧完成`, true);
-            } catch (err) { this.logger.warn(`${sid} 尾帧失败: ${(err as Error).message}`); }
+            } catch (err) {
+              const errMsg = (err as Error).message;
+              this.logger.warn(`${sid} 尾帧失败: ${errMsg}`);
+              shotMediaMap[sid] = {
+                ...shotMediaMap[sid],
+                shotId: sid,
+                lastFrameError: errMsg.slice(0, 500),
+              } as ShotMediaEntry;
+              emit(phaseOff + orderedShots.length + i, `${sid} 尾帧生成失败`, true);
+            }
           }
         });
         // P5: T2I 完成后，将池角色的最佳生成图写回 minorRolePool（内存操作，由 updateDramaState 统一落库）
         await this.updatePoolReferenceImages(state, shots, shotMediaMap);
+
+        // 立即持久化：将首帧/尾帧图片 URL 写入数据库，确保页面刷新后图片不丢失
+        // （此前仅在管线末尾 Phase 4 合成完成后才批量写入，导致中途刷新丢失所有图片）
+        await this.pushShotMediaMap(episode.id, shotMediaMap);
+        this.logger.log(`E${episodeNumber} Phase 0 T2I 完成，${Object.values(shotMediaMap).filter(m => m.imageUrl).length} 张首帧已持久化`);
 
         phaseOff += shots.length * 2;
       }
@@ -542,14 +608,20 @@ export class MediaOrchestratorService implements OnModuleInit {
         }
       }
 
-      // ═══ Phase 0.5: 镜头连贯性验证 + 自动重生成 flagged shots ═══
+      // ═══ Phase 0.5: 镜头连贯性验证 + 自动重生成 flagged shots（最多 2 轮） ═══
       if (hasT2I && mediaPolicy.enableCoherenceValidation) {
-        try {
-          await this.updateMediaStatus(episode.id, 'generating_first_frames');
-          const coherence = await this.coherenceValidator.validateEpisodeCoherence(dramaId, episodeNumber, mediaPolicy.enableVlmCoherence);
-          if (coherence.flaggedShots.length > 0) {
-            this.logger.warn(`E${episodeNumber} 连贯性标记 ${coherence.flaggedShots.length} 个Shot，自动重生成: ${coherence.flaggedShots.join(', ')}`);
+        const MAX_COHERENCE_ROUNDS = 2;
+        for (let coherenceRound = 0; coherenceRound < MAX_COHERENCE_ROUNDS; coherenceRound++) {
+          try {
+            await this.updateMediaStatus(episode.id, 'generating_first_frames');
+            const coherence = await this.coherenceValidator.validateEpisodeCoherence(dramaId, episodeNumber, mediaPolicy.enableVlmCoherence);
+            if (coherence.flaggedShots.length === 0) {
+              if (coherenceRound > 0) this.logger.log(`E${episodeNumber} 连贯性验证第${coherenceRound + 1}轮: 全部通过`);
+              break; // 全部通过，跳出循环
+            }
+            this.logger.warn(`E${episodeNumber} 连贯性验证第${coherenceRound + 1}轮: 标记 ${coherence.flaggedShots.length} 个Shot，自动重生成: ${coherence.flaggedShots.join(', ')}`);
             const flaggedSet = new Set(coherence.flaggedShots);
+            // P1-10: 每轮重建缓存，确保重生成的帧立即可作为后续 Shot 的参考
             const sceneCache = new Map<string, string>();
             const prevFrameCache = new Map<number, string>();
             for (const s of shots) {
@@ -561,6 +633,17 @@ export class MediaOrchestratorService implements OnModuleInit {
             const flaggedShots = this.shotOrderService.orderShotsForProduction(shots.filter(s => flaggedSet.has(s.shotId)), reviewRiskShotIds);
             for (const shot of flaggedShots) {
               const sid = shot.shotId;
+
+              // 错误反向传导 (Error Backpropagation): 重写 Prompt
+              // 获取该 Shot 导致的所有冲突 issues 并通过大模型修正 Prompt，防止携带原错词死锁
+              const issues = coherence.shotPairs.filter(p => p.shotB === sid).flatMap(p => p.issues);
+              if (issues.length > 0) {
+                this.logger.warn(`${sid} 因为连贯性问题触发 Prompt 重写: ${issues.join('; ')}`);
+                const fixedShot = await this.coherenceValidator.rewriteFlaggedShotPrompt(shot, state, issues);
+                shot.firstFramePrompt = fixedShot.firstFramePrompt;
+                shot.lastFramePrompt = fixedShot.lastFramePrompt;
+              }
+
               const shotPolicy = this.resolveShotRunPolicy(shot, state, mediaPolicy.styleBucket);
               try {
                 const mediaParams = shotMediaParamsCache.get(sid);
@@ -604,19 +687,23 @@ export class MediaOrchestratorService implements OnModuleInit {
                     size: imgSize, count: 1, referenceImages: refs, dramaId, assetType: 'shot_first_frame', refId: `${sid}_regen`, userId, episodeNumber,
                     ...regenRoute,
                   });
-                }, `${sid} 连贯性重生成`);
+                }, `${sid} 连贯性重生成(R${coherenceRound + 1})`);
                 const newUrl = res.images?.[0]?.url ?? '';
                 if (newUrl) {
                   shotMediaMap[sid] = { ...shotMediaMap[sid], imageUrl: newUrl, status: 'image_done', t2iPrompt: optimized.prompt, t2iNegativePrompt: optimized.negativePrompt || undefined };
+                  // P1-10: 立即更新缓存，让同轮后续 flagged shot 能参考已重生成的帧
                   prevFrameCache.set(shot.shotIndex, newUrl);
                   if (shot.sceneId) sceneCache.set(shot.sceneId, newUrl);
-                  this.logger.log(`${sid} 连贯性重生成完成`);
+                  this.logger.log(`${sid} 连贯性重生成完成(R${coherenceRound + 1})`);
                 }
-              } catch (err) { this.logger.warn(`${sid} 连贯性重生成失败: ${(err as Error).message}`); }
+              } catch (err) { this.logger.warn(`${sid} 连贯性重生成失败(R${coherenceRound + 1}): ${(err as Error).message}`); }
             }
             await this.updateMediaStatus(episode.id, 'generating_first_frames');
+          } catch (err) {
+            this.logger.warn(`连贯性验证降级(R${coherenceRound + 1}): ${(err as Error).message}`);
+            break; // 验证本身失败则不再重试
           }
-        } catch (err) { this.logger.warn(`连贯性验证降级: ${(err as Error).message}`); }
+        }
       }
 
       // ═══ Phase 1: I2V / T2V 视频生成 ═══
@@ -668,18 +755,12 @@ export class MediaOrchestratorService implements OnModuleInit {
           const shotPolicy = this.resolveShotRunPolicy(shot, state, mediaPolicy.styleBucket);
 
           const styleLockedVideoPrompt = this.shotContextService.applyStyleLockPrompt(shot.visualPrompt, shot, state);
-          const videoRoute = this.videoRouter.route({
-            overrideProvider: state.videoProvider,
-          });
-
-          const actualProvider = videoRoute.provider;
-          const actualFallback = videoRoute.fallbackProvider;
-
-          // ── Provider 时长约束（clamp 到 Provider 支持范围，时长不影响选型） ──
+          
+          // 锁定使用 Kling 生成并规范时长
+          const actualProvider = 'kling';
           const submitDuration = MediaOrchestratorService.clampDuration(shot.estimatedDurationSec, actualProvider);
-
-          // ── Prompt 优化 ──
           const videoQuality = shotPolicy.videoQuality;
+
           const optVideo = this.promptOptimizer.optimizeForT2V(styleLockedVideoPrompt, {
             provider: actualProvider,
             duration: shot.estimatedDurationSec,
@@ -694,7 +775,41 @@ export class MediaOrchestratorService implements OnModuleInit {
             dialogueEmotion: shot.dialogue?.emotion,
             dialoguePace: shot.dialogue?.pace,
             dialogueVolume: shot.dialogue?.volume,
+            dramaShotType: shot.shotType,
+            shotType: 'shot_video',
           });
+
+          // P7: Kling 3.0 精准多元素引用 (专属生成流)
+          let extraParams: Record<string, unknown> | undefined;
+          const klingElements: Array<{name: string, description: string, element_input_urls: string[]}> = [];
+          const charIds = Array.from(new Set([
+              ...this.shotContextService.resolveLockedCharacterIds(shot),
+              ...(shot.characters ?? []).map(c => c.characterId)
+          ])).slice(0, 3);
+          
+          const promptTags: string[] = [];
+          for (let k = 0; k < charIds.length; k++) {
+            const charId = charIds[k];
+            const safeName = `char_${charId.replace(/[^a-zA-Z0-9]/g, '')}_${k}`;
+            const charUrls = new Set<string>();
+            const cmap = charImageMap.get(charId);
+            if (cmap?.primary) charUrls.add(cmap.primary);
+            (characterAnchorMap.get(charId) ?? []).forEach(u => charUrls.add(u));
+            (characterShotImages.get(charId) ?? []).forEach(u => charUrls.add(u));
+            
+            const urlsArr = Array.from(charUrls).filter(Boolean);
+            if (urlsArr.length > 0) {
+               klingElements.push({
+                 name: safeName, description: 'Character reference',
+                 element_input_urls: urlsArr.slice(0, 4)
+               });
+               promptTags.push(`@${safeName}`);
+            }
+          }
+          if (klingElements.length > 0) {
+             extraParams = { kling_elements: klingElements };
+             optVideo.prompt += ` ${promptTags.join(' ')}`;
+          }
 
           const sub = await withMediaRetry(() => this.mediaService.submitVideo({
             prompt: optVideo.prompt,
@@ -702,7 +817,7 @@ export class MediaOrchestratorService implements OnModuleInit {
             quality: videoQuality, aspectRatio: aspectRatio as any,
             referenceImages: refImages, dramaId, assetType: 'shot_video', refId: sid, userId, episodeNumber,
             provider: actualProvider,
-            fallbackProvider: actualFallback,
+            extra: extraParams,
           }), `${sid} 视频`);
           shotMediaMap[sid] = { ...shotMediaMap[sid], videoJobId: sub.jobId, videoProvider: actualProvider, status: 'submitted' };
           await this.shotMediaRepo.upsert({ ...shotMediaMap[sid], episodeId: episode.id, shotId: sid }, ['episodeId', 'shotId']);
@@ -769,6 +884,42 @@ export class MediaOrchestratorService implements OnModuleInit {
           }
         }
       } else { this.logger.warn('TTS Provider 未配置，跳过语音合成'); }
+
+      // ═══ Phase 2.5: AI SFX 批量生成（sound-effect-v2，失败自动降级静态） ═══
+      // enablePipelineSfx = false 时跳过（sound-effect-v2 暂不可用），恢复后在 generation-policy 中改为 true
+      if (mediaPolicy.enablePipelineSfx) {
+        let sfxProvider: import('../../media/interfaces/media-provider.interface').AudioProvider | null = null;
+        try { sfxProvider = this.registry.getAudioProvider(); } catch {}
+        if (sfxProvider && sfxProvider.generateSync) {
+          await this.updateMediaStatus(episode.id, 'generating_sfx');
+          this.logger.log(`E${episodeNumber} Phase 2.5: AI SFX 批量生成，并发 ${mediaPolicy.sfxConcurrency}`);
+          const sfxShots = orderedShots.filter(s => !s.isPreview && (s.audio?.sfx?.length ?? 0) > 0);
+          const sfxProviderRef = sfxProvider; // 闭包引用，排除 null 检查
+          await this.runConcurrent(sfxShots, mediaPolicy.sfxConcurrency, async (shot) => {
+            // 断点续传：本次已有 sfxUrl 则跳过
+            if (shotMediaMap[shot.shotId]?.sfxUrl) return;
+            const sfxPrompt = this.buildSfxPrompt(shot);
+            try {
+              const sfxResult = await sfxProviderRef.generateSync!({
+                prompt: sfxPrompt,
+                duration: Math.min(shot.estimatedDurationSec ?? 5, 22), // SFX v2 最大 22s
+              });
+              if (sfxResult?.status === 'completed' && sfxResult.audioUrl) {
+                shotMediaMap[shot.shotId] = { ...shotMediaMap[shot.shotId], sfxUrl: sfxResult.audioUrl };
+                this.logger.debug(`${shot.shotId} AI SFX 完成: ${sfxResult.audioUrl}`);
+              } else {
+                this.logger.warn(`${shot.shotId} AI SFX 未成功(status=${sfxResult?.status})，降级静态`);
+              }
+            } catch (sfxErr) {
+              // 失败静默降级：compose 阶段会用 audioResource 静态兜底
+              this.logger.warn(`${shot.shotId} AI SFX 失败，降级静态: ${(sfxErr as Error).message}`);
+            }
+          });
+          this.logger.log(`E${episodeNumber} Phase 2.5 完成，${sfxShots.length} 个 Shot SFX 处理完毕`);
+        } else {
+          this.logger.warn('Audio Provider 未配置或不支持 generateSync，跳过 Phase 2.5 AI SFX');
+        }
+      }
 
       // ═══ Phase 3: FFmpeg 合成（TTS 时长同步 + per-shot 后处理参数） ═══
       let videoUrl = '';
@@ -854,6 +1005,9 @@ export class MediaOrchestratorService implements OnModuleInit {
   /**
    * 单镜图片生成 — 仅生成指定 Shot 的首帧图，同步返回 imageUrl。
    * 用于制作台"逐 Shot 手动触发"场景；前端等待 HTTP 响应即可，无需 SSE。
+   *
+   * 通过 withEpisodeLock 串行化同集请求，保证后生成的 Shot 能读到
+   * 前面已写入 DB 的首帧图作为参考，避免 refs=0 盲生成。
    */
   async generateShotImage(dramaId: string, episodeNumber: number, shotId: string): Promise<{ imageUrl: string }> {
     const episode = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber } });
@@ -867,6 +1021,16 @@ export class MediaOrchestratorService implements OnModuleInit {
       this.logger.warn(`[skipImageGen] ${shotId} 跳过图片生成`);
       return { imageUrl: '' };
     }
+
+    // 串行锁：同一集内的图片生成请求排队，确保前帧参考图可用
+    return this.withEpisodeLock(episode.id, () => this._doGenerateShotImage(dramaId, episodeNumber, shotId, episode, shot, storyboard));
+  }
+
+  /** generateShotImage 内部实现（被 episodeLock 保护） */
+  private async _doGenerateShotImage(
+    dramaId: string, episodeNumber: number, shotId: string,
+    episode: EpisodeEntity, shot: Shot, storyboard: EpisodeStoryboard,
+  ): Promise<{ imageUrl: string }> {
 
     const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
     const state = drama.state as unknown as DramaState;
@@ -1025,6 +1189,71 @@ export class MediaOrchestratorService implements OnModuleInit {
       await this.shotMediaRepo.upsert({ ...existing, ...updated, shotId, episodeId: episode.id }, ['episodeId', 'shotId']);
       try { await this.storage.downloadToLocal(imgUrl, this.storage.imageOutputPath(dramaId, shotId)); } catch {}
       this.logger.log(`[ShotImage] ${shotId} → ${imgUrl}`);
+
+      // 生成尾帧（如果有描述）
+      if (shot.lastFramePrompt) {
+        try {
+          const isCloseUpResumed = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.shotSize ?? '');
+          if (shot.sceneId && !sceneCache.has(shot.sceneId) && !isCloseUpResumed) sceneCache.set(shot.sceneId, imgUrl);
+          prevFrameCache.set(shot.shotIndex, imgUrl);
+
+          const lastRefs = this.shotContextService.buildRefImages(
+            shot, charImageMap, variationImageMap, characterAnchorMap, styleRefImages,
+            sceneCache, prevFrameCache, 'last', this.profile, undefined, propImageMap, propOwnerMap,
+          );
+          const styleLockedLastPrompt = this.shotContextService.applyStyleLockPrompt(shot.lastFramePrompt, shot, state);
+          const rawLastPrompt = await this.shotPromptAssembler.assembleT2iPrompt(shot, state, styleLockedLastPrompt, {
+            stylePrefix: t2iStylePrefix || '', maxTokens: Infinity, provider: singleShotRoute.provider || '',
+            batchLighting: singleShotLighting, sceneVisualPrompt: singleSceneVisualPrompt,
+          });
+          const optLast = this.promptOptimizer.optimizeForT2I(rawLastPrompt, episodeNegPrompt ?? '', {
+            shotType: 'last_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
+            qualityTier: shot.qualityTier ?? 'standard', emotionColorHint: mediaParams.colorGrade,
+            shotSize: shot.camera?.shotSizeEnd ?? shot.camera?.shotSize, cameraAngle: shot.camera?.cameraAngle,
+            composition: shot.camera?.composition, depthOfField: shot.camera?.depthOfField,
+            specialTechnique: shot.specialTechnique ?? undefined,
+            routeProfile: shotPolicy.routeProfile, provider: singleShotRoute.provider,
+            ambientPopulation: state.locations?.find(l => l.locationId === singleLocId)?.ambientPopulation,
+          });
+
+          const genLastFn = async () => {
+             const res = await this.withRetry(
+               async () => {
+                 await this.acquireT2iSlot();
+                 return this.mediaService.generateImage({
+                   prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined,
+                   size: imgSize, count: 1, referenceImages: lastRefs, dramaId, assetType: 'shot_last_frame', refId: `${shotId}_last`, userId, episodeNumber,
+                   ...singleShotRoute,
+                 });
+               },
+               `${shotId} 尾帧`,
+               mediaPolicy.maxMediaRetries,
+               mediaPolicy.retryBaseDelayMs,
+             );
+             return res.images?.[0]?.url ?? '';
+          };
+
+          let lastUrl = '';
+          if (shouldUseQualityGate) {
+            const gateResult = await this.qualityGate.generateWithQualityGate(genLastFn, {
+              maxAttempts: shotPolicy.gateMaxAttempts, minScore: shotPolicy.gateMinScore, qualityTier: tier,
+              prompt: optLast.prompt, characterRefs: this.shotContextService.collectRefImages(shot, charImageMap, variationImageMap, characterAnchorMap),
+              styleRefs: styleRefImages, candidateCount: shotPolicy.candidateCount, dramaId, userId, episodeNumber,
+            });
+            lastUrl = gateResult.imageUrl;
+          } else {
+            lastUrl = await genLastFn();
+          }
+
+          if (lastUrl) {
+            await this.shotMediaRepo.update({ episodeId: episode.id, shotId }, { lastFrameImageUrl: lastUrl, lastFrameT2iPrompt: optLast.prompt });
+            try { await this.storage.downloadToLocal(lastUrl, this.storage.imageOutputPath(dramaId, `${shotId}_last`)); } catch {}
+            this.logger.log(`[ShotImage] ${shotId} 尾帧 → ${lastUrl}`);
+          }
+        } catch (err) {
+          this.logger.warn(`[ShotImage] ${shotId} 尾帧失败: ${(err as Error).message}`);
+        }
+      }
     }
     return { imageUrl: imgUrl };
   }
@@ -1093,18 +1322,18 @@ export class MediaOrchestratorService implements OnModuleInit {
 
     const shotPolicy = this.resolveShotRunPolicy(shot, state, mediaPolicy.styleBucket);
     const styleLockedVideoPrompt = this.shotContextService.applyStyleLockPrompt(shot.visualPrompt, shot, state);
-    const videoRoute = this.videoRouter.route({
-      overrideProvider: state.videoProvider,
-    });
-
-    const submitDuration = MediaOrchestratorService.clampDuration(shot.estimatedDurationSec, videoRoute.provider);
+    
+    // 锁定使用 Kling 生成并规范时长
+    const actualProvider = 'kling';
+    const submitDuration = MediaOrchestratorService.clampDuration(shot.estimatedDurationSec, actualProvider);
+    const videoQuality = shotPolicy.videoQuality;
 
     const scriptScenes = ((episode.script as any)?.scenes ?? []) as import('../schemas/drama-state.schemas').ScriptScene[];
     const sceneForShot = scriptScenes.find(s => s.sceneId === shot.sceneId);
     const mediaParams = this.emotionMapper.mapShotToMediaParams(shot, sceneForShot);
 
     const optVideo = this.promptOptimizer.optimizeForT2V(styleLockedVideoPrompt, {
-      provider: videoRoute.provider,
+      provider: actualProvider,
       duration: shot.estimatedDurationSec,
       hasFirstFrame: !!firstFrame,
       hasLastFrame: !!lastFrame,
@@ -1114,25 +1343,65 @@ export class MediaOrchestratorService implements OnModuleInit {
       cameraAngle: shot.camera?.cameraAngle,
       emotionColorHint: mediaParams?.colorGrade,
       routeProfile: shotPolicy.routeProfile,
+      dramaShotType: shot.shotType,
+      shotType: 'shot_video',
     });
 
     const existing = raw[shotId] ?? {};
     await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, status: 'generating_video' }, ['episodeId', 'shotId']);
+
+    // P7: Kling 3.0 精准多元素引用 (专属生成流)
+    let extraParams: Record<string, unknown> | undefined;
+    const klingElements: Array<{name: string, description: string, element_input_urls: string[]}> = [];
+    const charIds = Array.from(new Set([
+        ...this.shotContextService.resolveLockedCharacterIds(shot),
+        ...(shot.characters ?? []).map(c => c.characterId)
+    ])).slice(0, 3);
+    
+    const promptTags: string[] = [];
+    for (let k = 0; k < charIds.length; k++) {
+      const charId = charIds[k];
+      const safeName = `char_${charId.replace(/[^a-zA-Z0-9]/g, '')}_${k}`;
+      const charUrls = new Set<string>();
+      const cmap = charImageMap.get(charId);
+      if (cmap?.primary) charUrls.add(cmap.primary);
+      (characterAnchorMap.get(charId) ?? []).forEach(u => charUrls.add(u));
+      
+      // 单镜重跑时通过 raw 拿到该角色所有曾参与过的镜头首帧，作为一致性补充图
+      for (const s of storyboard.shots ?? []) {
+        if (s.shotId !== shotId && (s.characters ?? []).some(c => c.characterId === charId) && raw[s.shotId]?.imageUrl) {
+          charUrls.add(raw[s.shotId].imageUrl);
+        }
+      }
+      
+      const urlsArr = Array.from(charUrls).filter(Boolean);
+      if (urlsArr.length > 0) {
+         klingElements.push({
+           name: safeName, description: 'Character reference',
+           element_input_urls: urlsArr.slice(0, 4)
+         });
+         promptTags.push(`@${safeName}`);
+      }
+    }
+    if (klingElements.length > 0) {
+       extraParams = { kling_elements: klingElements };
+       optVideo.prompt += ` ${promptTags.join(' ')}`;
+    }
 
     let videoUrl = '';
     try {
       const sub = await this.withRetry(() => this.mediaService.submitVideo({
         prompt: optVideo.prompt,
         duration: submitDuration,
-        quality: shotPolicy.videoQuality,
+        quality: videoQuality,
         aspectRatio: aspectRatio as any,
         referenceImages: refImages,
         dramaId, assetType: 'shot_video', refId: shotId, userId, episodeNumber,
-        provider: videoRoute.provider,
-        fallbackProvider: videoRoute.fallbackProvider,
+        provider: actualProvider,
+        extra: extraParams,
       }), `${shotId} 单镜视频`, mediaPolicy.maxMediaRetries, mediaPolicy.retryBaseDelayMs);
 
-      await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, videoJobId: sub.jobId, videoProvider: videoRoute.provider, status: 'submitted' }, ['episodeId', 'shotId']);
+      await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, videoJobId: sub.jobId, videoProvider: actualProvider, status: 'submitted' }, ['episodeId', 'shotId']);
 
       // 等待单个 job 完成
       videoUrl = await new Promise<string>((resolve, reject) => {
@@ -1188,7 +1457,7 @@ export class MediaOrchestratorService implements OnModuleInit {
     return { videoUrl: videoUrl || firstFrame || '', status: 'completed' };
   }
 
-  /** 单镜音效生成 (T2A/V2A) */
+  /** 单镜音效生成 (T2A) — 音效生成后自动 FFmpeg mux 到视频 */
   async generateShotSfx(dramaId: string, episodeNumber: number, shotId: string): Promise<{ sfxUrl: string; status: string }> {
     const episode = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber } });
     if (!episode?.storyboard) throw new Error(`E${episodeNumber} 无分镜数据`);
@@ -1200,74 +1469,362 @@ export class MediaOrchestratorService implements OnModuleInit {
     const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
     const mediaList = await this.shotMediaRepo.find({ where: { episodeId: episode.id } });
     const raw: Record<string, ShotMediaEntry> = Object.fromEntries(mediaList.map(m => [m.shotId, m as unknown as ShotMediaEntry]));
-    const existing = raw[shotId] ?? {};
-    
-    const prompt = shot.sfxPrompt || shot.visualPrompt; // Use sfxPrompt if exists, else fallback to visualPrompt
-    const videoUrl = existing.videoUrl;
+    const existing = (raw[shotId] ?? {}) as Partial<ShotMediaEntry>;
 
-    await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, sfxStatus: 'generating' }, ['episodeId', 'shotId']);
+    const hasDialogue = !!shot.dialogue?.text?.trim();
 
-    let sfxUrl = '';
-    try {
-      const sub = await this.withRetry(() => this.mediaService.submitAudio({
-        prompt: prompt,
-        duration: shot.estimatedDurationSec,
-        referenceVideoUrl: videoUrl,
-        dramaId, assetType: 'shot_sfx', refId: shotId, userId: drama.userId, episodeNumber,
-        provider: 'volcengine', // Use default volcengine or map from state.audioProvider if added later
-      }), `${shotId} 单镜音效`, 2, 2000);
-
-      await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, sfxJobId: sub.jobId, sfxStatus: 'submitted' }, ['episodeId', 'shotId']);
-
-      sfxUrl = await new Promise<string>((resolve, reject) => {
-        const timeoutMs = 60000; // 60s timeout for audio
-        const timer = setTimeout(() => {
-          this.mediaService.offJobCompleted(handler);
-          reject(new Error(`Shot ${shotId} 音效生成超时`));
-        }, timeoutMs);
-
-        const handler = async (evt: { jobId: string; status: string; result?: Record<string, unknown> }) => {
-          if (evt.jobId !== sub.jobId) return;
-          clearTimeout(timer);
-          this.mediaService.offJobCompleted(handler);
-          if (evt.status === 'completed') {
-            resolve((evt.result as any)?.audioUrl ?? '');
-          } else {
-            reject(new Error('音效生成失败'));
-          }
-        };
-
-        this.mediaService.findJob(sub.jobId).then(job => {
-          if (!job) return;
-          if (job.status === 'completed') {
-            clearTimeout(timer);
-            this.mediaService.offJobCompleted(handler);
-            resolve((job.result as any)?.audioUrl ?? '');
-          } else if (job.status === 'failed') {
-            clearTimeout(timer);
-            this.mediaService.offJobCompleted(handler);
-            reject(new Error(job.error || '音效生成失败'));
-          }
-        }).catch(() => {});
-
-        this.mediaService.onJobCompleted(handler);
-      });
-    } catch (err) {
-      await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, sfxStatus: 'failed' }, ['episodeId', 'shotId']);
-      throw err;
+    // ── 0. 没台词，而且关闭了 SFX，那就直接跳过不用生成 ───────────────────
+    if (this.skipSfxGen && !hasDialogue) {
+      this.logger.log(`[ShotSfx] ${shotId} 无台词，且 SFX 处于禁用状态，跳过声音生成`);
+      return { sfxUrl: '', status: 'skipped' };
     }
 
+    // ── 1. 必须先有视频 ────────────────────────────────────────────────────
+    const videoUrl = existing.videoUrl;
+    if (!videoUrl) throw new Error(`Shot ${shotId} 尚未生成视频，请先生成视频再生成声音`);
+
+    let finalTtsUrl = '';
+    let finalTtsLocalPath = '';
+
+    // ── 2. TTS 生成（如果有台词）────────────────────────────────────────────
+    if (hasDialogue) {
+      this.logger.log(`[ShotSfx] ${shotId} 开始生成 TTS 配音: ${shot.dialogue!.text.slice(0, 20)}`);
+      const state = drama.state as unknown as DramaState;
+      const voiceMap = new Map(state.characters?.map(c => [c.characterId, c.voiceProfile]) ?? []);
+      const voice = voiceMap.get(shot.dialogue!.characterId);
+      const baseSpeed = SPEED_MAP[voice?.speed ?? 'normal'] ?? 1.0;
+      const outPath = this.storage.ttsOutputPath(dramaId, shot.shotId);
+
+      try {
+        const useVoiceId = voice?.ttsVoiceId || '';
+        const ttsRes = await this.mediaService.synthesizeTtsToFile({
+          request: {
+            text: shot.dialogue!.text!, voiceId: useVoiceId,
+            speed: baseSpeed, emotion: shot.dialogue!.emotion,
+            extra: { volume: shot.dialogue!.volume },
+          },
+          outputPath: outPath,
+          dramaId, userId: drama.userId, episodeNumber: episode.episodeNumber,
+        });
+
+        let ttsUploadUrl = ttsRes.audioUrl;
+        if (this.ossService && fs.existsSync(outPath)) {
+          try {
+            const datePrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '/');
+            const ossPath = `media/audio/${datePrefix}/${dramaId}/tts_${shotId}_${Date.now()}.mp3`;
+            const uploadRes = await this.ossService.uploadFile(ossPath, outPath);
+            ttsUploadUrl = uploadRes.url;
+            this.logger.log(`[ShotSfx] TTS 已推送 OSS: ${ttsUploadUrl}`);
+          } catch (e) {
+            this.logger.warn(`[ShotSfx] TTS OSS上传失败: ${(e as Error).message}`);
+          }
+        }
+
+        finalTtsUrl = ttsUploadUrl;
+        finalTtsLocalPath = outPath;
+        // 先写一次 TTS 库
+        await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, ttsUrl: finalTtsUrl } as any, ['episodeId', 'shotId']);
+      } catch (err) {
+        this.logger.warn(`[ShotSfx] ${shotId} TTS 生成失败: ${(err as Error).message}`);
+      }
+    }
+
+    // ── 3. 音效/SFX 生成（如果没有 skipSfxGen）──────────────────────────────
+    let sfxUrl = '';
+    let sfxLocalPath = '';
+    let sfxPrompt = '';
+    
+    if (!this.skipSfxGen) {
+      sfxPrompt = this.buildSfxPrompt(shot);
+      this.logger.log(`[ShotSfx] ${shotId} 开始 | prompt="${sfxPrompt.slice(0, 80)}..."`);
+      await this.shotMediaRepo.upsert(
+        { ...existing, shotId, episodeId: episode.id, sfxStatus: 'generating', sfxPrompt } as any,
+        ['episodeId', 'shotId'],
+      );
+
+      try {
+        const sub = await this.withRetry(
+          () => this.mediaService.submitAudio({
+            prompt: sfxPrompt,
+            duration: Math.min(shot.estimatedDurationSec ?? 5, 22),
+            referenceVideoUrl: videoUrl,
+            dramaId, assetType: 'shot_sfx', refId: shotId, userId: drama.userId, episodeNumber,
+          }),
+          `${shotId} 单镜音效`, 2, 2000,
+        );
+
+        await this.shotMediaRepo.upsert(
+          { ...existing, shotId, episodeId: episode.id, sfxJobId: sub.jobId, sfxStatus: 'submitted' } as any,
+          ['episodeId', 'shotId'],
+        );
+
+        sfxUrl = await new Promise<string>((resolve, reject) => {
+          const timeoutMs = 90_000;
+          const timer = setTimeout(() => {
+            this.mediaService.offJobCompleted(handler);
+            reject(new Error(`Shot ${shotId} 音效生成超时`));
+          }, timeoutMs);
+
+          const handler = async (evt: { jobId: string; status: string; result?: Record<string, unknown> }) => {
+            if (evt.jobId !== sub.jobId) return;
+            clearTimeout(timer);
+            this.mediaService.offJobCompleted(handler);
+            if (evt.status === 'completed') {
+              resolve((evt.result as any)?.audioUrl ?? '');
+            } else {
+              reject(new Error('音效生成失败'));
+            }
+          };
+
+          this.mediaService.findJob(sub.jobId).then(job => {
+            if (!job) return;
+            if (job.status === 'completed') {
+              clearTimeout(timer);
+              this.mediaService.offJobCompleted(handler);
+              resolve((job.result as any)?.audioUrl ?? '');
+            } else if (job.status === 'failed') {
+              clearTimeout(timer);
+              this.mediaService.offJobCompleted(handler);
+              reject(new Error(job.error || '音效生成失败'));
+            }
+          }).catch(() => {});
+
+          this.mediaService.onJobCompleted(handler);
+        });
+      } catch (err) {
+        const status = (err as any)?.response?.status ?? (err as any)?.status;
+        const is4xx = typeof status === 'number' && status >= 400 && status < 500;
+        if (is4xx) {
+          this.logger.warn(`[ShotSfx] ${shotId} 音效模型不可用（${status}），跳过音效生成`);
+        } else {
+          this.logger.warn(`[ShotSfx] AI 音效生成失败，降级静态素材: ${(err as Error).message}`);
+          sfxUrl = this.audioResource.resolveSfx((shot as any).audio?.sfx?.[0]?.sound ?? '') ?? '';
+        }
+      }
+
+      if (sfxUrl) {
+        sfxLocalPath = this.storage.resolve(`videos/${dramaId}/${shotId}_sfx.mp3`);
+        try {
+          if (!sfxUrl.startsWith('http')) {
+            if (sfxUrl !== sfxLocalPath && fs.existsSync(sfxUrl)) {
+              fs.copyFileSync(sfxUrl, sfxLocalPath);
+            }
+          } else {
+            await this.storage.downloadToLocal(sfxUrl, sfxLocalPath);
+          }
+
+          let sfxUploadUrl = sfxUrl;
+          if (this.ossService && fs.existsSync(sfxLocalPath)) {
+            const datePrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '/');
+            const ossPath = `media/audio/${datePrefix}/${dramaId}/sfx_${shotId}_${Date.now()}.mp3`;
+            const uploadRes = await this.ossService.uploadFile(ossPath, sfxLocalPath);
+            sfxUploadUrl = uploadRes.url;
+            this.logger.log(`[ShotSfx] SFX 已推送 OSS: ${sfxUploadUrl}`);
+          }
+          sfxUrl = sfxUploadUrl;
+
+        } catch (e) {
+          this.logger.warn(`[ShotSfx] 音效处理失败: ${(e as Error).message}`);
+          sfxLocalPath = '';
+        }
+      } else {
+        await this.shotMediaRepo.upsert({ ...existing, shotId, episodeId: episode.id, sfxStatus: 'unavailable' } as any, ['episodeId', 'shotId']);
+      }
+    }
+
+    // ── 4. 混合（FFmpeg mux）──────────────────────────────────────────────────
+    let videoWithSfxUrl = '';
+    const videoLocalPath = this.storage.resolve(`videos/${dramaId}/${shotId}.mp4`);
+
+    if (finalTtsLocalPath || sfxLocalPath) {
+      if (!fs.existsSync(videoLocalPath)) {
+        try { await this.storage.downloadToLocal(videoUrl, videoLocalPath); } catch {}
+      }
+
+      if (fs.existsSync(videoLocalPath)) {
+        let currentVideoPath = videoLocalPath;
+        try {
+          if (finalTtsLocalPath) {
+            const tempOutputPath = this.storage.resolve(`videos/${dramaId}/${shotId}_with_tts.mp4`);
+            const muxRes = await this.postProcessor.muxVideoWithAudio(currentVideoPath, finalTtsLocalPath, tempOutputPath, 1.0);
+            if (fs.existsSync(muxRes.outputPath)) currentVideoPath = muxRes.outputPath;
+          }
+          if (sfxLocalPath) {
+            const tempOutputPath = this.storage.resolve(`videos/${dramaId}/${shotId}_with_sfx.mp4`);
+            const muxRes = await this.postProcessor.muxVideoWithAudio(currentVideoPath, sfxLocalPath, tempOutputPath, 1.0);
+            if (fs.existsSync(muxRes.outputPath)) currentVideoPath = muxRes.outputPath;
+          }
+
+          if (currentVideoPath !== videoLocalPath) {
+            videoWithSfxUrl = currentVideoPath;
+            this.logger.log(`[ShotSfx] mux 完成: ${path.basename(videoWithSfxUrl)}`);
+          }
+        } catch (muxErr) {
+          this.logger.warn(`[ShotSfx] FFmpeg mux 失败: ${(muxErr as Error).message}`);
+        }
+      } else {
+        this.logger.warn(`[ShotSfx] 本地视频不存在，跳过 mux: ${videoLocalPath}`);
+      }
+    }
+
+    if (!finalTtsUrl && !sfxUrl) {
+      return { sfxUrl: '', status: 'unavailable' };
+    }
+
+    // 返回 sfxUrl 让前端试听：优先使用 TTS 配音 url，如果没有才用 sfx
+    const returnAudioUrl = finalTtsUrl || sfxUrl;
+
+    // ── 5. 写库 ──────────────────────────────────────────────────────────────
     await this.shotMediaRepo.upsert({
       ...existing, shotId, episodeId: episode.id,
-      sfxUrl: sfxUrl, sfxStatus: 'completed'
-    }, ['episodeId', 'shotId']);
-    
-    if (sfxUrl) {
-      try { await this.storage.downloadToLocal(sfxUrl, this.storage.resolve(`videos/${dramaId}/${shotId}_sfx.mp3`)); } catch {}
-    }
-    this.logger.log(`[ShotSfx] ${shotId} → ${sfxUrl}`);
-    return { sfxUrl, status: 'completed' };
+      sfxUrl: returnAudioUrl, sfxStatus: 'completed', 
+      ...(sfxPrompt ? { sfxPrompt } : {}),
+      ...(videoWithSfxUrl ? { videoWithSfxUrl } : {}),
+    } as any, ['episodeId', 'shotId']);
+
+    this.logger.log(`[ShotSfx] ${shotId} 完成 | audio=${returnAudioUrl} | mux=${videoWithSfxUrl || 'skipped'}`);
+    return { sfxUrl: returnAudioUrl, status: 'completed' };
   }
+
+  async composeShotPreview(dramaId: string, episodeNumber: number, shotId: string): Promise<{ videoUrl: string; status: string }> {
+    const episode = await this.episodeRepo.findOne({ where: { dramaId, episodeNumber } });
+    if (!episode?.storyboard) throw new Error(`E${episodeNumber} 无分镜数据`);
+
+    const storyboard = episode.storyboard as unknown as EpisodeStoryboard;
+    const shot = storyboard.shots?.find((s: Shot) => s.shotId === shotId);
+    if (!shot) throw new Error(`Shot ${shotId} 不存在`);
+
+    const mediaList = await this.shotMediaRepo.find({ where: { episodeId: episode.id } });
+    const raw: Record<string, ShotMediaEntry> = Object.fromEntries(mediaList.map(m => [m.shotId, m as unknown as ShotMediaEntry]));
+    const entry = raw[shotId];
+
+    if (!entry?.videoUrl) throw new Error(`Shot ${shotId} 尚未生成无声视频，请先生成视频`);
+    
+    const hasSfx = (shot as any).audio?.sfx?.length > 0;
+    const hasBgm = !!(shot as any).audio?.bgm;
+    const hasAmbience = !!(shot as any).audio?.ambience;
+    if (!entry?.ttsUrl && !entry?.sfxUrl && !hasSfx && !hasBgm && !hasAmbience) {
+      throw new Error(`Shot ${shotId} 无任何音频要素配置，无需音画合成`);
+    }
+
+    if (!this.composer.isAvailable()) throw new Error('FFmpeg 未就绪，无法合成');
+
+    this.logger.log(`[Preview] 开始单镜合成: ${shotId}`);
+    
+    let ttsDur = 0;
+    if (entry.ttsUrl) {
+      try {
+        ttsDur = await (this.composer as any).getVideoDuration(entry.ttsUrl);
+      } catch (e) {
+        this.logger.warn(`获取 TTS 时长失败: ${(e as Error).message}`);
+      }
+    }
+
+    const drama = await this.dramaRepo.findOneOrFail({ where: { id: dramaId } });
+    const state = drama.state as unknown as DramaState;
+    const scriptScenes = ((episode.script as any)?.scenes ?? []) as import('../schemas/drama-state.schemas').ScriptScene[];
+    const scene = scriptScenes.find(s => s.sceneId === shot.sceneId);
+    const mp = this.emotionMapper.mapShotToMediaParams(shot, scene);
+
+    const generatedMaxSec = MediaOrchestratorService.getProviderMaxDuration(entry.videoProvider);
+    let effectiveDuration = Math.min(shot.estimatedDurationSec, generatedMaxSec);
+    let speedFactor = mp?.speedFactor ?? 1.0;
+
+    if (ttsDur && ttsDur > effectiveDuration * 1.1) {
+      const safeRatio = Math.min(ttsDur / effectiveDuration, 3.0);
+      speedFactor = speedFactor / safeRatio;
+      effectiveDuration = ttsDur;
+      this.logger.debug(`[Preview] ${shot.shotId} 减速 ${safeRatio.toFixed(2)}x 匹配TTS (${ttsDur.toFixed(1)}s)`);
+    }
+
+    const composeShot: ComposeShotInput = {
+      shotId: shot.shotId,
+      videoPath: entry.videoUrl,
+      ttsAudioPath: entry.ttsUrl,
+      durationSec: effectiveDuration,
+      trimInSec: shot.trimInSec,
+      trimOutSec: shot.trimOutSec ?? effectiveDuration,
+      transition: 'cut',
+      transitionDurationSec: mp?.transitionDurationSec,
+      subtitle: shot.subtitle ? { text: shot.subtitle.text, style: shot.subtitle.style ?? 'normal' } : undefined,
+      bgmPath: (shot as any).audio?.bgm?.mood ? (this.audioResource.resolveBgm((shot as any).audio.bgm.mood) ?? undefined) : undefined,
+      bgmIntensity: ((shot as any).audio?.bgm?.intensity ?? 0.3) * (mp?.bgmVolumeMultiplier ?? 1.0),
+      bgmAction: (shot as any).audio?.bgm?.action,
+      sfxPaths: [
+        ...(entry.sfxUrl ? [entry.sfxUrl] : []),
+        ...((hasSfx ? (shot as any).audio!.sfx!.map((fx: any) => this.audioResource.resolveSfx(fx.sound)).filter(Boolean) as string[] : []))
+      ],
+      ambiencePath: hasAmbience ? (this.audioResource.resolveAmbience((shot as any).audio!.ambience!) ?? undefined) : undefined,
+      postProcess: mp ? {
+        colorGrade: mp.colorGrade,
+        speedFactor,
+        stabilize: mp.stabilize,
+        kenBurns: entry.kenBurnsFallback ? { direction: 'zoom_in' as const, zoomFactor: 1.1 } : mp.kenBurns,
+        specialTechnique: shot.specialTechnique ?? undefined,
+      } : entry.kenBurnsFallback ? {
+        kenBurns: { direction: 'zoom_in' as const, zoomFactor: 1.1 },
+      } : undefined,
+    };
+
+    const outputPath = this.storage.composedShotOutputPath(dramaId, shotId);
+    const aspectRatio = state.audienceDirective?.aspectRatio || '16:9';
+    
+    const result = await this.composer.compose({ episodeId: episode.id, shots: [composeShot], outputPath, aspectRatio });
+
+    let finalVideoUrl = result.outputPath;
+    if (this.ossService) {
+      try {
+        const datePrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '/');
+        const ossPath = `media/videos/${datePrefix}/${dramaId}/${shotId}_composed_${Date.now()}.mp4`;
+        const uploadRes = await this.ossService.uploadFile(ossPath, result.outputPath);
+        finalVideoUrl = uploadRes.url;
+        this.logger.log(`合成视频已推送 OSS: ${finalVideoUrl}`);
+      } catch (err) {
+        this.logger.warn(`OSS 上传失败，退回本地路径: ${(err as Error).message}`);
+      }
+    }
+
+    await this.shotMediaRepo.upsert({ ...entry, shotId, episodeId: episode.id, videoUrl: finalVideoUrl } as any, ['episodeId', 'shotId']);
+    
+    this.logger.log(`[Preview] 单镜合成完毕: ${finalVideoUrl}`);
+    return { videoUrl: finalVideoUrl, status: 'completed' };
+  }
+
+
+  /** 根据 Shot 元数据构建用于 SFX 模型的英文音效 prompt（描述听觉，而非画面） */
+  private buildSfxPrompt(shot: Shot): string {
+    const parts: string[] = [];
+    const movement = shot.camera?.movement?.toLowerCase() ?? '';
+    if (movement.includes('pan') || movement.includes('dolly')) parts.push('subtle camera movement whoosh');
+    if (movement.includes('handheld')) parts.push('slight ambient rumble');
+
+    if (shot.characters?.length) {
+      const emotions = shot.characters.map((c: any) => String(c.emotion ?? '')).filter(Boolean);
+      if (emotions.some(e => e.includes('cry') || e.includes('sad'))) parts.push('soft sobbing, quiet sniffles');
+      if (emotions.some(e => e.includes('angry') || e.includes('rage'))) parts.push('heavy tense breathing');
+      if (emotions.some(e => e.includes('surprise') || e.includes('shock'))) parts.push('sharp gasp');
+      if (emotions.some(e => e.includes('happy') || e.includes('laugh'))) parts.push('gentle laughter');
+    }
+
+    const vp = ((shot as any).sfxPrompt || shot.visualPrompt || '').toLowerCase();
+    if (vp.includes('rain'))                              parts.push('rain falling');
+    if (vp.includes('thunder'))                           parts.push('distant thunder rumble');
+    if (vp.includes('wind') || vp.includes('storm'))      parts.push('wind howling');
+    if (vp.includes('door'))                              parts.push('door opening or closing');
+    if (vp.includes('forest') || vp.includes('nature'))   parts.push('birds chirping, leaves rustling');
+    if (vp.includes('office') || vp.includes('typing'))   parts.push('office ambience, keyboard typing');
+    if (vp.includes('street') || vp.includes('city'))     parts.push('city traffic ambience');
+    if (vp.includes('restaurant') || vp.includes('cafe')) parts.push('restaurant background noise');
+    if (vp.includes('car') || vp.includes('driv'))        parts.push('car engine, road noise');
+    if (vp.includes('fight') || vp.includes('battle'))    parts.push('impact sound, whoosh');
+    if (vp.includes('sword') || vp.includes('weapon'))    parts.push('sword clashing, metal ring');
+    if (vp.includes('night'))                             parts.push('night crickets, quiet ambience');
+    if (vp.includes('hospital'))                          parts.push('hospital ambience, soft footsteps');
+
+    if (!parts.length) parts.push('subtle ambient room tone, soft background atmosphere');
+    return parts.slice(0, 5).join(', ') + '. cinematic, natural, immersive';
+  }
+
 
 
   /**
@@ -1637,6 +2194,12 @@ export class MediaOrchestratorService implements OnModuleInit {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try { return await fn(); } catch (err) {
         if (attempt === maxRetries) throw err;
+        // 4xx 错误（模型不存在/未授权/参数错误）不重试，直接抛出
+        const status = (err as any)?.response?.status ?? (err as any)?.status;
+        if (typeof status === 'number' && status >= 400 && status < 500) {
+          this.logger.warn(`${label} 遇到 ${status} 不可重试错误，终止重试: ${(err as Error).message}`);
+          throw err;
+        }
         const delay = baseDelayMs * Math.pow(2, attempt);
         this.logger.warn(`${label} 失败(${attempt + 1}/${maxRetries + 1})，${delay}ms后重试: ${(err as Error).message}`);
         await new Promise(r => setTimeout(r, delay));

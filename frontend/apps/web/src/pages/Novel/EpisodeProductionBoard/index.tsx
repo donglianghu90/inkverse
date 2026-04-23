@@ -10,7 +10,7 @@ import { message } from 'antd';
 import {
   ArrowLeft, ImageIcon, Video, Film, Loader2, RefreshCw,
   CheckCircle2, Clock, AlertCircle, Sparkles, Play, ChevronDown, ChevronUp,
-  Users, Music,
+  Users, Music, Blend,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,7 +20,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import {
   getDrama, getEpisode, listEpisodes,
-  generateShotImage, generateShotVideo, generateShotSfx, getGenerateImagesSseUrl, getGenerateMediaSseUrl, resetProblemShots,
+  generateShotImage, generateShotVideo, generateShotSfx, composeShotPreview, getGenerateImagesSseUrl, getGenerateMediaSseUrl, resetProblemShots,
   getVisualAssets, regenerateVisualAssetImage, getEpisodeMediaStatus,
   type VisualAssetItem, type EpisodeListItem, type DramaSseEvent, type ResetFixTarget,
 } from '@/services/drama';
@@ -36,6 +36,7 @@ interface Shot {
   camera: ShotCamera; characters?: ShotChar[]; dialogue?: ShotDialogue | null;
   visualPrompt: string; estimatedDurationSec: number;
   firstFrameImageUrl?: string | null; firstFramePrompt?: string | null;
+  lastFrameImageUrl?: string | null; lastFramePrompt?: string | null;
   isFlashback?: boolean; isPreview?: boolean;
   isMasterShot?: boolean;
   shotType?: 'portrait' | 'dialogue' | 'action' | 'wide' | 'insert';
@@ -48,6 +49,7 @@ interface Shot {
 type QcFixTarget = Exclude<ResetFixTarget, 'all'>;
 interface ShotMediaEntry {
   imageUrl?: string;
+  lastFrameImageUrl?: string;
   videoUrl?: string;
   videoJobId?: string;
   sfxUrl?: string;
@@ -237,6 +239,16 @@ const ShotImageCard: React.FC<ShotImageCardProps> = ({
         <RegenPriorityBadge priority={shot.regenPriority} />
         <ShotTypeBadge shotType={shot.shotType} />
         <RiskBadge consistencyRisk={consistencyRisk} cameraRisk={cameraRisk} />
+        {shot.lastFramePrompt && (
+          <span className={cn(
+            'inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded shrink-0',
+            media?.lastFrameImageUrl
+              ? 'bg-indigo-100 text-indigo-700 border border-indigo-200'
+              : 'bg-orange-100 text-orange-700 border border-orange-200',
+          )}>
+            {media?.lastFrameImageUrl ? '🖼 双帧' : '⏳ 尾帧'}
+          </span>
+        )}
         {shot.camera?.angle && (
           <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">
             {ANGLE_LABELS[shot.camera.angle] ?? shot.camera.angle}
@@ -256,25 +268,40 @@ const ShotImageCard: React.FC<ShotImageCardProps> = ({
 
       {/* ─ Image area (fixed aspect ratio) ─ */}
       <div className="px-2 pb-1">
-        <div className="relative w-full rounded-lg overflow-hidden bg-muted" style={{ paddingTop: imgPadding }}>
-          {generating ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-amber-50/80 dark:bg-amber-950/40">
-              <Loader2 className="w-6 h-6 text-amber-500 animate-spin" />
-              <span className="text-[10px] text-amber-700 dark:text-amber-400">AI 生成中…</span>
+        {hasImage && media?.lastFrameImageUrl ? (
+          /* 双帧并排 */
+          <div className="grid grid-cols-2 gap-1">
+            <div className="relative w-full rounded-lg overflow-hidden bg-muted" style={{ paddingTop: imgPadding }}>
+              <img src={media!.imageUrl!} alt={`Shot ${shot.shotIndex + 1} start`} className="absolute inset-0 w-full h-full object-cover" />
+              <div className="absolute bottom-0.5 right-0.5 bg-black/60 text-white text-[8px] px-1 py-0.5 rounded">首帧</div>
             </div>
-          ) : hasImage ? (
-            <img
-              src={media!.imageUrl!}
-              alt={`Shot ${shot.shotIndex + 1}`}
-              className="absolute inset-0 w-full h-full object-cover"
-            />
-          ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1">
-              <ImageIcon className="w-6 h-6 text-muted-foreground/30" />
-              <span className="text-[10px] text-muted-foreground/50">待生成</span>
+            <div className="relative w-full rounded-lg overflow-hidden bg-muted" style={{ paddingTop: imgPadding }}>
+              <img src={media!.lastFrameImageUrl!} alt={`Shot ${shot.shotIndex + 1} end`} className="absolute inset-0 w-full h-full object-cover" />
+              <div className="absolute bottom-0.5 right-0.5 bg-black/60 text-white text-[8px] px-1 py-0.5 rounded">尾帧</div>
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          /* 单帧 / 生成中 / 待生成 */
+          <div className="relative w-full rounded-lg overflow-hidden bg-muted" style={{ paddingTop: imgPadding }}>
+            {generating ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-amber-50/80 dark:bg-amber-950/40">
+                <Loader2 className="w-6 h-6 text-amber-500 animate-spin" />
+                <span className="text-[10px] text-amber-700 dark:text-amber-400">AI 生成中…</span>
+              </div>
+            ) : hasImage ? (
+              <img
+                src={media!.imageUrl!}
+                alt={`Shot ${shot.shotIndex + 1}`}
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            ) : (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-1">
+                <ImageIcon className="w-6 h-6 text-muted-foreground/30" />
+                <span className="text-[10px] text-muted-foreground/50">待生成</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ─ Info area (fixed structure) ─ */}
@@ -364,8 +391,10 @@ interface ShotVideoCardProps {
   cameraRisk?: boolean;
   generating?: boolean;
   busy?: boolean;
+  isComposing?: boolean;
   onGenerate?: () => void;
   onGenerateSfx?: () => void;
+  onCompose?: () => void;
 }
 
 const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
@@ -376,8 +405,10 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
   cameraRisk,
   generating = false,
   busy = false,
+  isComposing = false,
   onGenerate,
   onGenerateSfx,
+  onCompose,
 }) => {
   const hasVideoUrl = !!media?.videoUrl;
   const isFallbackImage = hasVideoUrl && /\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(media.videoUrl!);
@@ -522,6 +553,18 @@ const ShotVideoCard: React.FC<ShotVideoCardProps> = ({
                 }}
               >
                 <Play className="w-3 h-3 text-emerald-600" />
+              </Button>
+            )}
+            {onCompose && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="px-2 h-7"
+                title="音画合成 (Merge)"
+                disabled={busy || !hasVideo || !hasSfx || isComposing}
+                onClick={onCompose}
+              >
+                {isComposing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Blend className="w-3 h-3" />}
               </Button>
             )}
           </div>
@@ -719,6 +762,7 @@ const EpisodeProductionBoard: React.FC = () => {
   const [generatingImageShots, setGeneratingImageShots] = useState<Set<string>>(new Set());
   const [generatingVideoShots, setGeneratingVideoShots] = useState<Set<string>>(new Set());
   const [generatingSfxShots, setGeneratingSfxShots] = useState<Set<string>>(new Set());
+  const [composingShots, setComposingShots] = useState<Set<string>>(new Set());
 
   // Batch image generation state (SSE)
   const [isGeneratingImages, setIsGeneratingImages] = useState(false);
@@ -886,6 +930,10 @@ const EpisodeProductionBoard: React.FC = () => {
       if (result.sfxUrl) {
         patchShotMedia(shotId, { sfxUrl: result.sfxUrl, sfxStatus: 'completed' });
         message.success('音效生成成功');
+      } else if (result.status === 'skipped') {
+        message.info('音效功能暂未开放，敬请期待');
+      } else if (result.status === 'unavailable') {
+        message.info('音效服务暂不可用，已跳过');
       } else {
         message.warning('音效未生成，请检查状态');
       }
@@ -893,6 +941,26 @@ const EpisodeProductionBoard: React.FC = () => {
       message.error(`音效生成失败: ${err?.message ?? '未知错误'}`);
     } finally {
       setGeneratingSfxShots(prev => { const s = new Set(prev); s.delete(shotId); return s; });
+    }
+  }, [dramaId, episodeNumber]);
+
+  // ── Per-shot Compose Preview ─────────────────────────────────────────────────
+
+  const handleComposeShotMedia = useCallback(async (shotId: string) => {
+    if (!dramaId) return;
+    setComposingShots(prev => new Set(prev).add(shotId));
+    try {
+      const result = await composeShotPreview(dramaId, episodeNumber, shotId);
+      if (result.videoUrl) {
+        patchShotMedia(shotId, { videoUrl: result.videoUrl, status: 'completed' });
+        message.success('单镜头音画合成成功');
+      } else {
+        message.warning('合成失败，请检查视频状态');
+      }
+    } catch (err: any) {
+      message.error(`合成失败: ${err?.message ?? '未知错误'}`);
+    } finally {
+      setComposingShots(prev => { const s = new Set(prev); s.delete(shotId); return s; });
     }
   }, [dramaId, episodeNumber]);
 
@@ -1536,9 +1604,11 @@ const EpisodeProductionBoard: React.FC = () => {
                   consistencyRisk={consistencyRiskSet.has(shot.shotId)}
                   cameraRisk={cameraRiskSet.has(shot.shotId)}
                   generating={generatingVideoShots.has(shot.shotId)}
-                  busy={isGeneratingVideos || isGeneratingImages || generatingSfxShots.has(shot.shotId)}
+                  busy={isGeneratingVideos || isGeneratingImages || generatingSfxShots.has(shot.shotId) || composingShots.has(shot.shotId)}
+                  isComposing={composingShots.has(shot.shotId)}
                   onGenerate={() => handleGenerateShotVideo(shot.shotId)}
                   onGenerateSfx={() => handleGenerateShotSfx(shot.shotId)}
+                  onCompose={() => handleComposeShotMedia(shot.shotId)}
                 />
               ))}
             </div>

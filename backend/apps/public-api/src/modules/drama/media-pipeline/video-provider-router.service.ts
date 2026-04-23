@@ -1,5 +1,5 @@
 /**
- * 视频 Provider 路由服务 — 为整部短剧选定一个主模型，保证视觉一致性。
+ * 视频 Provider 路由服务 — 混合路由策略，默认 Kling + 时长匹配 Hailuo。
  *
  * ╔══════════════════════════════════════════════════════════════════════════════════╗
  * ║                          视频模型能力矩阵（选型依据）                              ║
@@ -13,19 +13,16 @@
  * ║ sora (Sora 2 I2V)       ║ 叙事/运动连贯           ║ 真人实拍·古风实拍·auto 兜底  ║
  * ╚══════════════════════════╩═══════════════════════╩══════════════════════════════╝
  *
- * 设计原则：
- *   一部短剧 = 一个主视频模型。不同模型的视觉签名（色彩风格、运动感、
- *   皮肤质感、光影处理）差异显著，逐镜头切换模型会导致画面风格跳跃，
- *   破坏观感远超过单个镜头的质量差异。
+ * 路由策略（混合模式）：
+ *   · 默认所有镜头使用 Kling（3-15s 灵活时长）
+ *   · 当分镜时长恰好为 6s 或 10s 时，自动路由到 Hailuo 2.3 Standard
+ *     — Hailuo 支持离散时长 6s / 10s，面部情感细腻度优于 Kling
+ *     — Hailuo 统一输出 1080P，不受用户分辨率设置影响
+ *   · 其他 Provider（Veo/Sora/Seedance）保留映射表但当前不自动启用
  *
- * 选型策略：
- *   · 用户手动指定 videoProvider → 整部剧用该模型
- *   · auto 模式 → 根据题材(genre) + 视觉风格(styleBucket) 选定最适合的模型
- *   · 选定后整部剧所有镜头统一使用，时长约束通过 clamp + trim 处理
- *
- * 时长约束（Provider 层处理，不影响选型）：
- *   · Kling: 3-15s    · Hailuo: 6-10s   · Veo: 4-8s
- *   · Seedance: 5-10s · Sora: 10-15s
+ * 时长约束（Provider 层处理）：
+ *   · Kling: 3-15s    · Hailuo: 6 or 10s (离散)
+ *   · Veo: 4-8s       · Seedance: 5-10s  · Sora: 10-15s
  *   · 提交时 clamp 到 Provider 范围，合成时 trimOutSec 裁剪到分镜意图时长
  *
  * 分镜生成感知：
@@ -120,6 +117,9 @@ const MODEL_PROFILES: Record<string, VideoModelProfile> = {
   },
 };
 
+/** Hailuo 2.3 Standard 支持的离散时长（秒），命中即路由到 Hailuo */
+const HAILUO_ELIGIBLE_DURATIONS = new Set([6, 10]);
+
 // ─── 题材 → 最佳主模型 映射 ──────────────────────────────────────────────────
 
 const GENRE_PRIMARY_MODEL: Record<string, string> = {
@@ -193,21 +193,53 @@ export class VideoProviderRouterService {
 
   /**
    * 为单个镜头返回路由结果。
-   * 整部剧使用同一个 Provider，确保视觉一致性。
+   * 混合路由：默认 Kling，当分镜时长命中 Hailuo 离散时长（6s/10s）时自动切换到 Hailuo。
+   *
+   * Hailuo 2.3 Standard 固定输出 1080P（不受用户分辨率设置影响），
+   * 调用方需根据 isHailuo 标识跳过用户分辨率覆盖。
    */
   route(opts: {
     /** 已确定的主 Provider（来自 DramaState.videoProvider） */
     overrideProvider?: string;
-  }): VideoProviderRoute {
-    // 将历史的 hailuo / veo / volcengine 状态统一映射到 kling，确保历史短剧也全部使用 kling
-    let provider = opts.overrideProvider || 'kling';
-    if (['auto', 'hailuo', 'veo', 'volcengine'].includes(provider)) {
-      provider = 'kling';
+    /** 分镜设计的时长（秒），用于判断是否命中 Hailuo 离散时长 */
+    estimatedDurationSec?: number;
+  }): VideoProviderRoute & { isHailuo: boolean; hailuoResolution?: '720p' | '1080p' } {
+    // 先确定基础 Provider（将历史存量统一到 kling）
+    let baseProvider = opts.overrideProvider || 'kling';
+    if (['auto', 'hailuo', 'veo', 'volcengine'].includes(baseProvider)) {
+      baseProvider = 'kling';
+    }
+
+    // 时长匹配 Hailuo：当分镜设计时长四舍五入后恰好为 6s 或 10s 时，切换到 Hailuo
+    const roundedDuration = Math.round(opts.estimatedDurationSec ?? 0);
+    if (HAILUO_ELIGIBLE_DURATIONS.has(roundedDuration)) {
+      // Hailuo API 限制：1080P 仅支持 6s，10s 必须用 768P（传 '720p' 让 Provider 降级到默认 768P）
+      const hailuoResolution: '720p' | '1080p' = roundedDuration === 6 ? '1080p' : '720p';
+      this.logger.debug(
+        `Shot 时长 ${opts.estimatedDurationSec}s (≈${roundedDuration}s) 命中 Hailuo 离散时长，` +
+        `路由到 hailuo (resolution=${hailuoResolution})`,
+      );
+      return {
+        provider: 'hailuo',
+        fallbackProvider: baseProvider, // Hailuo 失败时降级回 Kling
+        isHailuo: true,
+        hailuoResolution,
+      };
     }
 
     return {
-      provider,
+      provider: baseProvider,
       fallbackProvider: this.fallbackProvider,
+      isHailuo: false,
+      hailuoResolution: undefined,
     };
+  }
+
+  /**
+   * 判断指定时长是否会被路由到 Hailuo。
+   * 供外部（如 GenerationPolicy）判断是否需要强制 1080P。
+   */
+  isHailuoEligible(estimatedDurationSec: number): boolean {
+    return HAILUO_ELIGIBLE_DURATIONS.has(Math.round(estimatedDurationSec));
   }
 }

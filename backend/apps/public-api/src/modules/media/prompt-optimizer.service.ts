@@ -356,7 +356,24 @@ export class PromptOptimizerService implements OnModuleInit {
     // 注入景别提示词（按 shotSize 注入构图/裁切关键词）— 前置到 prompt 开头
     // CLIP/T5 对 prompt 前段 token 赋予更高注意力权重，景别决定画面主体比例，必须优先感知
     if (opts.shotSize) {
-      const framingHint = FRAMING_SCALE_HINTS[opts.shotSize];
+      const isObjectFocus = opts.dramaShotType === 'insert' || opts.shotType === 'prop';
+      let framingHint = '';
+
+      if (isObjectFocus) {
+        const OBJECT_FRAMING_HINTS: Record<string, string> = {
+          extreme_close_up: 'extreme macro close-up, 100mm macro lens, sharp texture detail, heavy bokeh background, extremely shallow depth of field',
+          close_up:         'close-up object shot, 85mm lens, sharp material details, shallow depth of field, background blur',
+          medium_close_up:  'medium close-up object shot, 50mm lens, natural perspective',
+          medium:           'medium object shot, 35mm lens, environmental context',
+          medium_wide:      'medium wide shot, object in environment, 24mm lens',
+          wide:             'wide shot, clear scene environment',
+          extreme_wide:     'extreme wide establishing shot, vast environment, epic scale',
+        };
+        framingHint = OBJECT_FRAMING_HINTS[opts.shotSize] ?? '';
+      } else {
+        framingHint = FRAMING_SCALE_HINTS[opts.shotSize] ?? '';
+      }
+
       if (framingHint && !prompt.toLowerCase().includes(framingHint.split(',')[0].toLowerCase())) {
         prompt = `${framingHint}, ${prompt}`;
         added.push(framingHint);
@@ -401,10 +418,14 @@ export class PromptOptimizerService implements OnModuleInit {
 
     // 🌟 CINEMATIC UPDATE: 注入群演与环境生命力 (Ambient Population)
     // 解决"空城计"和死气沉沉的背景问题。如果传入了环境人口描述，强制附加到提示词序列中。
+    // 特例：insert（道具细节）特写属于微观视角，注入群演会导致模型将注意力转移至远景，必须排除。
     if (opts.ambientPopulation && opts.ambientPopulation.trim() !== '') {
-       if (!prompt.toLowerCase().includes(opts.ambientPopulation.toLowerCase().slice(0, 15))) {
-          prompt = `${prompt}, background environment: ${opts.ambientPopulation.trim()}`;
-          added.push('ambient_population');
+       const isInsertOrProp = opts.dramaShotType === 'insert' || opts.shotType === 'prop';
+       if (!isInsertOrProp) {
+         if (!prompt.toLowerCase().includes(opts.ambientPopulation.toLowerCase().slice(0, 15))) {
+            prompt = `${prompt}, background environment: ${opts.ambientPopulation.trim()}`;
+            added.push('ambient_population');
+         }
        }
     }
 
@@ -602,7 +623,8 @@ export class PromptOptimizerService implements OnModuleInit {
       }
 
       // Face stability hint for close-up shots — reduces face deformation in I2V
-      const isCloseUp = CLOSE_UP_SIZES.has(opts.shotSize ?? '');
+      const isObjectFocus = opts.dramaShotType === 'insert' || opts.shotType === 'prop' || opts.shotType === 'location';
+      const isCloseUp = CLOSE_UP_SIZES.has(opts.shotSize ?? '') && !isObjectFocus;
       if (isCloseUp) {
         const faceHint = 'stable face, subtle expression changes, consistent facial features';
         if (!prompt.toLowerCase().includes('stable face')) {
@@ -667,7 +689,8 @@ export class PromptOptimizerService implements OnModuleInit {
       }
 
       // 近景面部稳定：特写/超特写时面部变形是最高频问题，对 Hailuo 情感镜头尤为关键
-      const isCloseUp = CLOSE_UP_SIZES.has(opts.shotSize ?? '');
+      const isObjectFocus = opts.dramaShotType === 'insert' || opts.shotType === 'prop' || opts.shotType === 'location';
+      const isCloseUp = CLOSE_UP_SIZES.has(opts.shotSize ?? '') && !isObjectFocus;
       if (isCloseUp) {
         const faceHint = 'natural facial expression, stable face identity, no face distortion';
         if (!prompt.toLowerCase().includes('natural facial')) {

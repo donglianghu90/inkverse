@@ -43,6 +43,10 @@ export class ShotMediaEntity {
   @Column({ type: 'text', default: '' })
   sfxPrompt: string;
 
+  @Column({ default: '' })
+  videoWithSfxUrl: string; // 视频+音效合成后的最终 URL（FFmpeg mux 结果）
+
+
   @Column({ type: 'text', default: '' })
   t2iPrompt: string;
 
@@ -60,6 +64,12 @@ export class ShotMediaEntity {
 
   @Column({ type: 'jsonb', nullable: true })
   videoQcIssues: string[] | null;
+
+  @Column({ type: 'text', default: '' })
+  imageError: string;
+
+  @Column({ type: 'text', default: '' })
+  lastFrameError: string;
 
   @Column({ type: 'boolean', default: false })
   kenBurnsFallback: boolean;

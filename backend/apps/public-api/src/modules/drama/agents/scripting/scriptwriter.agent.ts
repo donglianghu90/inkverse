@@ -136,7 +136,7 @@ dialogues[].characterId 和 actions[].characterId【只能】使用以下已注�
 禁止使用未注册的角色ID。如果场景需要路人/群演发言，改用旁白方式（isVoiceover=true, characterId 留空或使用 narrator）。
 
 === 创作铁律（违反即不合格） ===
-1. 每句台词不超过15个中文字（关键独白除外，最多25字）
+1. 每句台词不超过${(state.promptProfile as any)?.maxDialogueLength ?? 15}个中文字（关键独白除外，最多${((state.promptProfile as any)?.maxDialogueLength ?? 15) + 10}字）
 2. 第一场必须是 hook_opening；${state.isSeriesFinale ? '本集是大结局，最后一场必须是 climax/emotional/closure/revelation 之一（禁止 cliffhanger——大结局要给观众完整的情感闭合）' : '最后一场必须是 cliffhanger 或 climax，保持追剧张力'}
 3. 知道秘密的角色说话要有"知情者的优越感"，不知道的要有"被蒙在鼓里的天真"
 4. 每场戏必须有信息增量（推进剧情/揭露线索/反转/情绪爆发），禁止无意义过场
@@ -144,7 +144,11 @@ dialogues[].characterId 和 actions[].characterId【只能】使用以下已注�
 6. 场景信息密度：estimatedDurationSec 超过 50 秒的场景，内部必须包含 ≥2 个转折点（turningPoint 只写最关键的那个，但 dialogues/actions 中必须体现至少 2 次情绪/信息转折）
 7. 全集所有场景的 estimatedDurationSec 总和必须达到目标时长（${intent.durationTargetSec}秒）的 80%-110%
 8. 每个场景的 objective 中标注本场覆盖的 emotionBeat ID（如"覆盖 eb_3, eb_4"），确保高强度节拍无遗漏
-9. 【强化要求】先在 _thoughtProcess 中一步步写下你的思考过程（分析目标、反思弱项、设计人物高光动作和台词），想清楚之后再编写 script 字段。${buildUserPromptConstraintsTail({ redLines: state.seed?.redLines })}`,
+9. 【强化要求】先在 _thoughtProcess 中一步步写下你的思考过程（分析目标、反思弱项、设计人物高光动作和台词），想清楚之后再编写 script 字段。
+10. 【道具状态铁律】凡是道具/武器的持握状态发生变化（从「挂于腰间/收纳」→「触碰/持握/拔出/攻击」），必须在 actions[] 中写出独立的过渡动作描述，例如：
+    - ✅ 合法：action="缓缓将手移向剑柄" → action="抽出长剑" → action="持剑指向对方"
+    - ❌ 非法：上一场景剑还在鞘中，下一场景突然出现「持剑对峙」而无任何中间动作
+    道具状态只能在 actions[] 的明确授权下逐步递进，禁止在相邻场景/动作之间无说明地跳变。${buildUserPromptConstraintsTail({ redLines: state.seed?.redLines })}`,
       temperature: 0.65,
     });
 

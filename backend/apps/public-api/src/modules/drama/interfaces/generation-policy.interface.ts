@@ -23,11 +23,15 @@ export interface DramaMediaRunPolicy {
   styleBucket: DramaStyleBucket;
   t2iConcurrency: number;
   i2vConcurrency: number;
+  /** AI SFX 并发数（Phase 2.5），默认 2 */
+  sfxConcurrency: number;
   maxMediaRetries: number;
   retryBaseDelayMs: number;
   enableQualityGate: boolean;
   enableCoherenceValidation: boolean;
   /** 启用 VLM 视觉比对增强（quality 模式专用，默认关闭 = 纯元数据检查） */
   enableVlmCoherence?: boolean;
+  /** 是否在一键生成时执行 AI SFX（Phase 2.5），默认 false，sound-effect-v2 可用后设为 true */ 
+  enablePipelineSfx?: boolean;
   dbFlushEvery: number;
 }

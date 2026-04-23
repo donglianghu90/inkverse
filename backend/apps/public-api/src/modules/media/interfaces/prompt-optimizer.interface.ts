@@ -54,6 +54,8 @@ export interface T2VOptimizeOptions {
   hasLastFrame?: boolean;
   specialTechnique?: string;
   cameraMovement?: string;
+  dramaShotType?: string;
+  shotType?: string;
   /** 景别（原 cameraAngle 中的景别部分），用于注入 T2V 构图上下文 */
   shotSize?: string;
   /** 摄影机透视角度，用于注入 T2V 角度上下文 */

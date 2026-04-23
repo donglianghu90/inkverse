@@ -707,7 +707,9 @@ const ShotCard: React.FC<ShotCardProps> = ({
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
-  const imgUrl = mediaItem?.imageUrl ?? shot.firstFrameImageUrl ?? shot.lastFrameImageUrl;
+  const firstFrameUrl = mediaItem?.imageUrl ?? shot.firstFrameImageUrl;
+  const lastFrameUrl = mediaItem?.lastFrameImageUrl ?? shot.lastFrameImageUrl;
+  const imgUrl = firstFrameUrl ?? lastFrameUrl;
   const qc = mediaItem?.qc;
 
   const handleSaved = (patch: ShotPatch) => {
@@ -771,6 +773,16 @@ const ShotCard: React.FC<ShotCardProps> = ({
               <span className="text-[10px] text-muted-foreground px-0.5 py-0.5">{shot.estimatedDurationSec}s</span>
               {shot.isFlashback && (
                 <span className="text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-700 px-1.5 py-0.5 rounded">闪回</span>
+              )}
+              {shot.lastFramePrompt && (
+                <span className={cn(
+                  'text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5',
+                  lastFrameUrl
+                    ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300'
+                    : 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300',
+                )}>
+                  {lastFrameUrl ? '🖼 首尾双帧' : '⏳ 有尾帧词'}
+                </span>
               )}
               {shot.cutPointHint && shot.cutPointHint !== 'free' && (
                 <span className="text-[10px] bg-pink-100 dark:bg-pink-900/30 text-pink-700 dark:text-pink-300 px-1.5 py-0.5 rounded flex items-center gap-0.5">
@@ -849,9 +861,26 @@ const ShotCard: React.FC<ShotCardProps> = ({
         {/* ── 展开详情 ── */}
         {expanded && !editing && (
           <div className="border-t border-border/40 px-3 pb-3 pt-2.5 space-y-3">
-            {imgUrl && (
-              <div className="rounded-lg overflow-hidden bg-muted">
-                <img src={imgUrl} alt={`shot ${index + 1}`} className="w-full object-cover max-h-48" />
+            {(firstFrameUrl || lastFrameUrl) && (
+              <div className={cn("grid gap-2", firstFrameUrl && lastFrameUrl ? "grid-cols-2" : "grid-cols-1")}>
+                {firstFrameUrl && (
+                  <div className="rounded-lg overflow-hidden bg-muted relative group">
+                    <img src={firstFrameUrl} alt={`shot ${index + 1} start`} className="w-full object-cover max-h-48" />
+                    {lastFrameUrl && (
+                      <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded">
+                        首帧
+                      </div>
+                    )}
+                  </div>
+                )}
+                {lastFrameUrl && (
+                  <div className="rounded-lg overflow-hidden bg-muted relative group">
+                    <img src={lastFrameUrl} alt={`shot ${index + 1} end`} className="w-full object-cover max-h-48" />
+                    <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded">
+                      尾帧
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

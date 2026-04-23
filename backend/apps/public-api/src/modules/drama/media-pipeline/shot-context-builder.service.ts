@@ -1,5 +1,5 @@
 /** ShotContextBuilderService — Shot 级上下文构建（角色锁定、样式锁定、Prompt拼装、参考图） */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import type { Shot, DramaState } from '../schemas/drama-state.schemas';
 import type {
   RenderingProfile, RefImageCandidate, CharacterImageSet, CharacterViewAngle,
@@ -8,6 +8,7 @@ import { selectRefImages, selectBestCharacterView } from '../../media/rendering/
 
 @Injectable()
 export class ShotContextBuilderService {
+  private readonly logger = new Logger('ShotContextBuilder');
 
   // ── 角色上下文 ──────────────────────────────────────────────
 
@@ -131,6 +132,20 @@ export class ShotContextBuilderService {
     // 如果参考图中混入人脸定妆照，T2I 模型会在"画道具"和"画人脸"之间严重困惑。
     // 仅保留 scene/style/prev_frame 参考图，跳过所有 character_face。
     const isInsert = shot.shotType === 'insert';
+    // 二重保险：即便 shotType 因历史数据缺失而不是 'insert'，
+    // 若 visualPrompt/firstFramePrompt 中明确包含 "no people" 或 "no hands"，
+    // 同样跳过角色参考图，防止人脸图污染道具特写镜头。
+    const promptHasNoPeople = /no\s+people|no\s+hands/i.test(
+      `${shot.visualPrompt ?? ''} ${shot.firstFramePrompt ?? ''}`
+    );
+    const skipCharRefs = isInsert || promptHasNoPeople;
+    if (!isInsert && promptHasNoPeople) {
+      // 记录降级事件，方便后续排查历史 shotType 遗漏
+      console.warn(
+        `[ShotContextBuilder] shot ${shot.shotId} shotType=${shot.shotType} but prompt contains "no people/no hands" — ` +
+        `skipping character refs to prevent face-prop confusion`
+      );
+    }
 
     const candidates: RefImageCandidate[] = [];
     const seenUrls = new Set<string>();
@@ -146,7 +161,7 @@ export class ShotContextBuilderService {
     }
 
     // insert 镜头跳过角色参考图（避免人脸照与 "no people" prompt 冲突）
-    if (!isInsert) {
+    if (!skipCharRefs) {
       const lockedIds = this.resolveLockedCharacterIds(shot);
       for (const cid of lockedIds) {
         const varId = shot.characterVariationIds?.[cid];
@@ -178,6 +193,13 @@ export class ShotContextBuilderService {
             pushCandidate(url, charWeight, 'character_face');
           } else if (tempCharCache?.has(c.characterId)) {
             pushCandidate(tempCharCache.get(c.characterId), charWeight * 0.9, 'character_face');
+          } else {
+            // P0-3: 安全警告 — 角色无任何参考图，T2I 将纯靠文字 prompt 生成，一致性风险极高
+            this.logger.warn(
+              `[P0-3 NoRefImage] Shot ${shot.shotId} 角色 ${c.characterId} 无参考图` +
+              `（charMap/anchorMap/tempCharCache 均为空）— T2I 将纯靠文字描述生成，角色外貌一致性可能不佳。` +
+              `建议在集制作页面手动生成定妆照后重新生成媒体。`,
+            );
           }
         }
       });
@@ -192,7 +214,7 @@ export class ShotContextBuilderService {
     // 签名道具参考图注入：medium+ 景别（wide/extreme_wide 道具不可见，不注入）
     const isWide = ['wide', 'extreme_wide'].includes(shot.camera?.shotSize ?? '');
     if (!isWide && propImageMap && propOwnerMap) {
-      const charIds = isInsert ? [] : this.resolveLockedCharacterIds(shot);
+      const charIds = skipCharRefs ? [] : this.resolveLockedCharacterIds(shot);
       const allCharIds = [...charIds, ...(shot.characters ?? []).map(c => c.characterId)];
       const seenProps = new Set<string>();
       for (const cid of allCharIds) {

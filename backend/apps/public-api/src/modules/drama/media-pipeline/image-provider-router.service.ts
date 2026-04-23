@@ -86,15 +86,20 @@ const DEFAULT_ROUTES: Record<RouteKey, string> = {
  * 主力 kieai.nano-banana-2 服务不可用时，降级到 volcengine（支持负提示词/中文美学）。
  * I2I 路由（flux-2-i2i）无需 fallback — kieai 全局不可用时由上层重试机制处理。
  */
+/**
+ * 跨 Provider 降级策略已禁用。
+ * 图片生成失败时直接返回错误给前端，由用户手动触发重新生成。
+ * 如需恢复自动降级，取消注释并填入 fallback provider name。
+ */
 const DEFAULT_FALLBACK_ROUTES: Partial<Record<RouteKey, string>> = {
-  characterFace: 'volcengine.doubao-seedream',
-  location:      'volcengine.doubao-seedream',
-  prop:          'volcengine.doubao-seedream',
-  styleGuide:    'volcengine.doubao-seedream',
-  shotCloseUp:   'volcengine.doubao-seedream',
-  shotMedium:    'volcengine.doubao-seedream',
-  shotWide:      'volcengine.doubao-seedream',
-  shotGolden:    'volcengine.doubao-seedream',
+  // characterFace: 'volcengine.doubao-seedream',
+  // location:      'volcengine.doubao-seedream',
+  // prop:          'volcengine.doubao-seedream',
+  // styleGuide:    'volcengine.doubao-seedream',
+  // shotCloseUp:   'volcengine.doubao-seedream',
+  // shotMedium:    'volcengine.doubao-seedream',
+  // shotWide:      'volcengine.doubao-seedream',
+  // shotGolden:    'volcengine.doubao-seedream',
 };
 
 /** kieai 模型的默认出图分辨率 */

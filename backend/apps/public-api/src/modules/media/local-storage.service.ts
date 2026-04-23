@@ -48,6 +48,11 @@ export class LocalStorageService implements OnModuleInit {
     return path.join(dir, `ep${episodeNumber}.mp4`);
   }
 
+  composedShotOutputPath(dramaId: string, shotId: string): string {
+    const dir = this.ensureDramaDir(dramaId, 'videos');
+    return path.join(dir, `${shotId}_composed_${Date.now()}.mp4`);
+  }
+
   ttsOutputPath(dramaId: string, shotId: string): string {
     const dir = this.ensureDramaDir(dramaId, 'audio');
     return path.join(dir, `tts_${shotId}.mp3`);

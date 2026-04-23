@@ -189,9 +189,26 @@ export class ShotCoherenceValidatorService {
           issues.push(`角色 ${cid} 同场景内服饰变体不一致: ${varA ?? 'default'} → ${varB ?? 'default'}`);
           score -= 0.3;
         }
-        if (charA.costumeOverride !== charB.costumeOverride && charA.costumeOverride && charB.costumeOverride) {
-          issues.push(`角色 ${cid} 同场景内服饰描述不一致`);
-          score -= 0.15;
+        // BUG-09 fix: 空 costumeOverride 代表用 defaultCostume，
+        // 若一方有覆盖而另一方无，视为潜在服饰不一致（轻度扣分）
+        if (charA.costumeOverride !== charB.costumeOverride) {
+          if (charA.costumeOverride && charB.costumeOverride) {
+            // 双方都非空但不同 → 明确不一致
+            issues.push(`角色 ${cid} 同场景内服饰描述不一致`);
+            score -= 0.15;
+          } else if (charA.costumeOverride || charB.costumeOverride) {
+            // 一方有 costumeOverride，一方无（用 default）→ 可能有服饰变化
+            issues.push(`角色 ${cid} 同场景内服饰描述不对称（一方使用 defaultCostume，另一方有覆盖）`);
+            score -= 0.08;
+          }
+        }
+
+        // BUG-06 fix: 检测角色朝向（facing）180° 跳变
+        const facingA = charA.facing ?? '';
+        const facingB = charB.facing ?? '';
+        if (facingA && facingB && this.isBadFacingJump(facingA, facingB)) {
+          issues.push(`角色 ${cid} 朝向跳变: "${facingA}" → "${facingB}"（同场景禁止无过渡的180°翻转）`);
+          score -= 0.2;
         }
       }
 
@@ -218,6 +235,15 @@ export class ShotCoherenceValidatorService {
 
     const promptA = shotA.visualPrompt?.toLowerCase() ?? '';
     const promptB = shotB.visualPrompt?.toLowerCase() ?? '';
+    // BUG-05 fix: 检测签名道具持握状态跳变
+    if (sameScene) {
+      const propIssue = this.detectPropStateJump(shotA, shotB, state);
+      if (propIssue) {
+        issues.push(propIssue);
+        score -= 0.25;
+      }
+    }
+
     if (sameScene) {
       const simScore = this.promptSimilarity(promptA, promptB);
       if (simScore < 0.3) {
@@ -230,7 +256,6 @@ export class ShotCoherenceValidatorService {
       const sharedChars = shotA.characters
         .filter(ca => shotB.characters.some(cb => cb.characterId === ca.characterId));
       for (const ca of sharedChars) {
-        const cb = shotB.characters.find(c => c.characterId === ca.characterId)!;
         const charDef = state.characters?.find(c => c.characterId === ca.characterId);
         if (charDef?.faceReferencePrompt) {
           const hasFaceA = promptA.includes(charDef.faceReferencePrompt.toLowerCase().slice(0, 20));
@@ -253,29 +278,146 @@ export class ShotCoherenceValidatorService {
   }
 
   private isEmotionJump(a: string, b: string): boolean {
+    // BUG-08 fix: 扩展情绪分组到5组，补充中文情绪词，提升跳变检出率
     const EMOTION_GROUPS: Record<string, string[]> = {
-      positive: ['happy', 'excited', 'joyful', 'loving', 'sweet', 'satisfied', 'proud', 'relieved',
-                 '开心', '兴奋', '喜悦', '甜蜜', '满意', '骄傲', '欣慰'],
-      negative: ['angry', 'furious', 'sad', 'grieving', 'terrified', 'desperate', 'disgusted',
-                 '愤怒', '悲伤', '恐惧', '绝望', '厌恶'],
-      neutral: ['calm', 'composed', 'thoughtful', 'curious', 'surprised',
-                '平静', '沉思', '好奇', '惊讶'],
+      // 正面情绪（温暖/喜悦/满足）
+      positive: [
+        'happy', 'joyful', 'loving', 'sweet', 'satisfied', 'proud', 'relieved', 'grateful',
+        'touched', 'warm', 'blissful',
+        '开心', '喜悦', '甜蜜', '满意', '骄傲', '欣慰', '感激', '温暖', '幸福', '快乐',
+      ],
+      // 激动情绪（兴奋/愤怒/激烈）
+      intense: [
+        'excited', 'furious', 'angry', 'passionate', 'fierce', 'enraged', 'outraged',
+        '兴奋', '愤怒', '激动', '狂怒', '激烈', '爆发', '怒火',
+      ],
+      // 痛苦情绪（悲伤/绝望/崩溃）
+      pain: [
+        'sad', 'grieving', 'desperate', 'heartbroken', 'devastated', 'crying', 'sobbing',
+        'broken', 'miserable',
+        '悲伤', '绝望', '崩溃', '痛苦', '哭泣', '心碎', '哀伤', '无助',
+      ],
+      // 恐惧情绪（害怕/惊恐/不安）
+      fear: [
+        'terrified', 'scared', 'horrified', 'panicked', 'anxious', 'nervous', 'dread',
+        '恐惧', '害怕', '惊恐', '慌张', '不安', '焦虑', '紧张',
+      ],
+      // 中性/平静
+      neutral: [
+        'calm', 'composed', 'thoughtful', 'curious', 'confused', 'surprised',
+        '平静', '沉思', '好奇', '困惑', '惊讶', '若有所思', '淡然',
+      ],
     };
-    const groupA = Object.entries(EMOTION_GROUPS).find(([, v]) => v.some(e => a.toLowerCase().includes(e)))?.[0] ?? 'unknown';
-    const groupB = Object.entries(EMOTION_GROUPS).find(([, v]) => v.some(e => b.toLowerCase().includes(e)))?.[0] ?? 'unknown';
-    return groupA !== 'unknown' && groupB !== 'unknown' && groupA !== groupB
-      && !(groupA === 'neutral' || groupB === 'neutral');
+    const aL = a.toLowerCase();
+    const bL = b.toLowerCase();
+    const groupA = Object.entries(EMOTION_GROUPS).find(([, v]) => v.some(e => aL.includes(e)))?.[0] ?? 'unknown';
+    const groupB = Object.entries(EMOTION_GROUPS).find(([, v]) => v.some(e => bL.includes(e)))?.[0] ?? 'unknown';
+    if (groupA === 'unknown' || groupB === 'unknown' || groupA === groupB) return false;
+    // neutral→任何情绪 或 任何情绪→neutral 不算跳变（neutral 是过渡态）
+    if (groupA === 'neutral' || groupB === 'neutral') return false;
+    // 其他组之间的切换均视为情绪跳变
+    return true;
   }
 
   private isBadAxisJump(a: string, b: string): boolean {
     if (a === b) return false;
+    // BUG-11 fix: 补充缺失的非法轴线切换对
     const AXIS_CONFLICTS = new Map([
-      ['over_shoulder', new Set(['pov', 'bird_eye'])],
-      ['pov', new Set(['bird_eye', 'extreme_wide', 'over_shoulder'])],
-      ['low_angle', new Set(['high_angle'])],
-      ['high_angle', new Set(['low_angle'])],
+      ['over_shoulder', new Set(['pov', 'bird_eye', 'worm_eye'])],
+      ['pov', new Set(['bird_eye', 'extreme_wide', 'over_shoulder', 'worm_eye'])],
+      ['low_angle', new Set(['high_angle', 'bird_eye'])],
+      ['high_angle', new Set(['low_angle', 'worm_eye'])],
+      // front ↔ back_of_head：180° 真实翻转，观众空间感断裂
+      ['front', new Set(['back_of_head'])],
+      ['back_of_head', new Set(['front', 'pov'])],
+      // side_profile → pov：侧面突然变主观视角，空间跳跃感强
+      ['side_profile', new Set(['pov', 'bird_eye'])],
+      // worm_eye ↔ bird_eye：两极对立，同场景极少合法
+      ['worm_eye', new Set(['bird_eye', 'high_angle'])],
+      ['bird_eye', new Set(['worm_eye', 'pov'])],
     ]);
     return AXIS_CONFLICTS.get(a)?.has(b) === true;
+  }
+
+  /**
+   * BUG-06 fix: 检测角色朝向（facing）的非法跳变。
+   * 同场景内，从「背对」到「正面朝镜头」是空间感断裂，除非有中间过渡 shot。
+   */
+  private isBadFacingJump(a: string, b: string): boolean {
+    if (a === b) return false;
+    // facing_away → facing_camera：背对到正面，需要有转身过渡
+    // facing_left → facing_right（及反向）：180度横向翻转，违反180°轴线法则
+    const BAD_FACING_JUMPS = new Map([
+      ['facing_away', new Set(['facing_camera', 'facing_left', 'facing_right'])],
+      ['facing_camera', new Set(['facing_away'])],
+      ['facing_left', new Set(['facing_right'])],
+      ['facing_right', new Set(['facing_left'])],
+    ]);
+    return BAD_FACING_JUMPS.get(a)?.has(b) === true;
+  }
+
+  /**
+   * BUG-05 fix: 检测道具/武器持握状态跳变。
+   * 优先使用结构化状态机 (propGripStates)，兼容旧数据回退词汇扫描。
+   */
+  private detectPropStateJump(shotA: Shot, shotB: Shot, state: DramaState): string | null {
+    // 优先使用结构化状态机 (State Machine)
+    if (shotA.propGripStates || shotB.propGripStates) {
+      const statesA = shotA.propGripStates ?? {};
+      const statesB = shotB.propGripStates ?? {};
+      for (const [propId, stateB] of Object.entries(statesB)) {
+        const stateA = statesA[propId] ?? 'hidden';
+        if ((stateA === 'hidden' || stateA === 'at_waist') && (stateB === 'in_hand' || stateB === 'pointing')) {
+          const propName = state.signatureProps?.find(p => p.propId === propId)?.name ?? propId;
+          return `道具状态跳变：${propName} 从「${stateA}」直接变为「${stateB}」，缺少过渡动作`;
+        }
+      }
+      return null;
+    }
+
+    // 兼容旧数据：基于字符串文本对比
+    const lastFrameA = (shotA.lastFramePrompt ?? shotA.visualPrompt ?? '').toLowerCase();
+    const firstFrameB = (shotB.firstFramePrompt ?? shotB.visualPrompt ?? '').toLowerCase();
+
+    // 从签名道具清单中提取道具关键词
+    const propKeywords = (state.signatureProps ?? [])
+      .flatMap(p => [
+        ...p.name.split(/[\s/，,]+/),
+        ...p.visualPrompt.split(/[\s,]+/).filter(t => t.length > 2).slice(0, 3),
+      ])
+      .map(k => k.toLowerCase().trim())
+      .filter(k => k.length > 1);
+
+    if (!propKeywords.length) return null;
+
+    // 「收纳/不可见」状态词
+    const HELD_AWAY = ['sheathed', 'at waist', 'hanging', 'slung', 'strapped', 'holstered',
+      'not visible', 'hidden', 'tucked', '收', '鞘', '腰间', '背负'];
+    // 「手持/出鞘/攻击」状态词
+    const IN_HAND = ['in hand', 'drawn', 'unsheathed', 'raised', 'pointed', 'gripped',
+      'brandishing', 'wielding', 'holding', 'swing', 'slash', 'thrust',
+      'hand near', 'reaching for', '握', '举', '拔出', '持', '挥', '指向'];
+
+    const hasAnyPropWord = (text: string) => propKeywords.some(k => text.includes(k));
+
+    // 检查 lastFrameA 和 firstFrameB 中是否有签名道具词
+    if (!hasAnyPropWord(lastFrameA) && !hasAnyPropWord(firstFrameB)) return null;
+
+    const aIsHeldAway = HELD_AWAY.some(w => lastFrameA.includes(w));
+    const bIsInHand = IN_HAND.some(w => firstFrameB.includes(w));
+    const aIsEmpty = !IN_HAND.some(w => lastFrameA.includes(w)) && !hasAnyPropWord(lastFrameA);
+
+    if ((aIsHeldAway || aIsEmpty) && bIsInHand) {
+      // 找出具体是哪个道具
+      const matchedProp = (state.signatureProps ?? []).find(p =>
+        firstFrameB.includes(p.name.toLowerCase()) ||
+        firstFrameB.includes(p.visualPrompt.split(/[\s,]+/)[0]?.toLowerCase() ?? '')
+      );
+      const propName = matchedProp?.name ?? '签名道具';
+      return `道具状态跳变：${propName} 从「${aIsHeldAway ? '收纳/挂腰' : '不可见'}」直接变为「手持/出鞘」，缺少过渡 Shot`;
+    }
+
+    return null;
   }
 
   /** 简单 token 重叠相似度 */
@@ -289,5 +431,46 @@ export class ShotCoherenceValidatorService {
 
   private emptyReport(): CoherenceReport {
     return { shotPairs: [], flaggedShots: [], overallScore: 1, checkedAt: new Date().toISOString() };
+  }
+
+  /**
+   * Error Backpropagation: 重写被判定为不连贯的 Shot
+   * 根据检测出的 issues 让 LLM 面壁思过，重新生成正确的 prompt 文本，破除死锁悖论。
+   */
+  async rewriteFlaggedShotPrompt(shot: Shot, state: DramaState, issues: string[]): Promise<Shot> {
+    if (!this.llm) return shot;
+    try {
+      const rewriteSchema = z.object({
+        firstFramePrompt: z.string(),
+        lastFramePrompt: z.string().optional(),
+        thoughtProcess: z.string()
+      });
+      const result = await this.llm.generateStructured({
+        taskName: 'prompt-rewriter',
+        schema: rewriteSchema,
+        metadata: { dramaId: state.dramaId },
+        systemPrompt: `You are an expert T2I prompt fixer for cinematic storyboards.
+The given shot generated continuity or coherence errors when compared to the previous shot.
+Your job is to REWRITE the firstFramePrompt (and lastFramePrompt if necessary) to fix the listed issues.
+Ensure you follow the strict positioning, facing, and prop-grip rules. Output ONLY visually descriptive prompt language for the prompt fields. Do not hallucinate axes or facings that contradict the requirements.`,
+        userPrompt: `Shot ID: ${shot.shotId}
+Original firstFramePrompt: ${shot.firstFramePrompt || shot.visualPrompt}
+Original lastFramePrompt: ${shot.lastFramePrompt || 'N/A'}
+Issues detected:
+${issues.map(i => '- ' + i).join('\n')}
+
+Analyze why it failed based on the issues, then write the fixed prompts. Ensure all issues are resolved.`,
+        temperature: 0.3,
+      });
+
+      return {
+        ...shot,
+        firstFramePrompt: result.firstFramePrompt,
+        lastFramePrompt: result.lastFramePrompt ?? shot.lastFramePrompt,
+      };
+    } catch (e) {
+      this.logger.warn(`Failed to rewrite prompt for ${shot.shotId}: ${(e as Error).message}`);
+      return shot;
+    }
   }
 }

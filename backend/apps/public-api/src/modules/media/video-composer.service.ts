@@ -30,6 +30,7 @@ const MATCH_CUT_DURATION = 0.15;
 export class VideoComposerService implements OnModuleInit {
   private readonly logger = new Logger('VideoComposer');
   private ffmpegAvailable = false;
+  private libassAvailable = false;
   private tmpDir = '';
 
   constructor(
@@ -48,6 +49,19 @@ export class VideoComposerService implements OnModuleInit {
       await execFileAsync('ffmpeg', ['-version']);
       this.ffmpegAvailable = true;
       this.logger.log('FFmpeg 可用');
+      // 检测 libass (ass/subtitles 滤镜) 是否可用
+      try {
+        const { stdout } = await execFileAsync('ffmpeg', ['-filters'], { maxBuffer: 10 * 1024 * 1024 });
+        this.libassAvailable = /\bass\b/.test(stdout);
+        if (!this.libassAvailable) {
+          this.logger.warn('FFmpeg 未集成 libass，字幕烧录将被跳过。如需字幕功能请安装: brew install ffmpeg（确认包含 --enable-libass）');
+        } else {
+          this.logger.log('FFmpeg libass 可用，字幕烧录已就绪');
+        }
+      } catch {
+        this.libassAvailable = false;
+        this.logger.warn('无法检测 FFmpeg 滤镜列表，字幕烧录将被跳过');
+      }
     } catch {
       this.ffmpegAvailable = false;
       this.logger.warn('FFmpeg 未安装，视频合成功能不可用。请安装 ffmpeg: brew install ffmpeg');
@@ -418,6 +432,8 @@ export class VideoComposerService implements OnModuleInit {
   private async addSubtitles(videoPath: string, shots: ComposeShotInput[], workDir: string, outputPath: string, aspectRatio?: string): Promise<string> {
     const subtitleShots = shots.filter(s => s.subtitle?.text);
     if (!subtitleShots.length) {
+      const outDir = path.dirname(outputPath);
+      if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
       fs.copyFileSync(videoPath, outputPath);
       return outputPath;
     }
@@ -494,8 +510,34 @@ export class VideoComposerService implements OnModuleInit {
     ].join('\n');
     fs.writeFileSync(assPath, assContent);
 
-    const absAssPath = path.resolve(assPath).replace(/\\/g, '/').replace(/'/g, "\\'");
-    await this.ffmpeg(['-i', videoPath, '-vf', `ass='${absAssPath}'`, '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-pix_fmt', 'yuv420p', '-c:a', 'copy', '-y', outputPath]);
+    // 确保输出目录存在
+    const outputDir = path.dirname(outputPath);
+    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
+    // 前置检测：如果 libass 不可用，直接跳过字幕烧录
+    if (!this.libassAvailable) {
+      this.logger.warn('FFmpeg 未集成 libass，跳过字幕烧录，使用原视频输出');
+      fs.copyFileSync(videoPath, outputPath);
+      return outputPath;
+    }
+
+    const absAssPath = path.resolve(assPath).replace(/\\/g, '/');
+    // FFmpeg filter 中冒号是选项分隔符，需用单个反斜杠转义：\:
+    const escapedAssPath = absAssPath.replace(/:/g, '\\:');
+    try {
+      await this.ffmpeg(['-i', videoPath, '-vf', `ass=${escapedAssPath}`, '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-pix_fmt', 'yuv420p', '-c:a', 'copy', '-y', outputPath]);
+    } catch (err: any) {
+      // 捕获所有字幕烧录相关的 FFmpeg 错误并优雅降级
+      if (err.message.includes('No such filter') || err.message.includes('No option name near') ||
+          err.message.includes('filterchain') || err.message.includes('Error parsing') ||
+          err.message.includes('ass=')) {
+        this.logger.warn(`字幕烧录失败，跳过字幕合成，使用原视频输出: ${err.message.slice(0, 200)}`);
+        this.libassAvailable = false; // 标记为不可用，后续 Shot 不再尝试
+        fs.copyFileSync(videoPath, outputPath);
+      } else {
+        throw err;
+      }
+    }
     return outputPath;
   }
 

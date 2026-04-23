@@ -90,14 +90,25 @@ export class BillingResolverService {
     return Number((p as Record<string, unknown>).default) || 0.43;
   }
 
-  /** 视频：按 provider → quality/model 查价，fallback 5.4 CNY/条 */
-  resolveVideoCostCny(provider: string, qualityOrModel?: string): number {
+  /** 视频：按 provider → quality/model 查价，返回计算后的总价（支持按秒计费模型），fallback 5.4 CNY/条 */
+  resolveVideoCostCny(provider: string, qualityOrModel?: string, durationSeconds?: number): number {
     const p = this.lookupCost(this.videoCost, provider);
     if (p == null) return 5.4;
-    if (typeof p === 'number') return p;
-    const q = qualityOrModel ? (p[qualityOrModel] as number | undefined) : null;
-    if (typeof q === 'number') return q;
-    return Number((p as Record<string, unknown>).default) || 5.4;
+    
+    let unitCost: number;
+    if (typeof p === 'number') {
+      unitCost = p;
+    } else {
+      const q = qualityOrModel ? (p[qualityOrModel] as number | undefined) : null;
+      unitCost = typeof q === 'number' ? q : (Number((p as Record<string, unknown>).default) || 5.4);
+    }
+
+    // Kling 是按秒计费的，如果提供时长则相乘，否则返回单价（作为保底）
+    if (provider === 'kling' && durationSeconds && durationSeconds > 0) {
+      return Number((unitCost * durationSeconds).toFixed(3));
+    }
+
+    return unitCost;
   }
 
   /** TTS：按 provider → model/voice 查价，fallback 0.11 CNY/条 */

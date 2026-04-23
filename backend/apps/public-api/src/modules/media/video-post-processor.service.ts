@@ -186,4 +186,79 @@ export class VideoPostProcessorService implements OnModuleInit {
     if (speed < 0.5) return `${(0.5).toFixed(2)},atempo=${(speed / 0.5).toFixed(2)}`;
     return `${(2.0).toFixed(2)},atempo=${(speed / 2.0).toFixed(2)}`;
   }
+
+  /**
+   * 将音效文件合并（mux）到视频文件中。
+   * - 视频原有的轨道（如果有）会与 sfx 混合，音量可调。
+   * - 输出时长以视频为准（-shortest 保证不超过视频长度）。
+   * @param videoPath  本地视频文件路径
+   * @param audioPath  本地音频文件路径（mp3/wav）
+   * @param outputPath 输出视频路径
+   * @param sfxVolume  音效音量系数，默认 1.0（1.0 = 原始音量，0.5 = 降低一半）
+   */
+  async muxVideoWithAudio(
+    videoPath: string,
+    audioPath: string,
+    outputPath: string,
+    sfxVolume = 1.0,
+  ): Promise<{ outputPath: string; durationSec: number }> {
+    if (!this.ffmpegAvailable) {
+      this.logger.warn('[Mux] FFmpeg 不可用，跳过音视频合并');
+      return { outputPath: videoPath, durationSec: 0 };
+    }
+
+    const dir = path.dirname(outputPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    // 检查视频是否已包含音轨
+    let videoHasAudio = false;
+    try {
+      const { stdout } = await execFileAsync('ffprobe', [
+        '-v', 'quiet', '-select_streams', 'a', '-show_entries', 'stream=codec_type',
+        '-of', 'csv=p=0', videoPath,
+      ]);
+      videoHasAudio = stdout.trim().length > 0;
+    } catch { /* probe 失败时当做无音轨处理 */ }
+
+    let args: string[];
+    const vol = sfxVolume.toFixed(2);
+
+    if (videoHasAudio) {
+      // 视频本身有音轨 → 混合（视频原音 + 音效）
+      args = [
+        '-i', videoPath,
+        '-i', audioPath,
+        '-filter_complex',
+        `[0:a]volume=1.0[va];[1:a]volume=${vol}[sfxa];[va][sfxa]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+        '-map', '0:v', '-map', '[aout]',
+        '-c:v', 'copy',
+        '-c:a', 'aac', '-b:a', '192k',
+        '-shortest', '-y', outputPath,
+      ];
+    } else {
+      // 视频无音轨 → 直接叠加音效
+      args = [
+        '-i', videoPath,
+        '-i', audioPath,
+        '-filter_complex', `[1:a]volume=${vol}[sfxa]`,
+        '-map', '0:v', '-map', '[sfxa]',
+        '-c:v', 'copy',
+        '-c:a', 'aac', '-b:a', '192k',
+        '-shortest', '-y', outputPath,
+      ];
+    }
+
+    try {
+      await execFileAsync('ffmpeg', args, { maxBuffer: 100 * 1024 * 1024 });
+      this.logger.log(`[Mux] 音视频合并完成: ${path.basename(outputPath)} hasOrigAudio=${videoHasAudio}`);
+    } catch (err: any) {
+      this.logger.error(`[Mux] 合并失败: ${err.stderr?.slice(-300) ?? err.message}`);
+      // 降级：直接复制原始视频（保留无声版本）
+      fs.copyFileSync(videoPath, outputPath);
+    }
+
+    const durationSec = await this.probeDuration(outputPath);
+    return { outputPath, durationSec };
+  }
 }
+

@@ -8,6 +8,8 @@ import { VolcengineVideoProvider } from './volcengine/volcengine-video.provider'
 import { VolcengineTtsProvider } from './volcengine/volcengine-tts.provider';
 import { VolcengineAudioProvider } from './volcengine/volcengine-audio.provider';
 import { KieAiImageProvider } from './kieai/kieai-image.provider';
+import { ElevenLabsTtsProvider } from './kieai/elevenlabs-tts.provider';
+import { ElevenLabsSfxProvider } from './kieai/elevenlabs-sfx.provider';
 import { KieAiCallbackService } from './kieai/kieai-callback.service';
 import { KieAiPollingService } from './kieai/kieai-polling.service';
 import { KlingVideoProvider } from './kieai/kling-video.provider';
@@ -41,11 +43,34 @@ export class ProviderRegistryService implements OnModuleInit {
     this.defaultImageProvider = String(media.defaultImageProvider || 'volcengine');
     this.defaultVideoProvider = String(media.defaultVideoProvider || 'volcengine');
     this.defaultTtsProvider = String(media.defaultTtsProvider || '');
-    this.defaultAudioProvider = String(media.defaultAudioProvider || 'volcengine');
+    this.defaultAudioProvider = String(media.defaultAudioProvider || '');
+    
+    // 初始化图像/视频（保留，以防没有其他可用画图引擎）
     this.initVolcengine(media);
     this.initVolcengineTts(media);
     this.initVolcengineAudio(media);
+    
+    // 初始化十一实验室 (TTS / Audio)
     this.initKieAi(media);
+
+    // 校验 defaultAudioProvider 是否真的已注册，配置残留旧值时自动修正
+    if (this.audioProviders.size && (!this.defaultAudioProvider || !this.audioProviders.has(this.defaultAudioProvider))) {
+      const fallback = [...this.audioProviders.keys()][0];
+      this.logger.warn(
+        `defaultAudioProvider 未注册或为空，自动降级为 '${fallback}'`,
+      );
+      this.defaultAudioProvider = fallback;
+    }
+    
+    // 校验 defaultTtsProvider
+    if (this.ttsProviders.size && (!this.defaultTtsProvider || !this.ttsProviders.has(this.defaultTtsProvider))) {
+      const fallback = [...this.ttsProviders.keys()][0];
+      this.logger.warn(
+        `defaultTtsProvider 未注册或为空，自动降级为 '${fallback}'`,
+      );
+      this.defaultTtsProvider = fallback;
+    }
+
     this.logger.log(`Image: [${[...this.imageProviders.keys()]}] default=${this.defaultImageProvider}`);
     this.logger.log(`Video: [${[...this.videoProviders.keys()]}] default=${this.defaultVideoProvider}`);
     if (this.ttsProviders.size) this.logger.log(`TTS: [${[...this.ttsProviders.keys()]}] default=${this.defaultTtsProvider}`);
@@ -86,8 +111,22 @@ export class ProviderRegistryService implements OnModuleInit {
   getAudioProvider(name?: string): AudioProvider {
     const key = name || this.defaultAudioProvider;
     const p = this.audioProviders.get(key);
-    if (!p) throw new Error(`Audio Provider [${key}] 未注册，可用: ${[...this.audioProviders.keys()]}`);
-    return p;
+    if (p) return p;
+
+    // 指定 provider 未注册时，自动降级到 default，再降级到第一个可用 provider
+    if (name && name !== this.defaultAudioProvider) {
+      const def = this.audioProviders.get(this.defaultAudioProvider);
+      if (def) {
+        this.logger.warn(`Audio Provider [${name}] 未注册，自动降级到默认 [${this.defaultAudioProvider}]`);
+        return def;
+      }
+    }
+    const first = [...this.audioProviders.values()][0];
+    if (first) {
+      this.logger.warn(`Audio Provider [${key}] 未注册，降级到第一个可用 Provider [${first.name}]`);
+      return first;
+    }
+    throw new Error(`Audio Provider [${key}] 未注册，可用: ${[...this.audioProviders.keys()]}`);
   }
 
   listProviders(): MediaProviderMeta[] {
@@ -151,6 +190,43 @@ export class ProviderRegistryService implements OnModuleInit {
     configureKieAiRateLimitsFromConfig(kieai);
     const apiKey = String(kieai.apiKey || '');
     if (!apiKey) { this.logger.debug('media.kieai.apiKey 未配置，跳过 Kie.ai'); return; }
+
+    // ── ElevenLabs TTS Provider（通过 kie.ai 代理，elevenlabs/text-to-speech-turbo-2-5） ──
+    const el11Cfg = (kieai.elevenlabs ?? {}) as Record<string, unknown>;
+    if (String(el11Cfg.enabled ?? 'true') !== 'false') {
+      const el11Provider = new ElevenLabsTtsProvider({
+        apiKey,
+        baseUrl: String(kieai.baseUrl || 'https://api.kie.ai'),
+        callBackUrl: String(kieai.callBackUrl || ''),
+        defaultVoice: String(el11Cfg.defaultVoice || 'Rachel'),
+        stability:       Number(el11Cfg.stability)       || 0.5,
+        similarityBoost: Number(el11Cfg.similarityBoost) || 0.75,
+        style:           Number(el11Cfg.style)           || 0,
+        speed:           Number(el11Cfg.speed)           || 1.0,
+      }, this.kieAiCallbackService, this.kieAiPollingService);
+      this.registerTtsProvider(el11Provider);
+      if (!this.defaultTtsProvider) this.defaultTtsProvider = el11Provider.name;
+      this.logger.log(`ElevenLabs TTS Provider 已注册: name=${el11Provider.name} voice=${el11Cfg.defaultVoice ?? 'Rachel'}`);
+    }
+
+    // ── ElevenLabs SFX Provider（elevenlabs/sound-effect-v2）──────────────────
+    // 注意：sound-effect-v2 已在 kie.ai 下线，默认关闭；恢复可用后将 sfx.enabled 设为 true
+    const sfxCfg = (el11Cfg.sfx ?? {}) as Record<string, unknown>;
+    if (String(sfxCfg.enabled ?? 'false') === 'true') {
+      const sfxProvider = new ElevenLabsSfxProvider({
+        apiKey,
+        baseUrl: String(kieai.baseUrl || 'https://api.kie.ai'),
+        callBackUrl: String(kieai.callBackUrl || ''),
+        maxDurationSec: Number(sfxCfg.maxDurationSec ?? el11Cfg.maxSfxDurationSec) || 22,
+      }, this.kieAiPollingService);
+      this.registerAudioProvider(sfxProvider);
+      if (!this.defaultAudioProvider || this.defaultAudioProvider === 'volcengine') {
+        this.defaultAudioProvider = sfxProvider.name;
+      }
+      this.logger.log(`ElevenLabs SFX Provider 已注册: name=${sfxProvider.name} maxDuration=${sfxProvider['maxDurationSec']}s`);
+    } else {
+      this.logger.debug('ElevenLabs SFX Provider 已禁用（sound-effect-v2 暂不可用），跳过注册');
+    }
 
     const baseUrl = String(kieai.baseUrl || 'https://api.kie.ai');
     const callBackUrl = String(kieai.callBackUrl || '');

@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, OneToMany } from 'typeorm';
 import { ShotMediaEntity } from './shot-media.entity';
 
-export type EpisodeMediaStatus = 'not_started' | 'generating_first_frames' | 'generating_images' | 'generating_videos' | 'compositing' | 'completed' | 'failed';
+export type EpisodeMediaStatus = 'not_started' | 'generating_first_frames' | 'generating_images' | 'generating_videos' | 'generating_sfx' | 'compositing' | 'completed' | 'failed';
 
 @Entity('drama_episodes')
 export class EpisodeEntity {

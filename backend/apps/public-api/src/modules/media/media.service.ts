@@ -101,7 +101,8 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
       const resourceId = job.dramaId || (job as any).bookId || '_unknown';
       const scope = job.episodeNumber != null ? `episode:${job.episodeNumber}` : ((job as any).chapterNumber != null ? `chapter:${(job as any).chapterNumber}` : (job.assetType?.startsWith('shot_') ? `shot:${job.refId || 'unknown'}` : 'creation'));
       const quality = (job.request as any)?.quality as string | undefined;
-      const vidCost = evt.status === 'completed' ? this.billingResolver.resolveVideoCostCny(job.provider, quality) : 0;
+      const durationSeconds = (evt.result as any)?.durationSeconds ? Number((evt.result as any).durationSeconds) : ((job.request as any)?.duration ? Number((job.request as any).duration) : 0);
+      const vidCost = evt.status === 'completed' ? this.billingResolver.resolveVideoCostCny(job.provider, quality, durationSeconds) : 0;
       const durationMs = evt.status === 'completed' && job.durationMs ? job.durationMs : 0;
       this.usageLedger.record({
         userId: job.userId ?? '', module, resourceId, scope,

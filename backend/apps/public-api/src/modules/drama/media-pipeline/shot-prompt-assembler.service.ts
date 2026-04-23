@@ -23,6 +23,27 @@ import { PromptCompilerService } from './prompt-compiler.service';
 const CLOSE_SHOTS = new Set(['close_up', 'extreme_close_up', 'medium_close_up']);
 const WIDE_SHOTS = new Set(['wide', 'extreme_wide', 'medium_wide']);
 
+// ── P0-2: 运动词黑名单 — 从 firstFramePrompt/lastFramePrompt 中清除，防止 T2I 生成运动模糊 ──
+const MOTION_VERB_PATTERNS = [
+  /\b(?:walking|running|turning|moving|rushing|flying|falling|stepping|approaching|retreating|leaping|jumping|climbing|crawling|sprinting|dashing|stumbling|strolling|marching|charging)\b/gi,
+  /\b(?:walks|runs|turns|moves|rushes|flies|falls|steps|approaches|retreats|leaps|jumps|climbs|crawls|sprints|dashes|stumbles|strolls|marches|charges)\b/gi,
+  /\b(?:walk|run|turn|move|rush|fly|fall|step|approach|retreat|leap|jump|climb|crawl|sprint|dash|stumble|stroll|march|charge)\s+(?:toward|towards|away|into|through|across|along|down|up|over|past)\b/gi,
+];
+
+// ── P1-7: 场景 visualPrompt 违规词 — LLM 常在场景描述中写入被禁止的构图/镜头/风格关键词 ──
+const SCENE_PROMPT_FORBIDDEN_PATTERNS = [
+  /\b(?:wide shot|close[- ]?up|medium shot|extreme wide|bird[']?s?[- ]?eye|establishing shot|over[- ]?the[- ]?shoulder|macro shot|aerial view|low angle|high angle|dutch angle|tracking shot|dolly|pan left|pan right|tilt up|tilt down)\b/gi,
+  /\b(?:photorealistic|hyperrealistic|cinematic|masterpiece|best quality|ultra detailed|8k|4k uhd|film grain|bokeh|depth of field|shallow dof|lens flare)\b/gi,
+];
+
+// ── P1-4: 中文字符检测 — T2I 模型（FLUX/Seedream）对中文理解远不如英文 ──
+const CHINESE_CHAR_REGEX = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g;
+const CHINESE_PUNCT_MAP: Record<string, string> = {
+  '\uff0c': ', ', '\u3002': '. ', '\uff1a': ': ', '\uff1b': '; ', '\uff01': '! ', '\uff1f': '? ',
+  '\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'", '\uff08': '(', '\uff09': ')',
+  '\u3010': '[', '\u3011': ']', '\u3001': ', ',
+};
+
 @Injectable()
 export class ShotPromptAssemblerService {
   private readonly logger = new Logger('ShotPromptAssembler');
@@ -45,8 +66,12 @@ export class ShotPromptAssemblerService {
     // Extracted raw materials
     const identityBlock = this.buildIdentityBlock(shot, state, charMap);
     const styleBlock = (opts.stylePrefix ?? '').trim();
-    const sceneVisualBlock = (opts.sceneVisualPrompt ?? '').trim();
+    // P1-7: 清洗场景 visualPrompt 中被禁止的构图/镜头/风格词
+    const sceneVisualBlock = ShotPromptAssemblerService.cleanSceneVisualPrompt((opts.sceneVisualPrompt ?? '').trim());
     const lightingBlock = (opts.batchLighting ?? '').trim();
+    
+    // P0-2: 清洗 sceneContent（firstFramePrompt）中的运动词
+    const sanitizedSceneContent = ShotPromptAssemblerService.sanitizeStaticFrame(sceneContent.trim());
     
     const shotType = shot.shotType || 'character';
     const shotSize = shot.camera?.shotSize ?? '';
@@ -73,15 +98,16 @@ export class ShotPromptAssemblerService {
       cameraAngle,
       identity_frozen: isInsert || isWide ? undefined : identityBlock,
       costume: undefined, // Already baked into identityBlock via buildIdentityBlock above
-      action_scene: sceneContent.trim(),
+      action_scene: sanitizedSceneContent,
       environment: sceneVisualBlock,
       lighting: lightingBlock,
       style: styleBlock,
       characters_brief: isWide && !isInsert ? [this.buildSimplifiedIdentity(shot, charMap)] : undefined,
-      object: isInsert ? sceneContent.trim() : undefined,
+      object: isInsert ? sanitizedSceneContent : undefined,
     });
     
-    return compiledPrompt;
+    // P1-4: 最终防线 — 清除编译后 prompt 中残留的中文字符
+    return ShotPromptAssemblerService.stripChinese(compiledPrompt);
   }
 
   /**
@@ -147,17 +173,53 @@ export class ShotPromptAssemblerService {
       return filtered.join(', ');
     }).filter(Boolean);
 
-    // 签名道具（仅非远景时附加）
+    // 签名道具（仅非远景时附加，且仅当本 Shot 文本中实际提到该道具时才注入）
+    // 原来无条件注入会导致：角色「喝茶」镜头里也被追加「持剑」描述，T2I 模型混乱画出武器。
     const sigProps = state.signatureProps || [];
     if (shotSize && !WIDE_SHOTS.has(shotSize)) {
+      // 合并 shot 所有文本 + 角色 Actions，用于检测道具是否被当前镜头提及
+      const shotText = [
+        shot.firstFramePrompt ?? '',
+        shot.lastFramePrompt ?? '',
+        shot.visualPrompt ?? '',
+        ...(shot.characters ?? []).map(c => (c as any).action ?? ''),
+      ].join(' ').toLowerCase();
+
       const matchedProps: string[] = [];
       for (const cid of charIds) {
         for (const p of sigProps) {
           if (!p.visualPrompt?.trim() || !p.characterOwner) continue;
-          if (p.characterOwner === cid || charMap.get(cid)?.name === p.characterOwner) {
-            if (!matchedProps.includes(p.visualPrompt.trim())) {
-              matchedProps.push(p.visualPrompt.trim());
+          if (p.characterOwner !== cid && charMap.get(cid)?.name !== p.characterOwner) continue;
+          if (matchedProps.includes(p.visualPrompt.trim())) continue;
+
+          // P1-5: 增强道具匹配 — 中文名完整匹配优先，英文要求 2+ token 命中
+          // (1) 中文道具名完整匹配（最高置信度）
+          const hasChineseName = p.name && /[\u4e00-\u9fff]/.test(p.name);
+          if (hasChineseName && shotText.includes(p.name.toLowerCase())) {
+            matchedProps.push(p.visualPrompt.trim());
+            continue;
+          }
+
+          // (2) 英文 token 匹配：从道具名称 + visualPrompt 前5词提取关键词
+          const propNameTokens = p.name.split(/[\s,/\u3001\uff0c]+/).filter(k => k.length > 1).map(k => k.toLowerCase());
+          const propVisualTokens = p.visualPrompt.split(/[\s,]+/).filter(k => k.length > 3).slice(0, 5).map(k => k.toLowerCase());
+          const allTokens = [...new Set([...propNameTokens, ...propVisualTokens])];
+
+          // 短词（<=3字符）使用词边界匹配，防止 "bow" 命中 "elbow"
+          let hitCount = 0;
+          for (const token of allTokens) {
+            if (token.length <= 3) {
+              const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              if (new RegExp(`\\b${escaped}\\b`, 'i').test(shotText)) hitCount++;
+            } else {
+              if (shotText.includes(token)) hitCount++;
             }
+          }
+
+          // 需至少 2 个 token 命中才注入（单 token 道具降级为 1）
+          const minHits = allTokens.length === 1 ? 1 : 2;
+          if (hitCount >= minHits) {
+            matchedProps.push(p.visualPrompt.trim());
           }
         }
       }
@@ -190,5 +252,51 @@ export class ShotPromptAssemblerService {
     }).filter(Boolean);
     
     return fragments.length ? `small distant ${fragments.join(' and ')}` : '';
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Prompt 净化工具方法
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * P0-2: 静态帧清洗 — 从 firstFramePrompt/lastFramePrompt 中去除运动词。
+   * T2I 模型生成静态图像，运动描述会导致模糊/重影伪影。
+   * 保留姿态词（standing, sitting, holding）因为它们描述静态状态。
+   */
+  static sanitizeStaticFrame(prompt: string): string {
+    if (!prompt) return prompt;
+    let cleaned = prompt;
+    for (const pattern of MOTION_VERB_PATTERNS) {
+      cleaned = cleaned.replace(pattern, '');
+    }
+    return cleaned.replace(/,\s*,+/g, ',').replace(/\s{2,}/g, ' ').replace(/^[,\s]+|[,\s]+$/g, '').trim();
+  }
+
+  /**
+   * P1-4: 中文字符净化 — 从最终 T2I prompt 中移除中文字符。
+   * FLUX/Seedream 的 T5/CLIP 编码器对中文 token 理解远不如英文。
+   */
+  static stripChinese(prompt: string): string {
+    if (!prompt) return prompt;
+    let result = prompt;
+    for (const [cn, en] of Object.entries(CHINESE_PUNCT_MAP)) {
+      result = result.split(cn).join(en);
+    }
+    result = result.replace(CHINESE_CHAR_REGEX, '').replace(/\s{2,}/g, ' ').trim();
+    return result;
+  }
+
+  /**
+   * P1-7: 场景 visualPrompt 清洗 — 去除构图/镜头/风格词。
+   * VisualAssetDesigner 铁律禁止这些词，但 LLM 不可能 100% 遵守。
+   * 此方法作为防御层，避免与 PromptCompiler/PromptOptimizer 的控制冲突。
+   */
+  static cleanSceneVisualPrompt(prompt: string): string {
+    if (!prompt) return prompt;
+    let cleaned = prompt;
+    for (const pattern of SCENE_PROMPT_FORBIDDEN_PATTERNS) {
+      cleaned = cleaned.replace(pattern, '');
+    }
+    return cleaned.replace(/,\s*,+/g, ',').replace(/\s{2,}/g, ' ').replace(/^[,\s]+|[,\s]+$/g, '').trim();
   }
 }

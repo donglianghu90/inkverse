@@ -774,6 +774,7 @@ export const shotSchema = z.object({
   dialogue: shotDialogueSchema.nullish(), // AI 可能输出 null
   audio: shotAudioSchema.nullish().transform(v => v ?? {}),
   visualPrompt: z.string(), // T2V 视觉提示词（英文，含风格/光影/构图/角色参考）
+  sfxPrompt: z.string().nullish(), // 音效提示词
   subtitle: shotSubtitleSchema.nullish(),
   estimatedDurationSec: z.number().min(0.5).max(15), // 硬上限 15s：Kling/Sora 2 物理上限均为 15s
   transitionToNext: z.enum(['cut', 'fade_black', 'fade_white', 'dissolve', 'wipe_left', 'wipe_right', 'flash', 'match_cut', 'occlusion_cut']).default('cut'),
@@ -785,6 +786,7 @@ export const shotSchema = z.object({
   lastFramePrompt: z.string().nullish(),
   firstFrameImageUrl: z.string().nullish(), // T2I 生成前为 null
   lastFrameImageUrl: z.string().nullish(),
+  propGripStates: z.record(z.string(), z.enum(['hidden', 'at_waist', 'drawing', 'in_hand', 'pointing'])).optional(),
   characterVariationIds: z.record(z.string(), z.string()).nullish(), // characterId → variationId 映射
 
 

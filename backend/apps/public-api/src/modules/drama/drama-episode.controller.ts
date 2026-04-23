@@ -376,7 +376,6 @@ export class DramaEpisodeController {
     return this.dramaService.generateShotVideo(dramaId, episodeNumber, shotId);
   }
 
-  /** 单镜音效生成（同步 HTTP，适合制作台逐 Shot 手动触发） */
   @Post(':dramaId/episodes/:episodeNumber/shots/:shotId/generate-sfx')
   async generateShotSfx(
     @Param('dramaId') dramaId: string,
@@ -386,5 +385,17 @@ export class DramaEpisodeController {
     const episodeNumber = parseInt(ep, 10);
     if (isNaN(episodeNumber)) throw new NotFoundException('episodeNumber 无效');
     return this.dramaService.generateShotSfx(dramaId, episodeNumber, shotId);
+  }
+
+  /** 单镜音画合成预览（同步 HTTP，合并已有画面和声音） */
+  @Post(':dramaId/episodes/:episodeNumber/shots/:shotId/compose-preview')
+  async composeShotPreview(
+    @Param('dramaId') dramaId: string,
+    @Param('episodeNumber') ep: string,
+    @Param('shotId') shotId: string,
+  ) {
+    const episodeNumber = parseInt(ep, 10);
+    if (isNaN(episodeNumber)) throw new NotFoundException('episodeNumber 无效');
+    return this.dramaService.composeShotPreview(dramaId, episodeNumber, shotId);
   }
 }

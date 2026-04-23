@@ -18,6 +18,10 @@ export class GenerationPolicyService {
       styleBucket: 'generic',
       t2iConcurrency: 3,
       i2vConcurrency: 2,
+      /** AI SFX 并发数（Phase 2.5），默认 2 路 */
+      sfxConcurrency: 2,
+      /** sound-effect-v2 当前暂不可用，设 false 跳过 Phase 2.5；恢复后改为 true */
+      enablePipelineSfx: false,
       maxMediaRetries: 3,
       retryBaseDelayMs: 2500,
       enableQualityGate: false,

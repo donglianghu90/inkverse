@@ -79,7 +79,7 @@ const DIALOGUE_EMOTION_TTS: Record<string, { speed: number; volume: number }> = 
 
 /**
  * 场景情绪 → TTS emotion 标签映射。
- * 映射到火山引擎 OpenSpeech 支持的情感标签，让语音合成带有感情色彩。
+ * 映射到 TTS 引擎情感参数（ElevenLabs 通过 stability/style 间接表达），让语音合成带有感情色彩。
  */
 const EMOTION_TO_TTS_EMOTION: Record<string, string> = {
   happy: 'happy', excited: 'happy', joyful: 'happy', loving: 'happy',

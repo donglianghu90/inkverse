@@ -6,9 +6,16 @@ import type { Shot } from '../schemas/drama-state.schemas';
 export class ShotProductionOrderService {
   private readonly logger = new Logger('ShotProductionOrder');
 
-  /** 按优先级对 shots 排序（risk → regenPriority → masterShot → qualityTier → shotType → shotIndex） */
-  orderShotsForProduction(shots: Shot[], riskShotIds?: Set<string>): Shot[] {
-    return [...shots].sort((a, b) => this.compareShotPriority(a, b, riskShotIds));
+  /**
+   * 按时间线顺序对 shots 排序 — shotIndex 始终是主排序键。
+   *
+   * 设计决策：之前按 priority/qualityTier/shotType 重排，会导致 insert 镜头被提前到
+   * dialogue/wide 之前生成。但 insert 依赖前面已完成的 wide shot 填充 sceneCache 和
+   * prevFrameCache，空缓存导致 refs=0 盲生成。现在严格按 shotIndex 保持叙事时间线，
+   * 优先级仅用于质量门和重试策略，不影响生成顺序。
+   */
+  orderShotsForProduction(shots: Shot[], _riskShotIds?: Set<string>): Shot[] {
+    return [...shots].sort((a, b) => a.shotIndex - b.shotIndex);
   }
 
   /** 从审核结果中提取高风险 shot IDs */
@@ -33,30 +40,22 @@ export class ShotProductionOrderService {
     if (!shots.length) return;
     const top = shots.slice(0, 10).map((s) => {
       const master = s.isMasterShot ? '*' : '';
-      return `${s.shotId}[${s.regenPriority || 'medium'}${master}/${s.qualityTier || 'standard'}]`;
+      return `${s.shotId}[idx=${s.shotIndex}${master}/${s.qualityTier || 'standard'}]`;
     }).join(', ');
     this.logger.log(`[scheduler] ${tag} order(top${Math.min(10, shots.length)}): ${top}`);
   }
 
-  // ── 内部 scoring 方法 ──────────────────────────────────────────
+  // ── 内部 scoring 方法（保留供质量门、重试优先级等非排序场景使用）──────
 
-  private compareShotPriority(a: Shot, b: Shot, riskShotIds?: Set<string>): number {
-    const riskDiff = Number(riskShotIds?.has(b.shotId)) - Number(riskShotIds?.has(a.shotId));
-    if (riskDiff !== 0) return riskDiff;
-
-    const regenDiff = this.priorityScore(b.regenPriority) - this.priorityScore(a.regenPriority);
-    if (regenDiff !== 0) return regenDiff;
-
-    const masterDiff = Number(b.isMasterShot) - Number(a.isMasterShot);
-    if (masterDiff !== 0) return masterDiff;
-
-    const tierDiff = this.qualityTierScore(b.qualityTier) - this.qualityTierScore(a.qualityTier);
-    if (tierDiff !== 0) return tierDiff;
-
-    const typeDiff = this.shotTypeScore(b.shotType) - this.shotTypeScore(a.shotType);
-    if (typeDiff !== 0) return typeDiff;
-
-    return a.shotIndex - b.shotIndex;
+  /** 获取 Shot 的综合优先级分数（用于质量门重试优先级等，不用于生成排序） */
+  getShotPriorityScore(shot: Shot, riskShotIds?: Set<string>): number {
+    let score = 0;
+    if (riskShotIds?.has(shot.shotId)) score += 10;
+    score += this.priorityScore(shot.regenPriority);
+    if (shot.isMasterShot) score += 3;
+    score += this.qualityTierScore(shot.qualityTier);
+    score += this.shotTypeScore(shot.shotType);
+    return score;
   }
 
   private priorityScore(priority?: Shot['regenPriority']): number {
