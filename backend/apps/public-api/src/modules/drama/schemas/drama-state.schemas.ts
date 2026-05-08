@@ -261,23 +261,33 @@ export const dramaPromptProfileSchema = z.object({
     /**
      * 连续性守卫：本剧世界观专项检查条目（超出通用12项的本剧特有约束）。
      * 注入 continuity-guard 的 system prompt。
-export const signaturePropSchema = z.object({
-  propId: z.string().transform(normalizeId),  // 全剧唯一 ID（英文/拼音简写，如 "jade_seal"、"jiu_zun"）
-  name: z.string(),             // 中文名称（如"传国玉玄"）
-  description: z.string(),      // 中文详细描述（材质、年代风格、外观特征，30-60字）
-  visualPrompt: z.string(),     // 英文 T2I 提示词（核心物体描述：材质、形态、细节）— 分镜用基因词
+     */
+    continuityGuardChecks: na(z.string()),
+  }).optional().nullable(),
+  agentSystemPrompts: z.record(z.string()).optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2: 视觉资产 (Visual Assets)
+// ---------------------------------------------------------------------------
+
+/**
+ * 通用 ID 归一化 — 全系统所有 LLM 生成的标识符必须使用统一的 ID 格式（小写、去除 _-空格）。
+ * 确保 "li_wei" / "LI_WEI" / "liwei" / "li-wei" 全部归一化为 "liwei"。
+ * 应用范围：characterId, propId, locationId, characterOwner, appearsInScenes
+ */
+export const normalizeId = (v: string) => v.toLowerCase().replace(/[\s\-_]+/g, '');
+/** @deprecated 请使用 normalizeId，保留别名以免破坏外部引用 */
+export const normalizeCharacterId = normalizeId;
+
+export const characterVariationSchema = z.object({ // 角色外观变体（换装/年龄/变身/伪装等）
+  variationId: z.string(),
+  name: z.string(), // "正式西装" / "少年时期" / "神形态" / "伪装造型"
   /**
-   * 道具商品图最终 T2I 提示词（完整咒语，含微距摄影、产品写真风格词、no people）。
-   * 由 VisualAssetDesigner 生成，DramaVisualAssetService 生成道具参考图时直接使用，跳过 PromptCompiler。
-   */
-  referenceImagePrompt: z.string().optional().nullable(),
-  narrativeRole: z.enum([
-    'signature',   // 角色标志性随身物（如主角的玉佩、反派的折扇）
-    'macguffin',   // 剧情核心驱动物（如密令、解药、传位诏书）
-    'recurring',   // 跨场景反复出现、需保持视觉一致的道具
-  ]),
-  appearsInScenes: na(z.string().transform(normalizeId)),  // 出现的 locationId 列表（归一化以匹配 sceneLocationSchema.locationId）
-  characterOwner: z.union([z.string(), z.null()]).transform(v => v ? normalizeId(v) : '').default(''),  // 归属角色 characterId（归一化以匹配 characterIdentitySchema.characterId）�大幅变化
+   * 变体类型 — 决定下游参考图生成策略：
+   *   costume: 仅换装，face 保持不变（默认）
+   *   age: 年龄跨度，face 需年龄化修改（皱纹/肤质/发色）
+   *   transformation: 变身/化形/修炼突破，整体外貌可能大幅变化
    *   disguise: 伪装，可能改变发型/妆容但骨骼结构不变
    */
   variationType: z.enum(['costume', 'age', 'transformation', 'disguise']).default('costume'),
@@ -289,15 +299,6 @@ export const signaturePropSchema = z.object({
   faceOverridePrompt: ns(),
   referenceImageUrl: z.union([z.string(), z.null()]).transform(v => v ?? ''), // LLM 可能返回 null，统一转为空串
 });
-
-/**
- * 通用 ID 归一化 — 全系统所有 LLM 生成的标识符必须使用统一的 ID 格式（小写、去除 _-空格）。
- * 确保 "li_wei" / "LI_WEI" / "liwei" / "li-wei" 全部归一化为 "liwei"。
- * 应用范围：characterId, propId, locationId, characterOwner, appearsInScenes
- */
-export const normalizeId = (v: string) => v.toLowerCase().replace(/[\s\-_]+/g, '');
-/** @deprecated 请使用 normalizeId，保留别名以免破坏外部引用 */
-export const normalizeCharacterId = normalizeId;
 
 export const characterIdentitySchema = z.object({
   characterId: z.string().transform(normalizeCharacterId),
@@ -383,7 +384,7 @@ export type PropAsset = z.infer<typeof propAssetSchema>;
  * 只有观众会在多集内记住、且视觉一致性有实际意义的物件才列入。
  */
 export const signaturePropSchema = z.object({
-  propId: z.string(),           // 全剧唯一 ID（英文/拼音简写，如 "jade_seal"、"jiu_zun"）
+  propId: z.string().transform(normalizeId),  // 全剧唯一 ID（英文/拼音简写，如 "jade_seal"、"jiu_zun"）
   name: z.string(),             // 中文名称（如"传国玉玺"）
   description: z.string(),      // 中文详细描述（材质、年代风格、外观特征，30-60字）
   visualPrompt: z.string(),     // 英文 T2I 提示词（核心物体描述：材质、形态、细节）— 分镜用基因词
@@ -397,8 +398,8 @@ export const signaturePropSchema = z.object({
     'macguffin',   // 剧情核心驱动物（如密令、解药、传位诏书）
     'recurring',   // 跨场景反复出现、需保持视觉一致的道具
   ]),
-  appearsInScenes: na(z.string()),  // 出现的 locationId 列表（macguffin 可为空，其余至少 2 个）
-  characterOwner: ns(),             // 归属角色 characterId（signature 类必填，其余可选）
+  appearsInScenes: na(z.string().transform(normalizeId)),  // 出现的 locationId 列表（归一化以匹配 sceneLocationSchema.locationId）
+  characterOwner: z.union([z.string(), z.null()]).transform(v => v ? normalizeId(v) : '').default(''),  // 归属角色 characterId（归一化以匹配 characterIdentitySchema.characterId）
 });
 
 export type SignatureProp = z.infer<typeof signaturePropSchema>;
