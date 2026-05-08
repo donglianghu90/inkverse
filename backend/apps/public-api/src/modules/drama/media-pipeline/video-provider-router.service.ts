@@ -70,7 +70,7 @@ const MODEL_PROFILES: Record<string, VideoModelProfile> = {
     sweetSpotSec: 5,
     promptStyleHint: '自然语言描述，侧重"动作+运动"描述，避免静态风格前缀。',
     strengthHint: '时长灵活(3-15s)，1080P，支持首尾帧控制和 kling_elements 角色一致性锁定。',
-    constraintHint: '普通Shot建议3-8秒；高潮动作镜头可到10-12秒。',
+    constraintHint: '每个Shot建议5-8秒，确保完成一个完整动作弧线；高潮动作镜头可到10-12秒。Shot越少连贯性越好。',
   },
   hailuo: {
     provider: 'hailuo',

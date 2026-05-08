@@ -55,6 +55,8 @@ export const PURPOSE_DIRECTIVE_TEMPLATES: Record<string, string> = {
 
 export const SCENE_CONTEXT_CONSTRAINTS = `=== 本场景约束 ===
 - 最多 {{maxShots}} 个Shot，目标时长 {{targetDur}}s
+- 每个 Shot 建议 5-8 秒，每 Shot 只包含一个清晰动作（AI 视频模型的实际能力限制）
+- Shot 越少连贯性越好 —— 每个切镜点都是身份漂移风险
 - 字幕只在有对话/旁白时添加
 - 暂不填 audio 字段（交给AudioDirector）
 - 所有 firstFramePrompt 和 lastFramePrompt 必须填写`;

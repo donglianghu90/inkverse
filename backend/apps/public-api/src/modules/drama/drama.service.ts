@@ -303,8 +303,8 @@ export class DramaService implements OnModuleInit {
             this.logger.log(`[create] 视觉风格模板已注入: ${vsTpl.displayName} (${vsTpl.styleKey})`);
           }
         }
-        // 建剧阶段只设计视觉风格，角色/场景全部延迟到逐集生产时设计
-        const { visualStyle, signatureProps } = await this.visualDesigner.design(
+        // 建剧阶段只设计视觉风格，角色/场景/道具全部延迟到逐集生产时设计
+        const { visualStyle } = await this.visualDesigner.design(
           out.seed, out.outline, effectiveVisualStyleHint, dramaId, opts.userId, effectiveSuggestedVisualStyle,
           { protagonistFocus: dto.protagonistFocus, platformTarget: dto.platformTarget, audienceTags: dto.audienceTags },
           visualStyleTemplateGuide as any,
@@ -326,17 +326,17 @@ export class DramaService implements OnModuleInit {
           : visualStyle;
 
         this.visualAssetService.sanitizeLiveActionVisualStyle(mergedVisualStyle, effectiveSuggestedVisualStyle, []);
-        Object.assign(out, { characters: [], locations: [], visualStyle: mergedVisualStyle, signatureProps });
+        Object.assign(out, { characters: [], locations: [], visualStyle: mergedVisualStyle, signatureProps: [] });
         logDrama('visual_design_done', 'ok', '视觉风格设计完成');
         emitCreate(2, '视觉风格设计完成', true);
-        await saveCP('visual_designed', { characters: [], locations: [], visualStyle: mergedVisualStyle, signatureProps });
+        await saveCP('visual_designed', { characters: [], locations: [], visualStyle: mergedVisualStyle, signatureProps: [] });
       }
 
       if (resumeFrom <= 3) {
         logDrama('assets_persist_start', 'ok', '保存风格资产');
         emitCreate(3, '保存风格资产...');
-        // 建剧阶段不设计角色/场景，只保存 signatureProps 和 style_guide
-        const assetEntities = await this.persistVisualAssets(dramaId, [], [], out.visualStyle, out.signatureProps);
+        // 建剧阶段不设计角色/场景/道具，只保存 style_guide
+        const assetEntities = await this.persistVisualAssets(dramaId, [], [], out.visualStyle, []);
         out.visualAssets = assetEntities;
         logDrama('assets_persist_done', 'ok', '风格资产已保存');
         emitCreate(3, '风格资产已保存', true);

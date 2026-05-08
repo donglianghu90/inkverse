@@ -261,24 +261,23 @@ export const dramaPromptProfileSchema = z.object({
     /**
      * 连续性守卫：本剧世界观专项检查条目（超出通用12项的本剧特有约束）。
      * 注入 continuity-guard 的 system prompt。
-     */
-    continuityGuardChecks: na(z.string()),
-  }).optional().nullable(),
-  agentSystemPrompts: z.record(z.string()).optional(),
-});
-
-// ---------------------------------------------------------------------------
-// Phase 2: 视觉资产 (Visual Assets)
-// ---------------------------------------------------------------------------
-
-export const characterVariationSchema = z.object({ // 角色外观变体（换装/年龄/变身/伪装等）
-  variationId: z.string(),
-  name: z.string(), // "正式西装" / "少年时期" / "神形态" / "伪装造型"
+export const signaturePropSchema = z.object({
+  propId: z.string().transform(normalizeId),  // 全剧唯一 ID（英文/拼音简写，如 "jade_seal"、"jiu_zun"）
+  name: z.string(),             // 中文名称（如"传国玉玄"）
+  description: z.string(),      // 中文详细描述（材质、年代风格、外观特征，30-60字）
+  visualPrompt: z.string(),     // 英文 T2I 提示词（核心物体描述：材质、形态、细节）— 分镜用基因词
   /**
-   * 变体类型 — 决定下游参考图生成策略：
-   *   costume: 仅换装，face 保持不变（默认）
-   *   age: 年龄跨度，face 需年龄化修改（皱纹/肤质/发色）
-   *   transformation: 变身/化形/修炼突破，整体外貌可能大幅变化
+   * 道具商品图最终 T2I 提示词（完整咒语，含微距摄影、产品写真风格词、no people）。
+   * 由 VisualAssetDesigner 生成，DramaVisualAssetService 生成道具参考图时直接使用，跳过 PromptCompiler。
+   */
+  referenceImagePrompt: z.string().optional().nullable(),
+  narrativeRole: z.enum([
+    'signature',   // 角色标志性随身物（如主角的玉佩、反派的折扇）
+    'macguffin',   // 剧情核心驱动物（如密令、解药、传位诏书）
+    'recurring',   // 跨场景反复出现、需保持视觉一致的道具
+  ]),
+  appearsInScenes: na(z.string().transform(normalizeId)),  // 出现的 locationId 列表（归一化以匹配 sceneLocationSchema.locationId）
+  characterOwner: z.union([z.string(), z.null()]).transform(v => v ? normalizeId(v) : '').default(''),  // 归属角色 characterId（归一化以匹配 characterIdentitySchema.characterId）�大幅变化
    *   disguise: 伪装，可能改变发型/妆容但骨骼结构不变
    */
   variationType: z.enum(['costume', 'age', 'transformation', 'disguise']).default('costume'),
@@ -291,8 +290,14 @@ export const characterVariationSchema = z.object({ // 角色外观变体（换�
   referenceImageUrl: z.union([z.string(), z.null()]).transform(v => v ?? ''), // LLM 可能返回 null，统一转为空串
 });
 
-/** CharacterId 归一化 — 全系统必须使用统一的 ID 格式（小写、去除 _-空格） */
-export const normalizeCharacterId = (v: string) => v.toLowerCase().replace(/[\s\-_]+/g, '');
+/**
+ * 通用 ID 归一化 — 全系统所有 LLM 生成的标识符必须使用统一的 ID 格式（小写、去除 _-空格）。
+ * 确保 "li_wei" / "LI_WEI" / "liwei" / "li-wei" 全部归一化为 "liwei"。
+ * 应用范围：characterId, propId, locationId, characterOwner, appearsInScenes
+ */
+export const normalizeId = (v: string) => v.toLowerCase().replace(/[\s\-_]+/g, '');
+/** @deprecated 请使用 normalizeId，保留别名以免破坏外部引用 */
+export const normalizeCharacterId = normalizeId;
 
 export const characterIdentitySchema = z.object({
   characterId: z.string().transform(normalizeCharacterId),
@@ -399,7 +404,7 @@ export const signaturePropSchema = z.object({
 export type SignatureProp = z.infer<typeof signaturePropSchema>;
 
 export const sceneLocationSchema = z.object({
-  locationId: z.string(),
+  locationId: z.string().transform(normalizeId),  // 归一化以确保跨 LLM 调用匹配一致
   name: z.string(), // 如 "男主总裁办公室"
   description: z.string(), // 详细描述
   visualPrompt: z.string(), // T2I 场景核心描述（英文，纯空间结构/材质/光照）— 分镜 Compiler 用基因词
@@ -773,7 +778,13 @@ export const shotSchema = z.object({
   styleLockRef: ns(), // 风格锁引用（来自 visualBible.stylePack/version）
   dialogue: shotDialogueSchema.nullish(), // AI 可能输出 null
   audio: shotAudioSchema.nullish().transform(v => v ?? {}),
-  visualPrompt: z.string(), // T2V 视觉提示词（英文，含风格/光影/构图/角色参考）
+  visualPrompt: z.string().describe(
+    'Video motion prompt (English). Describe what HAPPENS during this shot — ' +
+    'the action, movement, and changes from the opening frame to the closing frame. ' +
+    'Must logically bridge firstFramePrompt → lastFramePrompt as cause → effect. ' +
+    'Use motion verbs (walks, turns, reaches, draws). Never describe static poses. ' +
+    'Keep to ONE clear action per shot — AI video models cannot handle multi-step action sequences.'
+  ),
   sfxPrompt: z.string().nullish(), // 音效提示词
   subtitle: shotSubtitleSchema.nullish(),
   estimatedDurationSec: z.number().min(0.5).max(15), // 硬上限 15s：Kling/Sora 2 物理上限均为 15s
@@ -782,8 +793,22 @@ export const shotSchema = z.object({
   flashbackSourceEpisode: z.number().int().min(1).nullish(), // AI 可能输出 null
   flashbackSourceShotId: z.string().nullish(),
   isPreview: z.boolean().default(false), // 是否为"下集预告"Shot
-  firstFramePrompt: z.string().nullish(),
-  lastFramePrompt: z.string().nullish(),
+  firstFramePrompt: z.string().describe(
+    'Static pose prompt for the OPENING frame (English, 15-25 words). ' +
+    'Write ONLY: body poses, facial expressions, spatial anchors (at the gate, near the window), ' +
+    'prop interactions (hand on sword hilt, holding a letter). ' +
+    'DO NOT write: character appearance/hair/clothing (auto-injected by identity pipeline), ' +
+    'environment/architecture (auto-injected by scene pipeline), ' +
+    'lighting/atmosphere (auto-injected by lighting pipeline), ' +
+    'camera angles or style words (auto-injected by optimizer). ' +
+    'NO motion verbs. Must be spatially consistent with previous shot\'s lastFramePrompt.'
+  ).nullish(),
+  lastFramePrompt: z.string().describe(
+    'Static pose prompt for the CLOSING frame (English, 15-25 words). ' +
+    'Write ONLY: the END-STATE body pose, expression, and prop state after visualPrompt action completes. ' +
+    'DO NOT write: appearance, environment, lighting, camera, or style (all auto-injected). ' +
+    'NO motion verbs. The next shot\'s firstFramePrompt must depict this same state.'
+  ).nullish(),
   firstFrameImageUrl: z.string().nullish(), // T2I 生成前为 null
   lastFrameImageUrl: z.string().nullish(),
   propGripStates: z.record(z.string(), z.enum(['hidden', 'at_waist', 'drawing', 'in_hand', 'pointing'])).optional(),

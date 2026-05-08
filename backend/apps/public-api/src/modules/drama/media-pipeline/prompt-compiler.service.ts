@@ -316,27 +316,68 @@ export class PromptCompilerService {
     }
     return true;
   }
-
-  /** Fallback: if LLM fails or hallucinates, just concatenate carefully */
+  /**
+   * P6-fix: 半结构化 Fallback — LLM 编译失败或 identity drift 时使用。
+   *
+   * 旧方案：纯逗号拼接 → 关键词列表风格，T2I 模型解析效果差且与 LLM 编译结果风格割裂。
+   * 新方案：按 mode 使用语法连接词（wearing/in a/bathed in）构造接近自然英语的 prompt，
+   * 让 fallback 输出与 LLM 编译结果风格一致，避免同一集内画面风格断崖。
+   */
   private buildFallback(input: CompilerInput, mode: CompilerMode): string {
-    let parts: (string | undefined)[] = [];
+    const opt = (s: string | undefined, prefix = '', suffix = '') =>
+      s?.trim() ? `${prefix}${s.trim()}${suffix}` : '';
+
     switch (mode) {
-      case 'CHARACTER_DOMINANT':
-        parts = [input.identity_frozen, input.costume, input.action_scene, input.environment, input.lighting, input.atmosphere, input.style];
-        break;
-      case 'ENVIRONMENT_DOMINANT':
-        parts = [input.environment, input.action_scene, input.characters_brief?.join(' and '), input.lighting, input.atmosphere, input.style];
-        break;
-      case 'INSERT_PROP':
-        parts = [input.object, input.surface, input.lighting, 'no people, no hands', input.style];
-        break;
-      case 'CHARACTER_REFERENCE':
-        parts = [input.age, input.face, input.hair, input.costume, input.body, 'front-facing, looking at camera, neutral plain background, character reference sheet', input.style];
-        break;
-      case 'SCENE_REFERENCE':
-        parts = [input.view_angle, input.architecture, input.lighting, input.color_tone, 'absolutely no people, empty environment', input.style];
-        break;
+      case 'CHARACTER_DOMINANT': {
+        // 人物主导：Identity → 动作 → 服装 → 环境 → 光影 → 风格
+        const identity = input.identity_frozen ?? '';
+        const action = opt(input.action_scene, ', ');
+        const costume = opt(input.costume, ', wearing ');
+        const env = opt(input.environment, ', in ');
+        const light = opt(input.lighting, ', ');
+        const atmo = opt(input.atmosphere, ', ');
+        const style = opt(input.style, ', ');
+        return `${identity}${action}${costume}${env}${light}${atmo}${style}`.replace(/^[,\s]+/, '').trim();
+      }
+      case 'ENVIRONMENT_DOMINANT': {
+        // 环境主导：场景 → 人物轮廓 → 动作 → 光影 → 风格
+        const env = input.environment ?? '';
+        const chars = opt(input.characters_brief?.join(' and '), ', with ');
+        const action = opt(input.action_scene, ', ');
+        const light = opt(input.lighting, ', ');
+        const atmo = opt(input.atmosphere, ', ');
+        const style = opt(input.style, ', ');
+        return `${env}${chars}${action}${light}${atmo}${style}`.replace(/^[,\s]+/, '').trim();
+      }
+      case 'INSERT_PROP': {
+        // 道具特写：物体 → 表面 → 光影 → 无人声明 → 风格
+        const obj = input.object ?? '';
+        const surface = opt(input.surface, ', resting on ');
+        const light = opt(input.lighting, ', ');
+        const style = opt(input.style, ', ');
+        return `${obj}${surface}${light}, no people, no hands${style}`.replace(/^[,\s]+/, '').trim();
+      }
+      case 'CHARACTER_REFERENCE': {
+        // 定妆照：年龄 → 面部 → 发型 → 服装 → 体型 → 固定后缀
+        const age = opt(input.age, '', ', ');
+        const face = input.face ?? '';
+        const hair = opt(input.hair, ', ');
+        const costume = opt(input.costume, ', wearing ');
+        const body = opt(input.body, ', ');
+        const style = opt(input.style, ', ');
+        return `${age}${face}${hair}${costume}${body}, eyes sharply in focus, clear iris detail, realistic skin texture, even studio lighting, front-facing, looking at camera, neutral plain background, character reference sheet${style}`.replace(/^[,\s]+/, '').trim();
+      }
+      case 'SCENE_REFERENCE': {
+        // 场景概念图：视角 → 建筑 → 光影 → 色调 → 无人声明 → 风格
+        const view = opt(input.view_angle, '', ' perspective, ');
+        const arch = input.architecture ?? '';
+        const light = opt(input.lighting, ', ');
+        const color = opt(input.color_tone, ', ');
+        const style = opt(input.style, ', ');
+        return `${view}${arch}${light}${color}, symmetrical composition, absolutely no people, empty environment, uninhabited space${style}`.replace(/^[,\s]+/, '').trim();
+      }
+      default:
+        return [input.identity_frozen, input.action_scene, input.environment, input.style].filter(Boolean).join(', ');
     }
-    return parts.filter(Boolean).join(', ').replace(/,\s*,/g, ',').replace(/^,\s*/, '').trim();
   }
 }

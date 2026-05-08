@@ -1,8 +1,9 @@
 /**
  * 视觉资产设计师（Visual Asset Librarian）
  *
- * 职责一：全剧初始资产设计（角色/场景/风格）
+ * 职责一：全剧初始资产设计（仅视觉风格）
  * 职责二：逐集临时角色解析 — resolveEpisodeCharacters()
+ * 职责三：逐集道具发现 — discoverEpisodeProps()
  *   - 从 minorRolePool 匹配可复用的历史临时角色
  *   - 对真正的新角色调用 LLM 设计完整视觉身份
  *   - 确保所有角色与全剧美学体系一致
@@ -26,17 +27,21 @@ import {
   DramaState,
   CharacterIdentity,
   EpisodeIntent,
+  EpisodeScript,
+  SignatureProp,
 } from "../../schemas/drama-state.schemas";
 import { buildVisualAssetDesignerSystemPrompt } from "../../prompting/drama-playbook";
 import type { GenreProductionGuidance } from "../../../template/entities/drama-genre-template.entity";
 import type { VisualStyleGuide } from "../../../template/entities/drama-visual-style-template.entity";
 
-/** 建剧阶段只输出视觉风格 + 签名道具，角色/场景延迟到逐集生产 */
+/** 建剧阶段只输出视觉风格，角色/场景/道具全部延迟到逐集生产 */
 const visualStyleOnlySchema = z.object({
   visualStyle: visualStyleGuideSchema,
-  signatureProps: z
-    .preprocess((v) => v ?? [], z.array(signaturePropSchema))
-    .default([]),
+});
+
+/** 逐集道具发现输出 */
+const episodePropsOutputSchema = z.object({
+  discoveredProps: z.preprocess((v) => v ?? [], z.array(signaturePropSchema)).default([]),
 });
 
 /** 逐集新场景设计输出 */
@@ -397,24 +402,14 @@ ${visualStyleHint
         }
 
 === 重要：建剧阶段只设计视觉风格 ===
-角色和场景将在各集生产时按需设计，无需在此阶段预设。
+角色、场景、道具全部延迟到逐集生产时按需设计，无需在此阶段预设。
 
 要求：
-1. visualStyle 定义全剧美学基调（这是最重要的输出）
+1. visualStyle 定义全剧美学基调（这是唯一输出）
    ⚠️ visualStyle.styleReferencePrompt 是全剧的【全局风格与质感】，将作为风格后缀拼接到所有的画面中！
    必须仅包含：“photorealistic, film grain, cinematic color grading”等纯粹的光影、质感、摄影修饰词。
    绝对禁止：出现任何物理场景结构、天气、人物特征、服饰！否则会导致场景错乱。
-2. 全剧级签名道具（signatureProps）：只设计 2-5 个核心道具，满足以下任一条件才列入：
-   a) 角色标志性随身物（narrativeRole="signature"）
-   b) 剧情核心驱动物（narrativeRole="macguffin"）
-   ⚠️ 核心：道具的 visualPrompt 只写纯粹的物体核心描述，用纯英文：
-   [道具主体 Object] + [结构/形态 Form] + [材质/工艺 Material] + [细节特征 Detail] + [使用状态 Condition]
-   例如："Tang dynasty bronze mirror, round symmetrical form, aged bronze with rich patina, intricate engraved patterns, slightly worn edges"
-   （不含构图、光影、背景词，这是分镜阶段的基因词！）
-   另需为每个道具输出 referenceImagePrompt（英文）= 道具产品图最终完整 T2I 提示词。
-   公式：[visualPrompt内容] + "isolated centered composition, cinematic macro photography, material texture detail, studio spotlight, no people, no hands, product shot" + [全剧风格前缀]
-   此字段是送给 T2I 引擎的完整定版图咒语。
-3. 不要输出 characters 或 locations`,
+2. 不要输出 characters、locations 或 signatureProps`,
       temperature: 0.5,
     });
 
@@ -777,5 +772,113 @@ ${locRequests}
       `新场景设计完成：${result.locations.map((l) => `${l.locationId}(${l.name})`).join(", ")}`,
     );
     return result.locations;
+  }
+
+  /**
+   * Lazy per-episode prop discovery from script text.
+   * Follows the same pattern as designNewCharacters / designNewLocations:
+   * - Existing props (state.signatureProps) are not re-designed
+   * - Only signature-level props are identified (character markers / macguffins / recurring items)
+   * - Returns only NEW props not yet in state
+   */
+  async discoverEpisodeProps(
+    state: DramaState,
+    script: EpisodeScript,
+    episodeNumber: number,
+  ): Promise<SignatureProp[]> {
+    const sceneDigests = (script.scenes ?? []).map((s, i) => {
+      const lines: string[] = [`S${i + 1}: ${s.sceneHeading}`];
+      if (s.objective) lines.push(`  goal: ${s.objective}`);
+      for (const a of s.actions ?? []) {
+        lines.push(`  act: ${a.characterId ? `[${a.characterId}]` : ''} ${a.description}`);
+      }
+      for (const d of s.dialogues ?? []) {
+        lines.push(`  dlg: [${d.characterId}] ${d.text}`);
+      }
+      return lines.join('\n');
+    }).join('\n\n');
+
+    if (!sceneDigests.trim()) return [];
+
+    const existingProps = (state.signatureProps ?? []).map(
+      p => `${p.propId}(${p.name}): ${p.visualPrompt?.slice(0, 60) ?? ''}`,
+    ).join('\n');
+
+    const vs = state.visualStyle;
+    const styleCtx = vs
+      ? `aesthetic=${vs.overallAesthetic}, colorGrading=${vs.colorGrading}, lighting=${vs.lightingStyle}`
+      : '';
+    const styleRefPrompt = vs?.styleReferencePrompt ?? '';
+
+    // 封闭词表：注入角色/场景 ID 白名单，让 LLM 从列表中选择而非自己猜测
+    const charWhitelist = (state.characters ?? [])
+      .map(c => `${c.characterId}(${c.name})`)
+      .join(', ');
+    const locWhitelist = (state.locations ?? [])
+      .map(l => `${l.locationId}(${l.name})`)
+      .join(', ');
+
+    const raw = await this.llm.generateStructured({
+      taskName: DRAMA_AGENT_REGISTRY.VISUAL_ASSET_DESIGNER.key,
+      schema: episodePropsOutputSchema,
+      metadata: { dramaId: state.dramaId, userId: state.userId },
+      systemPrompt: `You are a film prop designer. Identify NEW signature props from the script that require visual consistency tracking.
+
+=== Signature Prop Criteria (ONLY these qualify) ===
+1. narrativeRole="signature" - Character's iconic personal item (jade pendant, folding fan, sword)
+2. narrativeRole="macguffin" - Plot-driving object (secret decree, antidote, inheritance letter)
+3. narrativeRole="recurring" - Cross-scene recurring key object (token, weapon, seal)
+
+=== DO NOT include ===
+- Furniture, background decorations
+- One-off items that appear only briefly
+- Food, daily necessities without narrative drive
+- Props already in the "existing props" list
+
+=== Output format per prop ===
+- propId: english/pinyin (e.g. jade_seal, golden_hairpin)
+- name: Chinese name
+- description: Chinese, 30-60 chars (material, era, appearance)
+- visualPrompt (English, core object gene-words only):
+  [Object] + [Form] + [Material] + [Detail] + [Condition]
+  NO composition/lighting/background words!
+- referenceImagePrompt (English, complete T2I prompt):
+  [visualPrompt] + "isolated centered composition, cinematic macro photography, material texture detail, studio spotlight, no people, no hands, product shot" + [style suffix]
+- narrativeRole: signature / macguffin / recurring
+- appearsInScenes: MUST use locationIds from the available list below (exact match)
+- characterOwner: MUST be one of the available characterIds below (exact match, required for signature type)
+
+If no new signature props found, return discoveredProps=[].`,
+      userPrompt: `Drama: ${state.seed.title}
+Genre: ${state.seed.genre}
+Visual style: ${styleCtx}
+Style suffix: ${styleRefPrompt}
+
+Available characters (use exact characterId for characterOwner):
+[${charWhitelist || 'none'}]
+
+Available locations (use exact locationId for appearsInScenes):
+[${locWhitelist || 'none'}]
+
+Existing signature props (DO NOT re-design):
+${existingProps || '(none yet)'}
+
+Episode ${episodeNumber} script:
+${sceneDigests}
+
+Identify new signature props from this episode (empty array if none).`,
+      temperature: 0.3,
+    });
+
+    const result = episodePropsOutputSchema.parse(raw);
+    const existingIds = new Set((state.signatureProps ?? []).map(p => p.propId));
+    const newProps = result.discoveredProps.filter(p => !existingIds.has(p.propId));
+
+    if (newProps.length > 0) {
+      this.logger.log(
+        `[E${episodeNumber}] prop discovery: ${newProps.map(p => `${p.propId}(${p.name})`).join(', ')}`,
+      );
+    }
+    return newProps;
   }
 }

@@ -194,18 +194,34 @@ export class ShotContextBuilderService {
           } else if (tempCharCache?.has(c.characterId)) {
             pushCandidate(tempCharCache.get(c.characterId), charWeight * 0.9, 'character_face');
           } else {
-            // P0-3: 安全警告 — 角色无任何参考图，T2I 将纯靠文字 prompt 生成，一致性风险极高
+            // P3-fix: 角色无任何参考图 → 提升前帧参考权重作为紧急锚点
+            // 当 prevFrameCache 中有前一帧图时，提高其权重从 0.15 → charWeight，
+            // 让 T2I 模型至少从前帧中"学到"角色大致外貌，而非完全盲生成。
             this.logger.warn(
-              `[P0-3 NoRefImage] Shot ${shot.shotId} 角色 ${c.characterId} 无参考图` +
-              `（charMap/anchorMap/tempCharCache 均为空）— T2I 将纯靠文字描述生成，角色外貌一致性可能不佳。` +
-              `建议在集制作页面手动生成定妆照后重新生成媒体。`,
+              `[P3 NoRefImage] Shot ${shot.shotId} 角色 ${c.characterId} 无参考图` +
+              `（charMap/anchorMap/tempCharCache 均为空）— ` +
+              `将提升前帧参考权重作为紧急身份锚点`,
             );
+            // 记录到 shot 元数据，供上游 MediaOrchestrator 决策是否需要补生成定妆照
+            (shot as any).__missingRefCharIds = (shot as any).__missingRefCharIds ?? [];
+            if (!(shot as any).__missingRefCharIds.includes(c.characterId)) {
+              (shot as any).__missingRefCharIds.push(c.characterId);
+            }
           }
         }
       });
     }
+    // P3-fix: 前帧参考 — 当有角色缺失参考图时，提升前帧权重作为紧急身份锚点
+    const hasMissingRefs = ((shot as any).__missingRefCharIds ?? []).length > 0;
+    const prevFrameWeight = hasMissingRefs ? charWeight : 0.15;
     if (frameType === 'first' && shot.shotIndex > 0 && prevFrameCache.has(shot.shotIndex - 1)) {
-      pushCandidate(prevFrameCache.get(shot.shotIndex - 1), 0.15, 'prev_frame');
+      pushCandidate(prevFrameCache.get(shot.shotIndex - 1), prevFrameWeight, 'prev_frame');
+      if (hasMissingRefs) {
+        this.logger.log(
+          `[P3 Anchor] Shot ${shot.shotId} 角色 ${(shot as any).__missingRefCharIds.join(',')} 无参考图，` +
+          `前帧权重提升 0.15→${prevFrameWeight} 作为紧急锚点`,
+        );
+      }
     }
     if (styleRefs.length) {
       pushCandidate(styleRefs[0], styleWeight, 'style');

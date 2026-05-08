@@ -443,19 +443,28 @@ export class ShotCoherenceValidatorService {
       const rewriteSchema = z.object({
         firstFramePrompt: z.string(),
         lastFramePrompt: z.string().optional(),
+        // V7-fix: 同步重写 visualPrompt，确保视频生成也受益于连贯性修复
+        visualPrompt: z.string(),
         thoughtProcess: z.string()
       });
       const result = await this.llm.generateStructured({
         taskName: 'prompt-rewriter',
         schema: rewriteSchema,
         metadata: { dramaId: state.dramaId },
-        systemPrompt: `You are an expert T2I prompt fixer for cinematic storyboards.
+        systemPrompt: `You are an expert T2I/T2V prompt fixer for cinematic storyboards.
 The given shot generated continuity or coherence errors when compared to the previous shot.
-Your job is to REWRITE the firstFramePrompt (and lastFramePrompt if necessary) to fix the listed issues.
+Your job is to REWRITE the firstFramePrompt, lastFramePrompt (if applicable), and visualPrompt to fix the listed issues.
+
+Important:
+- firstFramePrompt: static image description of the shot's STARTING state (no motion verbs)
+- lastFramePrompt: static image description of the shot's ENDING state (no motion verbs)
+- visualPrompt: motion/action description for VIDEO generation (describe what happens from firstFrame to lastFrame)
+
 Ensure you follow the strict positioning, facing, and prop-grip rules. Output ONLY visually descriptive prompt language for the prompt fields. Do not hallucinate axes or facings that contradict the requirements.`,
         userPrompt: `Shot ID: ${shot.shotId}
 Original firstFramePrompt: ${shot.firstFramePrompt || shot.visualPrompt}
 Original lastFramePrompt: ${shot.lastFramePrompt || 'N/A'}
+Original visualPrompt: ${shot.visualPrompt}
 Issues detected:
 ${issues.map(i => '- ' + i).join('\n')}
 
@@ -467,6 +476,7 @@ Analyze why it failed based on the issues, then write the fixed prompts. Ensure 
         ...shot,
         firstFramePrompt: result.firstFramePrompt,
         lastFramePrompt: result.lastFramePrompt ?? shot.lastFramePrompt,
+        visualPrompt: result.visualPrompt,
       };
     } catch (e) {
       this.logger.warn(`Failed to rewrite prompt for ${shot.shotId}: ${(e as Error).message}`);

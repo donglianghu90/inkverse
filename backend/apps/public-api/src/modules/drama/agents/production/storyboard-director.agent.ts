@@ -16,6 +16,31 @@ const GOLDEN_PURPOSES = new Set(['climax', 'confrontation', 'revelation', 'cliff
 // 过场类型：精简镜头
 const FILLER_PURPOSES = new Set(['transition']);
 
+/**
+ * S2-fix: 将 ScriptScene 转为精简摘要，替代 JSON.stringify(scene)。
+ * 只保留分镜导演实际需要的信息，去除冗余字段（presentCharacterIds/estimatedDurationSec 已在其他位置传递）。
+ */
+function buildSceneDigest(scene: ScriptScene): string {
+  const lines: string[] = [];
+  lines.push(`场景标题: ${scene.sceneHeading}`);
+  lines.push(`叙事目标: ${scene.objective}`);
+  if (scene.turningPoint) lines.push(`转折点: ${scene.turningPoint}`);
+  lines.push(`情绪弧: ${scene.emotionalEntry} → ${scene.emotionalExit}`);
+  if (scene.actions?.length) {
+    lines.push(`动作描写:`);
+    scene.actions.forEach(a => {
+      lines.push(`  - ${a.characterId ? `[${a.characterId}] ` : ''}${a.description}`);
+    });
+  }
+  if (scene.dialogues?.length) {
+    lines.push(`台词(${scene.dialogues.length}条):`);
+    scene.dialogues.forEach(d => {
+      lines.push(`  - ${d.characterId || '?'}: "${d.text}"${d.parenthetical ? ` (${d.parenthetical})` : ''}`);
+    });
+  }
+  return lines.join('\n');
+}
+
 @Injectable()
 export class StoryboardDirectorAgent {
   private readonly logger = new Logger(StoryboardDirectorAgent.name);
@@ -37,7 +62,8 @@ export class StoryboardDirectorAgent {
       const isLastScene = si === scenes.length - 1;
       if (si > 0) await new Promise(r => setTimeout(r, 800));
       this.logger.log(`E${script?.episodeNumber ?? 1} 场景 ${si + 1}/${scenes.length} [${scene?.purpose ?? ''}]: ${scene?.sceneHeading ?? ''}`);
-      const shots = await this.directScene(state, script, scene, globalIdx, isLastScene, intent, prevSceneLastShots, continuityWarnings, rebakeLessons);
+      const prevScenePurpose = si > 0 ? scenes[si - 1]?.purpose : undefined;
+      const shots = await this.directScene(state, script, scene, globalIdx, isLastScene, intent, prevSceneLastShots, continuityWarnings, rebakeLessons, prevScenePurpose);
       allShots.push(...shots);
       globalIdx += shots.length;
       // 保留最后 2 个 shot 作为下一场景的视觉衔接锚点
@@ -59,6 +85,7 @@ export class StoryboardDirectorAgent {
     prevSceneLastShots: z.infer<typeof shotSchema>[] = [],
     continuityWarnings?: string[],
     rebakeLessons?: string[],
+    prevScenePurpose?: string,
   ) {
     const profile = state.promptProfile;
     const camGuide = profile?.cameraStyleGuide;
@@ -97,12 +124,15 @@ export class StoryboardDirectorAgent {
     const targetDur = scene.estimatedDurationSec;
     const isGolden = effectiveGolden.has(scenePurpose);
     const isFiller = FILLER_PURPOSES.has(scenePurpose);
-    const shotDensitySec = isGolden ? 2.5 : isFiller ? 5 : 3.5;
+    // 分镜密度 — 基于 AI 视频模型的实际能力设计（非电影思维）
+    // 核心原则：每多一个 Shot 就多一次身份漂移风险，在模型能力范围内尽量减少 Shot 数
+    // Kling sweetSpot=5s，每个 Shot 至少需要 5s 才能完成一个有意义的动作
+    const shotDensitySec = isGolden ? 5 : isFiller ? 8 : 6;
     const maxShots = isGolden
-      ? Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 4), 15)
+      ? Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 3), 8)
       : isFiller
-        ? Math.min(Math.ceil(targetDur / shotDensitySec), 5)
-        : Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 3), 12);
+        ? Math.min(Math.ceil(targetDur / shotDensitySec), 3)
+        : Math.min(Math.max(Math.ceil(targetDur / shotDensitySec), 2), 6);
     // 签名道具上下文：查找与本场景角色关联的签名道具
     const sigProps = (state.signatureProps ?? [])
       .filter(p => p.visualPrompt?.trim())
@@ -157,7 +187,7 @@ export class StoryboardDirectorAgent {
         }),
       ),
       userPrompt: `场景 ${scene.sceneIndex + 1}【${scenePurpose}${isGolden ? ' ⭐黄金场景' : ''}${isLastScene ? ' 🎬全集结尾' : ''}】:
-${JSON.stringify(scene, null, 0)}
+${buildSceneDigest(scene)}
 ${epNum === 1 && scene.sceneIndex === 0 ? `
 🔥 第1集开场分镜铁律：
 - 第1个Shot必须是视觉冲击力最强的画面（特写/低角度/动态构图），qualityTier=golden
@@ -165,7 +195,7 @@ ${epNum === 1 && scene.sceneIndex === 0 ? `
 - 角色首次亮相的Shot要突出"记忆锚点"（标志性外貌+环境对比）
 ` : ''}
 ${prevSceneLastShots.length > 0 ? `
-🎬 上一场景结尾（视觉衔接参考，确保本场景第一个Shot在角色位置/情绪/构图/道具状态上与此自然衔接）：
+🎬 上一场景结尾${prevScenePurpose ? `（上一场景类型: ${prevScenePurpose}）` : ''}（视觉衔接参考，确保本场景第一个Shot在角色位置/情绪/构图/道具状态上与此自然衔接）：
 ${prevSceneLastShots.map(s => {
   // 从 lastFramePrompt 中提取道具持握状态片段，帮助 LLM 理解前一帧道具位置
   const lastFrame = (s.lastFramePrompt ?? '').slice(0, 160);
@@ -180,7 +210,7 @@ ${prevSceneLastShots.map(s => {
     .filter(c => c.facing)
     .map(c => `${c.characterId}:${c.facing}`)
     .join(',');
-  return `- shot${s.shotIndex} [${s.camera?.shotSize ?? ''}+${s.camera?.cameraAngle ?? ''}/${s.camera?.movement ?? ''}] chars=[${charIds}] emotion=${s.characters[0]?.emotion ?? ''}${propHints ? ` | propStates(${propHints})` : ''}${facingHints ? ` | facing(${facingHints})` : ''} | lastFrame: "${lastFrame}"`;
+  return `- shot${s.shotIndex} [${s.camera?.shotSize ?? ''}+${s.camera?.cameraAngle ?? ''}/${s.camera?.movement ?? ''}] chars=[${charIds}] emotion=${s.characters[0]?.emotion ?? ''} transition=${s.transitionToNext ?? 'cut'}${propHints ? ` | propStates(${propHints})` : ''}${facingHints ? ` | facing(${facingHints})` : ''} | lastFrame: "${lastFrame}"`;
 }).join('\n')}
 ` : ''}
 ⚠️ 姿态与空间继承铁律（场景内连贯性保障）：
@@ -198,6 +228,13 @@ ${prevSceneLastShots.map(s => {
   不可在这类 Shot 之后紧跟「手持武器对峙」的特写，除非中间有明确的过渡 Shot。
 - 在生成每个 Shot 的 firstFramePrompt 前，先在 _thoughtProcess 中明确写出：「当前角色[X]的剑/道具状态是什么？从上一Shot继承的状态是什么？本Shot是否需要状态迁移？」
 
+⚠️ 情绪渐进铁律（防止情绪跳变）：
+- 本场景情绪弧线为 "${scene.emotionalEntry}" → "${scene.emotionalExit}"
+- 每个 Shot 的角色情绪必须在这条弧线上均匀渐进，严禁跳变！
+- 第 1 个 Shot 的角色情绪应接近 "${scene.emotionalEntry}"
+- 最后一个 Shot 的角色情绪应接近 "${scene.emotionalExit}"
+- 中间 Shot 的情绪必须是自然过渡，例如"平静→微怒→愤怒"，而不是"平静→崩溃大哭"
+
 ⚠️ 合法角色ID白名单（characters数组只能使用这些ID，其他一律视为违规）：
 [${state.characters.map(c => `${c.characterId}(${c.name})`).join(', ')}]
 路人/守军/群演等非注册角色只能在 visualPrompt 文字描述中出现，禁止写入 characters 数组。
@@ -208,8 +245,49 @@ ${chars}
 场景视觉：
 ${locDesc}
 ${masterShotCtx}${sigPropsCtx}
-要求：shots数组，每个Shot必须包含firstFramePrompt、lastFramePrompt 和 qualityTier。visualPrompt、firstFramePrompt 和 lastFramePrompt 必须纯粹描写"画面里有什么"，专注动作、姿态、光影氛围与场景布置。
-**重要准则**：禁止在 prompt 中出现诸如 "close_up", "medium shot", "looking at camera", 角色发型、衣服、脸部细节的描述！这些描述会在后期管线中自动根据 budget 拼接，如果在 prompt 中出现会导致 token 重复叠加污染画面！
+要求：shots数组，每个Shot必须包含firstFramePrompt、lastFramePrompt 和 qualityTier。
+
+**firstFramePrompt / lastFramePrompt 内容管控铁律**：
+你只负责写「角色在做什么」，不负责写「角色长什么样」和「在什么环境里」— 后两者由后期管线自动注入。
+
+✅ 你必须写（15-25 英文词，这些是 T2I 的注意力核心）：
+  - 身体姿态：standing with arms crossed, crouching behind the pillar, seated leaning forward
+  - 面部表情/情绪：stern determined expression, eyes wide with shock, tears streaming down cheeks
+  - 空间锚点（2-4词点到即止）：at the gate, near the window, facing the throne, beside the horse
+  - 道具交互：hand resting on sword hilt, clutching a sealed letter, pouring tea from a bronze pot
+  - 角色间空间关系：facing each other across the table, back turned to the door, standing shoulder to shoulder
+
+❌ 你绝对不能写（后期管线会自动注入，你写了会造成重复污染）：
+  - 角色外貌：发型、肤色、五官、服装颜色/材质 → 由 identityBlock 自动注入
+  - 环境/建筑描写："ancient stone courtyard with weathered walls" → 由 sceneVisualPrompt 自动注入
+  - 光照/氛围："moonlight casting shadows", "dim candlelight" → 由 batchLighting 自动注入
+  - 镜头术语："close_up", "medium shot", "looking at camera" → 由 PromptOptimizer 自动注入
+  - 风格词："cinematic", "photorealistic", "film grain" → 由 stylePrefix 自动注入
+
+【铁律 — 动作弧线三段式】每个 Shot 的三个 prompt 必须形成完整的因果链：
+1. firstFramePrompt：开镜瞬间的定格画面 — 纯静态描写，NO motion verbs。必须与上一 Shot 的 lastFramePrompt 描述同一时刻的同一角色状态（姿态/道具/情绪），只是机位可能不同。
+2. visualPrompt：从 firstFrame → lastFrame 之间发生了什么运动/动作变化 — 用动作动词描写。每个 Shot 只描述一个清晰的动作（AI 视频模型无法处理多步动作序列）。
+3. lastFramePrompt：收镜瞬间的定格画面 — 纯静态描写，NO motion verbs。必须是 visualPrompt 动作完成后的逻辑结果。
+
+✅ 正确示例（注意：只有姿态/表情/空间锚点/道具交互）：
+  firstFrame: "standing at the gate, hand resting on sheathed sword, stern determined expression"
+  visual: "slowly draws the sword, blade catching light as it emerges from the scabbard"
+  lastFrame: "holding drawn sword at guard position, intense focused gaze, blade raised before face"
+
+❌ 错误示例 1（环境/光照污染 — 这些由下游自动注入）：
+  firstFrame: "warrior stands at ancient stone gate with weathered walls, moonlight casting dramatic shadows on worn flagstones" → 环境词浪费 60% token
+
+❌ 错误示例 2（太简略 — T2I 没有足够信息构图）：
+  firstFrame: "warrior stands at gate" → 缺少姿态、表情、道具状态
+
+❌ 错误示例 3（多步动作 — AI 视频模型做不了）：
+  visual: "warrior charges, swings sword, dodges, rolls, counterattacks" → 5 个动作
+
+【转场对帧描写的影响】
+- transitionToNext=fade_black → lastFramePrompt 应暗示画面趋暗（shadows deepening, dim lighting, silhouette）
+- transitionToNext=fade_white → lastFramePrompt 应暗示高光溢出（bright overexposed light, ethereal glow）
+- transitionToNext=flash → lastFramePrompt 应有瞬间光源（sudden flash of light, lightning）
+
 【强化要求】请先在 _thoughtProcess 中一步一步写下你的全场景机位调度考量、节奏分析以及防犯错策略，思考清楚后再输出 shots 数组！
 ${rebakeLessons?.length ? `\n🔥 回炉教训（上一版分镜之所以不合格的原因，这一版你必须绝对避免）：\n${rebakeLessons.map(l => `- ${l}`).join('\n')}` : ''}
 ${flashbackCtx}

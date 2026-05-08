@@ -74,7 +74,8 @@ export class MediaOrchestratorService implements OnModuleInit {
 
   static clampDuration(estimatedSec: number, provider?: string): number {
     const range = MediaOrchestratorService.PROVIDER_DURATION[provider ?? ''] ?? { min: 5, max: 10 };
-    return Math.min(Math.max(Math.round(estimatedSec), range.min), range.max);
+    // V4-fix: ceil 而非 round — 宁可视频多 0.5s 也不要提前结束（音频可能还没播完）
+    return Math.min(Math.max(Math.ceil(estimatedSec), range.min), range.max);
   }
 
   static getProviderMaxDuration(provider?: string): number {
@@ -473,9 +474,10 @@ export class MediaOrchestratorService implements OnModuleInit {
                     this.logger.debug(`[TempCharCache] ${c.characterId} 无档案，以 ${sid} 首帧为临时 anchor`);
                   }
                 }
-                // 仅非特写 shot 才写入 sceneCache，避免人脸特写图被当作场景参考
-                const isCloseUpShot = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.shotSize ?? '');
-                if (shot.sceneId && !sceneCache.has(shot.sceneId) && !isCloseUpShot) {
+                // S7-fix: 仅 medium_wide/wide/extreme_wide 才写入 sceneCache
+                // close_up 系列 + medium 景别均以角色为主体，作为场景参考会污染后续全景 Shot 的构图
+                const isCharacterDominantShot = ['close_up', 'extreme_close_up', 'medium_close_up', 'medium'].includes(shot.camera?.shotSize ?? '');
+                if (shot.sceneId && !sceneCache.has(shot.sceneId) && !isCharacterDominantShot) {
                   sceneCache.set(shot.sceneId, imgUrl);
                   // B2: isRecurring 场景第一次生成时，持久化到 VisualAssetEntity 供后续集复用
                   const resolvedLocId = getLocationId(shot.sceneId);
@@ -505,7 +507,7 @@ export class MediaOrchestratorService implements OnModuleInit {
               emit(phaseOff + i, `${sid} 首帧生成失败`, true);
             }
           } else {
-            const isCloseUpResumed = ['close_up', 'extreme_close_up', 'medium_close_up'].includes(shot.camera?.shotSize ?? '');
+            const isCloseUpResumed = ['close_up', 'extreme_close_up', 'medium_close_up', 'medium'].includes(shot.camera?.shotSize ?? '');
             if (shot.sceneId && !sceneCache.has(shot.sceneId) && !isCloseUpResumed) sceneCache.set(shot.sceneId, shotMediaMap[sid].imageUrl!);
             prevFrameCache.set(shot.shotIndex, shotMediaMap[sid].imageUrl!);
           }
@@ -557,6 +559,10 @@ export class MediaOrchestratorService implements OnModuleInit {
               if (lastUrl) {
                 const updatedEntry = { ...shotMediaMap[sid], lastFrameImageUrl: lastUrl, lastFrameT2iPrompt: optLast.prompt };
                 shotMediaMap[sid] = updatedEntry;
+                // 帧链修复：用尾帧覆盖 prevFrameCache，让下一 Shot 的首帧参考本 Shot 的结束状态
+                // 影视原则：切镜时观众看到的是「上一镜头最后一帧 → 下一镜头第一帧」，
+                // 因此下一 Shot 的首帧必须继承上一 Shot 结束时的角色状态（姿态/道具/表情）。
+                prevFrameCache.set(shot.shotIndex, lastUrl);
               }
               emit(phaseOff + orderedShots.length + i, `${sid} 尾帧完成`, true);
             } catch (err) {
@@ -642,6 +648,8 @@ export class MediaOrchestratorService implements OnModuleInit {
                 const fixedShot = await this.coherenceValidator.rewriteFlaggedShotPrompt(shot, state, issues);
                 shot.firstFramePrompt = fixedShot.firstFramePrompt;
                 shot.lastFramePrompt = fixedShot.lastFramePrompt;
+                // V2-fix: 同步 visualPrompt，确保视频生成也受益于连贯性修复
+                shot.visualPrompt = fixedShot.visualPrompt;
               }
 
               const shotPolicy = this.resolveShotRunPolicy(shot, state, mediaPolicy.styleBucket);
@@ -696,6 +704,54 @@ export class MediaOrchestratorService implements OnModuleInit {
                   if (shot.sceneId) sceneCache.set(shot.sceneId, newUrl);
                   this.logger.log(`${sid} 连贯性重生成完成(R${coherenceRound + 1})`);
                 }
+
+                // V8-fix: 首帧重生成后同步重生成尾帧
+                // 影视原则：一个镜头的动作弧线必须内部一致 —— 如果首帧的角色朝向/位置被修正了，
+                // 尾帧也必须反映修正后的状态，否则 I2V 在首尾帧间插值时会产生不自然的运动。
+                if (shot.lastFramePrompt && newUrl) {
+                  try {
+                    const lastRefs = this.shotContextService.buildRefImages(
+                      shot, charImageMap, variationImageMap, characterAnchorMap,
+                      styleRefImages, sceneCache, prevFrameCache,
+                      'last', this.profile, tempCharCache, propImageMap, propOwnerMap,
+                    );
+                    const styleLockedLastPrompt = this.shotContextService.applyStyleLockPrompt(shot.lastFramePrompt, shot, state);
+                    const rawLastPrompt = await this.shotPromptAssembler.assembleT2iPrompt(shot, state, styleLockedLastPrompt, {
+                      stylePrefix: t2iStylePrefix || '',
+                      maxTokens: Infinity, provider: regenRoute.provider || '',
+                      batchLighting: locationLightingMap.get(getLocationId(shot.sceneId)),
+                      sceneVisualPrompt: getLocationVisualPrompt(shot.sceneId),
+                    });
+                    const optLast = this.promptOptimizer.optimizeForT2I(rawLastPrompt, episodeNegPrompt ?? '', {
+                      shotType: 'last_frame', dramaShotType: shot.shotType, styleBucket: mediaPolicy.styleBucket,
+                      qualityTier: shot.qualityTier ?? 'standard', emotionColorHint: mediaParams?.colorGrade,
+                      shotSize: shot.camera?.shotSizeEnd ?? shot.camera?.shotSize,
+                      cameraAngle: shot.camera?.cameraAngle,
+                      composition: shot.camera?.composition, depthOfField: shot.camera?.depthOfField,
+                      specialTechnique: shot.specialTechnique ?? undefined,
+                      routeProfile: shotPolicy.routeProfile,
+                      provider: regenRoute.provider,
+                      ambientPopulation: ambientPopulationMap.get(getLocationId(shot.sceneId)),
+                    });
+                    const lastRes = await withMediaRetry(async () => {
+                      await this.acquireT2iSlot();
+                      return this.mediaService.generateImage({
+                        prompt: optLast.prompt, negativePrompt: optLast.negativePrompt || undefined,
+                        size: imgSize, count: 1, referenceImages: lastRefs, dramaId,
+                        assetType: 'shot_last_frame', refId: `${sid}_last_regen`, userId, episodeNumber,
+                        ...regenRoute,
+                      });
+                    }, `${sid} 尾帧连贯性重生成(R${coherenceRound + 1})`);
+                    const lastUrl = lastRes.images?.[0]?.url ?? '';
+                    if (lastUrl) {
+                      shotMediaMap[sid] = { ...shotMediaMap[sid], lastFrameImageUrl: lastUrl, lastFrameT2iPrompt: optLast.prompt };
+                      // 用尾帧更新 prevFrameCache，让下一 Shot 参考正确的结束状态
+                      prevFrameCache.set(shot.shotIndex, lastUrl);
+                    }
+                  } catch (lastErr) {
+                    this.logger.warn(`${sid} 尾帧连贯性重生成失败(R${coherenceRound + 1}): ${(lastErr as Error).message}`);
+                  }
+                }
               } catch (err) { this.logger.warn(`${sid} 连贯性重生成失败(R${coherenceRound + 1}): ${(err as Error).message}`); }
             }
             await this.updateMediaStatus(episode.id, 'generating_first_frames');
@@ -742,12 +798,18 @@ export class MediaOrchestratorService implements OnModuleInit {
           }
           styleRefImages.slice(0, 1).forEach((url) => refImages.push({ url, role: 'style' }));
 
-          // P1-1: 前帧锚定（同场景过渡色调与构图控制）
+          // P1-1: 前帧锚定 — 用前一 Shot 的尾帧锚定视频连贯性
+          // V3-fix: 同场景使用 character 角色追踪（身份+服饰强约束），跨场景仅 style（色调/光影）
+          // 影视原则：同场景连续镜头的角色外貌必须一致（同一个演员），跨场景只需色调统一
           if (shot.shotIndex > 0) {
-            const prevSid = shots.find(s => s.shotIndex === shot.shotIndex - 1)?.shotId;
-            if (prevSid) {
+            const prevShot = shots.find(s => s.shotIndex === shot.shotIndex - 1);
+            if (prevShot) {
+              const prevSid = prevShot.shotId;
               const prevLastFrame = shotMediaMap[prevSid]?.lastFrameImageUrl || shotMediaMap[prevSid]?.imageUrl;
-              if (prevLastFrame) refImages.push({ url: prevLastFrame, role: 'style' });
+              if (prevLastFrame) {
+                const isSameScene = prevShot.sceneId === shot.sceneId;
+                refImages.push({ url: prevLastFrame, role: isSameScene ? 'character' : 'style' });
+              }
             }
           }
 

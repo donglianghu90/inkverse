@@ -439,8 +439,8 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
         } catch (err) { this.logger.warn(`风格参考图失败: ${asset.refId} — ${(err as Error).message}`); }
       }),
       // Prop reference images (product-shot style, 1:1 square)
-      // Note: NO style prefix — prop visualPrompt already specifies "white background, studio lighting"
-      // which conflicts with drama's cinematic style prefix.
+      // referenceImagePrompt 已含风格后缀（VisualAssetDesigner 生成时追加），不需要 stylePrefix
+      // 降级路径（仅 visualPrompt）需要 stylePrefix 确保色调与全剧一致
       ...propAssets.map(asset => async () => {
         if (await this.stateStore.isCancelled(dramaId)) return;
         const propData = asset.data as Record<string, unknown>;
@@ -452,17 +452,22 @@ Rewrite the prompt to address the user's feedback while keeping everything else 
           const propRoute = this.imageRouter.routeProp(DramaVisualAssetService.PROP_IMAGE_SIZE);
           // Use pre-compiled referenceImagePrompt if available (skips one LLM call)
           let compiledPrompt: string;
+          let propStylePrefix: string | undefined;
           const propRefPrompt = (propData as any).referenceImagePrompt?.trim();
           if (propRefPrompt) {
             compiledPrompt = propRefPrompt;
+            propStylePrefix = undefined; // 已含风格后缀，不再追加
             this.logger.log(`[Phase1] Using pre-compiled referenceImagePrompt for prop ${asset.name}`);
           } else {
             compiledPrompt = await this.promptCompiler.compile({
               shotType: 'prop',
               object: rawPrompt,
             });
+            // 降级路径：PromptCompiler 只加产品摄影词，色调需要 stylePrefix 对齐
+            propStylePrefix = sceneStylePrefix;
+            this.logger.warn(`[Phase1] prop ${asset.name} 缺少 referenceImagePrompt，使用 PromptCompiler 降级编译`);
           }
-          const { prompt, negativePrompt } = this.optimizeAssetPrompt(compiledPrompt, 'prop', undefined, propRoute.provider, assetStyleBucket);
+          const { prompt, negativePrompt } = this.optimizeAssetPrompt(compiledPrompt, 'prop', propStylePrefix, propRoute.provider, assetStyleBucket);
           const result = await this.mediaService.generateImage({
             prompt, negativePrompt, size: DramaVisualAssetService.PROP_IMAGE_SIZE, count: 1,
             dramaId, assetType: 'prop_image', refId: asset.refId, userId,

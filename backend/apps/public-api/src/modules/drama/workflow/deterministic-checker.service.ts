@@ -26,16 +26,17 @@ const DIALOGUE_SOFT_MAX = 25;  // 超过 25 字触发软告警 + 加入 ScriptEd
 /**
  * 根据目标时长动态计算最低 Shot 数（软规则参考值）。
  * Shot 数量应由模型根据题材和场景节奏自主决定；此公式仅作为软警告参考，不硬阻断。
- * 注意：Sora 2 每镜固定 10/15s，180s 自然只有 12–18 镜，远低于此公式的值。
+ * 基于 AI 视频模型实际能力：Kling sweetSpot=5s，每 Shot 建议 5-8s，
+ * 因此 180s 一集约 22-36 镜，远少于传统电影密度。
  */
 function minShotsForDuration(targetSec: number): number {
-  return Math.min(60, Math.max(6, Math.round(targetSec / 6)));
+  return Math.min(40, Math.max(4, Math.round(targetSec / 8)));
 }
 
 /** 单镜时长硬上限（对应当前在用 provider 的物理上限：Kling/Sora 2 均为 15s） */
 const SHOT_MAX_DURATION_SEC = 15;
-/** 单镜时长软上限 — 超过此值 T2V 质量显著下降（运动不连贯），但仍在 provider 物理极限内 */
-const SHOT_QUALITY_WARN_SEC = 8;
+/** 单镜时长软上限 — 超过此值 T2V 运动连贯性下降，但仍在 provider 物理极限内 */
+const SHOT_QUALITY_WARN_SEC = 10;
 
 export type DeterministicCheckResult = DramaDeterministicCheck & {
   hardFails: FailedCheck[];
@@ -176,6 +177,7 @@ export class DramaDeterministicCheckerService {
     this.checkEmotionalProgression(script, fails);
     this.checkDialogueConsistency(script, storyboard, fails);
     this.checkConsecutiveSilentShots(storyboard, fails);
+    this.checkSpatialContinuity(storyboard, fails);
 
     const hardFails = fails.filter(f => f.severity === 'hard');
     return { pass: fails.length === 0, failedChecks: fails, hardFails, autoFixedRules, dialogueFixes };
@@ -353,5 +355,84 @@ export class DramaDeterministicCheckerService {
       }
     }
     emitIfNeeded();
+  }
+
+  /**
+   * S6-fix: Shot 级空间连续性后验检查 — 纯逻辑，不调用 LLM。
+   * 检测：
+   *   1. propGripStates 状态跳跃（如 at_waist → in_hand 跳过 drawing）
+   *   2. facing 翻转（如 facing_camera → facing_away 无过渡）
+   *   3. 场景内角色突然消失又重新出现
+   */
+  private checkSpatialContinuity(storyboard: EpisodeStoryboard, fails: FailedCheck[]): void {
+    const shots = (storyboard?.shots ?? []).filter(s => !s.isPreview && !s.isFlashback);
+    if (shots.length < 2) return;
+
+    // 道具状态合法过渡链（只能单步前进或保持，禁止跳跃）
+    const GRIP_ORDER: Record<string, number> = {
+      hidden: 0, at_waist: 1, drawing: 2, in_hand: 3, pointing: 4,
+    };
+
+    // facing 翻转检测：对立方向不能直接跳转
+    const FACING_OPPOSITES: Record<string, string> = {
+      facing_camera: 'facing_away',
+      facing_away: 'facing_camera',
+      facing_left: 'facing_right',
+      facing_right: 'facing_left',
+    };
+
+    for (let i = 1; i < shots.length; i++) {
+      const prev = shots[i - 1];
+      const curr = shots[i];
+
+      // 跳过跨场景边界（不同 sceneId 的 Shot 之间允许空间不连续）
+      if (prev.sceneId !== curr.sceneId) continue;
+
+      // 1. propGripStates 跳跃检测
+      if (prev.propGripStates && curr.propGripStates) {
+        for (const [propKey, currState] of Object.entries(curr.propGripStates)) {
+          const prevState = prev.propGripStates[propKey];
+          if (!prevState) continue; // 新道具首次出现，不检查
+          const prevOrder = GRIP_ORDER[prevState] ?? -1;
+          const currOrder = GRIP_ORDER[currState] ?? -1;
+          // 允许单步前进或保持，不允许跳跃2步以上
+          if (currOrder > prevOrder + 1) {
+            fails.push({
+              rule: 'prop_grip_jump', severity: 'soft',
+              detail: `shot${prev.shotIndex}→shot${curr.shotIndex} 道具"${propKey}"状态跳跃: ${prevState}→${currState}，缺少过渡步骤`,
+            });
+          }
+        }
+      }
+
+      // 2. facing 轴线跳转检测
+      const prevChars = new Map(prev.characters.map(c => [c.characterId, c]));
+      for (const cc of curr.characters) {
+        const pc = prevChars.get(cc.characterId);
+        if (!pc || !pc.facing || !cc.facing) continue;
+        if (FACING_OPPOSITES[pc.facing] === cc.facing) {
+          fails.push({
+            rule: 'facing_axis_flip', severity: 'soft',
+            detail: `shot${prev.shotIndex}→shot${curr.shotIndex} 角色${cc.characterId}朝向跳转: ${pc.facing}→${cc.facing}，违反轴线法则`,
+          });
+        }
+      }
+
+      // 3. 场景内角色消失又重现检测（A→B→C 中 A 和 C 有而 B 没有的情况）
+      if (i >= 2 && shots[i - 2].sceneId === curr.sceneId) {
+        const prevPrev = shots[i - 2];
+        const ppCharIds = new Set(prevPrev.characters.map(c => c.characterId));
+        const pCharIds = new Set(prev.characters.map(c => c.characterId));
+        const cCharIds = new Set(curr.characters.map(c => c.characterId));
+        for (const cid of cCharIds) {
+          if (ppCharIds.has(cid) && !pCharIds.has(cid)) {
+            fails.push({
+              rule: 'character_teleport', severity: 'soft',
+              detail: `shot${prevPrev.shotIndex}→shot${prev.shotIndex}→shot${curr.shotIndex} 角色${cid}在中间镜头消失又重现，空间不连贯`,
+            });
+          }
+        }
+      }
+    }
   }
 }

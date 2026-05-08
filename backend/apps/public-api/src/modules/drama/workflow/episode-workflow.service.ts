@@ -479,8 +479,47 @@ export class EpisodeWorkflowService {
         }
       }
 
-      if (resumeFrom < 5) { // Step 5: 分镜生成（按场景分步，传入 intent 以注入情绪地图）
+      if (resumeFrom < 5) { // Step 5: 分镜生成（含道具发现 + 按场景分步，传入 intent 以注入情绪地图）
         await assertOwnership();
+
+        // ── Step 4.5: 道具发现 — 从剧本中识别新签名道具 ──
+        if (script?.scenes?.length) {
+          try {
+            const existingPropIds = new Set((state.signatureProps ?? []).map(p => p.propId));
+            const newProps = await this.visualAssetDesigner.discoverEpisodeProps(state, script, episodeNumber);
+            if (newProps.length > 0) {
+              if (!state.signatureProps) state.signatureProps = [];
+              for (const prop of newProps) {
+                if (!existingPropIds.has(prop.propId)) {
+                  state.signatureProps.push(prop);
+                  existingPropIds.add(prop.propId);
+                  // Persist to VisualAssetEntity
+                  const existing = await this.visualAssetRepo.findOne({
+                    where: { dramaId, assetType: 'prop' as any, refId: prop.propId },
+                  });
+                  if (!existing) {
+                    await this.visualAssetRepo.save(this.visualAssetRepo.create({
+                      dramaId,
+                      assetType: 'prop' as any,
+                      refId: prop.propId,
+                      name: prop.name,
+                      data: prop as unknown as Record<string, unknown>,
+                      referenceImageUrl: '',
+                      referenceImages: [],
+                    }));
+                  }
+                }
+              }
+              drama.state = state as any;
+              await this.dramaRepo.save(drama);
+              logDrama('props_discovered', 'ok', `道具发现: ${newProps.map(p => `${p.propId}(${p.name})`).join(', ')}`);
+              emitEp(5, `发现 ${newProps.length} 个新道具: ${newProps.map(p => p.name).join('、')}`);
+            }
+          } catch (propErr) {
+            this.logger.warn(`[E${episodeNumber}] 道具发现失败(不影响继续): ${(propErr as Error).message}`);
+          }
+        }
+
         logDrama('storyboard_start', 'ok', '分镜生成');
         emitEp(5, '分镜生成...');
         storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description));
@@ -594,7 +633,9 @@ export class EpisodeWorkflowService {
           this.logger.warn(`E${episodeNumber} 分镜结构性硬规则触发重生成: ${retryReasons}`);
           logDrama('storyboard_retry_hard_rule', 'ok', `分镜结构性硬规则，重生成分镜`, { reasons: retryReasons });
           emitEp(7, `分镜结构校验失败，重新生成分镜...`);
-          storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description));
+          // S1-fix: 将硬规则失败原因作为 rebakeLessons 传递，避免盲重试
+          const hardRuleLessons = storyboardRetryFails.map(f => `${f.rule}: ${f.detail}`);
+          storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description), hardRuleLessons);
           if (enableAudioDirector) {
             try { storyboard = await this.audioDirector.enhance(state, storyboard, intent); }
             catch (audioErr) { this.logger.warn(`E${episodeNumber} 重生成后音频设计降级: ${(audioErr as Error).message}`); }
@@ -714,11 +755,24 @@ export class EpisodeWorkflowService {
           if (storyboardRebakeTriggered) {
             this.logger.warn(`[E${episodeNumber}] 分镜回炉触发：visualImpact=${dims.visualImpact} pacing=${dims.pacing}，重新生成分镜`);
             emitEp(9, `视觉质量低（${visualIssueScore.toFixed(1)}分），重新生成分镜...`);
-            storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description));
+            // S1-fix: 将审核发现的视觉/节奏问题作为 rebakeLessons 传递
+            const rebakeLessons = (review?.issuesFound ?? [])
+              .filter((i: any) => ['camera_language', 'pacing', 'visual_continuity'].includes(i.category))
+              .map((i: any) => `${i.category}: ${i.description}${i.suggestedFix ? ` → 建议: ${i.suggestedFix}` : ''}`);
+            storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description), rebakeLessons);
             // 回炉后重新校验硬规则（新分镜可能引入新的未知角色或 shotIndex 错误）
             detCheck = this.deterministicChecker.check(state, script, storyboard, intent);
-            if (detCheck.hardFails?.some(f => f.rule !== 'unknown_character')) {
-              this.logger.warn(`[E${episodeNumber}] 分镜回炉后硬规则校验发现问题: ${detCheck.hardFails.map(f => f.rule).join(', ')}，继续执行`);
+            // S3-fix: 回炉后硬规则仍失败时，再给一次重生成机会（与 Step 7 逻辑对齐）
+            const REBAKE_RETRYABLE = new Set(['shot_too_long', 'empty_visual_prompt', 'missing_first_frame_prompt']);
+            const rebakeHardFails = detCheck.hardFails?.filter(f => REBAKE_RETRYABLE.has(f.rule)) ?? [];
+            if (rebakeHardFails.length > 0) {
+              this.logger.warn(`[E${episodeNumber}] 分镜回炉后硬规则仍失败: ${rebakeHardFails.map(f => f.rule).join(', ')}，再尝试一次`);
+              const rebakeRetryLessons = rebakeHardFails.map(f => `${f.rule}: ${f.detail}`);
+              storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description), rebakeRetryLessons);
+              detCheck = this.deterministicChecker.check(state, script, storyboard, intent);
+              if (detCheck.hardFails?.some(f => REBAKE_RETRYABLE.has(f.rule))) {
+                this.logger.error(`[E${episodeNumber}] 分镜回炉二次重生成后硬规则仍失败，继续执行（下游可能报错）`);
+              }
             }
             if (enableAudioDirector) {
               try { storyboard = await this.audioDirector.enhance(state, storyboard, intent); } catch (audioErr) {
@@ -763,7 +817,12 @@ export class EpisodeWorkflowService {
                 this.logger.warn(`[E${episodeNumber}] 重写后台词润色降级: ${(dErr as Error).message}`);
               }
             }
-            storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description));
+            // S1-fix: 质量门禁重写后，将低分原因作为 rebakeLessons
+            const rewriteLessons = (review?.issuesFound ?? [])
+              .filter((i: any) => i.severity === 'critical' || i.severity === 'moderate')
+              .slice(0, 5)
+              .map((i: any) => `${i.category}: ${i.description}`);
+            storyboard = await this.storyboardDirector.direct(state, script, intent, continuity?.warnings?.map((w: any) => w.description), rewriteLessons);
             if (enableAudioDirector) {
               try { storyboard = await this.audioDirector.enhance(state, storyboard, intent); } catch (audioErr) {
                 this.logger.warn(`[E${episodeNumber}] 重写后音频设计降级: ${(audioErr as Error).message}`);
