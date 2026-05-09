@@ -904,30 +904,48 @@ export class MediaOrchestratorService implements OnModuleInit {
       try { this.registry.getTtsProvider(); ttsOk = true; } catch {}
       if (ttsOk) {
         const TTS_MAX_RETRIES = 2;
-        const FALLBACK_VOICE_ID = '';
+        const FALLBACK_VOICE_ID = 'zh_female_vv_uranus_bigtts'; // Vivi 2.0 通用女声，作为音色不可用时的安全降级
+        const NARRATOR_VOICE_ID = 'zh_male_cixingjieshuonan_uranus_bigtts'; // 磁性解说男声 2.0，旁白专用
         const voiceMap = new Map(state.characters?.map(c => [c.characterId, c.voiceProfile]) ?? []);
-        for (let i = 0; i < orderedShots.length; i++) {
-          const shot = orderedShots[i];
-          if (!shot.dialogue?.text || shot.isPreview) continue;
-          if (shotMediaMap[shot.shotId]?.ttsUrl) continue;
-          const voice = voiceMap.get(shot.dialogue.characterId);
+
+        const ttsShots = orderedShots.filter(shot =>
+          shot.dialogue?.text && !shot.isPreview && !shotMediaMap[shot.shotId]?.ttsUrl
+        );
+
+        await this.runConcurrent(ttsShots, 3, async (shot, idx) => {
+          const voice = voiceMap.get(shot.dialogue!.characterId);
           const mediaParams = shotMediaParamsCache.get(shot.shotId);
           const baseSpeed = SPEED_MAP[voice?.speed ?? 'normal'] ?? 1.0;
-          const ttsSpeed = baseSpeed * (mediaParams?.ttsSpeedMultiplier ?? 1.0);
-          emit(phaseOff + i, `${shot.shotId} TTS...`);
+          const ttsSpeed = baseSpeed * (mediaParams?.ttsSpeedMultiplier ?? 1.0) * (mediaParams?.ttsPaceMultiplier ?? 1.0);
+          const globalIdx = orderedShots.indexOf(shot);
+          emit(phaseOff + globalIdx, `${shot.shotId} TTS...`);
           const outPath = this.storage.ttsOutputPath(dramaId, shot.shotId);
+
+          // 旁白/画外音/内心独白处理
+          const isNarrator = shot.dialogue!.characterId === 'narrator' || shot.dialogue!.isVoiceover;
+          const isInnerThought = shot.dialogue!.isInnerThought;
 
           let ttsSuccess = false;
           for (let attempt = 0; attempt <= TTS_MAX_RETRIES && !ttsSuccess; attempt++) {
-            const useVoiceId = attempt <= TTS_MAX_RETRIES - 1
-              ? (voice?.ttsVoiceId || '')
-              : (FALLBACK_VOICE_ID || voice?.ttsVoiceId || '');
+            let useVoiceId: string;
+            if (attempt > TTS_MAX_RETRIES - 1) {
+              useVoiceId = FALLBACK_VOICE_ID; // 最后一次尝试使用安全降级音色
+            } else if (isNarrator) {
+              useVoiceId = NARRATOR_VOICE_ID; // 旁白专用音色
+            } else {
+              useVoiceId = voice?.ttsVoiceId || '';
+            }
             try {
               const ttsRes = await this.mediaService.synthesizeTtsToFile({
                 request: {
-                  text: shot.dialogue.text, voiceId: useVoiceId,
-                  speed: ttsSpeed, emotion: mediaParams?.ttsEmotion || shot.dialogue.emotion,
-                  extra: { volume: shot.dialogue.volume, volumeMultiplier: mediaParams?.ttsVolumeMultiplier },
+                  text: shot.dialogue!.text, voiceId: useVoiceId,
+                  speed: ttsSpeed,
+                  emotion: isNarrator ? 'neutral' : (mediaParams?.ttsEmotion || shot.dialogue!.emotion),
+                  extra: {
+                    volume: shot.dialogue!.volume,
+                    volumeMultiplier: isInnerThought ? (mediaParams?.ttsVolumeMultiplier ?? 1.0) * 0.75 : mediaParams?.ttsVolumeMultiplier,
+                    ...(isInnerThought ? { style: 0.3, stability: 0.8 } : {}), // 内心独白：压低风格化 + 提高稳定性，让语气更内救
+                  },
                 },
                 outputPath: outPath,
                 dramaId, userId, episodeNumber: episode.episodeNumber,
@@ -935,7 +953,7 @@ export class MediaOrchestratorService implements OnModuleInit {
               shotMediaMap[shot.shotId] = { ...shotMediaMap[shot.shotId], ttsUrl: ttsRes.audioUrl };
               if (ttsRes.durationSeconds > 0) ttsDurations.set(shot.shotId, ttsRes.durationSeconds);
               ttsSuccess = true;
-              emit(phaseOff + i, `${shot.shotId} TTS完成`, true);
+              emit(phaseOff + globalIdx, `${shot.shotId} TTS完成`, true);
             } catch (err) {
               if (attempt < TTS_MAX_RETRIES) {
                 this.logger.warn(`${shot.shotId} TTS第${attempt + 1}次失败，重试: ${(err as Error).message}`);
@@ -944,7 +962,7 @@ export class MediaOrchestratorService implements OnModuleInit {
               }
             }
           }
-        }
+        });
       } else { this.logger.warn('TTS Provider 未配置，跳过语音合成'); }
 
       // ═══ Phase 2.5: AI SFX 批量生成（sound-effect-v2，失败自动降级静态） ═══
@@ -1023,7 +1041,14 @@ export class MediaOrchestratorService implements OnModuleInit {
               trimOutSec: s.trimOutSec ?? effectiveDuration,
               transition: s.transitionToNext ?? 'cut',
               transitionDurationSec: mp?.transitionDurationSec,
-              subtitle: s.subtitle ? { text: s.subtitle.text, style: s.subtitle.style ?? 'normal' } : undefined,
+              subtitle: s.subtitle ? {
+                text: s.subtitle.text,
+                style: s.subtitle.style ?? 'normal',
+                characterId: s.subtitle.characterId ?? s.dialogue?.characterId,
+                position: s.subtitle.position ?? 'bottom',
+                ttsDurationSec: ttsDurations.get(s.shotId),
+                karaoke: true,
+              } : undefined,
               bgmPath: s.audio?.bgm?.mood ? (this.audioResource.resolveBgm(s.audio.bgm.mood) ?? undefined) : undefined,
               bgmIntensity: (s.audio?.bgm?.intensity ?? 0.3) * (mp?.bgmVolumeMultiplier ?? 1.0),
               bgmAction: s.audio?.bgm?.action,
@@ -1555,6 +1580,7 @@ export class MediaOrchestratorService implements OnModuleInit {
       const voiceMap = new Map(state.characters?.map(c => [c.characterId, c.voiceProfile]) ?? []);
       const voice = voiceMap.get(shot.dialogue!.characterId);
       const baseSpeed = SPEED_MAP[voice?.speed ?? 'normal'] ?? 1.0;
+      const paceMultiplier = { very_slow: 0.75, slow: 0.85, normal: 1.0, fast: 1.15, very_fast: 1.3 }[shot.dialogue!.pace ?? 'normal'] ?? 1.0;
       const outPath = this.storage.ttsOutputPath(dramaId, shot.shotId);
 
       try {
@@ -1562,7 +1588,7 @@ export class MediaOrchestratorService implements OnModuleInit {
         const ttsRes = await this.mediaService.synthesizeTtsToFile({
           request: {
             text: shot.dialogue!.text!, voiceId: useVoiceId,
-            speed: baseSpeed, emotion: shot.dialogue!.emotion,
+            speed: baseSpeed * paceMultiplier, emotion: shot.dialogue!.emotion,
             extra: { volume: shot.dialogue!.volume },
           },
           outputPath: outPath,
@@ -1808,7 +1834,14 @@ export class MediaOrchestratorService implements OnModuleInit {
       trimOutSec: shot.trimOutSec ?? effectiveDuration,
       transition: 'cut',
       transitionDurationSec: mp?.transitionDurationSec,
-      subtitle: shot.subtitle ? { text: shot.subtitle.text, style: shot.subtitle.style ?? 'normal' } : undefined,
+      subtitle: shot.subtitle ? {
+        text: shot.subtitle.text,
+        style: shot.subtitle.style ?? 'normal',
+        characterId: shot.subtitle.characterId ?? shot.dialogue?.characterId,
+        position: shot.subtitle.position ?? 'bottom',
+        ttsDurationSec: ttsDur || undefined,
+        karaoke: true,
+      } : undefined,
       bgmPath: (shot as any).audio?.bgm?.mood ? (this.audioResource.resolveBgm((shot as any).audio.bgm.mood) ?? undefined) : undefined,
       bgmIntensity: ((shot as any).audio?.bgm?.intensity ?? 0.3) * (mp?.bgmVolumeMultiplier ?? 1.0),
       bgmAction: (shot as any).audio?.bgm?.action,

@@ -740,7 +740,11 @@ export const shotAudioSchema = z.object({
 
 const shotSubtitleSchema = z.object({
   text: z.string(),
-  style: z.enum(['normal', 'emphasis', 'whisper', 'scream', 'narrator', 'time_skip']).default('normal'),
+  style: z.enum(['normal', 'emphasis', 'whisper', 'scream', 'narrator', 'time_skip', 'inner_thought']).default('normal'),
+  /** 说话角色 ID — 用于字幕颜色区分（多角色对话场景） */
+  characterId: z.string().nullish(),
+  /** 字幕位置提示 — bottom(安全区底部)/middle(居中，内心独白/时间跳转用) */
+  position: z.enum(['bottom', 'middle']).default('bottom'),
 });
 /**
  * 特殊拍摄手法枚举 — AI 生成时注入 T2V prompt，用户可手动覆盖。

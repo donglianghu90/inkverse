@@ -13,7 +13,14 @@ export interface ComposeShotInput {
   trimInSec?: number;
   /** Shot 内精确出点(秒)，用于 in-shot trim */
   trimOutSec?: number;
-  subtitle?: { text: string; style: string; karaoke?: boolean };
+  subtitle?: {
+    text: string;
+    style: string;
+    karaoke?: boolean;
+    characterId?: string;                    // 说话角色 → 颜色区分
+    position?: 'bottom' | 'middle';          // 字幕位置
+    ttsDurationSec?: number;                 // TTS 实际时长 → 精确字幕时间
+  };
   bgmPath?: string;
   bgmIntensity?: number;
   bgmAction?: string;

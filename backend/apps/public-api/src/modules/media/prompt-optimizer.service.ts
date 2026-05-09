@@ -18,6 +18,8 @@ const QUALITY_BOOSTERS: Record<string, string[]> = {
   'kieai.flux-2':      ['professional film still', 'masterpiece', 'cinematic composition', 'FLUX aesthetic', 'volumetric atmospheric lighting'],
   // flux-2 I2I：最重要的是保留原图身份同时做精准变换
   'kieai.flux-2-i2i':  ['consistent identity', 'high quality cinematic transformation', 'maintain facial features'],
+  // GPT-Image-2：指令遵循最强，不需要堆砍关键词，简洁的质量引导即可
+  apimart:             ['cinematic quality', 'professional composition', 'rich detail', 'vivid colors'],
   default:             ['cinematic masterpiece', 'detailed', 'sharp focus', 'professional color grading'],
 };
 
@@ -442,10 +444,12 @@ export class PromptOptimizerService implements OnModuleInit {
     }
 
     const isKieAi = provider.startsWith('kieai.');
+    const isApimart = provider.startsWith('apimart.');
+    const noNegativeSupport = isKieAi || isApimart;
 
-    // KIE.AI (FLUX等模型) 本质上不支持 negativePrompt，因此执行【反向词正向化】(Negative Inversion)
+    // KIE.AI / Apimart GPT-Image-2 本质上不支持 negativePrompt，因此执行【反向词正向化】(Negative Inversion)
     // 将防漂移、防乱入的反向意图，转化为强烈的正向英语主张，塞入 Prompt 中。
-    if (isKieAi) {
+    if (noNegativeSupport) {
       const inversionHints: string[] = [];
       
       // 1. 防止空境乱入人物
@@ -471,19 +475,20 @@ export class PromptOptimizerService implements OnModuleInit {
       if (inversionHints.length > 0) {
         const hintStr = inversionHints.join(', ');
         prompt = `${prompt}, ${hintStr}`;
-        added.push('kieai_negative_inversion');
+        added.push('negative_inversion');
       }
     }
 
     prompt = this.deduplicateKeywords(prompt);
-    // 按 provider 区分截断上限：kieai 支持 20000 字符无需截断，volcengine 对齐 2000 char maxLength
+    // 按 provider 区分截断上限：kieai 支持 20000 字符无需截断，apimart GPT-Image-2 宽松但限 500，volcengine 对齐 2000 char
     const effectiveMaxTokens = isKieAi ? Infinity
+      : isApimart ? 500
       : provider.startsWith('volcengine') ? 500
       : 300;
     prompt = this.smartTruncate(prompt, effectiveMaxTokens);
 
-    // KIE.AI 最终返回空 negativePrompt
-    if (isKieAi) {
+    // KIE.AI / Apimart 最终返回空 negativePrompt
+    if (noNegativeSupport) {
       return { prompt, negativePrompt: '', metadata: { addedKeywords: added, removedKeywords: removed } };
     }
 

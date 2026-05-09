@@ -3,6 +3,8 @@ import { Injectable, Logger, Optional, OnModuleInit, OnModuleDestroy } from '@ne
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { ProviderRegistryService } from './providers/provider-registry.service';
 import { MediaJobService } from './media-job.service';
 import { MediaTraceLoggerService } from './media-trace-logger.service';
@@ -487,6 +489,22 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
           const res = await axios.get(result.audioUrl, { responseType: 'arraybuffer', timeout: 30_000 });
           fs.writeFileSync(outPath, res.data);
           result.audioUrl = outPath;
+        }
+      }
+      // Provider 未返回时长时（如 ElevenLabs/kie.ai），用 ffprobe 从本地文件获取实际时长
+      if (result.durationSeconds <= 0 && fs.existsSync(outPath)) {
+        try {
+          const execFileAsync = promisify(execFile);
+          const { stdout } = await execFileAsync('ffprobe', [
+            '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', outPath,
+          ]);
+          const probedDuration = parseFloat(stdout.trim());
+          if (probedDuration > 0) {
+            result.durationSeconds = probedDuration;
+            this.logger.debug(`TTS ffprobe 补充时长: ${probedDuration.toFixed(2)}s (${outPath})`);
+          }
+        } catch (probeErr) {
+          this.logger.warn(`TTS ffprobe 获取时长失败: ${(probeErr as Error).message}`);
         }
       }
       const mod = meta.module ?? (meta.dramaId ? 'drama' : meta.bookId ? 'novel' : 'unknown');

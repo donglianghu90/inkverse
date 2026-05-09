@@ -8,7 +8,8 @@ export interface ShotMediaParams {
   speedFactor: number;         // 1.0=正常, 0.5=慢镜头, 2.0=快进
   stabilize: boolean;
   kenBurns?: { direction: 'zoom_in' | 'zoom_out' | 'pan_left' | 'pan_right'; zoomFactor: number };
-  ttsSpeedMultiplier: number;  // 1.0=正常
+  ttsSpeedMultiplier: number;  // 1.0=正常（基于 dialogue.volume 的语速微调）
+  ttsPaceMultiplier: number;   // 1.0=正常（基于 dialogue.pace 的语速调节）
   ttsVolumeMultiplier: number; // 1.0=正常
   bgmVolumeMultiplier: number;
   /** TTS 情感标签 — 传入 TTS 引擎的 emotion 参数，让语音有感情变化 */
@@ -77,6 +78,15 @@ const DIALOGUE_EMOTION_TTS: Record<string, { speed: number; volume: number }> = 
   scream: { speed: 1.2, volume: 1.5 },
 };
 
+/** 对话节奏 pace → TTS 语速乘数。独立于 volume→speed 映射，让调控更精细 */
+const DIALOGUE_PACE_TTS: Record<string, number> = {
+  very_slow: 0.75,
+  slow: 0.85,
+  normal: 1.0,
+  fast: 1.15,
+  very_fast: 1.3,
+};
+
 /**
  * 场景情绪 → TTS emotion 标签映射。
  * 映射到 TTS 引擎情感参数（ElevenLabs 通过 stability/style 间接表达），让语音合成带有感情色彩。
@@ -138,6 +148,9 @@ export class EmotionMediaMapperService {
     const dialogueVolume = shot.dialogue?.volume ?? 'normal';
     const ttsParams = DIALOGUE_EMOTION_TTS[dialogueVolume] ?? DIALOGUE_EMOTION_TTS.normal;
 
+    const dialoguePace = shot.dialogue?.pace ?? 'normal';
+    const ttsPaceMultiplier = DIALOGUE_PACE_TTS[dialoguePace] ?? 1.0;
+
     const bgmVolume = shot.audio?.bgm?.intensity ?? 0.3;
     const hasTts = !!shot.dialogue?.text;
     const bgmVolumeMultiplier = hasTts ? Math.max(0.3, 1.0 - bgmVolume * 0.5) : 1.0;
@@ -151,6 +164,7 @@ export class EmotionMediaMapperService {
       stabilize,
       kenBurns,
       ttsSpeedMultiplier: ttsParams.speed,
+      ttsPaceMultiplier,
       ttsVolumeMultiplier: ttsParams.volume,
       bgmVolumeMultiplier,
       ttsEmotion,

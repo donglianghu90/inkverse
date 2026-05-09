@@ -427,7 +427,7 @@ export class VideoComposerService implements OnModuleInit {
     return output;
   }
 
-  // ═══ Step 4: 字幕（V10 — 多风格 + 情绪字号 + 逐字出现） ═══
+  // ═══ Step 4: 字幕（V11 — TTS同步 + 安全区 + 角色颜色 + 逐字高亮 + 内心独白） ═══
 
   private async addSubtitles(videoPath: string, shots: ComposeShotInput[], workDir: string, outputPath: string, aspectRatio?: string): Promise<string> {
     const subtitleShots = shots.filter(s => s.subtitle?.text);
@@ -441,31 +441,78 @@ export class VideoComposerService implements OnModuleInit {
     const isVertical = aspectRatio === '9:16' || aspectRatio === '3:4';
     const resX = isVertical ? 1080 : 1920;
     const resY = isVertical ? 1920 : 1080;
-    const baseSize = isVertical ? 40 : 48;
-    const marginV = isVertical ? 60 : 30;
+    const baseSize = isVertical ? 42 : 48;
+    // 竖屏安全区：底部留白 ~20%（380px / 1920px）避开抖音/快手 UI
+    const marginV = isVertical ? 380 : 50;
+
+    // ── 角色颜色映射（自动分配，最多 4 色）──
+    const CHARACTER_COLORS = [
+      '&H00FFFFFF',  // 白色 — 主角/默认
+      '&H0097F0FF',  // 金黄色 — 第二角色
+      '&H00FFD700',  // 青蓝色 — 第三角色
+      '&H00C8A2FF',  // 浅紫色 — 第四角色
+    ];
+    const charColorMap = new Map<string, string>();
+    let colorIdx = 0;
+    for (const shot of shots) {
+      const cid = shot.subtitle?.characterId;
+      if (cid && !charColorMap.has(cid) && colorIdx < CHARACTER_COLORS.length) {
+        charColorMap.set(cid, CHARACTER_COLORS[colorIdx++]);
+      }
+    }
 
     const assPath = path.join(workDir, 'subs.ass');
     let offset = 0;
     const events: string[] = [];
+
     for (const shot of shots) {
       if (shot.subtitle?.text) {
-        const start = this.formatAssTime(offset);
-        const end = this.formatAssTime(offset + shot.durationSec);
         const text = shot.subtitle.text;
         const st = shot.subtitle.style || 'normal';
+        const pos = shot.subtitle.position || 'bottom';
+        const ttsDur = shot.subtitle.ttsDurationSec;
+
+        // TTS 同步时间：有 TTS 时长时精确对齐，否则用 Shot 时长
+        const subDur = ttsDur && ttsDur > 0 ? ttsDur : shot.durationSec;
+        // 字幕比语音提前 0.3s 出现，后延 0.2s 消失（符合阅读习惯）
+        const displayStart = Math.max(0, offset - 0.3);
+        const displayEnd = offset + subDur + 0.2;
+        const start = this.formatAssTime(displayStart);
+        const end = this.formatAssTime(displayEnd);
+
+        // 角色颜色覆盖（通过 ASS override tag）
+        const charColor = shot.subtitle.characterId ? charColorMap.get(shot.subtitle.characterId) : undefined;
+        const colorTag = charColor && charColor !== CHARACTER_COLORS[0] ? `{\\1c${charColor}}` : '';
+        // 淡入淡出动画
+        const fadeTag = '{\\fad(200,150)}';
+        // 位置覆盖：middle → Alignment 5（居中）
+        const posTag = pos === 'middle' ? '{\\an5}' : '';
+
+        // 默认启用逐字高亮（karaoke）：非旁白/时间跳转/内心独白，且 ≤30 字
+        const useKaraoke = !['narrator', 'time_skip', 'inner_thought'].includes(st) && text.length <= 30;
 
         switch (st) {
           case 'emphasis':
-            events.push(`Dialogue: 0,${start},${end},Default,,0,0,0,,{\\b1}${text}`);
+            if (useKaraoke) {
+              const chars = [...text];
+              const charDur = Math.floor((subDur * 100) / chars.length);
+              const kTags = chars.map(c => `{\\kf${charDur}}${c}`).join('');
+              events.push(`Dialogue: 0,${start},${end},Emphasis,,0,0,0,,${fadeTag}${colorTag}${kTags}`);
+            } else {
+              events.push(`Dialogue: 0,${start},${end},Emphasis,,0,0,0,,${fadeTag}${colorTag}${text}`);
+            }
             break;
           case 'whisper':
-            events.push(`Dialogue: 0,${start},${end},Whisper,,0,0,0,,${text}`);
+            events.push(`Dialogue: 0,${start},${end},Whisper,,0,0,0,,${fadeTag}${colorTag}${text}`);
             break;
           case 'scream':
-            events.push(`Dialogue: 0,${start},${end},Scream,,0,0,0,,${text}`);
+            events.push(`Dialogue: 0,${start},${end},Scream,,0,0,0,,${fadeTag}${colorTag}${text}`);
             break;
           case 'narrator':
-            events.push(`Dialogue: 0,${start},${end},Narrator,,0,0,0,,${text}`);
+            events.push(`Dialogue: 0,${start},${end},Narrator,,0,0,0,,${fadeTag}${text}`);
+            break;
+          case 'inner_thought':
+            events.push(`Dialogue: 0,${start},${end},InnerThought,,0,0,0,,${fadeTag}${posTag}${text}`);
             break;
           case 'time_skip': {
             const mid = this.formatAssTime(offset + shot.durationSec * 0.1);
@@ -476,33 +523,45 @@ export class VideoComposerService implements OnModuleInit {
             break;
           }
           default:
-            if (shot.subtitle.karaoke && text.length <= 30) {
+            if (useKaraoke) {
               const chars = [...text];
-              const charDur = Math.floor((shot.durationSec * 100) / chars.length);
+              const charDur = Math.floor((subDur * 100) / chars.length);
               const kTags = chars.map(c => `{\\kf${charDur}}${c}`).join('');
-              events.push(`Dialogue: 0,${start},${end},Default,,0,0,0,,${kTags}`);
+              events.push(`Dialogue: 0,${start},${end},Default,,0,0,0,,${fadeTag}${colorTag}${kTags}`);
             } else {
-              events.push(`Dialogue: 0,${start},${end},Default,,0,0,0,,${text}`);
+              events.push(`Dialogue: 0,${start},${end},Default,,0,0,0,,${fadeTag}${colorTag}${text}`);
             }
         }
       }
       offset += shot.durationSec;
     }
 
-    const screamSize = Math.round(baseSize * 1.5);
+    const screamSize = Math.round(baseSize * 1.4);
     const whisperSize = Math.round(baseSize * 0.8);
-    const narratorSize = Math.round(baseSize * 0.9);
+    const narratorSize = Math.round(baseSize * 0.85);
     const timeSkipSize = Math.round(baseSize * 1.8);
+    const innerThoughtSize = Math.round(baseSize * 0.9);
+    const emphasisSize = Math.round(baseSize * 1.1);
+    const fontName = 'Noto Sans SC';
 
     const assContent = [
       `[Script Info]`, `ScriptType: v4.00+`, `PlayResX: ${resX}`, `PlayResY: ${resY}`, ``,
       `[V4+ Styles]`,
       `Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding`,
-      `Style: Default,Noto Sans SC,${baseSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,10,10,${marginV},1`,
-      `Style: Whisper,Noto Sans SC,${whisperSize},&H80FFFFFF,&H000000FF,&H40000000,&H80000000,0,1,0,0,100,100,1,0,1,1,0,2,10,10,${marginV},1`,
-      `Style: Scream,Noto Sans SC,${screamSize},&H0000DDFF,&H000000FF,&H00000000,&HC0000000,-1,0,0,0,100,100,0,0,1,3,2,2,10,10,${marginV},1`,
-      `Style: Narrator,Noto Sans SC,${narratorSize},&H00E0E0E0,&H000000FF,&H00000000,&H80000000,0,1,0,0,100,100,0.5,0,1,1.5,1,8,10,10,${Math.round(marginV * 0.6)},1`,
-      `Style: TimeSkip,Noto Sans SC,${timeSkipSize},&H00AACCFF,&H000000FF,&H00000000,&HC0000000,-1,0,0,0,100,100,3,0,1,3,2,5,10,10,${Math.round(resY * 0.4)},1`,
+      // Default: 白字 + 黑色描边 2px + 阴影 1px，底部安全区
+      `Style: Default,${fontName},${baseSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,10,10,${marginV},1`,
+      // Emphasis: 黄色加粗 — 关键台词/反转
+      `Style: Emphasis,${fontName},${emphasisSize},&H0000DDFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2.5,1,2,10,10,${marginV},1`,
+      // Whisper: 半透明白字 + 斜体 + 细描边
+      `Style: Whisper,${fontName},${whisperSize},&H80FFFFFF,&H000000FF,&H40000000,&H80000000,0,1,0,0,100,100,1,0,1,1,0,2,10,10,${marginV},1`,
+      // Scream: 大号红色加粗 + 粗描边
+      `Style: Scream,${fontName},${screamSize},&H0000DDFF,&H000000FF,&H00000000,&HC0000000,-1,0,0,0,100,100,0,0,1,3,2,2,10,10,${marginV},1`,
+      // Narrator: 灰白斜体 + 顶部（Alignment=8）
+      `Style: Narrator,${fontName},${narratorSize},&H00E0E0E0,&H000000FF,&H00000000,&H80000000,0,1,0,0,100,100,0.5,0,1,1.5,1,8,10,10,${Math.round(marginV * 0.6)},1`,
+      // InnerThought: 半透明白色斜体 + 居中（Alignment=5）+ 暗背景条（BorderStyle=3）
+      `Style: InnerThought,${fontName},${innerThoughtSize},&H90FFFFFF,&H000000FF,&H40000000,&HA0000000,0,1,0,0,100,100,0.5,0,3,0,4,5,10,10,${Math.round(resY * 0.35)},1`,
+      // TimeSkip: 大号蓝白 + 居中（Alignment=5）
+      `Style: TimeSkip,${fontName},${timeSkipSize},&H00AACCFF,&H000000FF,&H00000000,&HC0000000,-1,0,0,0,100,100,3,0,1,3,2,5,10,10,${Math.round(resY * 0.4)},1`,
       ``,
       `[Events]`,
       `Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`,

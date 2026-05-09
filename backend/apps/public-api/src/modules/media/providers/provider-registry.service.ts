@@ -18,6 +18,7 @@ import { KlingAvatarProvider } from './kieai/kling-avatar.provider';
 import { VeoVideoProvider } from './google/veo-video.provider';
 import { SoraVideoProvider } from './openai/sora-video.provider';
 import { WanAnimateVideoProvider } from './dashscope/wan-animate-video.provider';
+import { ApimartImageProvider } from './apimart/apimart-image.provider';
 import { configureKieAiRateLimitsFromConfig } from './kieai/kieai-rate-limiter';
 
 @Injectable()
@@ -49,6 +50,9 @@ export class ProviderRegistryService implements OnModuleInit {
     this.initVolcengine(media);
     this.initVolcengineTts(media);
     this.initVolcengineAudio(media);
+    
+    // 初始化 Apimart GPT-Image-2
+    this.initApimart(media);
     
     // 初始化十一实验室 (TTS / Audio)
     this.initKieAi(media);
@@ -424,6 +428,26 @@ export class ProviderRegistryService implements OnModuleInit {
       this.registerVideoProvider(wanProvider);
       this.logger.log(`Wan Animate Replace Provider 已注册: name=${wanProvider.name} resolution=${wanCfg.defaultResolution ?? '720p'}`);
     }
+  }
+
+  // ═══ Apimart GPT-Image-2 初始化 ═══
+
+  private initApimart(media: Record<string, unknown>) {
+    const apimart = (media.apimart ?? {}) as Record<string, unknown>;
+    const apiKey = String(apimart.apiKey || '');
+    if (!apiKey) { this.logger.debug('media.apimart.apiKey 未配置，跳过 Apimart'); return; }
+
+    const provider = new ApimartImageProvider({
+      apiKey,
+      baseUrl: String(apimart.baseUrl || 'https://api.apimart.ai'),
+      defaultSize: String(apimart.defaultSize || '1:1'),
+      defaultResolution: String(apimart.defaultResolution || '2k'),
+      pollInitialDelayMs: Number(apimart.pollInitialDelayMs) || 15_000,
+      pollIntervalMs: Number(apimart.pollIntervalMs) || 5_000,
+      taskTimeoutMs: Number(apimart.taskTimeoutMs) || 300_000,
+    });
+    this.registerImageProvider(provider);
+    this.logger.log(`Apimart 图片 Provider 已注册: name=${provider.name} resolution=${apimart.defaultResolution ?? '2k'}`);
   }
 
   private initVolcengineTts(media: Record<string, unknown>) {

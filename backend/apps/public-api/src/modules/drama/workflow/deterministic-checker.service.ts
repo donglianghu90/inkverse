@@ -145,8 +145,30 @@ export class DramaDeterministicCheckerService {
     });
 
     shots.forEach(s => {
-      if (s.dialogue && !s.dialogue.isInnerThought && !s.subtitle?.text)
-        fails.push({ rule: 'missing_subtitle', severity: sev('missing_subtitle'), detail: `shot${s.shotIndex} 有对话但缺少字幕` });
+      if (s.dialogue?.text && !s.dialogue.isInnerThought && !s.subtitle?.text) {
+        // 自动从对话填充字幕（确定性补全，不依赖 LLM 输出）
+        const autoStyle = s.dialogue.isVoiceover ? 'narrator'
+          : s.dialogue.volume === 'whisper' ? 'whisper'
+          : s.dialogue.volume === 'scream' ? 'scream'
+          : 'normal';
+        s.subtitle = {
+          text: s.dialogue.text,
+          style: autoStyle,
+          characterId: s.dialogue.characterId || undefined,
+          position: 'bottom',
+        };
+        if (!autoFixedRules.includes('auto_fill_subtitle')) autoFixedRules.push('auto_fill_subtitle');
+      }
+      // 内心独白：单独处理，居中显示
+      if (s.dialogue?.text && s.dialogue.isInnerThought && !s.subtitle?.text) {
+        s.subtitle = {
+          text: s.dialogue.text,
+          style: 'inner_thought',
+          characterId: s.dialogue.characterId || undefined,
+          position: 'middle',
+        };
+        if (!autoFixedRules.includes('auto_fill_subtitle')) autoFixedRules.push('auto_fill_subtitle');
+      }
     });
 
     const scriptSceneIds = new Set(script.scenes.map(s => s.sceneId));
